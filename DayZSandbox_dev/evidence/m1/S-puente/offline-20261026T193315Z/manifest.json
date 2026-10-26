@@ -1,0 +1,33 @@
+{
+  "argv": [
+    "spike",
+    "S-puente",
+    "--both",
+    "--build",
+    "offline",
+    "--evidence",
+    "evidence/m1/S-puente/offline-20261026T193315Z"
+  ],
+  "both": true,
+  "build": "offline",
+  "ended_utc": "2026-10-26T19:34:23Z",
+  "faults": [],
+  "harness": {
+    "git_dirty": true,
+    "git_head": "6f67fedd4594a23246a86f25d1c84016ab16268f",
+    "platform": "Windows-11-10.0.22631-SP0",
+    "python": "3.14.3"
+  },
+  "id": "S-puente",
+  "kind": "spike",
+  "params": {
+    "hold_ms": 2000,
+    "lease_ms": 3000,
+    "port": 53151,
+    "retry_ms": 2000,
+    "seed": 20261026,
+    "ttl_ms": 5000
+  },
+  "schema": "dsbx-qa-manifest/1",
+  "started_utc": "2026-10-26T19:33:15Z"
+}
