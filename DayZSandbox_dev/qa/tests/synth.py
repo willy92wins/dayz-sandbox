@@ -137,7 +137,9 @@ def _build():
     state["t"] = 100000
     for peer in PEERS:
         _negatives(peer, b, s, state["refs"])
+    s("step_start", step="N6", peer="client")
     _n6(b, s, state["refs"])
+    s("step_end", step="N6", peer="client")
     return bridge, scenario
 
 
@@ -146,6 +148,7 @@ def _negatives(peer, b, s, refs):
     verb = "ambient_set" if peer == "server" else "cam_pose_set"
     read_verb = "ambient_read" if peer == "server" else "cam_pose_read"
     for step in ("N1", "N2", "N3"):
+        s("step_start", step=step, peer=peer)
         left, left_v, right, right_v = table[step]
         b_args = _value_args(peer, left_v, sentinel=False)
         s_args = _value_args(peer, right_v, sentinel=True)
@@ -168,6 +171,7 @@ def _negatives(peer, b, s, refs):
         else:
             b("enq", op_id=op_s, verb=verb, peer=peer, args=s_args)
             reason = "stale_instance" if step == "N2" else "expired"
+            b("force", op_id=op_s, peer=peer)
             b("deliver", op_id=op_s, peer=peer)
             sentinel = b(
                 "result",
@@ -181,9 +185,12 @@ def _negatives(peer, b, s, refs):
         s("expect", step=step, peer=peer, roles={"B": op_b, "S": op_s, "read": op_r})
         refs[(step, peer, "read")] = read
         refs[(step, peer, "sentinel_args")] = s_args
+        s("step_end", step=step, peer=peer)
 
     for step, source in (("N4", "b"), ("N5", "d")):
+        s("step_start", step=step, peer=peer)
         _replica(peer, step, source, table[step], verb, read_verb, b, s, refs)
+        s("step_end", step=step, peer=peer)
 
 
 def _replica(peer, step, source_role, pair, verb, read_verb, b, s, refs):
@@ -234,6 +241,9 @@ def _n6(b, s, refs):
         "seq0": 1000,
         "client_inst": "cd" * 16,
     }
+    b("cut_start", peer="client")
+    b("cut_end", peer="client")
+    b("poll", peer="client", http=200, n_ops=0, held_ms=10, frame=9100)
     b("enq", op_id="N6.burst", verb="rpc_burst", peer="server", args=burst_args)
     b("result", op_id="N6.burst", peer="server", result=_done("rpc_burst", {}, 1))
     log = []
@@ -359,6 +369,60 @@ def _apply(defect, bridge, scenario):
         op_id = f"{step}.{peer}.{'a' if step == 'N4' else 'c'}"
         results = [e for e in bridge if e["ev"] == "result" and e.get("op_id") == op_id]
         results[-1]["result"]["dup"] = False
+    elif defect == "sol01_repeat_both":
+        last = next(
+            e
+            for e in reversed(bridge)
+            if e["ev"] == "result" and e.get("op_id") == "N4.server.a"
+        )
+        earlier = json.loads(json.dumps(last))
+        earlier["t_ms"] = last["t_ms"] - 0.5
+        earlier["result"]["dup"] = False
+        bridge.insert(bridge.index(last), earlier)
+    elif defect == "sol02_28_ids":
+        ops = [e for e in scenario if e["ev"] == "mix_op"]
+        by_verb = {}
+        for op in ops:
+            by_verb.setdefault(op["verb"], []).append(op)
+        for verb, rows in by_verb.items():
+            if verb == "srv_read":
+                continue
+            for op in rows[1:]:
+                op["op_id"] = rows[0]["op_id"]
+    elif defect == "sol03_no_deliver":
+        bridge[:] = [
+            e
+            for e in bridge
+            if not (e["ev"] == "deliver" and e.get("op_id") == "N2.server.S")
+        ]
+    elif defect == "sol04_n4_client_without_cut":
+        start = next(e for e in bridge if e["ev"] == "cut_start" and e.get("peer") == "client")
+        end = next(
+            e
+            for e in bridge
+            if e["ev"] == "cut_end" and e.get("peer") == "client" and e["t_ms"] >= start["t_ms"]
+        )
+        bridge.remove(start)
+        bridge.remove(end)
+    elif defect == "sol05_read_no_status":
+        for ev in bridge:
+            if ev["ev"] == "result" and ev.get("op_id") == "N1.server.read":
+                del ev["result"]["status"]
+                break
+    elif defect == "sol05_srv_no_tick":
+        for ev in bridge:
+            if ev["ev"] == "result" and ev.get("op_id") == "mix-000":
+                ev["result"]["read"]["has"] = ["frame"]
+                break
+    elif defect == "sol06_nan_pose":
+        for ev in bridge:
+            if ev["ev"] == "result" and ev.get("op_id") == "N1.client.read":
+                ev["result"]["read"]["pos"][0] = float("nan")
+                break
+    elif defect == "sol07_result_before_enq":
+        enq = next(e for e in bridge if e["ev"] == "enq" and e.get("op_id") == "mix-000")
+        res = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == "mix-000")
+        res["t_ms"] = enq["t_ms"] - 1
     else:
         raise ValueError(defect)
 
@@ -475,8 +539,9 @@ def _done(verb, args, frame, dup=False, rpc_log=None):
         "ypr": [0, 0, 0],
     }
     if verb == "srv_read":
-        read["has"] = ["frame"]
+        read["has"] = ["frame", "tick_s"]
         read["frame"] = frame
+        read["tick_s"] = frame / 60.0
     elif verb == "ground_query":
         read["has"] = ["y"]
         read["y"] = 100.0
@@ -489,7 +554,17 @@ def _done(verb, args, frame, dup=False, rpc_log=None):
         read["fog"] = args.get("fog", 0.0)
     elif verb == "rpc_log_read":
         read["has"] = ["rpc_log"]
-    return {"dup": dup, "read": read, "reason": "", "status": "done"}
+    return {
+        "done_ms": 1.0,
+        "dup": dup,
+        "frame_done": frame if isinstance(frame, int) else 0,
+        "frame_recv": 0,
+        "op_id": "synth",
+        "read": read,
+        "reason": "",
+        "recv_ms": 0.0,
+        "status": "done",
+    }
 
 
 def _rejected(reason):
@@ -505,7 +580,12 @@ def _rejected(reason):
             "y": 0.0,
             "ypr": [0, 0, 0],
         },
+        "done_ms": 1.0,
+        "frame_done": 0,
+        "frame_recv": 0,
+        "op_id": "synth",
         "reason": reason,
+        "recv_ms": 0.0,
         "status": "rejected",
     }
 

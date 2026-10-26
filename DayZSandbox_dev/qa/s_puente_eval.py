@@ -46,6 +46,7 @@ def evaluate(directory):
     build = manifest.get("build")
     if build is None:
         raise EvidenceError("manifest missing build")
+    _validate_results(bridge)
     ctx = {
         "bridge": bridge,
         "scenario": scenario,
@@ -173,6 +174,15 @@ def _m1(ctx):
     ops = [e for e in ctx["scenario"] if e["ev"] == "mix_op"]
     if len(ops) != 100:
         return "missing", f"{len(ops)} mix_op", None
+    ids = []
+    for ev in ops:
+        if "op_id" not in ev or "verb" not in ev:
+            raise EvidenceError("mix_op missing op_id/verb")
+        ids.append(ev["op_id"])
+        if _first(ctx, "enq", ev["op_id"]) is None:
+            return "missing", "mix op without enq", None
+    if len(set(ids)) != 100:
+        return "missing", f"{len(set(ids))} distinct op_id", None
     for verb in MIX_VERBS:
         n = sum(1 for e in ops if e.get("verb") == verb)
         if n != 25:
@@ -233,7 +243,9 @@ def _mix_ok(verb, enq, res, last_srv):
         return False
     has = read.get("has") or []
     if verb == "srv_read":
-        if "frame" not in has or "frame" not in read:
+        if "frame" not in has or "tick_s" not in has:
+            return False
+        if not _finite(read.get("frame")) or not _finite(read.get("tick_s")):
             return False
         return last_srv is None or read["frame"] > last_srv
     if verb == "ground_query":
@@ -262,7 +274,7 @@ def _n1(peer, ctx):
         return "fail", "sentinel delivered", None
     if not _hello_after(ctx, peer, restored):
         return "missing", "no hello after restore", None
-    return _read_vs(ctx, peer, roles, "B")
+    return _read_vs(ctx, "N1", peer, roles, "B")
 
 
 def _n2(peer, ctx):
@@ -277,44 +289,38 @@ def _rejected(peer, ctx, step, reason):
     roles = _roles(ctx, step, peer)
     if roles is None:
         return "missing", "no expect", None
-    res = _first(ctx, "result", roles["S"])
+    res = _in_step(ctx, step, peer, "result", roles["S"])
     if res is None:
         return "missing", "no sentinel result", None
+    if not _handed(ctx, step, peer, roles["S"], res):
+        return "missing", "sentinel not delivered", None
     body = _body(res)
     if body.get("status") == "done":
         return "fail", "sentinel done", None
     if body.get("status") != "rejected" or body.get("reason") != reason:
         return "fail", f"sentinel not {reason}", None
-    return _read_vs(ctx, peer, roles, "B")
+    return _read_vs(ctx, step, peer, roles, "B")
 
 
 def _n4(peer, ctx):
     roles = _roles(ctx, "N4", peer)
     if roles is None:
         return "missing", "no expect", None
-    if _done(ctx, roles["a"]) is None or _done(ctx, roles["b"]) is None:
+    if _done_in(ctx, "N4", peer, roles["a"]) is None or _done_in(ctx, "N4", peer, roles["b"]) is None:
         return "missing", "a or b not done", None
-    cut_end = _cut_end(ctx, peer)
-    if _one_ev(ctx, "cut_start", peer) is None or cut_end is None:
+    if not _cut_then_poll(ctx, "N4", peer):
         return "missing", "no cut", None
-    if _poll_after(ctx, peer, cut_end) is None:
-        return "missing", "no poll after cut", None
-    rep = _result_after_repeat(ctx, roles["a"])
-    if rep is None:
-        return "missing", "no repeat result", None
-    body = _body(rep)
-    if body.get("status") == "done" and body.get("dup") is False:
-        return "fail", "dup false", None
-    if not (body.get("status") == "done" and body.get("dup") is True):
-        return "fail", "repeat not dup", None
-    return _read_vs(ctx, peer, roles, "b")
+    verdict = _repeat_dup(ctx, "N4", peer, roles["a"])
+    if verdict != "pass":
+        return verdict, "dup false" if verdict == "fail" else "no repeat result", None
+    return _read_vs(ctx, "N4", peer, roles, "b")
 
 
 def _n5(peer, ctx):
     roles = _roles(ctx, "N5", peer)
     if roles is None:
         return "missing", "no expect", None
-    repeat = _repeat_enq(ctx, roles["c"])
+    repeat = _repeat_enq(ctx, "N5", peer, roles["c"])
     if repeat is None:
         return "missing", "no repeat enq", None
     drops = [
@@ -331,20 +337,15 @@ def _n5(peer, ctx):
     ]
     if not drops or early:
         return "missing", "no clean result_drop", None
-    if _done(ctx, roles["d"]) is None:
-        res_d = _first(ctx, "result", roles["d"])
+    if _done_in(ctx, "N5", peer, roles["d"]) is None:
+        res_d = _in_step(ctx, "N5", peer, "result", roles["d"])
         if res_d is None:
             return "missing", "d missing", None
         return "fail", "d not done", None
-    rep = _result_after(ctx, roles["c"], repeat)
-    if rep is None:
-        return "missing", "no repeat result", None
-    body = _body(rep)
-    if not (body.get("status") == "done" and body.get("dup") is True):
-        if body.get("status") == "done" and body.get("dup") is False:
-            return "fail", "dup false", None
-        return "fail", "repeat not dup", None
-    return _read_vs(ctx, peer, roles, "d")
+    verdict = _repeat_dup(ctx, "N5", peer, roles["c"])
+    if verdict != "pass":
+        return verdict, "dup false" if verdict == "fail" else "no repeat result", None
+    return _read_vs(ctx, "N5", peer, roles, "d")
 
 
 def _n6(ctx):
@@ -407,7 +408,10 @@ def _n6(ctx):
     pose_res = _first(ctx, "result", roles["read"])
     if pose_res is None:
         return "missing", "no pose read", metrics
-    pose_ok = _pose_match(_body(pose_res).get("read") or {}, expect, [90, 0, 0])
+    pose_body = _body(pose_res)
+    if pose_body.get("status") != "done":
+        return "missing", "pose read not done", metrics
+    pose_ok = _pose_match(pose_body.get("read") or {}, expect, [90, 0, 0])
     if not bounds_ok:
         return "fail", "lease_age outside window", metrics
     if not order_ok:
@@ -417,14 +421,21 @@ def _n6(ctx):
     return "pass", "", metrics
 
 
-def _read_vs(ctx, peer, roles, source_role):
-    res = _first(ctx, "result", roles["read"])
+def _read_vs(ctx, step, peer, roles, source_role):
+    res = _in_step(ctx, step, peer, "result", roles["read"])
     if res is None:
         return "missing", "no read", None
-    src = _first(ctx, "enq", roles[source_role])
+    body = _body(res)
+    if body.get("status") != "done":
+        return "missing", "read not done", None
+    src = _in_step(ctx, step, peer, "enq", roles[source_role])
     if src is None:
         return "missing", "no source enq", None
-    read = _body(res).get("read") or {}
+    read = body.get("read") or {}
+    need = ("fog",) if peer == "server" else ("pos", "ypr")
+    has = read.get("has") or []
+    if any(name not in has for name in need):
+        return "missing", "read fields", None
     args = _args(src)
     if peer == "server":
         ok = _fog_match(read, args.get("fog"))
@@ -474,64 +485,104 @@ def _hello_after(ctx, peer, restored):
     return False
 
 
-def _done(ctx, op_id):
-    for ev in ctx["bridge"]:
-        if ev["ev"] == "result" and ev.get("op_id") == op_id:
-            body = _body(ev)
-            if body.get("status") == "done":
-                return ev
-    return None
-
-
-def _result_after_repeat(ctx, op_id):
-    enqs = [e for e in ctx["bridge"] if e["ev"] == "enq" and e.get("op_id") == op_id]
-    if len(enqs) < 2:
+def _span(ctx, step, peer):
+    start = end = None
+    for ev in ctx["scenario"]:
+        if ev.get("step") != step or ev.get("peer") != peer:
+            continue
+        if ev["ev"] == "step_start" and start is None:
+            start = ev["t_ms"]
+        elif ev["ev"] == "step_end" and start is not None and end is None:
+            end = ev["t_ms"]
+    if start is None or end is None or end < start:
         return None
-    return _result_after(ctx, op_id, enqs[-1])
+    return start, end
 
 
-def _repeat_enq(ctx, op_id):
-    enqs = [e for e in ctx["bridge"] if e["ev"] == "enq" and e.get("op_id") == op_id]
-    if len(enqs) < 2:
-        return None
-    return enqs[-1]
+def _during(ctx, step, peer):
+    window = _span(ctx, step, peer)
+    if window is None:
+        return []
+    start, end = window
+    return [ev for ev in ctx["bridge"] if start <= ev["t_ms"] <= end]
 
 
-def _result_after(ctx, op_id, mark):
-    mi = ctx["index"][id(mark)]
-    found = None
-    for ev in ctx["bridge"]:
-        if ev["ev"] == "result" and ev.get("op_id") == op_id and ctx["index"][id(ev)] > mi:
-            found = ev
-    return found
-
-
-def _cut_end(ctx, peer):
-    found = None
-    for ev in ctx["bridge"]:
-        if ev["ev"] == "cut_end" and ev.get("peer") == peer:
-            found = ev
-    return found
-
-
-def _one_ev(ctx, name, peer):
-    for ev in ctx["bridge"]:
-        if ev["ev"] == name and ev.get("peer") == peer:
+def _in_step(ctx, step, peer, ev_name, op_id):
+    for ev in _during(ctx, step, peer):
+        if ev["ev"] == ev_name and ev.get("op_id") == op_id:
             return ev
     return None
 
 
-def _poll_after(ctx, peer, mark):
-    mi = ctx["index"][id(mark)]
-    for ev in ctx["bridge"]:
+def _done_in(ctx, step, peer, op_id):
+    for ev in _during(ctx, step, peer):
+        if ev["ev"] == "result" and ev.get("op_id") == op_id and _body(ev).get("status") == "done":
+            return ev
+    return None
+
+
+def _handed(ctx, step, peer, op_id, before):
+    limit = ctx["index"][id(before)]
+    for ev in _during(ctx, step, peer):
+        if ctx["index"][id(ev)] >= limit:
+            break
+        if ev.get("op_id") == op_id and ev["ev"] == "deliver":
+            return True
+    return False
+
+
+def _cut_then_poll(ctx, step, peer):
+    started = None
+    end = None
+    for ev in _during(ctx, step, peer):
+        if ev.get("peer") != peer:
+            continue
+        if ev["ev"] == "cut_start" and started is None:
+            started = ev
+        elif ev["ev"] == "cut_end" and started is not None and ctx["index"][id(ev)] > ctx["index"][id(started)]:
+            end = ev
+            break
+    if started is None or end is None:
+        return False
+    mi = ctx["index"][id(end)]
+    for ev in _during(ctx, step, peer):
         if (
             ev["ev"] == "poll"
             and ev.get("peer") == peer
             and ev.get("http") == 200
             and ctx["index"][id(ev)] > mi
         ):
-            return ev
-    return None
+            return True
+    return False
+
+
+def _repeat_enq(ctx, step, peer, op_id):
+    enqs = [e for e in _during(ctx, step, peer) if e["ev"] == "enq" and e.get("op_id") == op_id]
+    if len(enqs) < 2:
+        return None
+    return enqs[-1]
+
+
+def _repeat_dup(ctx, step, peer, op_id):
+    mark = _repeat_enq(ctx, step, peer, op_id)
+    if mark is None:
+        return "missing"
+    mi = ctx["index"][id(mark)]
+    later = [
+        ev
+        for ev in _during(ctx, step, peer)
+        if ev["ev"] == "result" and ev.get("op_id") == op_id and ctx["index"][id(ev)] > mi
+    ]
+    if not later:
+        return "missing"
+    saw_dup = False
+    for ev in later:
+        body = _body(ev)
+        if body.get("status") == "done" and body.get("dup") is False:
+            return "fail"
+        if body.get("status") == "done" and body.get("dup") is True:
+            saw_dup = True
+    return "pass" if saw_dup else "fail"
 
 
 def _first(ctx, ev_name, op_id):
@@ -604,10 +655,14 @@ def _body(res):
     return body
 
 
+def _finite(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def _fog_match(read, fog):
     if not isinstance(read, dict):
         return False
-    if "fog" not in (read.get("has") or []) or "fog" not in read or fog is None:
+    if "fog" not in (read.get("has") or []) or not _finite(read.get("fog")) or not _finite(fog):
         return False
     return abs(float(read["fog"]) - float(fog)) <= 0.01
 
@@ -622,8 +677,10 @@ def _pose_match(read, pos, ypr):
         return False
     if len(read["pos"]) != 3 or len(pos) != 3 or len(read["ypr"]) != 3 or len(ypr) != 3:
         return False
+    if not all(_finite(v) for v in list(read["pos"]) + list(pos) + list(read["ypr"]) + list(ypr)):
+        return False
     dist = math.sqrt(sum((float(a) - float(b)) ** 2 for a, b in zip(read["pos"], pos)))
-    if dist > 0.05:
+    if not _finite(dist) or dist > 0.05:
         return False
     return all(_ang(a, b) <= 0.5 for a, b in zip(read["ypr"], ypr))
 
@@ -657,6 +714,49 @@ def _read_json(path):
     if not isinstance(data, dict):
         raise EvidenceError(f"{path.name} is not an object")
     return data
+
+
+RESULT_FIELDS = (
+    "done_ms",
+    "dup",
+    "frame_done",
+    "frame_recv",
+    "op_id",
+    "read",
+    "reason",
+    "recv_ms",
+    "status",
+)
+READ_FIELDS = ("fog", "frame", "has", "pos", "rpc_log", "tick_s", "y", "ypr")
+
+
+def _validate_results(bridge):
+    first_enq = {}
+    for ev in bridge:
+        if ev["ev"] == "enq" and ev.get("op_id") is not None:
+            first_enq.setdefault(ev["op_id"], ev["t_ms"])
+        elif ev["ev"] == "result":
+            _require_result(ev.get("result"))
+    for ev in bridge:
+        if ev["ev"] != "result":
+            continue
+        op_id = ev.get("op_id")
+        if op_id in first_enq and ev["t_ms"] < first_enq[op_id]:
+            raise EvidenceError("result registered before its enq")
+
+
+def _require_result(body):
+    if not isinstance(body, dict):
+        raise EvidenceError("result event missing result")
+    missing = [name for name in RESULT_FIELDS if name not in body]
+    if missing:
+        raise EvidenceError("RESULT missing " + ",".join(missing))
+    read = body.get("read")
+    if not isinstance(read, dict):
+        raise EvidenceError("RESULT missing read")
+    missing_read = [name for name in READ_FIELDS if name not in read]
+    if missing_read:
+        raise EvidenceError("READ missing " + ",".join(missing_read))
 
 
 def _read_jsonl(path):

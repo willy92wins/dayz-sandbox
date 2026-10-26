@@ -73,6 +73,7 @@ def run(args, evidence, argv=None):
     def sink(row):
         write_row(bridge_fp, row)
 
+    ready = False
     try:
         bridge = QABridge(hold, lease, sink, port=0)
         bridge_port_box["port"] = None
@@ -151,32 +152,33 @@ def run(args, evidence, argv=None):
         scen("step_end", step="S0")
 
         scen("step_start", step="S1")
-        limit = args.peer_timeout * 1000
+        deadline = time.monotonic() + args.peer_timeout
         seen = {}
         for role in ("server", "client"):
+            _raise_if_bridge_failed(bridge)
+            left_ms = max(0.0, (deadline - time.monotonic()) * 1000.0)
             ev = bridge.wait_event(
                 lambda e, role=role: e.get("ev") == "hello" and e.get("peer") == role and e.get("http") == 200,
-                limit,
+                left_ms,
             )
             seen[role] = ev is not None
+        _raise_if_bridge_failed(bridge)
         if not all(seen.values()):
             scen("peers_absent", peer="server" if not seen["server"] else "client")
         scen("step_end", step="S1")
-        if not all(seen.values()):
-            return _finish(args, evidence, argv, started, bridge, bridge.port, fault)
-        _retain(bridge, scen, hold)
-        _mix(bridge, scen, issue, seed, op_timeout)
-        for role in ("server", "client"):
-            if not _negatives(role, bridge, scen, issue, hold, lease, ttl, retry, op_timeout, cfg_path):
-                skipped.add(role)
-                scen("resume_timeout", peer=role)
-        if "server" not in skipped and "client" not in skipped:
-            _n6(bridge, scen, issue, lease, ttl, interval, op_timeout)
-        elif skipped:
-            pass
-        scen("step_start", step="S10")
-        scen("step_end", step="S10")
-        return _finish(args, evidence, argv, started, bridge, bridge.port, fault)
+        if all(seen.values()):
+            _retain(bridge, scen, hold)
+            _mix(bridge, scen, issue, seed, op_timeout)
+            for role in ("server", "client"):
+                if not _negatives(role, bridge, scen, issue, hold, lease, ttl, retry, op_timeout, cfg_path):
+                    skipped.add(role)
+                    scen("resume_timeout", peer=role)
+            if "server" not in skipped and "client" not in skipped:
+                _n6(bridge, scen, issue, lease, ttl, interval, op_timeout)
+            scen("step_start", step="S10")
+            scen("step_end", step="S10")
+        _raise_if_bridge_failed(bridge)
+        ready = True
     finally:
         _stop_peers(procs)
         if bridge is not None:
@@ -185,6 +187,14 @@ def run(args, evidence, argv=None):
             handle.close()
         for folder in profiles:
             shutil.rmtree(folder, ignore_errors=True)
+    if ready:
+        return _finish(args, evidence, argv, started, bridge, bridge.port, fault)
+
+
+def _raise_if_bridge_failed(bridge):
+    failure = getattr(bridge, "failure", None)
+    if failure is not None:
+        raise failure.with_traceback(failure.__traceback__)
 
 
 def _finish(args, evidence, argv, started, bridge, port, fault):

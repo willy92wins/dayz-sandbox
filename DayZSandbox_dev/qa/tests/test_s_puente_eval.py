@@ -125,6 +125,56 @@ class SPuenteEvalTests(unittest.TestCase):
             self.assertEqual(verdict["exit_code"], 0)
             self.assertLess(verdict["metrics"]["p95_ms"], 1000)
 
+    def test_sol01_dup_false_before_dup_true_fails(self):
+        self.assertEqual(self._code("sol01_repeat_both"), 1)
+
+    def test_sol02_repeated_mix_ids_are_missing(self):
+        self.assertEqual(self._code("sol02_28_ids"), 2)
+
+    def test_sol03_sentinel_without_deliver_is_missing(self):
+        self.assertEqual(self._code("sol03_no_deliver"), 2)
+
+    def test_sol04_n4_ignores_n6_cuts(self):
+        self.assertEqual(self._code("sol04_n4_client_without_cut"), 2)
+
+    def test_sol05_read_without_status_is_evidence_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_case(tmp, "sol05_read_no_status")
+            with self.assertRaises(EvidenceError):
+                evaluate(tmp)
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "qa/m1_gate.py",
+                    "spike",
+                    "S-puente",
+                    "--build",
+                    "offline",
+                    "--evidence",
+                    tmp,
+                    "--both",
+                    "--evaluate-only",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+            )
+            self.assertEqual(proc.returncode, 2)
+
+    def test_sol05_srv_read_without_tick_s_is_not_observed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_case(tmp, "sol05_srv_no_tick")
+            verdict = evaluate(tmp)
+            self.assertEqual(verdict["metrics"]["n_not_observed"], 1)
+
+    def test_sol06_nan_pose_fails(self):
+        self.assertEqual(self._code("sol06_nan_pose"), 1)
+
+    def test_sol07_result_before_enq_is_evidence_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_case(tmp, "sol07_result_before_enq")
+            with self.assertRaises(EvidenceError):
+                evaluate(tmp)
+
     def test_corrupt_jsonl_exits_2_with_traceback(self):
         with tempfile.TemporaryDirectory() as tmp:
             write_case(tmp, "corrupt_line")

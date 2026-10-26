@@ -3,12 +3,17 @@
 La evidencia de cada corrida es un temporal. La clave no se imprime.
 """
 
+import argparse
+import contextlib
+import io
 import json
+import socket
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
@@ -52,16 +57,37 @@ def _fake_peers():
         text=True,
         timeout=30,
     )
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr)
     return [line.strip() for line in out.stdout.splitlines() if line.strip()]
 
 
-def _stop_peers():
-    for pid in _fake_peers():
+def _kill(pids):
+    for pid in pids:
         subprocess.run(
             ["powershell", "-NoProfile", "-Command", f"Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue"],
             capture_output=True,
             timeout=20,
         )
+
+
+def _args(**extra):
+    values = {
+        "both": True,
+        "build": "offline",
+        "client_profile": None,
+        "evaluate_only": False,
+        "fault": None,
+        "hold_ms": 300,
+        "lease_ms": 600,
+        "peer_timeout": 20,
+        "retry_ms": 300,
+        "seed": 20261026,
+        "server_profile": None,
+        "ttl_ms": 1000,
+    }
+    values.update(extra)
+    return argparse.Namespace(**values)
 
 
 def _spike(extra, evidence, timeout):
@@ -79,8 +105,16 @@ def _tree_bytes(root):
 
 
 class E2ESpuenteTests(unittest.TestCase):
+    def setUp(self):
+        self.owned_before = set(_fake_peers())
+
     def tearDown(self):
-        _stop_peers()
+        afterwards = set(_fake_peers())
+        leaked = afterwards - self.owned_before
+        try:
+            self.assertEqual(sorted(leaked), [])
+        finally:
+            _kill(leaked)
 
     def test_point6_default_offline_passes(self):
         with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
@@ -115,6 +149,8 @@ class E2ESpuenteTests(unittest.TestCase):
                     self.assertEqual(proc.returncode, expected, proc.stderr[-2000:])
                     verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
                     self.assertEqual(verdict["exit_code"], expected)
+                    if fault == "drop_results":
+                        self.assertEqual(verdict["metrics"]["n_timeouts"], 11)
 
     def test_point8_retail_does_not_launch_and_writes_profiles(self):
         with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
@@ -150,10 +186,151 @@ class E2ESpuenteTests(unittest.TestCase):
             blob = _tree_bytes(evidence) + proc.stdout + proc.stderr
             for key in keys:
                 self.assertNotIn(key.encode("ascii"), blob)
-            self.assertEqual(_fake_peers(), [])
+            self.assertFalse(set(_fake_peers()) - self.owned_before)
+
+    def test_sol08_evaluate_runs_after_bridge_stops(self):
+        import s_puente_run
+
+        seen = {}
+        real = s_puente_run.evaluate
+
+        def wrapped(directory):
+            path = Path(directory) / "samples" / "bridge.jsonl"
+            seen["size"] = path.stat().st_size
+            port = json.loads((Path(directory) / "manifest.json").read_text(encoding="utf-8"))["params"]["port"]
+            sock = socket.socket()
+            sock.settimeout(0.3)
+            try:
+                sock.connect(("127.0.0.1", port))
+                seen["up"] = True
+            except OSError:
+                seen["up"] = False
+            finally:
+                sock.close()
+            seen["peers"] = _fake_peers()
+            return real(directory)
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "c").mkdir()
+            evidence = root / "run"
+            evidence.mkdir()
+            with mock.patch("s_puente_run.evaluate", wrapped):
+                code = s_puente_run.run(
+                    _args(
+                        build="retail",
+                        peer_timeout=0.2,
+                        server_profile=str(root / "s"),
+                        client_profile=str(root / "c"),
+                    ),
+                    evidence,
+                    [],
+                )
+            later = (evidence / "samples" / "bridge.jsonl").stat().st_size
+            proc_return = code
+        self.assertEqual(proc_return, 2)
+        self.assertIs(seen["up"], False)
+        self.assertEqual(seen["peers"], [])
+        self.assertEqual(later, seen["size"])
+
+    def test_sol14_one_deadline_for_both_peers(self):
+        import s_puente_run
+
+        script = Path(tempfile.mkdtemp(prefix="dsbx-hello-")) / "hello.py"
+        script.write_bytes(
+            b"import json,sys,time,urllib.request\n"
+            b"from pathlib import Path\n"
+            b"time.sleep(float(sys.argv[1]))\n"
+            b"cfg=json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))\n"
+            b"body=json.dumps({'proto':'qa0','peer':sys.argv[3],'inst':'ab'*16,'build':'offline','probe_ver':'t'}).encode()\n"
+            b"req=urllib.request.Request(cfg['url'].rstrip('/')+'/hello?key='+cfg['key'],data=body,method='POST')\n"
+            b"try:\n urllib.request.urlopen(req,timeout=5).read()\nexcept Exception:\n pass\n"
+            b"time.sleep(30)\n"
+        )
+        real = subprocess.Popen
+
+        def fake_popen(cmd, **kwargs):
+            if "--peer" not in cmd:
+                return real(cmd, **kwargs)
+            role = cmd[cmd.index("--peer") + 1]
+            cfg = cmd[cmd.index("--config") + 1]
+            delay = "1.5" if role == "server" else "3.5"
+            return real([sys.executable, str(script), delay, cfg, role], **kwargs)
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+            evidence = Path(tmp) / "run"
+            evidence.mkdir()
+            with mock.patch("s_puente_run.subprocess.Popen", fake_popen):
+                code = s_puente_run.run(
+                    _args(peer_timeout=2),
+                    evidence,
+                    [],
+                )
+            scenario = (evidence / "samples" / "scenario.jsonl").read_text(encoding="utf-8")
+        self.assertEqual(code, 2)
+        self.assertIn('"ev": "peers_absent"', scenario)
+        self.assertIn('"peer": "client"', scenario)
+
+    def test_sol16_generated_keys_stay_out_of_evidence(self):
+        import s_puente_run
+        from bridge_qa import QABridge
+
+        keys = []
+        original = QABridge.set_peer_key
+
+        def set_peer_key(self, peer, key):
+            keys.append(key)
+            return original(self, peer, key)
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+            evidence = Path(tmp) / "run"
+            evidence.mkdir()
+            out = io.StringIO()
+            err = io.StringIO()
+            with mock.patch.object(QABridge, "set_peer_key", set_peer_key):
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    code = s_puente_run.run(_args(), evidence, [])
+            blob = _tree_bytes(evidence) + out.getvalue().encode("utf-8") + err.getvalue().encode("utf-8")
+        self.assertEqual(code, 0)
+        self.assertTrue(keys)
+        self.assertFalse(any(key.encode("ascii") in blob for key in keys))
+
+    def test_sol09_sink_error_fills_verdict(self):
+        import m1_gate
+        import s_puente_run
+
+        original = s_puente_run.json.dumps
+
+        def dumps(obj, **kwargs):
+            if isinstance(obj, dict) and obj.get("ev") == "hello":
+                raise OSError("sink")
+            return original(obj, **kwargs)
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+            evidence = Path(tmp) / "run"
+            with mock.patch("s_puente_run.json.dumps", dumps):
+                code = m1_gate.main(
+                    [
+                        "spike",
+                        "S-puente",
+                        "--both",
+                        "--build",
+                        "offline",
+                        "--evidence",
+                        str(evidence),
+                        "--peer-timeout",
+                        "5",
+                        *FAST,
+                    ]
+                )
+            verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
+        self.assertEqual(code, 2)
+        self.assertEqual(verdict["error"]["type"], "OSError")
+        self.assertTrue(verdict["error"]["traceback"])
 
     def test_point11_no_fake_peer_survives(self):
-        self.assertEqual(_fake_peers(), [])
+        self.assertFalse(set(_fake_peers()) - self.owned_before)
 
 
 if __name__ == "__main__":

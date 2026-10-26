@@ -149,6 +149,47 @@ class BridgeQaTests(unittest.TestCase):
         self.assertEqual(payload["error"], "drop")
         self.assertIsNone(self.bridge.wait_result("gone", 0, 50))
 
+    def test_sol11_hello_uses_body_peer_key(self):
+        code, _payload = _call(
+            self.bridge,
+            "POST",
+            "/hello",
+            "k-server",
+            {"proto": "qa0", "peer": "client", "inst": "cc", "build": "offline", "probe_ver": "t"},
+            "peer=server",
+        )
+        self.assertEqual(code, 401)
+        self.assertIsNone(self.bridge.registered("client"))
+
+    def test_sol12_poll_rechecks_instance_when_released(self):
+        _call(
+            self.bridge,
+            "POST",
+            "/hello",
+            "k-server",
+            {"proto": "qa0", "peer": "server", "inst": "I1", "build": "offline", "probe_ver": "t"},
+        )
+        box = {}
+
+        def _poll():
+            box["result"] = _call(self.bridge, "GET", "/poll", "k-server", None, "peer=server&inst=I1&frame=1")
+
+        thread = threading.Thread(target=_poll)
+        thread.start()
+        time.sleep(0.05)
+        _call(
+            self.bridge,
+            "POST",
+            "/hello",
+            "k-server",
+            {"proto": "qa0", "peer": "server", "inst": "I2", "build": "offline", "probe_ver": "t"},
+        )
+        oid = self.bridge.enqueue("server", "srv_read", {}, "I1", 5000)
+        thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(box["result"][0], 409)
+        self.assertFalse(any(row.get("ev") == "deliver" and row.get("op_id") == oid for row in self.rows))
+
     def test_key_absent_from_events(self):
         _call(
             self.bridge,

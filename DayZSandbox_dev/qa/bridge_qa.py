@@ -2,6 +2,7 @@
 
 import json
 import hmac
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,8 +46,11 @@ class QABridge:
         self.drop = set()
         self.force = set()
         self._seq = 0
+        self.failure = None
+        self._stopping = False
         handler = self._handler()
         self.httpd = _Server(("127.0.0.1", port), handler)
+        self.httpd.qa_bridge = self
         self._thread = None
 
 
@@ -55,7 +59,9 @@ class _Server(ThreadingHTTPServer):
     daemon_threads = True
 
     def handle_error(self, request, client_address):
-        return
+        bridge = getattr(self, "qa_bridge", None)
+        if bridge is not None:
+            bridge.note_handler_error()
 
 
 class QABridge(QABridge):
@@ -84,7 +90,16 @@ class QABridge(QABridge):
         self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self._thread.start()
 
+    def note_handler_error(self):
+        exc = sys.exception()
+        if exc is None or self._stopping or self.failure is not None:
+            return
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return
+        self.failure = exc
+
     def stop(self):
+        self._stopping = True
         self.httpd.shutdown()
         self.httpd.server_close()
         if self._thread is not None:
@@ -171,6 +186,7 @@ class QABridge(QABridge):
                 for rec in self.results.get(op_id, ()):
                     if rec["t_ms"] >= after_t_ms:
                         return rec["result"]
+                self._raise_failure()
                 left = deadline - time.monotonic()
                 if left <= 0:
                     return None
@@ -186,10 +202,15 @@ class QABridge(QABridge):
                     index += 1
                     if pred(ev):
                         return ev
+                self._raise_failure()
                 left = deadline - time.monotonic()
                 if left <= 0:
                     return None
                 self.cv.wait(left)
+
+    def _raise_failure(self):
+        if self.failure is not None:
+            raise self.failure.with_traceback(self.failure.__traceback__)
 
     def _emit(self, fields):
         row = {"t_ms": self.now_ms()}
@@ -197,7 +218,12 @@ class QABridge(QABridge):
             if value is not None:
                 row[key] = value
         self.events.append(row)
-        self.sink(row)
+        try:
+            self.sink(row)
+        except Exception as exc:
+            if self.failure is None:
+                self.failure = exc
+            raise
         self.cv.notify_all()
 
     def _cut_active(self, peer):
@@ -217,9 +243,20 @@ class QABridge(QABridge):
                 self._send(handler, 400, {"error": "bad_json"})
                 return
         path = parts.path
-        peer = query.get("peer") or (body.get("peer") if isinstance(body, dict) else None)
         key = query.get("key", "")
         with self.cv:
+            if path == "/hello" and handler.command == "POST":
+                peer = body.get("peer") if isinstance(body, dict) else None
+                if peer in ("server", "client") and self._cut_active(peer):
+                    self._send(handler, 503, {"error": "cut"})
+                    return
+                if not self._key_ok(peer, key):
+                    self._emit({"ev": "auth_reject", "http": 401, "peer": peer})
+                    self._send(handler, 401, {"error": "bad_key"})
+                    return
+                self._hello(handler, body)
+                return
+            peer = query.get("peer")
             if peer in ("server", "client") and self._cut_active(peer):
                 self._send(handler, 503, {"error": "cut"})
                 return
@@ -227,9 +264,7 @@ class QABridge(QABridge):
                 self._emit({"ev": "auth_reject", "http": 401, "peer": peer})
                 self._send(handler, 401, {"error": "bad_key"})
                 return
-            if path == "/hello" and handler.command == "POST":
-                self._hello(handler, body)
-            elif path == "/poll" and handler.command == "GET":
+            if path == "/poll" and handler.command == "GET":
                 self._poll(handler, query)
             elif path == "/result" and handler.command == "POST":
                 self._result(handler, query, body)
@@ -285,6 +320,10 @@ class QABridge(QABridge):
         start = time.monotonic()
         deadline = start + self.hold_ms / 1000.0
         while True:
+            if self.inst.get(peer) != inst:
+                self._emit({"ev": "inst_reject", "http": 409, "peer": peer, "inst": inst, "reason": "hello_required"})
+                self._send(handler, 409, {"error": "hello_required"})
+                return
             if self._cut_active(peer):
                 self._send(handler, 503, {"error": "cut"})
                 return
@@ -292,6 +331,10 @@ class QABridge(QABridge):
             if ops or time.monotonic() >= deadline:
                 break
             self.cv.wait(max(0.0, deadline - time.monotonic()))
+        if self.inst.get(peer) != inst:
+            self._emit({"ev": "inst_reject", "http": 409, "peer": peer, "inst": inst, "reason": "hello_required"})
+            self._send(handler, 409, {"error": "hello_required"})
+            return
         held = round((time.monotonic() - start) * 1000.0, 3)
         now = self.now_ms()
         self._emit(

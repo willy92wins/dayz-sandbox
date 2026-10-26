@@ -85,13 +85,13 @@
   "exit_code": 0,
   "id": "S-puente",
   "metrics": {
-    "max_ms": 66.4390000000003,
+    "max_ms": 70.40499999999975,
     "n_not_observed": 0,
     "n_timeouts": 0,
-    "p50_ms": 33.48800000000119,
-    "p95_ms": 54.32600000000002,
-    "window_accept_max_ms": 2770.2041000011377,
-    "window_reject_min_ms": 3069.8900999996113
+    "p50_ms": 34.284999999999854,
+    "p95_ms": 61.069000000001324,
+    "window_accept_max_ms": 2793.472599994857,
+    "window_reject_min_ms": 3093.822699993325
   },
   "reasons": [],
   "schema": "dsbx-qa-verdict/1",

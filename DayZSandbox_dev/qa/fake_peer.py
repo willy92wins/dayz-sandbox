@@ -54,6 +54,8 @@ class Peer:
         self.rpc_log = []
         self.build = "retail" if fault == "wrong_build" else "offline"
         self.udp = None
+        self._batch = None
+        self.burst = None
 
     def local_ms(self):
         return (time.monotonic() - self.t0) * 1000.0
@@ -118,46 +120,68 @@ class Peer:
                 self.last_ok = time.monotonic()
                 self.backoff = 0.25
                 bucket = []
-                recv = self.local_ms()
-                for op in payload.get("ops") or []:
-                    self._start_op(op, payload.get("now_ms", 0), recv, bucket)
-                while self.jobs and self.alive:
-                    time.sleep(1.0 / self.frame_hz)
-                    self.frame += 1
-                    self._apply()
-                    self._drain_rpc()
-                    self._finish_jobs()
+                ops = list(payload.get("ops") or [])
+                now_ms = payload.get("now_ms", 0)
+                while self.alive and (ops or self.jobs or self.burst is not None):
+                    if self._take_one(ops, now_ms, bucket):
+                        time.sleep(1.0 / self.frame_hz)
+                        self.frame += 1
+                        self._apply()
+                        self._drain_rpc()
                 self._send_results(cfg, bucket)
             else:
                 self._on_http_error(cfg, code)
 
     def _pump(self):
-        self._finish_jobs()
-        try:
-            item = self.inbox.get_nowait()
-        except queue.Empty:
-            return
-        ops, now_ms, bucket, done = item
-        recv = self.local_ms()
-        for op in ops:
-            self._start_op(op, now_ms, recv, bucket)
-        if not self.jobs:
+        if self._batch is None:
+            try:
+                ops, now_ms, bucket, done = self.inbox.get_nowait()
+            except queue.Empty:
+                self._finish_jobs()
+                return
+            self._batch = [list(ops), now_ms, bucket, done]
+        ops, now_ms, bucket, done = self._batch
+        while self.alive:
+            if self._take_one(ops, now_ms, bucket):
+                return
+            if ops or self.jobs or self.burst is not None:
+                continue
             done.set()
-        else:
-            self.pending_done = done
+            self._batch = None
+            return
+
+    def _take_one(self, ops, now_ms, bucket):
+        self._finish_jobs()
+        if self.jobs or self.burst is not None:
+            return True
+        if not ops:
+            return False
+        self._start_op(ops.pop(0), now_ms, self.local_ms(), bucket)
+        return bool(self.jobs or self.burst is not None)
 
     def _finish_jobs(self):
+        self._burst_tick()
         still = []
         for job in self.jobs:
             if job["phase"] == "wait" and self.frame < job["read_frame"]:
                 if not self._expired(job):
                     still.append(job)
                     continue
+            if job["phase"] == "burst":
+                if self.burst is not None:
+                    still.append(job)
+                    continue
+                body = self._done(job["op"], _empty_read(), job)
+                self._keep(body, job["bucket"])
+                continue
             if self._expired(job):
                 body = self._rejected(job["op"], "expired", job)
                 self._keep(body, job["bucket"])
                 continue
             body = self._execute(job)
+            if body is None:
+                still.append(job)
+                continue
             self._keep(body, job["bucket"])
         self.jobs = still
         done = getattr(self, "pending_done", None)
@@ -173,11 +197,6 @@ class Peer:
         return time.monotonic() > job["deadline"]
 
     def _start_op(self, op, now_ms, recv_ms, bucket):
-        if self.fault != "no_dedup" and op["op_id"] in self.cache:
-            sent = json.loads(json.dumps(self.cache[op["op_id"]]))
-            sent["dup"] = True
-            bucket.append(sent)
-            return
         if self.fault != "ignores_instance" and op.get("inst") != self.inst:
             bucket.append(self._rejected(op, "stale_instance", {"recv_ms": recv_ms, "frame": self.frame}))
             self._remember(bucket[-1])
@@ -187,6 +206,11 @@ class Peer:
         if self.fault != "ignores_ttl" and restante <= 0:
             bucket.append(self._rejected(op, "expired", {"recv_ms": recv_ms, "frame": self.frame}))
             self._remember(bucket[-1])
+            return
+        if self.fault != "no_dedup" and op["op_id"] in self.cache:
+            sent = json.loads(json.dumps(self.cache[op["op_id"]]))
+            sent["dup"] = True
+            bucket.append(sent)
             return
         verb = op.get("verb")
         if VERBS.get(verb) != self.role:
@@ -224,33 +248,52 @@ class Peer:
             self.effects.append((self.frame, "pose", (pos, ypr)))
             self._apply()
         elif verb == "rpc_burst":
-            self._burst(args)
+            self._arm_burst(args, job)
+            return None
         read = self._observe(verb, args)
         if self.fault == "ack_only":
             read = _empty_read()
         body = self._done(op, read, job)
         return body
 
-    def _burst(self, args):
+    def _arm_burst(self, args, job):
+        job["phase"] = "burst"
         count = int(args.get("count") or 0)
         interval = int(args.get("interval_ms") or 0)
-        seq0 = int(args.get("seq0") or 0)
+        gap = max(1, int(round(interval * self.frame_hz / 1000.0))) if interval > 0 else 1
+        self.burst = {
+            "args": args,
+            "count": count,
+            "gap": gap,
+            "i": 0,
+            "next": self.frame,
+            "seq0": int(args.get("seq0") or 0),
+        }
+
+    def _burst_tick(self):
+        burst = self.burst
+        if burst is None or self.frame < burst["next"]:
+            return
+        args = burst["args"]
+        i = burst["i"]
         pos = [float(v) for v in args.get("pos") or [0, 0, 0]]
         ypr = [float(v) for v in args.get("ypr") or [0, 0, 0]]
-        target = args.get("client_inst") or ""
-        for i in range(count):
-            pkt = {
-                "pos": [pos[0] + i, pos[1], pos[2]],
-                "seq": seq0 + i,
-                "target_inst": target,
-                "ypr": ypr,
-            }
-            try:
-                self.udp.sendto(json.dumps(pkt, separators=(",", ":")).encode("utf-8"), ("127.0.0.1", self.rpc_port))
-            except OSError:
-                break
-            if i + 1 < count and interval > 0:
-                time.sleep(interval / 1000.0)
+        pkt = {
+            "pos": [pos[0] + i, pos[1], pos[2]],
+            "seq": burst["seq0"] + i,
+            "target_inst": args.get("client_inst") or "",
+            "ypr": ypr,
+        }
+        try:
+            self.udp.sendto(json.dumps(pkt, separators=(",", ":")).encode("utf-8"), ("127.0.0.1", self.rpc_port))
+        except OSError:
+            self.burst = None
+            return
+        burst["i"] = i + 1
+        if burst["i"] >= burst["count"]:
+            self.burst = None
+        else:
+            burst["next"] = self.frame + burst["gap"]
 
     def _observe(self, verb, args):
         if verb == "srv_read":
@@ -312,7 +355,7 @@ class Peer:
     def _keep(self, body, bucket):
         self._remember(body)
         self.processed += 1
-        nth = self.processed % 10 == 0
+        nth = self.processed % 10 == 1
         if self.fault == "drop_results" and nth:
             return
         if self.fault == "slow" and nth:
@@ -396,7 +439,8 @@ class Peer:
             bucket = []
             done = threading.Event()
             self.inbox.put((payload.get("ops") or [], payload.get("now_ms", 0), bucket, done))
-            done.wait(timeout=60)
+            while self.alive and not done.wait(timeout=0.2):
+                pass
             self._send_results(cfg, bucket)
 
     def _hello(self, cfg):
