@@ -1,6 +1,7 @@
 """Escenario de S-puente (brief F0.1 §8). Offline lanza peers falsos; retail/diag no arranca DayZ."""
 
 import json
+import math
 import random
 import secrets
 import shutil
@@ -153,14 +154,25 @@ def run(args, evidence, argv=None):
 
         scen("step_start", step="S1")
         deadline = time.monotonic() + args.peer_timeout
+        limit_ms = bridge.now_ms() + args.peer_timeout * 1000.0
         seen = {}
         for role in ("server", "client"):
             _raise_if_bridge_failed(bridge)
             left_ms = max(0.0, (deadline - time.monotonic()) * 1000.0)
-            ev = bridge.wait_event(
-                lambda e, role=role: e.get("ev") == "hello" and e.get("peer") == role and e.get("http") == 200,
-                left_ms,
-            )
+
+            def hello_on_time(e, role=role):
+                t_ms = e.get("t_ms")
+                return (
+                    e.get("ev") == "hello"
+                    and e.get("peer") == role
+                    and e.get("http") == 200
+                    and isinstance(t_ms, (int, float))
+                    and not isinstance(t_ms, bool)
+                    and math.isfinite(t_ms)
+                    and t_ms <= limit_ms
+                )
+
+            ev = bridge.wait_event(hello_on_time, left_ms)
             seen[role] = ev is not None
         _raise_if_bridge_failed(bridge)
         if not all(seen.values()):
@@ -187,6 +199,8 @@ def run(args, evidence, argv=None):
             handle.close()
         for folder in profiles:
             shutil.rmtree(folder, ignore_errors=True)
+    if bridge is not None and bridge.failure is not None:
+        _raise_if_bridge_failed(bridge)
     if ready:
         return _finish(args, evidence, argv, started, bridge, bridge.port, fault)
 

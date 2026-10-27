@@ -48,6 +48,9 @@ class QABridge:
         self._seq = 0
         self.failure = None
         self._stopping = False
+        self._sink_closed = False
+        self._live = 0
+        self.STOP_JOIN_S = 5.0
         handler = self._handler()
         self.httpd = _Server(("127.0.0.1", port), handler)
         self.httpd.qa_bridge = self
@@ -62,6 +65,26 @@ class _Server(ThreadingHTTPServer):
         bridge = getattr(self, "qa_bridge", None)
         if bridge is not None:
             bridge.note_handler_error()
+
+    def process_request_thread(self, request, client_address):
+        bridge = self.qa_bridge
+        with bridge.cv:
+            bridge._live += 1
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            with bridge.cv:
+                bridge._live -= 1
+                bridge.cv.notify_all()
+
+    def process_request(self, request, client_address):
+        if self.qa_bridge._stopping:
+            try:
+                request.close()
+            except OSError:
+                pass
+            return
+        super().process_request(request, client_address)
 
 
 class QABridge(QABridge):
@@ -92,18 +115,32 @@ class QABridge(QABridge):
 
     def note_handler_error(self):
         exc = sys.exception()
-        if exc is None or self._stopping or self.failure is not None:
+        if exc is None or self.failure is not None:
             return
-        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+        # El peer cierra el socket (lectura o respuesta). No es un fallo del
+        # bridge. Cualquier otra excepcion, tambien con la parada en curso, se guarda.
+        if isinstance(exc, ConnectionError):
             return
         self.failure = exc
 
     def stop(self):
         self._stopping = True
+        with self.cv:
+            self.cv.notify_all()
         self.httpd.shutdown()
         self.httpd.server_close()
         if self._thread is not None:
             self._thread.join(timeout=2)
+        deadline = time.monotonic() + self.STOP_JOIN_S
+        while time.monotonic() < deadline:
+            with self.cv:
+                if self._live == 0:
+                    break
+            time.sleep(0.01)
+        with self.cv:
+            if self._live > 0 and self.failure is None:
+                self.failure = TimeoutError("handler still running after stop")
+            self._sink_closed = True
 
     def now_ms(self):
         return round((time.monotonic_ns() - self.t0) / 1e6, 3)
@@ -213,17 +250,22 @@ class QABridge(QABridge):
             raise self.failure.with_traceback(self.failure.__traceback__)
 
     def _emit(self, fields):
+        if self._sink_closed:
+            return
         row = {"t_ms": self.now_ms()}
         for key, value in fields.items():
             if value is not None:
                 row[key] = value
         self.events.append(row)
+        self.cv.release()
         try:
             self.sink(row)
         except Exception as exc:
             if self.failure is None:
                 self.failure = exc
             raise
+        finally:
+            self.cv.acquire()
         self.cv.notify_all()
 
     def _cut_active(self, peer):
@@ -319,7 +361,10 @@ class QABridge(QABridge):
             tick_s = 0.0
         start = time.monotonic()
         deadline = start + self.hold_ms / 1000.0
+        ops = []
         while True:
+            if self._stopping:
+                break
             if self.inst.get(peer) != inst:
                 self._emit({"ev": "inst_reject", "http": 409, "peer": peer, "inst": inst, "reason": "hello_required"})
                 self._send(handler, 409, {"error": "hello_required"})

@@ -4,9 +4,9 @@ La evidencia de cada corrida es un temporal. La clave no se imprime.
 """
 
 import argparse
-import contextlib
-import io
 import json
+import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -45,11 +45,11 @@ MATRIX = (
 )
 
 
-def _fake_peers():
+def _peer_rows():
     script = (
         "Get-CimInstance Win32_Process | "
         "Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*fake_peer.py*' } | "
-        "Select-Object -ExpandProperty ProcessId"
+        "ForEach-Object { '{0}`t{1}' -f $_.ProcessId, $_.ParentProcessId }"
     )
     out = subprocess.run(
         ["powershell", "-NoProfile", "-Command", script],
@@ -59,7 +59,54 @@ def _fake_peers():
     )
     if out.returncode != 0:
         raise RuntimeError(out.stderr)
-    return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    rows = []
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if not line or "\t" not in line:
+            continue
+        pid, parent = line.split("\t", 1)
+        rows.append(
+            {
+                "Name": "python.exe",
+                "CommandLine": "fake_peer.py",
+                "ProcessId": pid.strip(),
+                "ParentProcessId": parent.strip(),
+            }
+        )
+    return rows
+
+
+def peers_owned(rows, parent_pids):
+    parents = {str(pid) for pid in parent_pids}
+    owned = []
+    for row in rows:
+        if str(row.get("Name", "")).lower() != "python.exe":
+            continue
+        if "fake_peer.py" not in str(row.get("CommandLine") or ""):
+            continue
+        if str(row.get("ParentProcessId")) not in parents:
+            continue
+        owned.append(str(row.get("ProcessId")))
+    return owned
+
+
+def _fake_peers(parent_pids):
+    return peers_owned(_peer_rows(), parent_pids)
+
+
+def evidence_key_bytes(root):
+    root = Path(root)
+    blob = b""
+    if not root.is_dir():
+        return blob
+    for path in root.iterdir():
+        if path.is_file():
+            blob += path.read_bytes()
+    peers = root / "peers"
+    if peers.is_dir():
+        for path in peers.glob("*.log"):
+            blob += path.read_bytes()
+    return blob
 
 
 def _kill(pids):
@@ -90,10 +137,17 @@ def _args(**extra):
     return argparse.Namespace(**values)
 
 
-def _spike(extra, evidence, timeout):
+def _spike(extra, evidence, timeout, parents):
     cmd = [PY, "qa/m1_gate.py", "spike", "S-puente", "--both", "--evidence", str(evidence), *extra]
-    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, timeout=timeout)
-    return proc
+    proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    parents.add(str(proc.pid))
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
 def _tree_bytes(root):
@@ -106,10 +160,11 @@ def _tree_bytes(root):
 
 class E2ESpuenteTests(unittest.TestCase):
     def setUp(self):
-        self.owned_before = set(_fake_peers())
+        self.parents = {str(os.getpid())}
+        self.owned_before = set(_fake_peers(self.parents))
 
     def tearDown(self):
-        afterwards = set(_fake_peers())
+        afterwards = set(_fake_peers(self.parents))
         leaked = afterwards - self.owned_before
         try:
             self.assertEqual(sorted(leaked), [])
@@ -119,7 +174,7 @@ class E2ESpuenteTests(unittest.TestCase):
     def test_point6_default_offline_passes(self):
         with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
             evidence = Path(tmp) / "run"
-            proc = _spike(["--build", "offline"], evidence, 240)
+            proc = _spike(["--build", "offline"], evidence, 240, self.parents)
             self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
             verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
             self.assertEqual(verdict["exit_code"], 0)
@@ -127,7 +182,7 @@ class E2ESpuenteTests(unittest.TestCase):
             self.assertEqual(bad, [])
             before = (evidence / "verdict.json").read_bytes()
             manifest = (evidence / "manifest.json").read_bytes()
-            again = _spike(["--build", "offline", "--evaluate-only"], evidence, 60)
+            again = _spike(["--build", "offline", "--evaluate-only"], evidence, 60, self.parents)
             self.assertEqual(again.returncode, 0, again.stderr[-2000:])
             self.assertEqual((evidence / "verdict.json").read_bytes(), before)
             self.assertEqual((evidence / "manifest.json").read_bytes(), manifest)
@@ -138,19 +193,41 @@ class E2ESpuenteTests(unittest.TestCase):
             self.assertNotIn(b"key=", joined)
 
     def test_point7_fault_matrix(self):
-        for fault, expected in MATRIX:
-            with self.subTest(fault=fault, expected=expected):
-                with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
-                    evidence = Path(tmp) / "run"
-                    extra = ["--build", "offline", *FAST]
-                    if fault != "none":
-                        extra.extend(["--fault", fault])
-                    proc = _spike(extra, evidence, 180)
-                    self.assertEqual(proc.returncode, expected, proc.stderr[-2000:])
-                    verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
-                    self.assertEqual(verdict["exit_code"], expected)
-                    if fault == "drop_results":
-                        self.assertEqual(verdict["metrics"]["n_timeouts"], 11)
+        import s_puente_run
+        from bridge_qa import QABridge
+
+        keys = []
+        original = QABridge.set_peer_key
+
+        def set_peer_key(self, peer, key):
+            keys.append(key)
+            return original(self, peer, key)
+
+        with mock.patch.object(QABridge, "set_peer_key", set_peer_key):
+            for fault, expected in MATRIX:
+                with self.subTest(fault=fault, expected=expected):
+                    keys.clear()
+                    with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+                        evidence = Path(tmp) / "run"
+                        evidence.mkdir()
+                        args = _args(fault=None if fault == "none" else fault)
+                        code = s_puente_run.run(args, evidence, [])
+                        self.assertEqual(code, expected)
+                        verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
+                        self.assertEqual(verdict["exit_code"], expected)
+                        if fault == "drop_results":
+                            self.assertEqual(verdict["metrics"]["n_timeouts"], 11)
+                        blob = evidence_key_bytes(evidence)
+                        self.assertTrue(keys)
+                        for key in keys:
+                            self.assertNotIn(key.encode("ascii"), blob)
+                        if fault == "none":
+                            copied = Path(tmp) / "copy"
+                            shutil.copytree(evidence, copied)
+                            planted = "c0ffee" * 5
+                            (copied / "peers" / "server.log").write_bytes(planted.encode("ascii"))
+                            self.assertIn(planted.encode("ascii"), evidence_key_bytes(copied))
+                            self.assertNotIn(planted.encode("ascii"), evidence_key_bytes(evidence))
 
     def test_point8_retail_does_not_launch_and_writes_profiles(self):
         with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
@@ -173,6 +250,7 @@ class E2ESpuenteTests(unittest.TestCase):
                 ],
                 evidence,
                 30,
+                self.parents,
             )
             self.assertEqual(proc.returncode, 2, proc.stderr[-2000:])
             keys = []
@@ -186,7 +264,7 @@ class E2ESpuenteTests(unittest.TestCase):
             blob = _tree_bytes(evidence) + proc.stdout + proc.stderr
             for key in keys:
                 self.assertNotIn(key.encode("ascii"), blob)
-            self.assertFalse(set(_fake_peers()) - self.owned_before)
+            self.assertFalse(set(_fake_peers(self.parents)) - self.owned_before)
 
     def test_sol08_evaluate_runs_after_bridge_stops(self):
         import s_puente_run
@@ -207,7 +285,7 @@ class E2ESpuenteTests(unittest.TestCase):
                 seen["up"] = False
             finally:
                 sock.close()
-            seen["peers"] = _fake_peers()
+            seen["peers"] = _fake_peers(self.parents)
             return real(directory)
 
         with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
@@ -272,29 +350,22 @@ class E2ESpuenteTests(unittest.TestCase):
         self.assertIn('"ev": "peers_absent"', scenario)
         self.assertIn('"peer": "client"', scenario)
 
-    def test_sol16_generated_keys_stay_out_of_evidence(self):
-        import s_puente_run
-        from bridge_qa import QABridge
-
-        keys = []
-        original = QABridge.set_peer_key
-
-        def set_peer_key(self, peer, key):
-            keys.append(key)
-            return original(self, peer, key)
-
-        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
-            evidence = Path(tmp) / "run"
-            evidence.mkdir()
-            out = io.StringIO()
-            err = io.StringIO()
-            with mock.patch.object(QABridge, "set_peer_key", set_peer_key):
-                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                    code = s_puente_run.run(_args(), evidence, [])
-            blob = _tree_bytes(evidence) + out.getvalue().encode("utf-8") + err.getvalue().encode("utf-8")
-        self.assertEqual(code, 0)
-        self.assertTrue(keys)
-        self.assertFalse(any(key.encode("ascii") in blob for key in keys))
+    def test_sol15_foreign_parent_is_not_killed(self):
+        rows = [
+            {
+                "Name": "python.exe",
+                "CommandLine": r"C:\Python314\python.exe qa\fake_peer.py --peer server",
+                "ProcessId": "41",
+                "ParentProcessId": "999",
+            },
+            {
+                "Name": "python.exe",
+                "CommandLine": r"C:\Python314\python.exe qa\fake_peer.py --peer client",
+                "ProcessId": "42",
+                "ParentProcessId": "10",
+            },
+        ]
+        self.assertEqual(peers_owned(rows, {"10", str(os.getpid())}), ["42"])
 
     def test_sol09_sink_error_fills_verdict(self):
         import m1_gate
@@ -330,7 +401,7 @@ class E2ESpuenteTests(unittest.TestCase):
         self.assertTrue(verdict["error"]["traceback"])
 
     def test_point11_no_fake_peer_survives(self):
-        self.assertFalse(set(_fake_peers()) - self.owned_before)
+        self.assertFalse(set(_fake_peers(self.parents)) - self.owned_before)
 
 
 if __name__ == "__main__":

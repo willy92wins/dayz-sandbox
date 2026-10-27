@@ -122,8 +122,9 @@ class Peer:
                 bucket = []
                 ops = list(payload.get("ops") or [])
                 now_ms = payload.get("now_ms", 0)
+                batch_recv = time.monotonic()
                 while self.alive and (ops or self.jobs or self.burst is not None):
-                    if self._take_one(ops, now_ms, bucket):
+                    if self._take_one(ops, now_ms, bucket, batch_recv):
                         time.sleep(1.0 / self.frame_hz)
                         self.frame += 1
                         self._apply()
@@ -139,10 +140,10 @@ class Peer:
             except queue.Empty:
                 self._finish_jobs()
                 return
-            self._batch = [list(ops), now_ms, bucket, done]
-        ops, now_ms, bucket, done = self._batch
+            self._batch = [list(ops), now_ms, bucket, done, time.monotonic()]
+        ops, now_ms, bucket, done, batch_recv = self._batch
         while self.alive:
-            if self._take_one(ops, now_ms, bucket):
+            if self._take_one(ops, now_ms, bucket, batch_recv):
                 return
             if ops or self.jobs or self.burst is not None:
                 continue
@@ -150,13 +151,13 @@ class Peer:
             self._batch = None
             return
 
-    def _take_one(self, ops, now_ms, bucket):
+    def _take_one(self, ops, now_ms, bucket, batch_recv):
         self._finish_jobs()
         if self.jobs or self.burst is not None:
             return True
         if not ops:
             return False
-        self._start_op(ops.pop(0), now_ms, self.local_ms(), bucket)
+        self._start_op(ops.pop(0), now_ms, batch_recv, bucket)
         return bool(self.jobs or self.burst is not None)
 
     def _finish_jobs(self):
@@ -196,14 +197,16 @@ class Peer:
             return True
         return time.monotonic() > job["deadline"]
 
-    def _start_op(self, op, now_ms, recv_ms, bucket):
+    def _start_op(self, op, now_ms, batch_recv, bucket):
+        recv_ms = self.local_ms()
         if self.fault != "ignores_instance" and op.get("inst") != self.inst:
             bucket.append(self._rejected(op, "stale_instance", {"recv_ms": recv_ms, "frame": self.frame}))
             self._remember(bucket[-1])
             return
         ttl = float(op.get("ttl_ms") or 0)
         restante = ttl - (float(now_ms) - float(op.get("issued_ms") or 0))
-        if self.fault != "ignores_ttl" and restante <= 0:
+        plazo = float(batch_recv) + max(restante, 0) / 1000.0
+        if self.fault != "ignores_ttl" and (restante <= 0 or time.monotonic() > plazo):
             bucket.append(self._rejected(op, "expired", {"recv_ms": recv_ms, "frame": self.frame}))
             self._remember(bucket[-1])
             return
@@ -228,7 +231,7 @@ class Peer:
                 "recv_ms": recv_ms,
                 "frame": self.frame,
                 "restante": restante,
-                "deadline": time.monotonic() + max(restante, 0) / 1000.0,
+                "deadline": plazo,
                 "phase": "wait",
                 "read_frame": self.frame + 1,
                 "verb": verb,
@@ -248,6 +251,8 @@ class Peer:
             self.effects.append((self.frame, "pose", (pos, ypr)))
             self._apply()
         elif verb == "rpc_burst":
+            if int(args.get("count") or 0) <= 0:
+                return self._done(op, _empty_read(), job)
             self._arm_burst(args, job)
             return None
         read = self._observe(verb, args)
@@ -276,6 +281,9 @@ class Peer:
             return
         args = burst["args"]
         i = burst["i"]
+        if i >= burst["count"]:
+            self.burst = None
+            return
         pos = [float(v) for v in args.get("pos") or [0, 0, 0]]
         ypr = [float(v) for v in args.get("ypr") or [0, 0, 0]]
         pkt = {

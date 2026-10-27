@@ -147,7 +147,7 @@ def _h1(peer, ctx):
             continue
         if "held_ms" not in ev:
             raise EvidenceError("poll missing held_ms")
-        if ev["held_ms"] + 1e-9 >= 0.9 * ctx["hold"]:
+        if _finite(ev["held_ms"]) and ev["held_ms"] + 1e-9 >= 0.9 * ctx["hold"]:
             qualifying.append(ev)
     if len(qualifying) < 2:
         return "missing", f"{len(qualifying)} held polls", None
@@ -161,7 +161,8 @@ def _h1(peer, ctx):
         if "frame" not in ev or "frame" not in nxt:
             raise EvidenceError("poll missing frame")
         need = 10.0 * (ev["held_ms"] / 1000.0)
-        if (nxt["frame"] - ev["frame"]) + 1e-9 < need:
+        advanced = nxt["frame"] - ev["frame"]
+        if not (_finite(ev["frame"]) and _finite(nxt["frame"]) and _finite(advanced) and advanced + 1e-9 >= need):
             stalled = True
     if stalled:
         return "fail", "frame advance below 10/s", None
@@ -208,7 +209,7 @@ def _m2(ctx):
             ok = _mix_ok(ev["verb"], enq, res, last_srv)
             if ok and ev["verb"] == "srv_read":
                 last_srv = res["result"]["read"]["frame"]
-        if ok:
+        if ok and _finite(res.get("t_ms")) and _finite(enq.get("t_ms")):
             lats.append(res["t_ms"] - enq["t_ms"])
         else:
             lats.append(math.inf)
@@ -299,6 +300,11 @@ def _rejected(peer, ctx, step, reason):
         return "fail", "sentinel done", None
     if body.get("status") != "rejected" or body.get("reason") != reason:
         return "fail", f"sentinel not {reason}", None
+    for ev in ctx["bridge"]:
+        if ev["ev"] != "result" or ev.get("op_id") != roles["S"]:
+            continue
+        if _body(ev).get("status") == "done":
+            return "fail", "sentinel done", None
     return _read_vs(ctx, step, peer, roles, "B")
 
 
@@ -354,12 +360,13 @@ def _n6(ctx):
     roles = _roles(ctx, "N6", "client")
     if roles is None:
         return "missing", "no expect", None
-    burst = _first(ctx, "enq", roles["burst"])
-    log_res = _first(ctx, "result", roles["log"])
+    burst = _in_step(ctx, "N6", "client", "enq", roles["burst"])
+    log_res = _in_step(ctx, "N6", "client", "result", roles["log"])
     if burst is None or log_res is None:
         return "missing", "no burst or log", None
-    read = _body(log_res).get("read")
-    if not isinstance(read, dict) or "rpc_log" not in (read.get("has") or []):
+    log_body = _body(log_res)
+    read = log_body.get("read") if isinstance(log_body.get("read"), dict) else {}
+    if log_body.get("status") != "done" or "rpc_log" not in (read.get("has") or []):
         return "missing", "rpc_log absent", None
     log = read.get("rpc_log")
     if not isinstance(log, list):
@@ -378,40 +385,55 @@ def _n6(ctx):
     accepted = [e for e in log if e["decision"] == "accepted"]
     rejected = [e for e in log if e["decision"] == "rejected_lease"]
     lease = ctx["lease"]
-    # Un accepted con lease_age > L es conducta rota (matriz rpc_ignores_lease → 1),
-    # aunque no haya ningún rejected_lease que vuelva el caso «missing».
-    if accepted and any(e["lease_age_ms"] > lease for e in accepted):
-        metrics = {"window_accept_max_ms": max(e["lease_age_ms"] for e in accepted)}
-        if rejected:
-            metrics["window_reject_min_ms"] = min(e["lease_age_ms"] for e in rejected)
-        return "fail", "lease_age outside window", metrics
+
+    def _age_holds(entry, over):
+        age = entry.get("lease_age_ms")
+        if not _finite(age):
+            return False
+        return age > lease if over else age <= lease
+
+    finite_ages = [e["lease_age_ms"] for e in accepted if _finite(e.get("lease_age_ms"))]
+    # Un accepted cumple la ventana solo si su lease_age es finito y <= L
+    # (rpc_ignores_lease, y tambien un NaN, que una comparacion cruda deja pasar).
+    if accepted and not all(_age_holds(e, False) for e in accepted):
+        metrics = {}
+        if finite_ages:
+            metrics["window_accept_max_ms"] = max(finite_ages)
+        return "fail", "lease_age outside window", metrics or None
     if not accepted or not rejected or decisions - {"accepted", "rejected_lease"}:
         return "missing", "lease window not both sides", None
+    reject_ages = [e["lease_age_ms"] for e in rejected if _finite(e.get("lease_age_ms"))]
     metrics = {
-        "window_accept_max_ms": max(e["lease_age_ms"] for e in accepted),
-        "window_reject_min_ms": min(e["lease_age_ms"] for e in rejected),
+        "window_accept_max_ms": max(finite_ages),
+        "window_reject_min_ms": min(reject_ages) if reject_ages else None,
     }
-    bounds_ok = all(e["lease_age_ms"] > lease for e in rejected)
-    first_reject = min(rejected, key=lambda e: (e["recv_ms"], e["seq"]))
-    order_ok = not any(
-        (e["recv_ms"] > first_reject["recv_ms"])
-        or (e["recv_ms"] == first_reject["recv_ms"] and e["seq"] > first_reject["seq"])
-        for e in accepted
-    )
-    last = max(accepted, key=lambda e: (e["recv_ms"], e["seq"]))
-    k = last["seq"]
+    bounds_ok = all(_age_holds(e, True) for e in rejected)
+
+    def _stamp(entry):
+        return _finite(entry.get("recv_ms")) and _finite(entry.get("seq"))
+
+    if all(_stamp(e) for e in accepted) and all(_stamp(e) for e in rejected):
+        first_reject = min(rejected, key=lambda e: (e["recv_ms"], e["seq"]))
+        order_ok = not any((e["recv_ms"], e["seq"]) > (first_reject["recv_ms"], first_reject["seq"]) for e in accepted)
+        last = max(accepted, key=lambda e: (e["recv_ms"], e["seq"]))
+    else:
+        order_ok = False
+        last = None
+    k = last["seq"] if last is not None else None
     args = _args(burst)
     p0 = args.get("pos")
-    if not isinstance(p0, list) or len(p0) != 3:
+    if not isinstance(p0, list) or len(p0) != 3 or not all(_finite(v) for v in p0):
         raise EvidenceError("rpc_burst missing pos")
-    expect = [p0[0] + (k - 1000), p0[1], p0[2]]
-    pose_res = _first(ctx, "result", roles["read"])
+    expect = [p0[0] + (k - 1000), p0[1], p0[2]] if k is not None and _finite(k) else None
+    pose_res = _in_step(ctx, "N6", "client", "result", roles["read"])
     if pose_res is None:
         return "missing", "no pose read", metrics
     pose_body = _body(pose_res)
-    if pose_body.get("status") != "done":
+    pose_read = pose_body.get("read") if isinstance(pose_body.get("read"), dict) else {}
+    pose_has = pose_read.get("has") or []
+    if pose_body.get("status") != "done" or "pos" not in pose_has or "ypr" not in pose_has:
         return "missing", "pose read not done", metrics
-    pose_ok = _pose_match(pose_body.get("read") or {}, expect, [90, 0, 0])
+    pose_ok = expect is not None and _pose_match(pose_read, expect, [90, 0, 0])
     if not bounds_ok:
         return "fail", "lease_age outside window", metrics
     if not order_ok:
@@ -568,21 +590,22 @@ def _repeat_dup(ctx, step, peer, op_id):
     if mark is None:
         return "missing"
     mi = ctx["index"][id(mark)]
+    window = _span(ctx, step, peer)
     later = [
         ev
-        for ev in _during(ctx, step, peer)
+        for ev in ctx["bridge"]
         if ev["ev"] == "result" and ev.get("op_id") == op_id and ctx["index"][id(ev)] > mi
     ]
     if not later:
         return "missing"
-    saw_dup = False
+    in_window = False
     for ev in later:
         body = _body(ev)
-        if body.get("status") == "done" and body.get("dup") is False:
+        if body.get("status") != "done" or body.get("dup") is not True:
             return "fail"
-        if body.get("status") == "done" and body.get("dup") is True:
-            saw_dup = True
-    return "pass" if saw_dup else "fail"
+        if window is not None and window[0] <= ev["t_ms"] <= window[1]:
+            in_window = True
+    return "pass" if in_window else "missing"
 
 
 def _first(ctx, ev_name, op_id):
@@ -741,7 +764,9 @@ def _validate_results(bridge):
         if ev["ev"] != "result":
             continue
         op_id = ev.get("op_id")
-        if op_id in first_enq and ev["t_ms"] < first_enq[op_id]:
+        if op_id in first_enq and (
+            not _finite(ev.get("t_ms")) or not _finite(first_enq[op_id]) or ev["t_ms"] < first_enq[op_id]
+        ):
             raise EvidenceError("result registered before its enq")
 
 

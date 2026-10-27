@@ -423,8 +423,55 @@ def _apply(defect, bridge, scenario):
         enq = next(e for e in bridge if e["ev"] == "enq" and e.get("op_id") == "mix-000")
         res = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == "mix-000")
         res["t_ms"] = enq["t_ms"] - 1
+    elif defect == "sol18_n4_late_not_dup":
+        end = next(e for e in scenario if e["ev"] == "step_end" and e.get("step") == "N4" and e.get("peer") == "server")
+        last = next(e for e in reversed(bridge) if e["ev"] == "result" and e.get("op_id") == "N4.server.a")
+        late = json.loads(json.dumps(last))
+        late["t_ms"] = end["t_ms"] + 1
+        late["result"]["dup"] = False
+        bridge.append(late)
+    elif defect == "sol19_n4_rejected_after_dup":
+        _insert_rejected_repeat(bridge, "N4", "server", "a")
+    elif defect == "sol19_n5_rejected_after_dup":
+        _insert_rejected_repeat(bridge, "N5", "server", "c")
+    elif defect == "sol18_n2_late_sentinel":
+        end = next(e for e in scenario if e["ev"] == "step_end" and e.get("step") == "N2" and e.get("peer") == "server")
+        done = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == "N2.server.S")
+        late = json.loads(json.dumps(done))
+        late["t_ms"] = end["t_ms"] + 1
+        late["result"]["status"] = "done"
+        late["result"]["reason"] = ""
+        bridge.append(late)
+    elif defect == "sol04_n6_reads_after_end":
+        end = next(e for e in scenario if e["ev"] == "step_end" and e.get("step") == "N6")
+        for op_id in ("N6.log", "N6.read"):
+            res = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == op_id)
+            res["t_ms"] = end["t_ms"] + 1
+    elif defect == "sol05_n6_log_error":
+        res = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == "N6.log")
+        res["result"]["status"] = "error"
+    elif defect == "sol05_n6_pose_has_empty":
+        res = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == "N6.read")
+        res["result"]["read"]["has"] = []
+    elif defect == "sol06_nan_lease_age":
+        log = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == "N6.log")
+        for entry in log["result"]["read"]["rpc_log"]:
+            if entry["decision"] == "accepted":
+                entry["lease_age_ms"] = float("nan")
+                break
     else:
         raise ValueError(defect)
+
+
+def _insert_rejected_repeat(bridge, step, peer, role):
+    op_id = f"{step}.{peer}.{role}"
+    last = next(e for e in reversed(bridge) if e["ev"] == "result" and e.get("op_id") == op_id)
+    late = json.loads(json.dumps(last))
+    late["t_ms"] = last["t_ms"] + 0.1
+    late["result"]["status"] = "rejected"
+    late["result"]["reason"] = "expired"
+    late["result"]["dup"] = False
+    bridge.insert(bridge.index(last) + 1, late)
 
 
 def _relat(bridge, lats):

@@ -169,6 +169,22 @@ class SPuenteEvalTests(unittest.TestCase):
     def test_sol06_nan_pose_fails(self):
         self.assertEqual(self._code("sol06_nan_pose"), 1)
 
+    def test_sol18_repeat_and_sentinel_count_until_capture_end(self):
+        self.assertEqual(self._code("sol18_n4_late_not_dup"), 1)
+        self.assertEqual(self._code("sol19_n4_rejected_after_dup"), 1)
+        self.assertEqual(self._code("sol19_n5_rejected_after_dup"), 1)
+        self.assertEqual(self._code("sol18_n2_late_sentinel"), 1)
+
+    def test_sol04_n6_reads_outside_window_are_missing(self):
+        self.assertEqual(self._code("sol04_n6_reads_after_end"), 2)
+
+    def test_sol05_n6_read_without_done_or_has_is_missing(self):
+        self.assertEqual(self._code("sol05_n6_log_error"), 2)
+        self.assertEqual(self._code("sol05_n6_pose_has_empty"), 2)
+
+    def test_sol06_nan_lease_age_fails(self):
+        self.assertEqual(self._code("sol06_nan_lease_age"), 1)
+
     def test_sol07_result_before_enq_is_evidence_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             write_case(tmp, "sol07_result_before_enq")

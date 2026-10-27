@@ -1,11 +1,14 @@
 """Puente QA v0 aislado (brief F0.1 §10.2 punto 5)."""
 
 import json
+import tempfile
 import threading
 import time
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
+from unittest import mock
 
 from bridge_qa import QABridge
 
@@ -201,6 +204,188 @@ class BridgeQaTests(unittest.TestCase):
         blob = json.dumps(self.rows)
         self.assertNotIn("k-server", blob)
         self.assertNotIn("k-client", blob)
+
+    def _hello_server(self):
+        return _call(
+            self.bridge,
+            "POST",
+            "/hello",
+            "k-server",
+            {"proto": "qa0", "peer": "server", "inst": "aa", "build": "offline", "probe_ver": "t"},
+        )
+
+    def test_sol08_stop_drains_handlers_and_then_the_sink_is_quiet(self):
+        log = Path(tempfile.mkdtemp(prefix="dsbx-bridge-")) / "bridge.jsonl"
+        handle = log.open("a", encoding="utf-8", newline="\n")
+
+        def sink(row):
+            self.rows.append(row)
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+            handle.flush()
+
+        self.bridge.sink = sink
+        self._hello_server()
+        thread = threading.Thread(
+            target=_call,
+            args=(self.bridge, "GET", "/poll", "k-server"),
+            kwargs={"query": "peer=server&inst=aa&frame=1"},
+        )
+        thread.start()
+        deadline = time.monotonic() + 2
+        while self.bridge._live < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertGreater(self.bridge._live, 0)
+        self.bridge.stop()
+        thread.join(timeout=2)
+        handle.close()
+        self.assertEqual(self.bridge._live, 0)
+        self.assertFalse(thread.is_alive())
+        lines = [line for line in log.read_text(encoding="utf-8").splitlines() if line]
+        self.assertEqual(len(lines), len(self.bridge.events))
+        self.assertEqual(len(self.rows), len(self.bridge.events))
+        time.sleep(0.05)
+        self.assertEqual(len(self.rows), len(self.bridge.events))
+
+    def test_sol08_stop_stores_error_when_a_handler_never_finishes(self):
+        gate = threading.Event()
+
+        def sink(row):
+            self.rows.append(row)
+            if row.get("ev") == "poll":
+                gate.wait(timeout=5)
+
+        self.bridge.sink = sink
+        self.bridge.STOP_JOIN_S = 0.05
+        self._hello_server()
+        thread = threading.Thread(
+            target=_call,
+            args=(self.bridge, "GET", "/poll", "k-server"),
+            kwargs={"query": "peer=server&inst=aa&frame=1"},
+        )
+        thread.start()
+        deadline = time.monotonic() + 2
+        while not any(row.get("ev") == "poll" for row in self.rows) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.bridge.stop()
+        self.assertIsInstance(self.bridge.failure, TimeoutError)
+        gate.set()
+        thread.join(timeout=2)
+
+    def test_sol09_sink_oserror_during_stop_exits_2(self):
+        import m1_gate
+        import s_puente_run
+
+        real_stop = s_puente_run.QABridge.stop
+        keys = {}
+        real_set = s_puente_run.QABridge.set_peer_key
+
+        def set_peer_key(self, peer, key):
+            keys[peer] = key
+            return real_set(self, peer, key)
+
+        def stop(self):
+            def worker():
+                try:
+                    body = {"proto": "qa0", "peer": "server", "inst": "aa" * 16, "build": "retail", "probe_ver": "t"}
+                    _call(self, "POST", "/hello", keys["server"], body)
+                    _call(self, "GET", "/poll", keys["server"], None, "peer=server&inst=" + ("aa" * 16) + "&frame=1")
+                except Exception:
+                    return
+
+            thread = threading.Thread(target=worker)
+            thread.start()
+            deadline = time.monotonic() + 2
+            while self._live < 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            real_stop(self)
+            thread.join(timeout=2)
+
+        real_init = s_puente_run.QABridge.__init__
+
+        def init(self, hold_ms, lease_ms, sink, port=0):
+            def wrapped(row):
+                if self._stopping:
+                    raise OSError("sink during stop")
+                sink(row)
+
+            real_init(self, hold_ms, lease_ms, wrapped, port)
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "c").mkdir()
+            evidence = root / "run"
+            with (
+                mock.patch.object(s_puente_run.QABridge, "__init__", init),
+                mock.patch.object(s_puente_run.QABridge, "set_peer_key", set_peer_key),
+                mock.patch.object(s_puente_run.QABridge, "stop", stop),
+            ):
+                code = m1_gate.main(
+                    [
+                        "spike",
+                        "S-puente",
+                        "--both",
+                        "--build",
+                        "retail",
+                        "--evidence",
+                        str(evidence),
+                        "--peer-timeout",
+                        "0",
+                        "--server-profile",
+                        str(root / "s"),
+                        "--client-profile",
+                        str(root / "c"),
+                    ]
+                )
+            verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
+        self.assertEqual(code, 2)
+        self.assertEqual(verdict["error"]["type"], "OSError")
+        self.assertTrue(verdict["error"]["traceback"])
+
+    def test_sol14_late_hello_t_ms_does_not_count(self):
+        import s_puente_run
+
+        real = s_puente_run.QABridge.start
+
+        def start(self):
+            real(self)
+            self.events.append({"ev": "hello", "peer": "server", "http": 200, "t_ms": 0})
+            self.events.append({"ev": "hello", "peer": "client", "http": 200, "t_ms": 1e15})
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "c").mkdir()
+            evidence = root / "run"
+            with mock.patch.object(s_puente_run.QABridge, "start", start):
+                code = s_puente_run.run(
+                    _retail_args(root),
+                    evidence,
+                    [],
+                )
+            scenario = (evidence / "samples" / "scenario.jsonl").read_text(encoding="utf-8")
+        self.assertEqual(code, 2)
+        self.assertIn('"ev": "peers_absent"', scenario)
+        self.assertIn('"peer": "client"', scenario)
+
+
+def _retail_args(root):
+    import argparse
+
+    return argparse.Namespace(
+        both=True,
+        build="retail",
+        client_profile=str(root / "c"),
+        evaluate_only=False,
+        fault=None,
+        hold_ms=300,
+        lease_ms=600,
+        peer_timeout=0,
+        retry_ms=300,
+        seed=20261026,
+        server_profile=str(root / "s"),
+        ttl_ms=1000,
+    )
 
 
 if __name__ == "__main__":
