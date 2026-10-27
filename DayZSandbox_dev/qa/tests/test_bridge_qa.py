@@ -1,6 +1,8 @@
 """Puente QA v0 aislado (brief F0.1 §10.2 punto 5)."""
 
 import json
+import socket
+import struct
 import tempfile
 import threading
 import time
@@ -342,6 +344,45 @@ class BridgeQaTests(unittest.TestCase):
         self.assertEqual(verdict["error"]["type"], "OSError")
         self.assertTrue(verdict["error"]["traceback"])
 
+    def test_sol14_hello_54ms_after_the_single_deadline_is_absent(self):
+        import s_puente_run
+
+        clock = {"values": []}
+        real_now = s_puente_run.QABridge.now_ms
+
+        def now_ms(self):
+            clock["values"].append(real_now(self) + 100.0 * (len(clock["values"]) + 1))
+            return clock["values"][-1]
+
+        real_wait = s_puente_run.QABridge.wait_event
+
+        def wait_event(self, pred, timeout_ms):
+            if not clock.get("armed"):
+                clock["armed"] = True
+                anchor = clock["values"][-2]
+                plazo = anchor + 200.0
+                self.events.append(
+                    {"ev": "hello", "peer": "server", "http": 200, "t_ms": plazo + 54}
+                )
+            return real_wait(self, pred, timeout_ms)
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "c").mkdir()
+            evidence = root / "run"
+            args = _retail_args(root)
+            args.peer_timeout = 0.2
+            with (
+                mock.patch.object(s_puente_run.QABridge, "now_ms", now_ms),
+                mock.patch.object(s_puente_run.QABridge, "wait_event", wait_event),
+            ):
+                code = s_puente_run.run(args, evidence, [])
+            scenario = (evidence / "samples" / "scenario.jsonl").read_text(encoding="utf-8")
+        self.assertEqual(code, 2)
+        self.assertIn('"peer": "server"', scenario)
+        self.assertIn('"ev": "peers_absent"', scenario)
+
     def test_sol14_late_hello_t_ms_does_not_count(self):
         import s_puente_run
 
@@ -367,6 +408,176 @@ class BridgeQaTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn('"ev": "peers_absent"', scenario)
         self.assertIn('"peer": "client"', scenario)
+
+
+    def test_sol22_enq_blocks_poll_until_the_sink_returns(self):
+        gate = threading.Event()
+
+        def sink(row):
+            self.rows.append(row)
+            if row.get("ev") == "enq":
+                gate.wait(timeout=3)
+
+        self.bridge.sink = sink
+        self._hello_server()
+        box = {}
+
+        def do_enq():
+            box["oid"] = self.bridge.enqueue("server", "srv_read", {}, "aa", 5000)
+
+        enq = threading.Thread(target=do_enq)
+        enq.start()
+        deadline = time.monotonic() + 2
+        while not any(row.get("ev") == "enq" for row in self.rows) and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        def do_poll():
+            box["poll"] = _call(self.bridge, "GET", "/poll", "k-server", None, "peer=server&inst=aa&frame=1")
+
+        poll = threading.Thread(target=do_poll)
+        poll.start()
+        time.sleep(0.15)
+        self.assertFalse(any(row.get("ev") == "deliver" for row in self.rows))
+        gate.set()
+        enq.join(timeout=2)
+        poll.join(timeout=2)
+        self.assertEqual(box["poll"][0], 200)
+        self.assertEqual(box["poll"][1]["ops"][0]["op_id"], box["oid"])
+        code, _payload = _call(
+            self.bridge,
+            "POST",
+            "/result",
+            "k-server",
+            {
+                "op_id": box["oid"],
+                "status": "done",
+                "reason": "",
+                "dup": False,
+                "recv_ms": 1,
+                "done_ms": 2,
+                "frame_recv": 1,
+                "frame_done": 2,
+                "read": {"has": []},
+            },
+            "peer=server&inst=aa",
+        )
+        self.assertEqual(code, 200)
+        names = [row["ev"] for row in self.rows if row["ev"] in ("enq", "deliver", "result")]
+        self.assertEqual(names, ["enq", "deliver", "result"])
+        stamps = [row["t_ms"] for row in self.rows]
+        self.assertEqual(stamps, sorted(stamps))
+
+    def test_sol22_poll_blocks_the_next_hello(self):
+        gate = threading.Event()
+
+        def sink(row):
+            self.rows.append(row)
+            if row.get("ev") == "poll" and row.get("inst") == "I1":
+                gate.wait(timeout=3)
+
+        _call(
+            self.bridge,
+            "POST",
+            "/hello",
+            "k-server",
+            {"proto": "qa0", "peer": "server", "inst": "I1", "build": "offline", "probe_ver": "t"},
+        )
+        self.bridge.sink = sink
+        self.bridge.enqueue("server", "srv_read", {}, "I1", 5000)
+        poll = threading.Thread(
+            target=_call,
+            args=(self.bridge, "GET", "/poll", "k-server"),
+            kwargs={"query": "peer=server&inst=I1&frame=1"},
+        )
+        poll.start()
+        deadline = time.monotonic() + 2
+        while not any(row.get("ev") == "poll" for row in self.rows) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        box = {}
+
+        def do_hello():
+            box["hello"] = _call(
+                self.bridge,
+                "POST",
+                "/hello",
+                "k-server",
+                {"proto": "qa0", "peer": "server", "inst": "I2", "build": "offline", "probe_ver": "t"},
+            )
+
+        hello = threading.Thread(target=do_hello)
+        hello.start()
+        time.sleep(0.15)
+        self.assertNotIn("hello", box)
+        gate.set()
+        poll.join(timeout=2)
+        hello.join(timeout=2)
+        self.assertEqual(box["hello"][0], 200)
+        deliver_at = next(i for i, row in enumerate(self.rows) if row.get("ev") == "deliver")
+        hello_at = next(i for i, row in enumerate(self.rows) if row.get("ev") == "hello" and row.get("inst") == "I2")
+        self.assertLess(deliver_at, hello_at)
+
+    def test_sol08_stop_waits_for_a_request_accepted_before_its_thread(self):
+        release = threading.Event()
+        entered = threading.Event()
+        self._hello_server()
+        server_cls = type(self.bridge.httpd)
+        original = server_cls.process_request_thread
+
+        def delayed(self_server, request, client_address):
+            entered.set()
+            release.wait(timeout=3)
+            return original(self_server, request, client_address)
+
+        box = {}
+        seen = {}
+        with mock.patch.object(server_cls, "process_request_thread", delayed):
+            def do_poll():
+                box["poll"] = _call(
+                    self.bridge, "GET", "/poll", "k-server", None, "peer=server&inst=aa&frame=1"
+                )
+
+            poll = threading.Thread(target=do_poll)
+            poll.start()
+            self.assertTrue(entered.wait(2))
+            stopped = threading.Event()
+
+            def do_stop():
+                self.bridge.stop()
+                seen["rows"] = list(self.rows)
+                stopped.set()
+
+            stopper = threading.Thread(target=do_stop)
+            stopper.start()
+            # serve_forever polls every 0.5s; shutdown() on c458c699 returns inside that window.
+            time.sleep(1.2)
+            self.assertFalse(stopped.is_set())
+            release.set()
+            self.assertTrue(stopped.wait(3))
+            poll.join(timeout=2)
+        self.assertTrue(any(row.get("ev") == "poll" for row in seen["rows"]))
+        recorded = len(seen["rows"])
+        time.sleep(0.05)
+        self.assertEqual(len(self.rows), recorded)
+        self.assertEqual(box["poll"][0], 200)
+
+    def test_sol09_reset_during_the_run_is_a_bridge_error(self):
+        import s_puente_run
+
+        self._hello_server()
+        sock = socket.create_connection(("127.0.0.1", self.bridge.port))
+        sock.sendall(b"GET /poll?key=k-server&peer=server&inst=aa HTTP/1.0\r\n")
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("hh", 1, 0))
+        sock.close()
+        found = None
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                s_puente_run._raise_if_bridge_failed(self.bridge)
+            except Exception as exc:
+                found = exc
+                break
+            time.sleep(0.05)
+        self.assertIsInstance(found, ConnectionError)
 
 
 def _retail_args(root):

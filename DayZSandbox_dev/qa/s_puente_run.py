@@ -82,7 +82,9 @@ def run(args, evidence, argv=None):
         bridge_port_box["port"] = bridge.port
 
         def scen(ev, **fields):
-            row = {"ev": ev, "t_ms": bridge.now_ms()}
+            row = {"ev": ev}
+            if "t_ms" not in fields:
+                row["t_ms"] = bridge.now_ms()
             row.update({k: v for k, v in fields.items() if v is not None})
             write_row(scenario_fp, row)
 
@@ -152,13 +154,13 @@ def run(args, evidence, argv=None):
             prepare_live()
         scen("step_end", step="S0")
 
-        scen("step_start", step="S1")
-        deadline = time.monotonic() + args.peer_timeout
-        limit_ms = bridge.now_ms() + args.peer_timeout * 1000.0
+        anchor_ms = bridge.now_ms()
+        scen("step_start", step="S1", t_ms=anchor_ms)
+        limit_ms = anchor_ms + args.peer_timeout * 1000.0
         seen = {}
         for role in ("server", "client"):
             _raise_if_bridge_failed(bridge)
-            left_ms = max(0.0, (deadline - time.monotonic()) * 1000.0)
+            left_ms = max(0.0, limit_ms - bridge.now_ms())
 
             def hello_on_time(e, role=role):
                 t_ms = e.get("t_ms")
@@ -192,9 +194,9 @@ def run(args, evidence, argv=None):
         _raise_if_bridge_failed(bridge)
         ready = True
     finally:
-        _stop_peers(procs)
         if bridge is not None:
             bridge.stop()
+        _stop_peers(procs)
         for handle in files:
             handle.close()
         for folder in profiles:

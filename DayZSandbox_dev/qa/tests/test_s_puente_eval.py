@@ -169,6 +169,32 @@ class SPuenteEvalTests(unittest.TestCase):
     def test_sol06_nan_pose_fails(self):
         self.assertEqual(self._code("sol06_nan_pose"), 1)
 
+    def test_sol22_backwards_t_ms_is_evidence_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_case(tmp, "sol22_repeat_file_order_backwards")
+            with self.assertRaises(EvidenceError):
+                evaluate(tmp)
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "qa/m1_gate.py",
+                    "spike",
+                    "S-puente",
+                    "--build",
+                    "offline",
+                    "--evidence",
+                    tmp,
+                    "--both",
+                    "--evaluate-only",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+            )
+            self.assertEqual(proc.returncode, 2)
+
+    def test_sol18_late_sentinel_done_fails_before_missing(self):
+        self.assertEqual(self._code("sol18_n2_late_only"), 1)
+
     def test_sol18_repeat_and_sentinel_count_until_capture_end(self):
         self.assertEqual(self._code("sol18_n4_late_not_dup"), 1)
         self.assertEqual(self._code("sol19_n4_rejected_after_dup"), 1)

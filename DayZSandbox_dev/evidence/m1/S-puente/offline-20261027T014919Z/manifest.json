@@ -6,15 +6,15 @@
     "--build",
     "offline",
     "--evidence",
-    "evidence/m1/S-puente/offline-20261027T001835Z"
+    "evidence/m1/S-puente/offline-20261027T014919Z"
   ],
   "both": true,
   "build": "offline",
-  "ended_utc": "2026-10-27T00:19:43Z",
+  "ended_utc": "2026-10-27T01:50:27Z",
   "faults": [],
   "harness": {
     "git_dirty": true,
-    "git_head": "dfce8dac129542eb6d799a6d77decc29b12d50ac",
+    "git_head": "59ebb55d29210a88ea6ec32a978dc68f914ab90d",
     "platform": "Windows-11-10.0.22631-SP0",
     "python": "3.14.3"
   },
@@ -23,11 +23,11 @@
   "params": {
     "hold_ms": 2000,
     "lease_ms": 3000,
-    "port": 63550,
+    "port": 56533,
     "retry_ms": 2000,
     "seed": 20261026,
     "ttl_ms": 5000
   },
   "schema": "dsbx-qa-manifest/1",
-  "started_utc": "2026-10-27T00:18:35Z"
+  "started_utc": "2026-10-27T01:49:19Z"
 }

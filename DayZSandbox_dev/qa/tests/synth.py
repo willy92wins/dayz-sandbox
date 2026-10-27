@@ -30,6 +30,9 @@ def write_case(directory, defect=None):
     samples.mkdir(parents=True)
     bridge, scenario = _build()
     _apply(defect, bridge, scenario)
+    if defect != "sol22_repeat_file_order_backwards":
+        bridge.sort(key=lambda ev: ev["t_ms"])
+        scenario.sort(key=lambda ev: ev["t_ms"])
     _write_jsonl(samples / "bridge.jsonl", bridge)
     _write_jsonl(samples / "scenario.jsonl", scenario)
     gate_core.write_json(directory / "manifest.json", _manifest())
@@ -423,6 +426,23 @@ def _apply(defect, bridge, scenario):
         enq = next(e for e in bridge if e["ev"] == "enq" and e.get("op_id") == "mix-000")
         res = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == "mix-000")
         res["t_ms"] = enq["t_ms"] - 1
+    elif defect == "sol22_repeat_file_order_backwards":
+        enq = [e for e in bridge if e["ev"] == "enq" and e.get("op_id") == "N4.server.a"][-1]
+        done = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == "N4.server.a" and e["t_ms"] > enq["t_ms"])
+        early = json.loads(json.dumps(done))
+        early["t_ms"] = enq["t_ms"] + 5
+        early["result"]["dup"] = False
+        bridge.insert(bridge.index(enq), early)
+    elif defect == "sol18_n2_late_only":
+        end = next(e for e in scenario if e["ev"] == "step_end" and e.get("step") == "N2" and e.get("peer") == "server")
+        res = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == "N2.server.S")
+        bridge.remove(res)
+        late = json.loads(json.dumps(res))
+        last_t = max(e["t_ms"] for e in bridge)
+        late["t_ms"] = max(end["t_ms"], last_t) + 1
+        late["result"]["status"] = "done"
+        late["result"]["reason"] = ""
+        bridge.append(late)
     elif defect == "sol18_n4_late_not_dup":
         end = next(e for e in scenario if e["ev"] == "step_end" and e.get("step") == "N4" and e.get("peer") == "server")
         last = next(e for e in reversed(bridge) if e["ev"] == "result" and e.get("op_id") == "N4.server.a")

@@ -290,6 +290,9 @@ def _rejected(peer, ctx, step, reason):
     roles = _roles(ctx, step, peer)
     if roles is None:
         return "missing", "no expect", None
+    for ev in ctx["bridge"]:
+        if ev["ev"] == "result" and ev.get("op_id") == roles["S"] and _body(ev).get("status") == "done":
+            return "fail", "sentinel done", None
     res = _in_step(ctx, step, peer, "result", roles["S"])
     if res is None:
         return "missing", "no sentinel result", None
@@ -300,11 +303,6 @@ def _rejected(peer, ctx, step, reason):
         return "fail", "sentinel done", None
     if body.get("status") != "rejected" or body.get("reason") != reason:
         return "fail", f"sentinel not {reason}", None
-    for ev in ctx["bridge"]:
-        if ev["ev"] != "result" or ev.get("op_id") != roles["S"]:
-            continue
-        if _body(ev).get("status") == "done":
-            return "fail", "sentinel done", None
     return _read_vs(ctx, step, peer, roles, "B")
 
 
@@ -798,5 +796,7 @@ def _read_jsonl(path):
             raise EvidenceError(f"{path.name}:{lineno}: {exc}") from exc
         if not isinstance(obj, dict) or "ev" not in obj or "t_ms" not in obj:
             raise EvidenceError(f"{path.name}:{lineno}: missing ev or t_ms")
+        if events and obj["t_ms"] < events[-1]["t_ms"]:
+            raise EvidenceError(f"{path.name}:{lineno}: t_ms went backwards")
         events.append(obj)
     return events
