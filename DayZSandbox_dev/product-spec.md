@@ -17,7 +17,7 @@ DayZ Sandbox es un estudio local de escenas para DayZ: desde el navegador, un cr
   2. Rodaje: cámaras guardadas y caminos de cámara con claves (posición, orientación, FOV y enfoque), sin HUD. Una toma lanza a la vez cámara y actores, y se puede parar.
   3. Web: mapa 2D, árbol de escena, inspector, biblioteca de plantillas (objetos, vestuario, gestos), cola con estados observados y layouts personalizables.
   4. Todo local y funcionando con el MCP apagado.
-- **M2 — Standalone:** IA propia (ir a marca, patrullar, gesto) en lugar de Expansion, con las mismas escenas guardadas; cambio de mapa con reinicio de sesión entre los mapas instalados.
+- **M2 — Standalone:** IA propia de cine en lugar de Expansion: una "marioneta de ruta" (el actor recorre una ruta con tiempos, trazada en el mapa o grabada del pase del creador, igual en cada toma), más ir a marca y gesto, con las mismas escenas guardadas; cambio de mapa con reinicio de sesión entre los mapas instalados.
 - **M3 — IA opcional:** fachada MCP sobre la misma API, para que una IA proponga y coordine piezas y escenas siempre con aprobación humana.
 
 Supuestos confirmados el 2026-10-24: M1 es para uso propio (sin instalador); las tomas se graban con OBS u otra herramienta externa; eventos/RP queda fuera de esta versión.
@@ -75,7 +75,7 @@ estás **obligado** a surfacearlo en el **Grill de plan (Modo B)** ANTES de impl
 | C3 | Gesto: se observa que empieza y termina; si no puede, el estado es rechazado o agotado, nunca terminado | Estado observado del gesto, con fixture negativa (actor en combate) | ❓ |
 | C4 | El documento usa un vocabulario propio de comportamiento (HOLD, ONCE, LOOP, ROAM; HOLD es quieto observable y ROAM es deambular sin salir de un radio de su posición inicial, que fija el spike de Expansion): la misma escena da C1-C3 con Expansion (M1) y con la IA propia (M2) | La misma fixture contra los dos motores | ❓ |
 | C5 | Sin Expansion cargado en M1, una escena con actores se rechaza entera (`expansion_unavailable`) antes de aplicar nada | Fixture negativa | ❓ |
-| C6 | M2: sin Expansion, la IA propia cumple C1-C3 y sigue una ruta por navmesh entre marcas | Test en partida `[verify]`: la locomoción de supervivientes de servidor no está probada | ❓ |
+| C6 | M2: sin Expansion, la IA propia cumple C1-C3 y recorre por navmesh una ruta con tiempos entre marcas (trazada o grabada del pase del creador) de forma repetible: en 3 tomas con reset pasa por sus puntos de control a < 1 m. Puerta: los probes de locomoción de supervivientes de servidor (ficha 15) y de ruta (ficha 14) pasan antes de construirla; si fallan, M2 se replantea en un Grill | Test en partida `[verify]`: la locomoción de supervivientes de servidor no está probada | ❓ |
 
 ### D — Web e interfaz (M1)
 
@@ -135,6 +135,7 @@ estás **obligado** a surfacearlo en el **Grill de plan (Modo B)** ANTES de impl
 - Cambiar de mapa sin reiniciar la sesión, y editar el terreno.
 - Animaciones propias o arbitrarias: solo el catálogo vanilla de gestos (un solo mod de animaciones a la vez).
 - NPC conversacionales con LLM persistente.
+- IA autónoma de actores (combate, decisiones propias) en M2: M2 se queda en la marioneta de ruta; la IA autónoma se reabre después con un Grill.
 - Servidor alojado multiusuario, control de audiencia y streamers.
 - Varios directores editando a la vez.
 - Viewport 3D en la web.
@@ -160,3 +161,4 @@ estás **obligado** a surfacearlo en el **Grill de plan (Modo B)** ANTES de impl
 - 2026-10-23 — alcance inicial propuesto tras el research fase 0 y las decisiones de Guillermo (cine/machinima prioritario, local, uso comercial, Expansion en M1 con IA propia como meta, Chernarus). **Pendiente de confirmar en el Grill Modo A.**
 - 2026-10-24 — **confirmado con Guillermo** sin cambios (tarjeta del Grill Modo A, opción "Ciérralo así"), con sus tres supuestos: uso propio sin instalador, grabación con OBS fuera del producto y eventos/RP fuera de esta versión.
 - 2026-10-26 — **Grill Modo B del plan de M1** con Guillermo (tarjeta "Ciérralo así"; preguntas y porqués en `plans/2026-10-24-m1-cine-v1.md` §5 y §6). No entra ni sale ningún criterio. Cambian estos textos: B1 dice de dónde sale la pose, una cámara libre mínima dentro del juego (Q2); B6 y C1 piden el mismo personaje en cada toma (Q3); B5 define "a la vez" (Q4); B3 se mide con la profundidad de campo activada y sale de M1 si ni así desenfoca (Q5); y A2, B6, B7, C4, D5, E2 y E5 aclaran cómo se miden (Q9).
+- 2026-10-27 — **C6 reorientado a "marioneta de ruta"** con el visto bueno de Guillermo en el hilo del council post-v1 (`backlog-post-v1.md`, T17; votos en `reviews/2026-10-27-council-post-v1/`). Cambian el texto de M2 y C6: la IA propia de M2 es una ruta con tiempos repetible (trazada o grabada del pase del creador), con los probes de las fichas 14 y 15 como puerta; la IA autónoma pasa a Fuera de alcance. C4 no cambia: el vocabulario HOLD, ONCE, LOOP y ROAM debe dar lo mismo con los dos motores. No afecta a M1 ni a F0.
