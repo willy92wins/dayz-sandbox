@@ -110,17 +110,19 @@ Base: la barra del DayZ Editor (superficies planas oscuras, iconos claros, grupo
 | `--bg` y `--chassis` | `#0F0F0F` | `#F4F4F4` y `#E3E3E3` | Fondo |
 | `--surface` · `--surface-2` · `--surface-3` | `#1E1E1E` · `#272727` · `#313131` | `#FFFFFF` · `#F2F2F2` · `#E7E7E7` | Paneles, campos y realces |
 | `--line` · `--line-strong` | `#2D2D2D` · `#404040` | `#DADADA` · `#C3C3C3` | Bordes |
-| `--fg` · `--fg-2` · `--muted` · `--faint` | `#FFFFFF` · `#CBCBCB` · `#9C9C9C` · `#6E6E6E` | `#0F0F0F` · `#3C3C3C` · `#646464` · `#8E8E8E` | Texto |
+| `--fg` · `--fg-2` · `--muted` · `--faint` | `#FFFFFF` · `#CBCBCB` · `#9C9C9C` · `#6E6E6E` | `#0F0F0F` · `#3C3C3C` · `#646464` · `#8E8E8E` | Texto; `--faint` solo en lo desactivado y en iconos |
 | `--primary` sobre `--primary-ink` | `#FFFFFF` con `#0F0F0F` | `#0F0F0F` con `#FFFFFF` | Botón principal (Aplicar, Rodar) |
-| `--accent` | `#e9aa3c` | `#9a5d07` | Selección, tope alcanzado y paso actual |
-| `--rec` | `#ef4a3e` | `#cc3226` | Rodando y Parar |
+| `--accent` | `#e9aa3c` | `#8d5506` | Selección, tope alcanzado y paso actual |
+| `--rec` | `#d24137` | `#cc3226` | Rodando y Parar |
 | `--cam` | `#71a8ee` | `#2459a6` | Cámaras y claves |
-| `--st-pend` · `--st-exec` · `--st-appl` · `--st-obs` · `--st-fail` · `--st-part` | `#a0a0a0` · `#6fb2ee` · `#5fc6ba` · `#82c662` · `#f05b4d` · `#eb8d3a` | `#6b6b6b` · `#2a71b6` · `#128478` · `#398422` · `#c43327` · `#ab550c` | Estados de D2 |
-| `--st-draft` | `#d4cba9` | `#7b7356` | Nuevo o cambiado en el documento |
+| `--st-pend` · `--st-exec` · `--st-appl` · `--st-obs` · `--st-fail` · `--st-part` | `#a0a0a0` · `#6fb2ee` · `#5fc6ba` · `#82c662` · `#f27468` · `#eb8d3a` | `#616161` · `#2563a0` · `#0f6d63` · `#306e1c` · `#b22e23` · `#984c0b` | Estados de D2 |
+| `--st-draft` | `#d4cba9` | `#696249` | Nuevo o cambiado en el documento |
+| `--st-ink` | `#0F0F0F` | `#FFFFFF` | Texto sobre un relleno de estado (contadores y pasos) |
 | `--g-obj` · `--g-zmb` · `--g-ani` · `--g-act` | `#cfc7aa` · `#d3836c` · `#c6a767` · `#f5f2e8` | `#5b5446` · `#a8432f` · `#86691c` · `#1d1f19` | Objeto, infectado, animal y actor en el mapa |
 
 - **Letra:** la del sistema (Segoe UI y Cascadia Mono en Windows), con monoespaciada para clases, coordenadas, hashes, edades y código de tiempo. Títulos sin mayúsculas forzadas.
 - **Movimiento:** solo gira Ejecutando y late la barra superior al rodar; con `prefers-reduced-motion` no se mueve nada.
+- **Contraste:** todo texto visible pasa WCAG 2.1 AA (criterio 1.4.3: 4,5:1, o 3:1 si es grande) en los dos temas, también sobre las rayas de Parcial y dentro de Parar. Los valores de esta tabla ya están ajustados para eso (CU-38).
 
 **Estados de una orden (D2), por forma además de color.** Es PROPIO (D2 y #23), apoyado en la cola de comandos de DZ Commander y en el Session Inspector de UEFN.
 
@@ -137,7 +139,7 @@ En la Jerarquía, el estado de cada entidad frente al juego va en cuadros discon
 
 ## 7. Criterios verificables para el brief de F6 (R26)
 
-Juntan los UI-01 a UI-26 de Claude y los R26-01 a R26-39 de Astra; el detalle de cada caso está en la fila de origen. Corren con el mod falso de #24 salvo que digan «en partida», y cada uno tiene que poder ponerse en rojo con la inyección de fallos de #24. No hay umbrales nuevos: los números salen del spec o del plan. PASA quiere decir que el caso positivo y el negativo dan lo esperado; FALLA, que aparece la conducta prohibida; INCONCLUSO, que falta esquema, capacidad, montaje o muestra (regla de Astra, del plan). Lo que enseña la web no cierra por sí solo un gate del juego.
+Juntan los UI-01 a UI-26 de Claude y los R26-01 a R26-39 de Astra; el detalle de cada caso está en la fila de origen. Corren con el mod falso de #24 salvo que digan «en partida», y cada uno tiene que poder ponerse en rojo con la inyección de fallos de #24. No hay umbrales nuevos: los números salen del spec o del plan, salvo el de contraste de CU-38, que es el de WCAG 2.1. PASA quiere decir que el caso positivo y el negativo dan lo esperado; FALLA, que aparece la conducta prohibida; INCONCLUSO, que falta esquema, capacidad, montaje o muestra (regla de Astra, del plan). Lo que enseña la web no cierra por sí solo un gate del juego.
 
 La columna «Prototipo» dice qué hace ya el prototipo con datos falsos: **Probado** (lo comprueba `pruebas.js`), **Se ve** (está en la página, sin prueba) o **No**.
 
@@ -180,6 +182,7 @@ La columna «Prototipo» dice qué hace ya el prototipo con datos falsos: **Prob
 | CU-35 | E3, E4 | Todo funciona con el MCP apagado y la barra de estado lo dice | Ninguna petición al MCP; evidencia de Diag presentada como retail deja la aceptación INCONCLUSA | UI-22, R26-35 | Se ve: «MCP apagado» |
 | CU-36 | E5, A6, #28 | Escena al tope combinado con actores vestidos, cámara y toma: media > 35 FPS en tres ventanas de 60 s (suelo provisional de #28) | Un pico o un promedio instantáneo no acreditan; si falla, se revisa el presupuesto en S-perf, nunca desde la web | R26-36 | No |
 | CU-37 | D2, #7, F5 | Sin backend: luces en gris con «hace X», aviso y Consola con lo último que se supo; al volver, el aviso se va | No se puede guardar ni aplicar nada y Propiedades se bloquean | Consolidación | Probado |
+| CU-38 | D2, B5 y WCAG 2.1 (1.4.3) | Todo texto visible llega a 4,5:1 (3:1 si es grande) en los dos temas, en escena, historial, validación, aplicando, fallo a mitad, sin backend, armada, rodando, parada y Guía | Un solo texto por debajo hace fallar la prueba, también sobre las rayas de Parcial; con los colores anteriores fallaban, entre otros, «Parar» en oscuro (3,67:1) y «Observado» en claro (3,96:1) | Medición de Claude tras la consolidación | Probado |
 
 El manifiesto de cada prueba guarda revisión y hash, operación, epoch y generación, build y modset, y origen y hora de cada muestra (Astra, del plan). Son datos para cruzar evidencia, no un formulario para la creadora.
 
@@ -282,7 +285,7 @@ Pendiente. Astra revisa el prototipo consolidado y este documento contra el spec
 
 ## 12. Verificación y cambios
 
-- `node ui/prototipo/pruebas.js` (Playwright con Chromium, 1600 × 960, tema oscuro): 62 de 62, código de salida 0, sin errores de JavaScript y sin ninguna petición fuera de la página.
+- `node ui/prototipo/pruebas.js` (Playwright con Chromium, 1600 × 960, tema oscuro, más el contraste en claro y oscuro): 64 de 64, código de salida 0, sin errores de JavaScript y sin ninguna petición fuera de la página. Con el prototipo anterior a los cambios de contraste, las dos comprobaciones nuevas fallan (62 de 64, código de salida 1).
 - Capturas revisadas a mano: 1280 × 800, 1366 × 768 y 1440 × 900 (escena, sin backend y toma armada), tema claro y oscuro a 1600 × 960, móvil a 390 px con viewport y la Guía entera. A los tres anchos de portátil la barra superior cabe sin cortar nada.
 - Lo que no prueba: nada del juego, del backend, de Dockview ni de Leaflet. El terreno del mapa es de ejemplo, no Chernarus.
 
@@ -294,3 +297,4 @@ Fallos que encontraron las pruebas y ya están arreglados:
 - Una entidad nueva reutilizaba el id de una borrada que seguía en el juego y salía como «Cambiado» (#10 pide ids lógicos que no se repiten).
 - A 1366 px la barra superior se salía de la pantalla, y a 1280 px se cortaba el nombre de la escena y se aplastaban las pestañas del panel de abajo.
 - El aviso de mundo nuevo no se quitaba después de aplicar la escena en el mundo nuevo.
+- Textos por debajo de WCAG AA: en oscuro, «Parar», la insignia «RODANDO» y la tecla Esc sobre el rojo (3,2 a 3,7:1), el contador azul de la Consola (2,26:1) y «Borrar» (4,49:1); en claro, los chips de estado (3,9 a 4,3:1), la etiqueta de la Guía (4,14:1) y la tecla Esc de Parar (4,36:1); en los dos, «se aplica al juego» (3,27:1) y las rayas de Parcial (3,7 y 4,3:1). El aviso «Backend de vuelta» salía en verde porque heredaba el color de los textos de éxito.

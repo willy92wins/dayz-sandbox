@@ -213,6 +213,69 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
   await shot('11-guia', true);
   await page.click('#bGuideClose'); await page.waitForTimeout(200);
 
+  // --- Contraste (WCAG 2.1 AA, 1.4.3): texto visible a 4,5:1, o 3:1 si es grande, en los dos temas y en los estados de la toma ---
+  const audit = () => {
+    const colors = s => [...s.matchAll(/rgba?\(([^)]+)\)|color\(srgb ([^)]+)\)/g)].map(m => { const p = (m[1] !== undefined ? m[1] : m[2]).split(/[ ,\/]+/).filter(Boolean).map(Number), k = m[1] !== undefined ? 1 : 255; return { r: p[0] * k, g: p[1] * k, b: p[2] * k, a: p.length > 3 ? p[3] : 1 }; });
+    const parse = s => colors(s)[0] || null;
+    const over = (t, u) => ({ r: t.r * t.a + u.r * (1 - t.a), g: t.g * t.a + u.g * (1 - t.a), b: t.b * t.a + u.b * (1 - t.a), a: 1 });
+    const lum = c => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
+    // Fondo efectivo: capas de color de los antepasados; de un degradado cuenta su color más opaco (el peor caso de las rayas).
+    const bgOf = el => { const st = []; for (let e = el; e; e = e.parentElement) { const cs = getComputedStyle(e); const g = /gradient/.test(cs.backgroundImage) && colors(cs.backgroundImage).sort((u, v) => v.a - u.a)[0]; if (g && g.a > 0) st.push(g); const c = parse(cs.backgroundColor); if (c && c.a > 0) { st.push(c); if (c.a >= 1) break; } } let u = { r: 255, g: 255, b: 255, a: 1 }; for (let i = st.length - 1; i >= 0; i--) u = over(st[i], u); return u; };
+    const hex = c => '#' + [c.r, c.g, c.b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+    const out = [];
+    for (const el of document.querySelectorAll('body *')) {
+      const text = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+      if (!text || el.closest('[disabled],[aria-disabled="true"]')) continue;
+      const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+      if (!r.width || !r.height || cs.visibility === 'hidden' || r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) continue;
+      let o = 1; for (let e = el; e; e = e.parentElement) o *= Number(getComputedStyle(e).opacity);
+      if (o < 0.05) continue;
+      const bg = bgOf(el), fg0 = parse(cs.color), fg = over({ ...fg0, a: fg0.a * o }, bg);
+      const x = lum(fg), y = lum(bg), ratio = (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+      const size = parseFloat(cs.fontSize), large = size >= 24 || (size >= 18.66 && Number(cs.fontWeight) >= 700);
+      if (ratio < (large ? 3 : 4.5)) out.push(`«${text.slice(0, 28)}» ${hex(fg)} sobre ${hex(bg)} ${ratio.toFixed(2)}:1`);
+    }
+    return out;
+  };
+  for (const scheme of ['dark', 'light']) {
+    const c2 = await browser.newContext({ viewport: { width: 1600, height: 960 }, colorScheme: scheme });
+    const p2 = await c2.newPage();
+    p2.on('pageerror', e => errors.push(`[pageerror ${scheme}] ${e.message}`));
+    p2.on('request', r => { if (!/^(file|data|blob|about):/.test(r.url())) external.push(r.url()); });
+    const low = new Set(), seen = [];
+    const check = async label => {
+      await p2.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect.getComputedTiming().iterations === Infinity), null, { timeout: 5000 }).catch(() => {});
+      for (const f of await p2.evaluate(audit)) low.add(`${label}: ${f}`);
+      seen.push(label);
+    };
+    const until = async (sel, re, ms) => p2.waitForFunction(([s, r]) => { const el = document.querySelector(s); return el && new RegExp(r).test(el.innerText); }, [sel, re.source], { timeout: ms }).then(() => true, () => false);
+    const sim2 = async v => { await p2.click('#bSim'); await p2.waitForTimeout(120); await p2.click(`#menu [data-act="sim"][data-v="${v}"]`); await p2.keyboard.press('Escape'); await p2.waitForTimeout(150); };
+    await p2.goto(URL); await p2.waitForTimeout(800);
+    await check('escena');
+    await p2.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p2.locator('#map').hover();
+    await p2.keyboard.press('ArrowUp'); await p2.waitForTimeout(150); await p2.keyboard.press('Control+z'); await p2.waitForTimeout(150);
+    await p2.click('[data-act="dtab"][data-v="historial"]'); await check('historial con rehacer');
+    await p2.click('[data-act="dtab"][data-v="validacion"]'); await check('validación');
+    await p2.click('[data-act="dtab"][data-v="consola"]');
+    await p2.click('#bSim'); await p2.waitForTimeout(150); await check('menú del simulador'); await p2.keyboard.press('Escape');
+    await p2.locator('#map').hover(); await p2.keyboard.press('Control+Enter'); await p2.waitForTimeout(600); await check('aplicando');
+    await until('#bApply', /Volver a aplicar/, 12000); await check('aplicada');
+    await sim2('fault'); await p2.locator('#map').hover(); await p2.keyboard.press('Control+Enter');
+    const partial = await until('#dock .qrow', /Parcial/, 12000);
+    if (partial) await p2.locator('#dock .chip.parcial').first().scrollIntoViewIfNeeded().catch(() => {});
+    await check('fallo a mitad');
+    await p2.locator('#map').hover(); await p2.keyboard.press('Control+Enter'); await until('#bApply', /Volver a aplicar/, 12000);
+    await sim2('backend'); await p2.waitForTimeout(300); await check('sin backend'); await sim2('backend');
+    await p2.keyboard.press('2'); await p2.waitForTimeout(300); await check('rodaje');
+    await p2.keyboard.press('Shift+F9'); const armed = await until('#slateWrap', /Desarmar/, 6000); await check('armada');
+    await p2.keyboard.press('Enter'); const rolling = await until('#slateWrap', /Parar/, 1500); await p2.waitForTimeout(400); await check('rodando');
+    await p2.keyboard.press('Escape'); await until('#slateWrap', /Reaplicar y preparar la/, 2000); await check('parada');
+    await p2.click('#bGuide'); await p2.waitForTimeout(400); await check('guía');
+    await c2.close();
+    const list = [...low];
+    expect(partial && armed && rolling && list.length === 0, `contraste AA en tema ${scheme === 'dark' ? 'oscuro' : 'claro'} en ${seen.length} estados (llegó a Parcial, armada y rodando: ${partial && armed && rolling})` + (list.length ? ': ' + list.slice(0, 6).join(' | ') + (list.length > 6 ? ` y ${list.length - 6} más` : '') : ''));
+  }
+
   expect(external.length === 0, 'ninguna petición sale de la página (sin teselas ni servicios externos): ' + (external.slice(0, 3).join(' ') || 'ninguna'));
   expect(errors.length === 0, 'sin errores de JavaScript en la página');
   errors.forEach(e => console.log(e));
