@@ -80,7 +80,7 @@ svg.g{flex:none}
 @media (prefers-reduced-motion: reduce){.spin,body.rolling .top{animation:none!important}}
 
 /* ---------- barra superior: documento, modos y acciones (UX-03) ---------- */
-#app{height:100%;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:44px minmax(0,1fr) 28px}
+#app{height:100%;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:44px minmax(0,1fr) auto}
 .top{display:flex;align-items:center;gap:6px;min-width:0;padding-left:max(10px,env(safe-area-inset-left,0px));padding-right:max(10px,env(safe-area-inset-right,0px));background:var(--bg);border-bottom:1px solid var(--chassis)}
 body.rolling .top{animation:pulse 1.2s ease-in-out infinite}
 .top .grow{flex:1;min-width:8px}
@@ -194,7 +194,7 @@ body.ui-off .center{grid-template-rows:0 minmax(0,1fr) 0 0}
 .row .tg svg.i{width:13px;height:13px}
 .row.off .nm,.row.off svg.g{opacity:.4}
 .row.gone .nm{text-decoration:line-through;color:var(--muted)}
-.st-observado{color:var(--st-obs)} .st-nuevo,.st-cambiado,.st-fuera{color:var(--st-draft)} .st-fallido{color:var(--st-fail)}
+.st-observado{color:var(--st-obs)} .st-nuevo,.st-cambiado,.st-fuera{color:var(--st-draft)} .st-fallido{color:var(--st-fail)} .st-parcial{color:var(--st-part)} .st-ejecutando{color:var(--st-exec)}
 
 /* ---------- chips de estado (D2) ---------- */
 .chip{--c:var(--st-pend);display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 8px 0 5px;border-radius:10px;font:600 12px/1 var(--font-body);white-space:nowrap;color:var(--c);background:color-mix(in srgb,var(--c) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 45%,transparent)}
@@ -214,7 +214,8 @@ body.ui-off .center{grid-template-rows:0 minmax(0,1fr) 0 0}
 .ovl.bl{left:10px;bottom:10px;align-items:center;gap:12px;padding:4px 4px 4px 10px;font-size:12px;color:var(--fg-2)}
 .scale{display:flex;flex-direction:column;gap:3px;font:500 12px/1 var(--font-body);color:var(--fg-2)}
 .scale i{display:block;height:6px;border:1.5px solid var(--fg-2);border-top:0}
-#cursorXY{font-size:12px;min-width:17ch}
+#cursorXY{font-size:12px;width:23ch;flex:none;overflow:hidden;text-overflow:ellipsis}
+#cursorTown{width:13em;flex:none;overflow:hidden;text-overflow:ellipsis}
 .legend{position:absolute;left:10px;bottom:52px;z-index:4;width:270px;display:grid;gap:6px;padding:10px 12px 12px;border-radius:8px;background:var(--surface);border:1px solid var(--line-strong);box-shadow:var(--shadow);font-size:12px;color:var(--fg-2)}
 .legend h5{margin:4px 0 0;font:600 12px/1.2 var(--font-display);color:var(--fg)}
 .legend div{display:flex;align-items:center;gap:8px;line-height:1.35}
@@ -414,23 +415,27 @@ details.checks>summary{padding:6px 12px 8px}
 .tk{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:4px;font:600 12px/1 var(--font-body);border:1px solid var(--line-strong);color:var(--fg)}
 .tk.parada{color:var(--fg-2)} .tk.fallida{color:var(--st-fail);border-color:color-mix(in srgb,var(--st-fail) 55%,transparent)}
 .take .th .tm{margin-left:auto;color:var(--muted);font-size:12px}
+.take small{font-size:12px}
 .lags{display:flex;flex-wrap:wrap;gap:4px}
 .lags span{font-size:12px;padding:3px 6px;border-radius:4px;background:var(--surface-2);border:1px solid var(--line)}
 .summary{padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--fg-2);line-height:1.5}
 
 /* ---------- barra de estado: las tres luces y el resto (UX-03) ---------- */
-.status{display:flex;align-items:center;gap:14px;min-width:0;padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px));font-size:12px;color:var(--muted);background:var(--bg);border-top:1px solid var(--chassis);white-space:nowrap;overflow:hidden}
+/* las coordenadas y el pueblo tienen hueco fijo, para que nada se mueva al pasar el cursor; si las zonas no caben
+   en una línea, la barra pasa a dos en vez de pisarlas o sacar «MCP apagado» del borde (UX-33, CU-35) */
+.status{display:flex;flex-wrap:wrap;align-items:center;gap:2px 14px;min-height:28px;padding-block:3px;min-width:0;padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px));font-size:12px;color:var(--muted);background:var(--bg);border-top:1px solid var(--chassis);white-space:nowrap;overflow:hidden}
 .status b{font-weight:500;color:var(--fg-2)}
 .status .ssep{width:1px;height:14px;background:var(--line-strong);flex:none}
 .status .grow{flex:1;min-width:8px}
-#stInfo{display:flex;align-items:center;gap:14px;min-width:0}
+#stInfo{display:flex;flex-wrap:wrap;align-items:center;gap:2px 14px;min-width:0}
 .peer{display:inline-flex;align-items:center;gap:6px;flex:none;color:var(--muted)}
 .peer i{width:8px;height:8px;border-radius:50%;background:var(--st-obs);box-shadow:0 0 0 2px color-mix(in srgb,var(--st-obs) 25%,transparent)}
 .peer b{font-weight:500;color:var(--fg-2)}
 .peer.down,.peer.down b{color:var(--st-fail)}
 .peer.down i{background:var(--st-fail);box-shadow:0 0 0 2px color-mix(in srgb,var(--st-fail) 25%,transparent)}
 .peer.stale i{background:var(--st-pend);box-shadow:none}
-.pnote{flex:none;border:1px dashed var(--line-strong);border-radius:4px;padding:1px 6px;color:var(--fg-2)}
+/* la nota del prototipo ocupa lo que sobra en la línea y nunca la parte en dos (UX-33) */
+.pnote{flex:1000 1 0;min-width:0;max-width:max-content;overflow:hidden;text-overflow:ellipsis;border:1px dashed var(--line-strong);border-radius:4px;padding:1px 6px;color:var(--fg-2)}
 
 /* ---------- menús, diálogos, avisos ---------- */
 .menu{position:fixed;z-index:60;min-width:260px;max-width:min(340px,calc(100vw - 32px));max-height:calc(100vh - 80px);overflow:auto;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;box-shadow:var(--shadow);padding:6px}
@@ -498,7 +503,7 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
 .lockmsg{margin:10px 12px 0;display:flex;gap:8px;align-items:flex-start}
 
 /* ---------- escritorio estrecho ---------- */
-@media (max-width: 1500px){ .brand span{display:none} #bSim span{display:none} #bSim{padding:0 6px} }
+@media (max-width: 1500px){ .brand span{display:none} #bSim span{display:none} #bSim{padding:0 6px} .pnote{display:none} }
 @media (max-width: 1400px){ #bGuide span{display:none} #bGuide{padding:0 6px} .docbtn{max-width:260px} }
 
 /* ---------- móvil ---------- */
@@ -650,7 +655,7 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
       <div><small>Texto, 13 px, 400 a 600</small><span>Aplica la escena antes de rodar. Hay 2 cambios sin aplicar.</span></div>
       <div><small>Monoespaciada, solo coordenadas y tiempos</small><span class="mono">X 6188,0 · Z 7626,0 · 00:06.12</span></div>
     </div>
-    <p style="margin-top:12px">En Windows salen Segoe UI Variable y Cascadia Mono, como en el editor de Unreal 5 y en el de Reforger. El texto va a 13 px con cifras tabulares para que los números no bailen, y nada baja de 12 px. La monoespaciada se queda para coordenadas y tiempos; los nombres de clase y los códigos van en letra normal o en los detalles técnicos. Los menús del DayZ Editor van en minúsculas y sin versalitas, y así van aquí los títulos.</p>
+    <p style="margin-top:12px">Es la letra del sistema: en Windows salen Segoe UI Variable y Cascadia Mono. La familia, el tamaño y los grises son una elección propia; de Unreal 5 y Reforger se copia el patrón (tema oscuro por capas, paneles acoplados y texto denso), no sus valores. El texto va a 13 px con cifras tabulares para que los números no bailen, y nada baja de 12 px. La monoespaciada se queda para coordenadas y tiempos; los nombres de clase y los códigos van en letra normal o en los detalles técnicos. Los menús del DayZ Editor van en minúsculas y sin versalitas, y así van aquí los títulos.</p>
 
     <h3>Fuera de M1</h3>
     <p>Aunque algún referente lo tenga, no entra en M1: vista 3D en la web, varios directores a la vez, grabar vídeo dentro del producto, cambiar de mapa, la IA y el MCP, y los eventos de roleplay. Tampoco la paleta de comandos ni el modo imán del DayZ Editor: no los pide el spec.</p>
@@ -933,6 +938,10 @@ function comboOf(e) {
 }
 
 const takeActive = () => ['preparando', 'armada', 'rodando', 'parando'].includes(S.take.state);
+// La toma sigue abierta hasta que una lectura confirma la parada: tras un corte, nada tapa «Parada sin confirmar» (UX-01, AR-01)
+const takeOpen = () => takeActive() || !!S.take.unconfirmed;
+const openWhy = what => S.take.unconfirmed ? `${what} hasta confirmar la parada de la toma: se comprueba sola al volver la conexión.` : `${what} durante la toma.`;
+const UNC = 'Falta confirmar que la toma se paró: se comprueba sola al volver la conexión.';
 const offline = () => !S.sim.backend;
 function editBlock() {
   if (offline()) return 'Sin conexión con el backend: no se puede guardar ningún cambio. El documento sigue como en el último guardado.';
@@ -979,12 +988,12 @@ function counts(d) { const n = {objeto: 0, infectado: 0, animal: 0, actor: 0}; d
 function validate(d) {
   const out = [], n = counts(d);
   d.entities.forEach((e, i) => {
-    if (e.x < 0 || e.x > W0 || e.z < 0 || e.z > W0) out.push({code: 'out_of_map', ptr: `/entities/${i}`, msg: `«${e.name}» está fuera del mapa (de 0 a 15 360 m).`, go: 'ent:' + e.id});
-    if (e.kind === 'actor') (e.gestures || []).forEach((g, j) => { const em = emote(g.emote); if (!em || !em.cert) out.push({code: 'unknown_emote', ptr: `/entities/${i}/gestures/${j}`, msg: `El gesto «${em ? em.name : g.emote}» de ${e.name} no está certificado y no se puede usar.`, go: 'ent:' + e.id}); });
+    if (e.x < 0 || e.x > W0 || e.z < 0 || e.z > W0) out.push({code: 'out_of_map', ptr: `/entities/${i}`, msg: `«${e.name}» está fuera del mapa (de 0 a 15 360 m).`, go: 'ent:' + e.id, fld: '#f-x'});
+    if (e.kind === 'actor') (e.gestures || []).forEach((g, j) => { const em = emote(g.emote); if (!em || !em.cert) out.push({code: 'unknown_emote', ptr: `/entities/${i}/gestures/${j}`, msg: `El gesto «${em ? em.name : g.emote}» de ${e.name} no está certificado y no se puede usar.`, go: 'ent:' + e.id, fld: `[data-f="g-emote"][data-i="${j}"]`}); });
   });
   KINDS.forEach(k => { if (n[k] > CAPS[k]) out.push({code: 'budget_exceeded', ptr: '/entities', msg: `Hay ${n[k]} ${KLABEL[k].toLowerCase()} y el tope es ${CAPS[k]}. Quita ${n[k] - CAPS[k]} para poder aplicar.`, go: 'grp:' + k}); });
   if (!S.sim.expansion && n.actor > 0) { const i = d.entities.findIndex(e => e.kind === 'actor'); out.push({code: 'expansion_unavailable', ptr: `/entities/${i}`, msg: `La escena tiene ${n.actor} actores y el servidor no tiene cargado Expansion. No se aplicará nada hasta que lo cargues o quites los actores.`, go: 'ent:' + d.entities[i].id}); }
-  d.cameras.forEach((c, i) => { for (let k = 1; k < c.keys.length; k++) if (!(c.keys[k].t > c.keys[k - 1].t)) out.push({code: 'times_not_increasing', ptr: `/cameras/${i}/keys/${k}/t`, msg: `En «${c.name}», la clave K${k + 1} no va después de la K${k}.`, go: 'key:' + c.id + ':' + k}); });
+  d.cameras.forEach((c, i) => { for (let k = 1; k < c.keys.length; k++) if (!(c.keys[k].t > c.keys[k - 1].t)) out.push({code: 'times_not_increasing', ptr: `/cameras/${i}/keys/${k}/t`, msg: `En «${c.name}», la clave K${k + 1} no va después de la K${k}.`, go: 'key:' + c.id + ':' + k, fld: '#k-t'}); });
   return out;
 }
 
@@ -996,6 +1005,15 @@ const wpick = e => WKEYS.reduce((o, k) => { if (e[k] !== undefined) o[k] = e[k];
 function entState(e) { if (!S.world) return 'fuera'; const w = S.world.ents[e.id]; if (!w) return 'nuevo'; return canon(wpick(e)) === canon(wpick(w)) ? 'observado' : 'cambiado'; }
 function removedEnts() { if (!S.world) return []; const ids = new Set(S.doc.entities.map(e => e.id)); return Object.values(S.world.ents).filter(w => !ids.has(w.id)); }
 const ambDiff = () => !S.worldAmb || canon(S.doc.ambiente) !== canon(S.worldAmb);
+// Con una orden de escena a medias, o cortada y sin confirmar, no se sabe qué hay en el juego: la falta de lectura
+// no se presenta como «Nada en el juego», que queda para una lectura o una retirada confirmada (AR-02)
+function worldDoubt() {
+  const op = S.applying && S.queue.find(o => o.id === S.applying);
+  if (!op || (op.verb !== 'scene_apply' && op.verb !== 'scene_reset')) return null;
+  const ap = op.verb === 'scene_apply';
+  if (op.lost) return {cut: true, short: 'Falta confirmar qué hay en el juego', long: `Falta confirmar qué hay en el juego: se cortó la conexión mientras ${ap ? 'se aplicaba' : 'se quitaba'} la escena. Se comprueba sola al volver la conexión, sin repetir la orden.`};
+  return S.world ? null : {cut: false, short: ap ? 'Aplicando: aún sin lectura' : 'Quitando: aún sin lectura', long: ap ? 'Aplicando la escena: el juego está cambiando y se sabrá qué hay al leerlo.' : 'Quitando la escena: falta leer el juego.'};
+}
 function changeCount() { if (!S.world) return null; let n = 0; S.doc.entities.forEach(e => { const st = entState(e); if (st === 'nuevo' || st === 'cambiado') n++; }); n += removedEnts().length; if (ambDiff()) n++; return n; }
 
 /* =========================================================
@@ -1009,6 +1027,9 @@ function setOp(op, p) {
   // la edad de la evidencia va aparte de la de la petición (UX-13)
   if (p.state === 'observado' && !p.readAt) p = Object.assign({}, p, {readAt: now()});
   Object.assign(op, p); renderDock(); renderTop();
+  // si cambia lo que se sabe del juego (aplicando, cortada o leída), se repintan también la Jerarquía y Propiedades (AR-02)
+  const d = worldDoubt(), dk = d ? (d.cut ? 'corte' : 'curso') : '';
+  if (dk !== (S.doubtKey || '')) { S.doubtKey = dk; renderLeft(); renderRight(); }
 }
 const peerUp = p => p === 'server' ? S.sim.server : S.sim.director;
 const peerName = p => p === 'server' ? 'el servidor' : 'tu juego';
@@ -1040,6 +1061,7 @@ function applyScene(after) {
   if (offline()) return toast('Sin conexión con el backend: la orden no sale de la web.', 'fail');
   if (S.applying) return toast('Ya hay una aplicación en curso.');
   if (takeActive()) return toast('Para o desarma la toma antes de aplicar.', 'fail');
+  if (S.take.unconfirmed) return toast(UNC + ' Después podrás aplicar.', 'fail');
   const errs = validate(S.doc);
   if (errs.length) { S.dtab = 'validacion'; if (S.ws !== 'escena') go('escena'); L.de = true; applyLayout(); renderAll(); return toast(`No se aplica: ${errs.length === 1 ? 'hay un error' : 'hay ' + errs.length + ' errores'} en la escena. Los tienes en la pestaña Validación.`, 'fail'); }
   const snap = clone(S.doc), roots = snap.entities.length;
@@ -1081,6 +1103,7 @@ function resetScene(after) {
   if (offline()) return toast('Sin conexión con el backend: la orden no sale de la web.', 'fail');
   if (S.applying) return toast('Espera a que termine la aplicación en curso.');
   if (takeActive()) return toast('Para o desarma la toma antes de quitar la escena del juego.', 'fail');
+  if (S.take.unconfirmed) return toast(UNC + ' Después podrás quitar la escena.', 'fail');
   const n = S.world ? Object.keys(S.world.ents).length : 0;
   const op = newOp({verb: 'scene_reset', label: 'Quitar del juego', target: S.doc.name}); S.applying = op.id; renderAll();
   deliver(op, 'server', () => runSteps(op, 'server', [
@@ -1166,6 +1189,7 @@ const CHECKS = [
 ];
 function prepareTake() {
   if (takeActive()) return;
+  if (S.take.unconfirmed) return toast(UNC, 'fail');
   if (offline()) return toast('Sin conexión con el backend: no se puede leer el juego.', 'fail');
   if (S.applying) return toast('Espera a que termine la aplicación en curso.');
   if (!camById(S.take.cam)) return toast('Elige la cámara de la toma.', 'fail');
@@ -1313,8 +1337,8 @@ function height(x, z) {
   return (40 + base * 260 + ridge * ridge * 140 * clamp(z / 9000, 0.2, 1)) * s + 0.5;
 }
 const PAL = {
-  paper: {sea: [169, 198, 214], field: [236, 233, 216], forest: [196, 214, 166], contour: [150, 116, 70], road: '#fbf8ec', roadEdge: '#9b9276', bld: '#7b7569', grid: 'rgba(60,60,40,.20)', gridTxt: 'rgba(50,50,35,.75)', label: '#37362a', halo: 'rgba(245,242,228,.9)'},
-  dim: {sea: [118, 144, 158], field: [186, 183, 167], forest: [150, 167, 127], contour: [102, 80, 50], road: '#dcd8c8', roadEdge: '#6c6755', bld: '#58534a', grid: 'rgba(25,25,15,.24)', gridTxt: 'rgba(25,25,15,.8)', label: '#222116', halo: 'rgba(200,197,182,.9)'}
+  paper: {sea: [169, 198, 214], field: [236, 233, 216], forest: [196, 214, 166], contour: [150, 116, 70], road: '#fbf8ec', roadEdge: '#9b9276', bld: '#7b7569', grid: 'rgba(60,60,40,.20)', label: '#37362a', halo: 'rgb(245,242,228)'},
+  dim: {sea: [118, 144, 158], field: [186, 183, 167], forest: [150, 167, 127], contour: [102, 80, 50], road: '#dcd8c8', roadEdge: '#6c6755', bld: '#58534a', grid: 'rgba(25,25,15,.24)', label: '#222116', halo: 'rgb(200,197,182)'}
 };
 const MC = {obj: '#544d40', zmb: '#a8432f', ani: '#86691c', act: '#18191a', cam: '#2459a6', mark: '#b06400', sel: '#e8a12a'};
 let P = PAL.paper;
@@ -1385,14 +1409,15 @@ function drawMap() {
   // rejilla con coordenadas en metros
   const steps = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000], sp = steps.find(v => v * V.s >= 70) || 5000;
   const [wx0, wz1] = s2w(0, 0), [wx1, wz0] = s2w(V.w, V.h);
-  g.strokeStyle = P.grid; g.lineWidth = 1; g.fillStyle = P.gridTxt; g.font = '500 12px ' + FONT_MONO;
-  for (let x = Math.ceil(wx0 / sp) * sp; x <= wx1; x += sp) { const [sx] = w2s(x, 0); g.beginPath(); g.moveTo(sx + 0.5, 0); g.lineTo(sx + 0.5, V.h); g.stroke(); if (x >= 0 && x <= W0) g.fillText(String(x), sx + 3, 13); }
-  for (let z = Math.ceil(wz0 / sp) * sp; z <= wz1; z += sp) { const [, sy] = w2s(0, z); g.beginPath(); g.moveTo(0, sy + 0.5); g.lineTo(V.w, sy + 0.5); g.stroke(); if (z >= 0 && z <= W0) g.fillText(String(z), 3, sy - 3); }
+  g.strokeStyle = P.grid; g.lineWidth = 1; g.font = '500 12px ' + FONT_MONO;
+  const nums = [];
+  for (let x = Math.ceil(wx0 / sp) * sp; x <= wx1; x += sp) { const [sx] = w2s(x, 0); g.beginPath(); g.moveTo(sx + 0.5, 0); g.lineTo(sx + 0.5, V.h); g.stroke(); if (x >= 0 && x <= W0) nums.push([String(x), sx + 3, 13]); }
+  for (let z = Math.ceil(wz0 / sp) * sp; z <= wz1; z += sp) { const [, sy] = w2s(0, z); g.beginPath(); g.moveTo(0, sy + 0.5); g.lineTo(V.w, sy + 0.5); g.stroke(); if (z >= 0 && z <= W0) nums.push([String(z), 3, sy - 3]); }
+  // los números, sobre una placa opaca del color del halo de las etiquetas, que también es opaco: se leen encima de edificios y bosque (CU-38, AR-03)
+  nums.forEach(([t, x, y]) => { g.fillStyle = P.halo; g.fillRect(x - 2, y - 11, g.measureText(t).width + 4, 14); g.fillStyle = P.label; g.fillText(t, x, y); });
   // pueblos, en minúscula normal (UX-09)
-  LBLT.length = 0;
-  if (V.s < 1.2) { g.textAlign = 'center'; g.font = `600 12px ${FONT_UI}`; TOWNS.forEach(t => { const [x, y] = w2s(t[1], t[2]); if (x < -80 || y < -20 || x > V.w + 80 || y > V.h + 20) return; const label = t[0]; g.lineWidth = 3; g.strokeStyle = P.halo; g.strokeText(label, x, y); g.fillStyle = P.label; g.fillText(label, x, y); LBLT.push(label); }); g.textAlign = 'left'; }
+  if (V.s < 1.2) { g.textAlign = 'center'; g.font = `600 12px ${FONT_UI}`; TOWNS.forEach(t => { const [x, y] = w2s(t[1], t[2]); if (x < -80 || y < -20 || x > V.w + 80 || y > V.h + 20) return; const label = t[0]; g.lineWidth = 3; g.strokeStyle = P.halo; g.strokeText(label, x, y); g.fillStyle = P.label; g.fillText(label, x, y); }); g.textAlign = 'left'; }
   LBL.length = 0; drawScene(g);
-  canvas.dataset.etiquetas = LBLT.join('|');
   updateScale();
 }
 function drawGlyph(g, kind, x, y, yaw, style) {
@@ -1410,15 +1435,16 @@ function drawGlyph(g, kind, x, y, yaw, style) {
   if (style !== 'ghost') { const a = yaw * Math.PI / 180, r0 = kind === 'actor' ? 8.75 : 7.5, r1 = r0 + 6; g.beginPath(); g.moveTo(x + Math.sin(a) * r0, y - Math.cos(a) * r0); g.lineTo(x + Math.sin(a) * r1, y - Math.cos(a) * r1); g.lineCap = 'round'; g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.stroke(); }
 }
 // Etiquetas sin solaparse: prueba debajo y encima; las secundarias se omiten si no caben.
-const LBL = [], LBLT = [];
+const LBL = [];
 function label(g, txt, x, y, strong, must) {
   g.font = `${strong ? 600 : 500} 12px ${FONT_UI}`;
   const w = g.measureText(txt).width + 4, h = 14, hit = r => LBL.some(o => r[0] < o[0] + o[2] && o[0] < r[0] + r[2] && r[1] < o[1] + o[3] && o[1] < r[1] + r[3]);
   let py = null;
   for (const dy of [0, 14, -14, 28]) if (!hit([x - 2, y + dy - 11, w, h])) { py = y + dy; break; }
   if (py === null) { if (!(strong || must)) return; py = y; }
-  LBL.push([x - 2, py - 11, w, h]); LBLT.push(txt);
-  g.lineWidth = 3; g.strokeStyle = P.halo; g.strokeText(txt, x, py); g.fillStyle = P.label; g.fillText(txt, x, py);
+  LBL.push([x - 2, py - 11, w, h]);
+  // halo opaco de 4 px: ningún píxel de la letra queda sobre el mapa (CU-38, AR-03)
+  g.lineWidth = 4; g.strokeStyle = P.halo; g.strokeText(txt, x, py); g.fillStyle = P.label; g.fillText(txt, x, py);
 }
 function ring(g, x, y, r) { g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.lineWidth = 4; g.strokeStyle = 'rgba(0,0,0,.35)'; g.stroke(); g.lineWidth = 2.4; g.strokeStyle = MC.sel; g.stroke(); }
 // candado dibujado, no un emoji (UX-09)
@@ -1446,7 +1472,6 @@ function drawScene(g) {
   const selActor = sel && sel.type === 'mark' ? sel.id : (one && one.kind === 'actor' ? one.id : null);
   const selCam = sel && (sel.type === 'cam' || sel.type === 'key') ? sel.cam : null;
   const focusCam = selCam || (inRod ? S.take.cam : null), dimOthers = !!(selActor || selCam);
-  let drafts = 0;
   // fantasmas de lo que sigue en el juego
   if (S.world) Object.values(S.world.ents).forEach(w => {
     if (!S.layers[w.kind] || S.hidden[w.id]) return;
@@ -1480,7 +1505,6 @@ function drawScene(g) {
       // los actores solo se mueven en el mapa mientras rueda: el cursor de la línea de tiempo no los mueve
       if (kind === 'actor' && live) p = actorAt(e, Math.max(0, t - (S.take.lag[e.id] || 0) / 1000));
       const st = entState(e), [x, y] = w2s(p.x, p.z), draft = st !== 'observado';
-      if (draft) drafts++;
       const yw = dragYaw(e.id);
       drawGlyph(g, kind, x, y, yw === null ? e.yaw : yw, draft ? 'draft' : 'solid');
       if (yw !== null) label(g, Math.round(yw) + '°', x + 15, y - 12, true, true);
@@ -1518,7 +1542,6 @@ function drawScene(g) {
   });
   // mientras se coloca, un fantasma de la entidad sigue al ratón (UX-08)
   if (S.placing && S.mouse) { const [x, y] = w2s(S.mouse[0], S.mouse[1]); g.save(); g.globalAlpha = 0.75; drawGlyph(g, S.placing.kind, x, y, 0, 'draft'); g.restore(); label(g, clsName(S.placing.kind, S.placing.cls), x + 15, y + 4, true, true); }
-  canvas.dataset.borrador = String(drafts);
 }
 function updateScale() {
   const nice = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
@@ -1736,7 +1759,7 @@ function renderTop() {
   $$('[data-act="ws"]').forEach(b => { const k = keyOf(b.dataset.v), nm = b.dataset.v === 'escena' ? 'Escena' : 'Rodaje'; b.setAttribute('aria-pressed', String(b.dataset.v === S.ws)); b.innerHTML = nm + (k ? ` <kbd>${keyLabel(k)}</kbd>` : ''); b.title = 'Ir a ' + nm; });
   const n = changeCount(), busy = !!S.applying, armed = takeActive(), off = offline(), errs = validate(S.doc).length;
   // el documento a la izquierda: nombre, cambios sin aplicar y guardado (UX-03, UX-04); la revisión, al pasar el ratón (UX-05)
-  const state = n === null ? (S.other ? 'En el juego hay otra escena' : 'Nada en el juego') : n ? `${pl(n, 'cambio', 'cambios')} sin aplicar` : 'Sin cambios por aplicar';
+  const dbt = worldDoubt(), state = dbt ? dbt.short : n === null ? (S.other ? 'En el juego hay otra escena' : 'Nada en el juego') : n ? `${pl(n, 'cambio', 'cambios')} sin aplicar` : 'Sin cambios por aplicar';
   $('#docBtn').title = `${S.doc.name} · revisión ${S.doc.rev}${S.world ? `, en el juego la ${S.world.rev}` : S.other ? `; en el juego está «${otherName()}»` : ''}`;
   $('#docBtn').innerHTML = `<b><span class="nm">${esc(S.doc.name)}</span>${ic('chev')}</b><small class="${n !== 0 ? 'dirty' : ''}">${state} · <span data-since="${S.savedAt}" data-fmt="guardado hace %"></span></small>`;
   const u = S.undo[S.undo.length - 1], r = S.redo[S.redo.length - 1];
@@ -1748,11 +1771,11 @@ function renderTop() {
   const b = $('#bApply');
   b.innerHTML = applying ? `${sm('ejecutando')} Aplicando…` : 'Aplicar escena';
   b.classList.toggle('primary', S.ws === 'escena' && !goRod && (n !== 0 || applying)); b.classList.toggle('busy', applying);
-  b.disabled = busy || errs > 0 || armed || off;
-  b.title = off ? 'Sin conexión con el backend' : errs ? `${errs === 1 ? 'Un error impide' : errs + ' errores impiden'} aplicar. Míralos en Validación.` : busy ? 'Hay una orden en curso' : armed ? 'Para o desarma la toma antes de aplicar' : S.other ? `Quita del juego «${otherName()}» y crea esta escena entera desde el documento (${keyLabel(keyOf('apply'))})` : `Quita del juego lo que puso la escena y la vuelve a crear entera desde el documento (${keyLabel(keyOf('apply'))})`;
+  b.disabled = busy || errs > 0 || armed || off || !!S.take.unconfirmed;
+  b.title = off ? 'Sin conexión con el backend' : errs ? `${errs === 1 ? 'Un error impide' : errs + ' errores impiden'} aplicar. Míralos en Validación.` : busy ? 'Hay una orden en curso' : armed ? 'Para o desarma la toma antes de aplicar' : S.take.unconfirmed ? UNC : S.other ? `Quita del juego «${otherName()}» y crea esta escena entera desde el documento (${keyLabel(keyOf('apply'))})` : `Quita del juego lo que puso la escena y la vuelve a crear entera desde el documento (${keyLabel(keyOf('apply'))})`;
   const rs = $('#bReset');
   rs.innerHTML = removing ? `${sm('ejecutando')} Quitando…` : 'Quitar del juego'; rs.classList.toggle('busy', removing);
-  rs.disabled = busy || !S.world || armed || off; rs.hidden = armed; b.hidden = armed;
+  rs.disabled = busy || !S.world || armed || off || !!S.take.unconfirmed; rs.hidden = armed; b.hidden = armed;
   rs.title = S.world ? 'Quita del juego todo lo que puso esta escena, y nada más. El documento no cambia.' : S.other ? `En el juego está «${otherName()}»: ábrela para quitarla, o aplica esta para cambiarla` : 'No hay nada de la escena en el juego';
   const g = $('#bGoRod'); g.hidden = !goRod; g.innerHTML = `Ir a rodaje ${ic('next')}`; g.title = 'La escena está en el juego y leída: el siguiente paso es preparar la toma';
   // Parar fijo en la barra mientras dura la toma; tras un corte, «Parada sin confirmar» hasta leer el juego (UX-01)
@@ -1764,7 +1787,7 @@ function renderTop() {
   $('#bTools').innerHTML = `Herramientas ${ic('chev')}`; $('#bTools').title = 'Paneles, layouts, atajos de teclado y ocultar la interfaz';
   $('#bSim').innerHTML = `${ic('flask')}<span>Simular</span>`; $('#bSim').title = 'Simular fallos del juego (solo en el prototipo)';
   $('#bRefs').innerHTML = ic('tag'); $('#bRefs').title = 'Ver de qué juego sale cada parte'; $('#bRefs').setAttribute('aria-pressed', String(S.refs));
-  $('#bGuide').innerHTML = `${ic('book')}<span>Guía</span>`; $('#bGuide').disabled = armed; $('#bGuide').title = armed ? 'La Guía no se abre durante la toma' : 'Guía: el recorrido de una toma, los estados y los atajos';
+  $('#bGuide').innerHTML = `${ic('book')}<span>Guía</span>`; $('#bGuide').disabled = takeOpen(); $('#bGuide').title = takeOpen() ? openWhy('La Guía no se abre') : 'Guía: el recorrido de una toma, los estados y los atajos';
   $('#bZin').innerHTML = ic('plus'); $('#bZout').innerHTML = ic('minus'); $('#bFit').innerHTML = ic('focus'); $('#bPath').innerHTML = ic('path'); $('#bLayers').innerHTML = ic('layers'); $('#bGrid').innerHTML = ic('grid');
   $('#bGrid').title = `Rejillas: mover ${S.grid.move ? 'de ' + nf(S.grid.step, S.grid.step < 1 ? 1 : 0) + ' m en ' + nf(S.grid.step, S.grid.step < 1 ? 1 : 0) + ' m' : 'libre'} · girar ${S.grid.rot ? 'de ' + S.grid.rstep + '° en ' + S.grid.rstep + '°' : 'libre'}`;
   renderPeers();
@@ -1784,10 +1807,12 @@ function renderPeers() {
 }
 function treeRow(e) {
   const st = entState(e), sel = S.sel && S.sel.type === 'ent' && S.sel.ids.includes(e.id), mark = st === 'nuevo' || st === 'cambiado';
-  return `<div class="row${S.hidden[e.id] ? ' off' : ''}" role="treeitem" aria-selected="${sel}" tabindex="${sel ? 0 : -1}" data-act="sel" data-v="ent:${e.id}" title="${esc(e.cls)} · ${esc(ESTATE[st].label)}">${gl(e.kind)}<span class="nm">${esc(e.name)}</span><span class="st ${ESTATE[st].cls}">${mark ? sm(st) : ''}</span><button class="tg${S.locked[e.id] ? ' on' : ''}" data-act="lock" data-v="${e.id}" aria-label="${S.locked[e.id] ? 'Desbloquear' : 'Bloquear'} ${esc(e.name)}">${ic(S.locked[e.id] ? 'lock' : 'unlock')}</button><button class="tg${S.hidden[e.id] ? ' on' : ''}" data-act="eye" data-v="${e.id}" aria-label="${S.hidden[e.id] ? 'Mostrar' : 'Ocultar'} ${esc(e.name)} en el mapa">${ic(S.hidden[e.id] ? 'eyeoff' : 'eye')}</button></div>`;
+  return `<div class="row${S.hidden[e.id] ? ' off' : ''}" role="treeitem" aria-selected="${sel}" tabindex="${sel ? 0 : -1}" data-act="sel" data-v="ent:${e.id}" title="${esc(e.cls)} · ${esc(st === 'fuera' && worldDoubt() ? 'Sin lectura del juego' : ESTATE[st].label)}">${gl(e.kind)}<span class="nm">${esc(e.name)}</span><span class="st ${ESTATE[st].cls}">${mark ? sm(st) : ''}</span><button class="tg${S.locked[e.id] ? ' on' : ''}" data-act="lock" data-v="${e.id}" aria-label="${S.locked[e.id] ? 'Desbloquear' : 'Bloquear'} ${esc(e.name)}">${ic(S.locked[e.id] ? 'lock' : 'unlock')}</button><button class="tg${S.hidden[e.id] ? ' on' : ''}" data-act="eye" data-v="${e.id}" aria-label="${S.hidden[e.id] ? 'Mostrar' : 'Ocultar'} ${esc(e.name)} en el mapa">${ic(S.hidden[e.id] ? 'eyeoff' : 'eye')}</button></div>`;
 }
 // Una línea dice qué hay en el juego y la edad de la lectura; las filas solo llevan icono si algo difiere (UX-06)
 function worldLine() {
+  const dbt = worldDoubt();
+  if (dbt) return `<div class="worldline" title="${dbt.long}"><span class="${dbt.cut ? 'st-parcial' : 'st-ejecutando'}">${sm(dbt.cut ? 'parcial' : 'ejecutando')}</span><span>${dbt.short}</span></div>`;
   if (!S.world && S.other) return `<div class="worldline"><span class="st-fuera">${sm('fuera')}</span><span>En el juego está «${esc(otherName())}», leída hace <b data-since="${S.other.world.at}"></b>. Aplicar la quita y pone esta.</span></div>`;
   if (!S.world) return `<div class="worldline"><span class="st-fuera">${sm('fuera')}</span><span>${S.epochNew ? 'Nada en el juego: el servidor se reinició' : 'Nada en el juego'}</span></div>`;
   return `<div class="worldline"><span class="st-observado">${sm('observado')}</span><span>En el juego, leída hace <b data-since="${S.world.at}"></b></span></div>`;
@@ -1846,8 +1871,8 @@ const tech = (k, body) => `<details class="tech" data-k="${k}" ${S.tech[k] ? 'op
 // Sin selección, Propiedades resume la escena y dice qué toca (UX-07)
 function sceneProps() {
   const n = counts(S.doc), ch = changeCount(), a = S.doc.ambiente;
-  const estado = ch === null ? (S.other ? `En el juego está «${esc(otherName())}»` : 'Nada en el juego') : ch ? `${pl(ch, 'cambio', 'cambios')} sin aplicar` : 'Aplicada y leída';
-  const next = !S.doc.entities.length ? 'La escena está vacía: añade tu primer objeto desde Añadir.' : ch === null ? `Aplica la escena para ponerla en el juego (${keyLabel(keyOf('apply'))}).` : ch ? `Aplica para que el juego tenga lo que ves (${keyLabel(keyOf('apply'))}).` : S.ws === 'rodaje' ? 'Lista para rodar: prepara la toma.' : 'Lista para rodar: pasa a Rodaje y prepara la toma.';
+  const dbt = worldDoubt(), estado = dbt ? dbt.long : ch === null ? (S.other ? `En el juego está «${esc(otherName())}»` : 'Nada en el juego') : ch ? `${pl(ch, 'cambio', 'cambios')} sin aplicar` : 'Aplicada y leída';
+  const next = dbt ? (dbt.cut ? 'No hace falta aplicar otra vez: al volver la conexión se lee el juego.' : 'Espera a que termine la orden.') : !S.doc.entities.length ? 'La escena está vacía: añade tu primer objeto desde Añadir.' : ch === null ? `Aplica la escena para ponerla en el juego (${keyLabel(keyOf('apply'))}).` : ch ? `Aplica para que el juego tenga lo que ves (${keyLabel(keyOf('apply'))}).` : S.ws === 'rodaje' ? 'Lista para rodar: prepara la toma.' : 'Lista para rodar: pasa a Rodaje y prepara la toma.';
   const cont = [pl(n.actor, 'actor', 'actores'), pl(n.objeto, 'objeto', 'objetos'), pl(n.infectado, 'infectado', 'infectados'), pl(n.animal, 'animal', 'animales'), pl(S.doc.cameras.length, 'cámara', 'cámaras')].join(' · ');
   return `<div class="ident">${gl('ambiente')}<div style="min-width:0;flex:1"><input id="f-docname" value="${esc(S.doc.name)}" aria-label="Nombre de la escena"><div class="cn">Escena de Chernarus</div></div></div>
   <div class="sec"><h4>Estado <span class="where">${S.world ? `leída hace <span data-since="${S.world.at}"></span>` : ''}</span></h4><p>${estado}</p><p class="mut">${next}</p>${S.world ? `<div class="btnrow"><button class="btn sm" data-act="observe">${ic('eye')} Leer el juego</button></div>` : ''}</div>
@@ -1862,8 +1887,8 @@ function obsBlock(e) {
   if (st === 'observado' && o) { const dd = Math.hypot(o.x - e.x, o.z - e.z); body = `<div class="kv"><span>Posición leída</span><span class="mono">${nf(o.x, 2)} · ${nf(o.z, 2)}</span></div><div class="kv"><span>Diferencia</span><span class="${dd < 0.5 ? 'ok' : 'bad'} mono">${nf(dd, 2)} m ${dd < 0.5 ? '(dentro de 0,5 m)' : '(fuera de 0,5 m)'}</span></div>${e.kind === 'actor' ? `<div class="kv"><span>Personaje</span><span>${esc(clsName(w.kind, w.cls))} ✓</span></div><div class="kv"><span>Vestuario</span><span>${ward(w.wardrobe).items.length} de ${ward(w.wardrobe).items.length} prendas leídas</span></div>` : ''}<div class="kv"><span>Lectura</span><span>hace <span data-since="${S.world.at}"></span> · servidor</span></div>`; }
   else if (st === 'cambiado') body = `<div class="note warn">En el juego sigue en <span class="mono">${nf(w.x, 1)} · ${nf(w.z, 1)}</span>${w.cls !== e.cls ? ` y con la clase ${esc(w.cls)}` : ''}. Aplica los cambios para moverlo.</div>`;
   else if (st === 'nuevo') body = `<div class="note warn">Todavía no existe en el juego. Aparecerá al aplicar los cambios.</div>`;
-  else body = `<div class="note">No hay nada de la escena en el juego ahora mismo.</div>`;
-  return `<div class="sec"><h4>En el juego <span class="where">${chipEnt(st)}</span></h4>${body}${S.world ? `<div class="btnrow"><button class="btn sm" data-act="observe">${ic('eye')} Leer el juego</button></div>` : ''}</div>`;
+  else body = `<div class="note">${worldDoubt() ? worldDoubt().long : 'No hay nada de la escena en el juego ahora mismo.'}</div>`;
+  return `<div class="sec"><h4>En el juego <span class="where">${st === 'fuera' && worldDoubt() ? `<span class="chip borrador">${sm('parcial')}Sin lectura</span>` : chipEnt(st)}</span></h4>${body}${S.world ? `<div class="btnrow"><button class="btn sm" data-act="observe">${ic('eye')} Leer el juego</button></div>` : ''}</div>`;
 }
 const chipEnt = st => st === 'observado' ? chip('observado') : `<span class="chip borrador">${sm(st === 'fuera' ? 'fuera' : st)}${st === 'nuevo' ? 'Nuevo' : st === 'cambiado' ? 'Cambiado' : 'Fuera'}</span>`;
 function groundRow(e) {
@@ -2007,10 +2032,11 @@ function renderRight() {
   if (pf) { const f = document.getElementById(pf); if (f) f.focus(); }
   tick();
 }
-// Problemas: errores de validación y órdenes parciales posteriores a la última escena leída
+// Problemas: errores de validación y órdenes fallidas o parciales sin resolver. Las resuelve una orden igual
+// posterior que se lee bien, o aplicar y leer la escena entera (AR-07)
 function problems(Q) {
-  const last = Q.find(o => (o.verb === 'scene_apply' || o.verb === 'scene_reset') && o.state === 'observado');
-  return validate(S.doc).length + Q.filter(o => o.state === 'parcial' && (!last || o.created > last.created)).length;
+  const solved = o => Q.some(p => p.created > o.created && p.state === 'observado' && ((p.verb === o.verb && p.target === o.target) || p.verb === 'scene_apply' || p.verb === 'scene_reset'));
+  return validate(S.doc).length + Q.filter(o => (o.state === 'parcial' || o.state === 'fallido') && !solved(o)).length;
 }
 // En Escena, Actividad va plegada en una tira; en Rodaje la vista previa sigue abierta (UX-02)
 function dockOpen() { return S.ws === 'escena' ? !!L.de : L.dr !== false; }
@@ -2022,7 +2048,7 @@ function renderDock() {
   const Q = S.qsnap || S.queue;
   if (!open) {
     const o = Q[0], np = problems(Q);
-    el.innerHTML = `<button class="strip" data-act="dock" data-v="open" aria-expanded="false" title="Abrir el panel">${ic('chev')}<span class="pt">${S.ws === 'escena' ? 'Actividad' : 'Vista previa y actividad'}</span>${o ? `${chip(o.state)}<span class="sl">${esc(o.label)}${o.target ? ' · ' + esc(o.target) : ''}</span><span class="sa">${o.readAt ? 'leída hace' : 'pedida hace'} <span data-since="${o.readAt || o.created}"></span></span><span class="so">${esc(o.origin)}</span>` : '<span class="sl">Sin órdenes todavía</span>'}<span class="grow"></span><span class="probs${np ? ' bad' : ''}">${np ? pl(np, 'problema', 'problemas') : 'Sin problemas'}</span></button>`;
+    el.innerHTML = `<button class="strip" data-act="dock" data-v="open" aria-expanded="false" title="Abrir el panel">${ic('chev')}<span class="pt">${S.ws === 'escena' ? 'Actividad' : 'Vista previa y actividad'}</span>${o ? `${chip(o.state)}<span class="sl">${esc(o.label)}${o.target ? ' · ' + esc(o.target) : ''}</span><span class="sa">${o.readAt ? 'leída hace' : 'pedida hace'} <span data-since="${o.readAt || o.created}"></span></span><span class="so">${esc(o.origin)}</span>` : '<span class="sl">Sin órdenes todavía</span>'}<span class="grow"></span><span class="probs${np ? ' bad' : ''}" title="Errores de validación y órdenes fallidas o parciales sin resolver">${np ? pl(np, 'problema', 'problemas') : 'Sin problemas'}</span></button>`;
     tick(); return;
   }
   const sc = el.querySelector('.pb') ? el.querySelector('.pb').scrollTop : 0;
@@ -2048,7 +2074,7 @@ function renderDock() {
     body = `<div class="empty" style="padding:8px 12px">Cada cambio es una transacción con nombre. Haz clic en una para volver a ese punto. Las de antes de esta sesión no se pueden deshacer aquí.</div>${base}<div style="border-top:2px solid var(--line-strong)"></div>${un}${re}`;
   } else if (cur === 'validacion') {
     // primero el mensaje; el código y la ruta al campo, al lado (UX-05, CU-02)
-    body = errs.length ? errs.map(e => `<div class="vrow"><span>${esc(e.msg)}</span><span class="vc"><code>${e.code}</code><code class="ptr">${esc(e.ptr)}</code></span><button class="btn sm" data-act="val-go" data-v="${esc(e.go)}">Ver</button></div>`).join('') : `<div class="empty"><b>Sin errores.</b> El backend validó la escena hace <span data-since="${S.validatedAt}"></span>: clases del catálogo, dentro del mapa, gestos certificados, presupuesto y tiempos de las cámaras.</div>`;
+    body = errs.length ? errs.map(e => `<div class="vrow"><span>${esc(e.msg)}</span><span class="vc"><code>${e.code}</code><code class="ptr">${esc(e.ptr)}</code></span><button class="btn sm" data-act="val-go" data-v="${esc(e.go)}" data-fld="${esc(e.fld || '')}">Ver</button></div>`).join('') : `<div class="empty"><b>Sin errores.</b> El backend validó la escena hace <span data-since="${S.validatedAt}"></span>: clases del catálogo, dentro del mapa, gestos certificados, presupuesto y tiempos de las cámaras.</div>`;
   } else body = timelineHtml();
   el.innerHTML = `<div class="ph"><div class="tabs" role="tablist">${tabs.map(t => `<button role="tab" data-act="${S.ws === 'escena' ? 'dtab' : 'rdtab'}" data-v="${t[0]}" aria-selected="${cur === t[0]}" ${t[0] === 'actividad' ? 'data-ref="Log Console: World Editor de Reforger"' : t[0] === 'timeline' ? 'data-ref="Sequencer de Unreal"' : ''}>${t[1]} ${t[2]}</button>`).join('')}</div>${bar}</div><div class="pb">${body}</div>`;
   const pb = el.querySelector('.pb'); if (pb && cur !== 'timeline') pb.scrollTop = sc;
@@ -2091,7 +2117,7 @@ function renderSlate() {
   else if (st === 'preparando') act = `<button class="btn" data-act="take-stop">Cancelar</button>`;
   else if (st === 'bloqueada') { const f = bad[0] || {fix: 'prep', fixTxt: 'Volver a preparar', txt: ''}; if (f.txt) fix = `<span class="tfix">${esc(f.txt)}</span>`; act = `<button class="btn primary" data-act="${f.fix === 'apply' ? 'take-reapply' : 'take-prep'}">${esc(f.fixTxt || 'Volver a preparar')}</button>`; }
   else if (st === 'armada') act = `<button class="btn primary" data-act="take-roll" data-ref="Intro arranca la vista previa: Eden">${ic('play')} Rodar <kbd>${keyLabel(keyOf('roll'))}</kbd></button>`;
-  else if (ended) act = `<button class="btn primary" data-act="take-reapply">${ic('reset')} Reaplicar y preparar la ${pad2(tk.n)}</button>`;
+  else if (ended) act = `<button class="btn primary" data-act="take-reapply" ${tk.unconfirmed ? `disabled title="${UNC}"` : ''}>${ic('reset')} Reaplicar y preparar la ${pad2(tk.n)}</button>`;
   const camOpts = S.doc.cameras.map(x => `<option value="${x.id}" ${x.id === tk.cam ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
   const t = st === 'rodando' || st === 'parando' ? tk.t : (ended && tk.log[0] ? tk.log[0].dur : 0);
   w.innerHTML = `<div class="takebar" data-ref="Transporte de Ableton Live · Studio Mode de OBS"><span class="tn">Toma ${pad2(shown)}</span><label>Cámara <select id="takeCam" ${takeActive() ? 'disabled' : ''}>${camOpts}</select></label><span class="tstate${st === 'bloqueada' || st === 'fallida' ? ' bad' : ''}">${icon}<span>${label}</span></span><span class="grow"></span>${fix}<span class="tc" id="tcBig">${tc(t)}</span><div class="tact">${act}</div></div>`;
@@ -2226,7 +2252,7 @@ function toolsMenu(anchor) {
   openMenu(anchor, `<h5>Paneles</h5>${ck(!L.nl, 'nl', sc ? 'Jerarquía' : 'Cámaras y tomas')}${ck(!L.nr, 'nr', sc ? 'Propiedades y Añadir' : 'Preparación y propiedades')}${ck(dockOpen(), 'dock', sc ? 'Actividad, historial y validación' : 'Vista previa del mapa y actividad')}${sc ? ck(!!L.both, 'both', 'Propiedades y Añadir a la vez') : ''}${ck(!!L.swap, 'swap', 'Cambiar de lado los paneles')}
     <h5>Layouts</h5>${Object.keys(LAYOUTS).map(k => `<button class="mi" data-act="lay" data-v="${k}">${LAYOUTS[k].name}</button>`).join('')}${Object.keys(saved).map(k => `<button class="mi" data-act="lay-saved" data-v="${esc(k)}">${esc(k)}</button>`).join('')}
     <div class="saverow"><input class="inp" id="layName" placeholder="Nombre del layout" aria-label="Nombre del layout"><button class="btn sm" data-act="lay-save">Guardar</button></div>
-    <hr><button class="mi" data-act="keys" ${takeActive() ? 'disabled' : ''}>Atajos de teclado…</button>
+    <hr><button class="mi" data-act="keys" ${takeOpen() ? 'disabled' : ''}>Atajos de teclado…</button>
     <button class="mi" data-act="ui">Ocultar la interfaz <kbd class="k">${keyLabel(keyOf('ui'))}</kbd></button>
     <div class="note">Los paneles se ajustan arrastrando sus bordes. El layout se guarda solo; en el producto va al perfil local del backend y aquí, al navegador.</div>`);
 }
@@ -2279,9 +2305,9 @@ function closeDialog() { $('#scrim').hidden = true; $('#scrim').innerHTML = ''; 
    ========================================================= */
 const REFS = [
   ['Modos Escena y Rodaje en la barra superior', 'Game Master de Arma Reforger', 'La barra de arriba que cambia entre Game Master y Armavision', 'https://community.bistudio.com/wiki/Arma_Reforger:Game_Master', 'Las dos'],
-  ['Paleta de grises fríos por capas: chasis, panel, campo y realce, con líneas de 1 px', 'Editor de Unreal 5 y World Editor de Reforger', 'Superficies un paso más claras cada una; el mapa es la única superficie de papel', 'https://dev.epicgames.com/documentation/en-us/unreal-engine/unreal-editor-interface', 'Grok, Muse y Gemini 4'],
+  ['Paleta de grises fríos por capas: chasis, panel, campo y realce, con líneas de 1 px', 'Editor de Unreal 5 y World Editor de Reforger', 'El patrón: superficies oscuras, un paso más claras cada una. Los valores son propios, ajustados al contraste; el mapa es la única superficie de papel', 'https://dev.epicgames.com/documentation/en-us/unreal-engine/unreal-editor-interface', 'Grok, Muse y Gemini 4'],
   ['Una sola acción principal a la vista, en ámbar con texto oscuro; Parar en rojo', 'PROPIO (lista de noviembre), sobre la barra principal de Unreal 5', 'Play destacado en la barra; aquí el color sale del acento y nunca hay dos', 'https://dev.epicgames.com/documentation/en-us/unreal-engine/unreal-editor-interface', 'Grok, Muse y Gemini 4'],
-  ['Letra del sistema a 13 px, Segoe UI Variable en Windows, cifras tabulares y títulos sin mayúsculas forzadas', 'DayZ Editor y editor de Unreal 5', 'Menús en minúscula normal y sin versalitas; la letra del sistema de Windows', 'https://raw.githubusercontent.com/wiki/InclementDab/DayZ-Editor/assets/images/toolbar.png', 'Consolidación, Gemini 4 y Grok'],
+  ['Letra del sistema a 13 px, Segoe UI Variable en Windows, cifras tabulares y títulos sin mayúsculas forzadas', 'DayZ Editor y editor de Unreal 5', 'Menús en minúscula normal y sin versalitas (DayZ Editor) y texto denso en paneles (Unreal 5). La letra del sistema y los 13 px son propios', 'https://raw.githubusercontent.com/wiki/InclementDab/DayZ-Editor/assets/images/toolbar.png', 'Consolidación, Gemini 4 y Grok'],
   ['Selección en ámbar, con color propio', 'DayZ Editor (Preferences)', 'El color de selección se ajusta aparte; el ámbar es propio', 'https://github.com/InclementDab/DayZ-Editor/wiki/5.1-Preferences', 'Consolidación'],
   ['Jerarquía a la izquierda, agrupada y con buscador', 'Eden (Entity List) y World Editor de Reforger (Hierarchy)', 'Lista de todo lo que hay en la escena, agrupada', 'https://community.bistudio.com/wiki/Eden_Editor:_Terminology', 'Las dos'],
   ['Bloquear y ocultar desde la jerarquía', 'DayZ Editor', 'Lock (L) y Unlock (Ctrl+L)', 'https://github.com/InclementDab/DayZ-Editor/wiki/4.-Shortcuts', 'Claude'],
@@ -2379,7 +2405,7 @@ function go(ws) { if (ws !== 'escena' && ws !== 'rodaje') return; if (location.h
 function route() {
   const h = location.hash.replace('#', '');
   if (h === 'guia') {
-    if (takeActive()) { toast('La Guía no se abre durante la toma.', 'fail'); location.hash = S.ws; return; }
+    if (takeOpen()) { toast(openWhy('La Guía no se abre'), 'fail'); location.hash = S.ws; return; }
     renderGuide(); $('#guide').hidden = false; $('#app').setAttribute('aria-hidden', 'true'); return;
   }
   $('#guide').hidden = true; $('#app').removeAttribute('aria-hidden');
@@ -2489,7 +2515,12 @@ document.addEventListener('click', e => {
     case 'tl-end': S.scrub = camDur(camById(S.take.cam)); S.preview = false; renderDock(); markMap(); break;
     case 'tl-prev': case 'tl-next': { const c = camById(S.take.cam), ts = c.keys.map(k => k.t); const t = a === 'tl-prev' ? ts.filter(x => x < S.scrub - 0.001).pop() : ts.find(x => x > S.scrub + 0.001); if (t !== undefined) { S.scrub = t; const ki = ts.indexOf(t); select({type: 'key', cam: c.id, ki}); } break; }
     case 'hist': histJump(+v); break;
-    case 'val-go': { const [t, id, k] = v.split(':'); if (t === 'ent') { select({type: 'ent', ids: [id]}); fit(); } else if (t === 'key') { go('rodaje'); select({type: 'key', cam: id, ki: +k}); } else if (t === 'grp') { S.collapsed[id] = false; renderLeft(); } break; }
+    case 'val-go': {
+      // abre Propiedades y lleva al campo que hay que cambiar, junto al error (AR-06)
+      const [t, id, k] = v.split(':'), fld = b.dataset.fld;
+      if (t === 'ent') { if (!L.both) S.rtab = 'props'; select({type: 'ent', ids: [id]}); fit(); } else if (t === 'key') { go('rodaje'); select({type: 'key', cam: id, ki: +k}); } else if (t === 'grp') { S.collapsed[id] = false; renderLeft(); }
+      const f = fld && $('#colR ' + fld); if (f) { f.scrollIntoView({block: 'nearest'}); f.focus(); }
+      break; }
     case 'menu-scene': sceneMenu(b); return;
     case 'm-new': newDoc(); break;
     case 'm-open': openMenuDocs(menuFor || $('#docBtn')); return;
@@ -2522,14 +2553,14 @@ document.addEventListener('click', e => {
       setTimeout(() => { S.sim.server = true; S.hb.server = now(); S.epoch = fnv(String(now())).slice(0, 8); S.epochNew = true; S.world = null; S.obs = {}; S.other = null; S.take.dirty = false; if (['armada', 'preparando'].includes(S.take.state)) { S.take.state = 'idle'; S.take.checks = []; } renderAll(); }, 2200);
       break;
     }
-    case 'keys': if (takeActive()) { closeMenu(); toast('Los atajos no se cambian durante la toma.', 'fail'); break; } capture = null; keysDialog(); break;
+    case 'keys': if (takeOpen()) { closeMenu(); toast(openWhy('Los atajos no se cambian'), 'fail'); break; } capture = null; keysDialog(); break;
     case 'key-set': capture = capture === v ? null : v; keysDialog(); break;
     case 'keys-reset': KEYMAP = Object.assign({}, ...ACTIONS.map(x => ({[x.id]: x.def}))); lsSet('keys', {}); capture = null; keysDialog(); renderAll(); break;
     case 'key-conf': { const [id, k] = v.split('|'), me = ACTIONS.find(x => x.id === id); ACTIONS.forEach(x => { if (x.id !== id && KEYMAP[x.id] === k && clash(x, me)) KEYMAP[x.id] = ''; }); KEYMAP[id] = k; lsSet('keys', KEYMAP); capture = null; keysDialog(); renderAll(); break; }
     case 'key-cancel': capture = null; keysDialog(); break;
     case 'dlg-close': closeDialog(); break;
     case 'refs': S.refs = !S.refs; document.body.classList.toggle('refs', S.refs); renderTop(); toast(S.refs ? 'Etiquetas azules: de qué juego o editor sale cada parte.' : 'Etiquetas ocultas.'); break;
-    case 'guide': if (takeActive()) { toast('La Guía no se abre durante la toma.', 'fail'); break; } location.hash = 'guia'; break;
+    case 'guide': if (takeOpen()) { toast(openWhy('La Guía no se abre'), 'fail'); break; } location.hash = 'guia'; break;
     case 'guide-close': location.hash = S.ws; break;
   }
   if (inMenu && !['layer', 'pan', 'sim'].includes(a)) closeMenu();
