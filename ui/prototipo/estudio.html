@@ -219,7 +219,8 @@ body.ui-off .center{grid-template-rows:0 minmax(0,1fr) 0 0}
 .legend h5{margin:4px 0 0;font:600 12px/1.2 var(--font-display);color:var(--fg)}
 .legend div{display:flex;align-items:center;gap:8px;line-height:1.35}
 .legend .lsw{display:grid;place-items:center;width:22px;height:22px;flex:none;border-radius:3px;background:#d9d5c2}
-.hint{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:4;width:max-content;max-width:calc(100% - 200px);padding:8px 12px;border-radius:8px;background:var(--surface);border:1px solid var(--accent);box-shadow:var(--shadow);font-size:13px;line-height:1.5}
+.hint{position:absolute;top:10px;left:10px;z-index:4;width:max-content;max-width:calc(100% - 228px);padding:8px 12px;border-radius:8px;background:var(--surface);border:1px solid var(--accent);box-shadow:var(--shadow);font-size:13px;line-height:1.5}
+.hint.soft{border-color:var(--line-strong);color:var(--fg-2)}
 .mapstack{position:absolute;left:50%;bottom:54px;transform:translateX(-50%);z-index:5;width:min(560px,calc(100% - 32px));display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
 .banner{pointer-events:auto;width:100%;display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:8px;background:var(--surface);border:1px solid var(--st-fail);box-shadow:var(--shadow);font-size:13px;line-height:1.5}
 .banner.warn{border-color:var(--st-part)}
@@ -467,6 +468,10 @@ body.refs button[data-ref]::before{top:calc(100% + 3px);bottom:auto;right:auto;l
 .gw h2{font:600 19px/1.2 var(--font-display);margin:44px 0 12px;color:var(--fg)}
 .gw p{max-width:68ch;line-height:1.6;color:var(--fg-2);margin:0 0 10px}
 .gw .lead{font-size:15px;color:var(--fg)}
+.gw ol.steps{margin:0 0 10px;padding-left:22px;max-width:68ch;color:var(--fg-2);line-height:1.6}
+.gw ol.steps li{margin:6px 0}
+.gw ol.steps b{color:var(--fg)}
+.gw h3{font:600 15px/1.2 var(--font-display);margin:28px 0 10px;color:var(--fg)}
 .gw table{width:100%;border-collapse:collapse;font-size:13px}
 .gw th{text-align:left;font:600 12px/1.2 var(--font-display);color:var(--muted);padding:8px 10px;border-bottom:1px solid var(--line-strong)}
 .gw td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.5}
@@ -516,7 +521,7 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
   .vrow{grid-template-columns:1fr}
   .vrow .vc{align-items:flex-start}
   .status{flex-wrap:wrap;height:auto;padding-block:6px;white-space:normal}
-  .hint{max-width:calc(100% - 20px)}
+  .hint{max-width:calc(100% - 70px)}
   .ovl.tr{flex-direction:column}
   .types div{grid-template-columns:1fr;gap:4px}
 }
@@ -564,7 +569,7 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
           <button class="ib" data-act="grid" id="bGrid" aria-label="Rejillas de movimiento y de giro" aria-haspopup="menu" data-ref="Rejillas de movimiento y de giro: barra de Eden"></button>
           <button class="ib" data-act="layers" id="bLayers" aria-label="Capas del mapa" aria-haspopup="menu"></button>
         </div>
-        <div class="ovl bl"><div class="scale"><span id="scaleTxt">50 m</span><i id="scaleBar"></i></div><span class="mono" id="cursorXY">X — · Z —</span><button class="btn sm ghost" id="bLegend" data-act="legend" aria-expanded="false" aria-controls="legend">Leyenda</button></div>
+        <div class="ovl bl"><div class="scale"><span id="scaleTxt">50 m</span><i id="scaleBar"></i></div><button class="btn sm ghost" id="bLegend" data-act="legend" aria-expanded="false" aria-controls="legend">Leyenda</button></div>
         <div class="legend" id="legend" role="region" aria-label="Leyenda del mapa" hidden></div>
         <div class="hint" id="hint" hidden></div>
         <div class="mapstack"><div class="banner" id="banner" hidden></div><div id="toasts" class="toasts" aria-live="polite"></div></div>
@@ -582,6 +587,8 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
     <span class="peer" id="peerSrv" title="Servidor de DayZ con el mod"></span>
     <span class="peer" id="peerCli" title="Tu juego: el cliente de DayZ desde el que diriges"></span>
     <span class="ssep"></span>
+    <span class="mono" id="cursorXY" title="Posición del cursor en el mapa">X — · Z —</span><span id="cursorTown"></span>
+    <span class="ssep"></span>
     <span id="stInfo"></span>
     <span class="grow"></span>
     <span class="pnote" title="Solo en el prototipo">Prototipo con datos de ejemplo</span>
@@ -593,18 +600,13 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
     <div class="gtop">
       <button class="btn" data-act="guide-close" id="bGuideClose">← Volver al estudio</button>
       <span class="grow"></span>
-      <span class="tag">Consolidados de Claude y Astra · 2026-10-28 y 2026-11-04</span>
     </div>
-    <h1>Guía de diseño del estudio</h1>
-    <p class="lead">Cada parte de la interfaz está copiada de un juego o un editor que ya funciona, y la tabla de referentes dice de cuál y con qué fuente. Manda primero lo que el creador de DayZ ya conoce (DayZ Editor), después los editores de Bohemia (Eden, Zeus y Reforger), luego las herramientas de cine en juegos, después los editores generales y, para la toma, el transporte de un DAW y el Studio Mode de OBS.</p>
-    <p>Lo único propio es lo que ningún referente necesita porque solo existe aquí: saber qué está de verdad en el juego. Va marcado como propio y apoyado en el patrón conocido más cercano.</p>
-    <p>El estudio junta dos diseños hechos a ciegas, el de Claude y el de Astra, y la revisión de noviembre suma cinco críticas también a ciegas: Claude, Astra, Grok, Muse y Gemini 4. La columna «Propuso» dice de dónde sale cada parte; cuando chocaban, ganó el referente de prioridad más alta y, si no, lo que pide el spec.</p>
+    <h1>Guía del estudio</h1>
+    <p class="lead">El estudio prepara escenas de DayZ y las rueda. Lo que editas es un documento: el juego solo cambia cuando aplicas, y lo que se ve del juego dice cuándo se leyó.</p>
 
-    <h2>Referentes</h2>
-    <div class="tw"><table>
-      <thead><tr><th>Parte de la interfaz</th><th>Referente</th><th>Qué se copia</th><th>Fuente</th><th>Propuso</th></tr></thead>
-      <tbody id="refTable"></tbody>
-    </table></div>
+    <h2>Recorrido</h2>
+    <ol class="steps" id="tour"></ol>
+    <p>Si algo no cuadra, ese paso lo dice y cómo arreglarlo: la validación vuelve con el campo que hay que cambiar, y una comprobación que falla no deja armar la toma. Rodar siempre lo pulsa la persona.</p>
 
     <h2>Tres capas que nunca se mezclan</h2>
     <div class="grid3">
@@ -620,10 +622,29 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
     <h2>Cómo se ve cada cosa en el mapa</h2>
     <div class="grid3" id="mapLegend"></div>
 
-    <h2>Paleta</h2>
+    <h2>Atajos de teclado por defecto</h2>
+    <div class="tw"><table><thead><tr><th>Acción</th><th>Tecla</th><th>De dónde sale</th></tr></thead><tbody id="keyTable"></tbody></table></div>
+
+    <h2>Cómo cambia de estado una orden</h2>
+    <div class="flow"><span>Pendiente</span><i>la recoge el mod</i><span>Ejecutando</span><i>confirma</i><span>Aplicado</span><i>la lectura cumple</i><span>Observado</span></div>
+    <p>Si caduca sin entregarse, Fallido («No se entregó»). Si falla a mitad, o se pierde la respuesta después de entregarla, Parcial hasta reconciliar: nunca vuelve a «no ocurrió» (decisión #23). Si la lectura no cumple, Fallido con el motivo.</p>
+
+    <h2>Acerca del diseño</h2>
+    <p><span class="tag">Consolidados de Claude y Astra · 2026-10-28 y 2026-11-04</span></p>
+    <p>Cada parte de la interfaz está copiada de un juego o un editor que ya funciona, y la tabla de referentes dice de cuál y con qué fuente. Manda primero lo que el creador de DayZ ya conoce (DayZ Editor), después los editores de Bohemia (Eden, Zeus y Reforger), luego las herramientas de cine en juegos, después los editores generales y, para la toma, el transporte de un DAW y el Studio Mode de OBS.</p>
+    <p>Lo único propio es lo que ningún referente necesita porque solo existe aquí: saber qué está de verdad en el juego. Va marcado como propio y apoyado en el patrón conocido más cercano.</p>
+    <p>El estudio junta dos diseños hechos a ciegas, el de Claude y el de Astra, y la revisión de noviembre suma cinco críticas también a ciegas: Claude, Astra, Grok, Muse y Gemini 4. La columna «Propuso» dice de dónde sale cada parte; cuando chocaban, ganó el referente de prioridad más alta y, si no, lo que pide el spec.</p>
+
+    <h3>Referentes</h3>
+    <div class="tw"><table>
+      <thead><tr><th>Parte de la interfaz</th><th>Referente</th><th>Qué se copia</th><th>Fuente</th><th>Propuso</th></tr></thead>
+      <tbody id="refTable"></tbody>
+    </table></div>
+
+    <h3>Paleta</h3>
     <div class="sw" id="swatches"></div>
 
-    <h2>Tipografía</h2>
+    <h3>Tipografía</h3>
     <div class="types">
       <div><small>Títulos, 600</small><span style="font:600 15px/1.2 var(--font-display)">Jerarquía · Toma 04</span></div>
       <div><small>Texto, 13 px, 400 a 600</small><span>Aplica la escena antes de rodar. Hay 2 cambios sin aplicar.</span></div>
@@ -631,19 +652,9 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
     </div>
     <p style="margin-top:12px">En Windows salen Segoe UI Variable y Cascadia Mono, como en el editor de Unreal 5 y en el de Reforger. El texto va a 13 px con cifras tabulares para que los números no bailen, y nada baja de 12 px. La monoespaciada se queda para coordenadas y tiempos; los nombres de clase y los códigos van en letra normal o en los detalles técnicos. Los menús del DayZ Editor van en minúsculas y sin versalitas, y así van aquí los títulos.</p>
 
-    <h2>Atajos de teclado por defecto</h2>
-    <div class="tw"><table><thead><tr><th>Acción</th><th>Tecla</th><th>De dónde sale</th></tr></thead><tbody id="keyTable"></tbody></table></div>
-
-    <h2>Flujo de trabajo</h2>
-    <div class="flow"><span>Preparar la escena</span><i>→</i><span>Validación del backend</span><i>→</i><span>Aplicar <kbd>Ctrl+Intro</kbd></span><i>→</i><span>Observado</span><i>→</i><span>Preparar la toma <kbd>Mayús+F9</kbd></span><i>→</i><span>Armada</span><i>→</i><span>Rodando <kbd>Intro</kbd></span><i>→</i><span>Terminada, o Parando… <kbd>Esc</kbd> y Parada</span><i>→</i><span>Reaplicar y preparar</span></div>
-    <p>Si la validación da errores, vuelven con su ruta al campo que hay que cambiar. Si una lectura de la preparación no cuadra, la toma no se arma y esa fila dice cómo arreglarlo. Rodar siempre lo pulsa la persona.</p>
-
-    <h2>Cómo cambia de estado una orden</h2>
-    <div class="flow"><span>Pendiente</span><i>la recoge el mod</i><span>Ejecutando</span><i>confirma</i><span>Aplicado</span><i>la lectura cumple</i><span>Observado</span></div>
-    <p>Si caduca sin entregarse, Fallido («No se entregó»). Si falla a mitad, o se pierde la respuesta después de entregarla, Parcial hasta reconciliar: nunca vuelve a «no ocurrió» (decisión #23). Si la lectura no cumple, Fallido con el motivo.</p>
-
-    <h2>Fuera de M1</h2>
+    <h3>Fuera de M1</h3>
     <p>Aunque algún referente lo tenga, no entra en M1: vista 3D en la web, varios directores a la vez, grabar vídeo dentro del producto, cambiar de mapa, la IA y el MCP, y los eventos de roleplay. Tampoco la paleta de comandos ni el modo imán del DayZ Editor: no los pide el spec.</p>
+
   </div>
 </div>
 
@@ -857,6 +868,8 @@ const S = {
 function worldFrom(d, at) { const ents = {}; d.entities.forEach(e => { ents[e.id] = clone(e); }); return {rev: d.rev, ents, at, epoch: S.epoch}; }
 function jitterObs(seed) { const r = rng(seed || 7); S.obs = {}; if (!S.world) return; Object.values(S.world.ents).forEach(e => { S.obs[e.id] = {x: e.x + (r() - 0.5) * 0.36, z: e.z + (r() - 0.5) * 0.36}; }); }
 S.world = worldFrom(R12, T0 - 262000); S.worldAmb = clone(R12.ambiente); S.worldAmbAt = T0 - 262000; jitterObs(3);
+// Escenas de esta sesión; la abierta es S.doc. Si en el juego está otra, va en S.other hasta aplicar (UX-15, §8.5)
+S.docs = [{key: 'd1', doc: S.doc}]; S.cur = 'd1'; S.other = null;
 let opSeq = 0x7f40;
 // Cada orden guarda cuándo se pidió y, aparte, cuándo la confirmó una lectura (UX-13).
 // El id, el verbo y la revisión van al pasar el ratón (UX-05).
@@ -881,9 +894,9 @@ const ACTIONS = [
   {id: 'stop2', name: 'Parar la toma que rueda', def: 'Space', ref: 'Espacio para el transporte: Ableton Live (aquí nunca arranca)', run: () => spaceStop()},
   {id: 'undo', name: 'Deshacer', def: 'Ctrl+Z', ref: 'DayZ Editor', run: () => undo()},
   {id: 'redo', name: 'Rehacer', def: 'Ctrl+Y', ref: 'DayZ Editor y World Editor de Reforger', run: () => redo()},
-  {id: 'open', name: 'Abrir escena', def: 'Ctrl+O', ref: 'DayZ Editor', run: () => sceneMenu($('#docBtn'))},
+  {id: 'open', name: 'Abrir escena', def: 'Ctrl+O', ref: 'DayZ Editor', run: () => openMenuDocs($('#docBtn'))},
   {id: 'save', name: 'Guardar', def: 'Ctrl+S', ref: 'DayZ Editor', run: () => toast('Guardado. El estudio guarda cada cambio al momento.', 'ok')},
-  {id: 'saveas', name: 'Guardar como', def: 'Ctrl+Shift+S', ref: 'DayZ Editor', run: () => toast('En este prototipo solo hay una escena cargada.')},
+  {id: 'saveas', name: 'Guardar como', def: 'Ctrl+Shift+S', ref: 'DayZ Editor', run: () => toast(SAVEAS)},
   {id: 'del', name: 'Borrar lo seleccionado', def: 'Delete', ref: 'DayZ Editor y Eden', run: () => delSel()},
   {id: 'dup', name: 'Duplicar', def: 'Ctrl+J', ref: 'DayZ Editor', run: () => dupSel()},
   {id: 'all', name: 'Seleccionar todo', def: 'Ctrl+A', ref: 'DayZ Editor', run: () => selectAll()},
@@ -897,6 +910,7 @@ const ACTIONS = [
   {id: 'escena', name: 'Ir a Escena', def: '1', ref: 'Propio', run: () => go('escena')},
   {id: 'rodaje', name: 'Ir a Rodaje', def: '2', ref: 'Propio', run: () => go('rodaje')}
 ];
+const SAVEAS = 'Guardar como no está en este prototipo. Nueva escena empieza una vacía.';
 const REQUIRED = ['place', 'apply', 'prep', 'roll', 'stop']; // D4: colocar, aplicar, toma y parar siempre tienen tecla
 let KEYMAP = Object.assign({}, ...ACTIONS.map(a => ({[a.id]: a.def})), lsGet('keys') || {});
 const keyOf = id => KEYMAP[id] || '';
@@ -1036,7 +1050,7 @@ function applyScene(after) {
   deliver(op, 'server', () => runSteps(op, 'server', [
     {ms: 260, detail: 'Validando en el mod'},
     {ms: 260, detail: 'Reservando presupuesto'},
-    {ms: 420, detail: 'Borrando lo que había creado la escena antes', run: next => { setTimeout(() => { S.world = null; S.obs = {}; markMap(); renderAll(); next(); }, 420); }},
+    {ms: 420, detail: S.other ? `Quitando «${otherName()}» del juego` : 'Borrando lo que había creado la escena antes', run: next => { setTimeout(() => { S.world = null; S.obs = {}; S.other = null; markMap(); renderAll(); next(); }, 420); }},
     {detail: 'Creando entidades', run: next => {
       let c = 0;
       const iv = setInterval(() => {
@@ -1339,6 +1353,8 @@ const ROADS = [
   [[10300, 2230], [10000, 4200], [9700, 6200], [9500, 8900]]
 ];
 const TOWNS = [['Chernogorsk', 6700, 2500, 520], ['Elektrozavodsk', 10300, 2250, 420], ['Berezino', 12350, 9550, 380], ['Solnichniy', 13350, 6200, 220], ['Kamyshovo', 12050, 3500, 180], ['Zelenogorsk', 2750, 5250, 330], ['Stary Sobor', 6060, 7760, 240], ['Novy Sobor', 7100, 7700, 200], ['Vybor', 3800, 8900, 240], ['Gorka', 9500, 8900, 200], ['Balota', 4400, 2400, 160], ['Komarovo', 3600, 2400, 140], ['Kabanino', 5300, 8600, 160], ['Prigorodki', 7900, 3200, 180], ['Svetlojarsk', 13900, 13200, 220], ['Krasnostav', 11200, 12300, 260], ['Severograd', 8100, 12700, 330], ['Novodmitrovsk', 11500, 14500, 320], ['Lopatino', 2750, 9900, 180], ['Pustoshka', 3000, 7900, 160]];
+// El pueblo más cercano al cursor, con su distancia, para la barra de estado (UX-33)
+function nearTown(x, z) { const [t, d] = TOWNS.map(w => [w[0], Math.hypot(w[1] - x, w[2] - z)]).sort((a, b) => a[1] - b[1])[0]; return `${t}, a ${d < 1000 ? nf(Math.round(d / 10) * 10, 0) + ' m' : nf(d / 1000, 1) + ' km'}`; }
 const BLDS = [];
 (function () { const r = rng(42); TOWNS.forEach(t => { const n = Math.round(t[3] / 6); for (let i = 0; i < n; i++) { const a = r() * Math.PI * 2, d = Math.sqrt(r()) * t[3], x = t[1] + Math.cos(a) * d, z = t[2] + Math.sin(a) * d; if (Math.hypot(x - C.x, z - C.z) < 75) continue; BLDS.push({x, z, w: 7 + r() * 11, h: 6 + r() * 9, a: r() * Math.PI}); } }); })();
 
@@ -1564,7 +1580,7 @@ canvas.addEventListener('pointerdown', ev => {
 });
 canvas.addEventListener('pointermove', ev => {
   const [px, py] = local(ev), [wx, wz] = s2w(px, py);
-  $('#cursorXY').textContent = `X ${nf(wx, 1)} · Z ${nf(wz, 1)}`;
+  $('#cursorXY').textContent = `X ${nf(wx, 1)} · Z ${nf(wz, 1)}`; $('#cursorTown').textContent = nearTown(wx, wz);
   S.mouse = [wx, wz]; if (S.placing) markMap();
   if (!drag) { canvas.style.cursor = S.placing || S.markArm ? 'crosshair' : (hitTest(px, py) ? 'pointer' : 'default'); return; }
   if (drag.pan) { V.cx = drag.cx - (px - drag.sx) / V.s; V.cz = drag.cz + (py - drag.sy) / V.s; markMap(); return; }
@@ -1615,7 +1631,7 @@ canvas.addEventListener('wheel', ev => {
   V.s = clamp(V.s * Math.exp(-ev.deltaY * 0.0015), 0.035, 14);
   V.cx = wx - (px - V.w / 2) / V.s; V.cz = wz + (py - V.h / 2) / V.s; markMap();
 }, {passive: false});
-canvas.addEventListener('pointerleave', () => { $('#cursorXY').textContent = 'X — · Z —'; S.mouse = null; if (S.placing) markMap(); });
+canvas.addEventListener('pointerleave', () => { $('#cursorXY').textContent = 'X — · Z —'; $('#cursorTown').textContent = ''; S.mouse = null; if (S.placing) markMap(); });
 function zoom(f) { V.s = clamp(V.s * f, 0.035, 14); markMap(); }
 function fit() {
   let pts = [];
@@ -1720,8 +1736,8 @@ function renderTop() {
   $$('[data-act="ws"]').forEach(b => { const k = keyOf(b.dataset.v), nm = b.dataset.v === 'escena' ? 'Escena' : 'Rodaje'; b.setAttribute('aria-pressed', String(b.dataset.v === S.ws)); b.innerHTML = nm + (k ? ` <kbd>${keyLabel(k)}</kbd>` : ''); b.title = 'Ir a ' + nm; });
   const n = changeCount(), busy = !!S.applying, armed = takeActive(), off = offline(), errs = validate(S.doc).length;
   // el documento a la izquierda: nombre, cambios sin aplicar y guardado (UX-03, UX-04); la revisión, al pasar el ratón (UX-05)
-  const state = n === null ? 'Nada en el juego' : n ? `${pl(n, 'cambio', 'cambios')} sin aplicar` : 'Sin cambios por aplicar';
-  $('#docBtn').title = `${S.doc.name} · revisión ${S.doc.rev}${S.world ? `, en el juego la ${S.world.rev}` : ''}`;
+  const state = n === null ? (S.other ? 'En el juego hay otra escena' : 'Nada en el juego') : n ? `${pl(n, 'cambio', 'cambios')} sin aplicar` : 'Sin cambios por aplicar';
+  $('#docBtn').title = `${S.doc.name} · revisión ${S.doc.rev}${S.world ? `, en el juego la ${S.world.rev}` : S.other ? `; en el juego está «${otherName()}»` : ''}`;
   $('#docBtn').innerHTML = `<b><span class="nm">${esc(S.doc.name)}</span>${ic('chev')}</b><small class="${n !== 0 ? 'dirty' : ''}">${state} · <span data-since="${S.savedAt}" data-fmt="guardado hace %"></span></small>`;
   const u = S.undo[S.undo.length - 1], r = S.redo[S.redo.length - 1];
   $('#bUndo').innerHTML = ic('undo'); $('#bUndo').disabled = !u || !!editBlock(); $('#bUndo').title = u ? `Deshacer: ${u.name} (${keyLabel(keyOf('undo'))})` : 'Nada que deshacer';
@@ -1733,11 +1749,11 @@ function renderTop() {
   b.innerHTML = applying ? `${sm('ejecutando')} Aplicando…` : 'Aplicar escena';
   b.classList.toggle('primary', S.ws === 'escena' && !goRod && (n !== 0 || applying)); b.classList.toggle('busy', applying);
   b.disabled = busy || errs > 0 || armed || off;
-  b.title = off ? 'Sin conexión con el backend' : errs ? `${errs === 1 ? 'Un error impide' : errs + ' errores impiden'} aplicar. Míralos en Validación.` : busy ? 'Hay una orden en curso' : armed ? 'Para o desarma la toma antes de aplicar' : `Quita del juego lo que puso la escena y la vuelve a crear entera desde el documento (${keyLabel(keyOf('apply'))})`;
+  b.title = off ? 'Sin conexión con el backend' : errs ? `${errs === 1 ? 'Un error impide' : errs + ' errores impiden'} aplicar. Míralos en Validación.` : busy ? 'Hay una orden en curso' : armed ? 'Para o desarma la toma antes de aplicar' : S.other ? `Quita del juego «${otherName()}» y crea esta escena entera desde el documento (${keyLabel(keyOf('apply'))})` : `Quita del juego lo que puso la escena y la vuelve a crear entera desde el documento (${keyLabel(keyOf('apply'))})`;
   const rs = $('#bReset');
   rs.innerHTML = removing ? `${sm('ejecutando')} Quitando…` : 'Quitar del juego'; rs.classList.toggle('busy', removing);
   rs.disabled = busy || !S.world || armed || off; rs.hidden = armed; b.hidden = armed;
-  rs.title = S.world ? 'Quita del juego todo lo que puso esta escena, y nada más. El documento no cambia.' : 'No hay nada de la escena en el juego';
+  rs.title = S.world ? 'Quita del juego todo lo que puso esta escena, y nada más. El documento no cambia.' : S.other ? `En el juego está «${otherName()}»: ábrela para quitarla, o aplica esta para cambiarla` : 'No hay nada de la escena en el juego';
   const g = $('#bGoRod'); g.hidden = !goRod; g.innerHTML = `Ir a rodaje ${ic('next')}`; g.title = 'La escena está en el juego y leída: el siguiente paso es preparar la toma';
   // Parar fijo en la barra mientras dura la toma; tras un corte, «Parada sin confirmar» hasta leer el juego (UX-01)
   const ts = S.take.state, unc = !!S.take.unconfirmed, st = $('#bTopStop');
@@ -1748,7 +1764,7 @@ function renderTop() {
   $('#bTools').innerHTML = `Herramientas ${ic('chev')}`; $('#bTools').title = 'Paneles, layouts, atajos de teclado y ocultar la interfaz';
   $('#bSim').innerHTML = `${ic('flask')}<span>Simular</span>`; $('#bSim').title = 'Simular fallos del juego (solo en el prototipo)';
   $('#bRefs').innerHTML = ic('tag'); $('#bRefs').title = 'Ver de qué juego sale cada parte'; $('#bRefs').setAttribute('aria-pressed', String(S.refs));
-  $('#bGuide').innerHTML = `${ic('book')}<span>Guía</span>`; $('#bGuide').disabled = armed; $('#bGuide').title = armed ? 'La Guía no se abre durante la toma' : 'Guía de diseño: de dónde sale cada parte';
+  $('#bGuide').innerHTML = `${ic('book')}<span>Guía</span>`; $('#bGuide').disabled = armed; $('#bGuide').title = armed ? 'La Guía no se abre durante la toma' : 'Guía: el recorrido de una toma, los estados y los atajos';
   $('#bZin').innerHTML = ic('plus'); $('#bZout').innerHTML = ic('minus'); $('#bFit').innerHTML = ic('focus'); $('#bPath').innerHTML = ic('path'); $('#bLayers').innerHTML = ic('layers'); $('#bGrid').innerHTML = ic('grid');
   $('#bGrid').title = `Rejillas: mover ${S.grid.move ? 'de ' + nf(S.grid.step, S.grid.step < 1 ? 1 : 0) + ' m en ' + nf(S.grid.step, S.grid.step < 1 ? 1 : 0) + ' m' : 'libre'} · girar ${S.grid.rot ? 'de ' + S.grid.rstep + '° en ' + S.grid.rstep + '°' : 'libre'}`;
   renderPeers();
@@ -1772,6 +1788,7 @@ function treeRow(e) {
 }
 // Una línea dice qué hay en el juego y la edad de la lectura; las filas solo llevan icono si algo difiere (UX-06)
 function worldLine() {
+  if (!S.world && S.other) return `<div class="worldline"><span class="st-fuera">${sm('fuera')}</span><span>En el juego está «${esc(otherName())}», leída hace <b data-since="${S.other.world.at}"></b>. Aplicar la quita y pone esta.</span></div>`;
   if (!S.world) return `<div class="worldline"><span class="st-fuera">${sm('fuera')}</span><span>${S.epochNew ? 'Nada en el juego: el servidor se reinició' : 'Nada en el juego'}</span></div>`;
   return `<div class="worldline"><span class="st-observado">${sm('observado')}</span><span>En el juego, leída hace <b data-since="${S.world.at}"></b></span></div>`;
 }
@@ -1782,6 +1799,7 @@ function renderLeft() {
     const match = e => !q || e.name.toLowerCase().includes(q) || e.cls.toLowerCase().includes(q);
     let html = `<div class="panel" data-ref="Entity List: Eden · Hierarchy: World Editor de Reforger"><div class="ph"><span class="pt">Jerarquía</span><span class="grow"></span><span class="sub">${pl(S.doc.entities.length, 'entidad', 'entidades')}</span></div>${worldLine()}`;
     html += `<label class="search">${ic('search')}<input id="treeq" placeholder="Buscar por nombre o clase" value="${esc(S.treeq)}" aria-label="Buscar en la jerarquía"></label><div class="pb" role="tree" aria-label="Escena">`;
+    if (!S.doc.entities.length) html += `<div class="empty"><b>Esta escena está vacía.</b> Busca en Añadir lo que quieras y haz clic en el mapa para ponerlo.<br><button class="btn sm" data-act="first-add">Añade tu primer objeto</button></div>`;
     const ambSel = S.sel && S.sel.type === 'amb', ambMark = !!S.worldAmb && ambDiff();
     html += `<div class="row" role="treeitem" aria-selected="${ambSel}" data-act="sel" data-v="amb" style="padding-left:8px" title="Fecha, hora y clima de la escena: ${esc(S.doc.ambiente.fecha)}${ambMark ? ' · distinto en el juego' : ''}">${gl('ambiente')}<span class="nm">Ambiente<span class="cls">${esc(S.doc.ambiente.hora)}</span></span><span class="st st-cambiado">${ambMark ? sm('cambiado') : ''}</span><span></span><span></span></div>`;
     KINDS.forEach(k => {
@@ -1828,8 +1846,8 @@ const tech = (k, body) => `<details class="tech" data-k="${k}" ${S.tech[k] ? 'op
 // Sin selección, Propiedades resume la escena y dice qué toca (UX-07)
 function sceneProps() {
   const n = counts(S.doc), ch = changeCount(), a = S.doc.ambiente;
-  const estado = ch === null ? 'Nada en el juego' : ch ? `${pl(ch, 'cambio', 'cambios')} sin aplicar` : 'Aplicada y leída';
-  const next = ch === null ? `Aplica la escena para ponerla en el juego (${keyLabel(keyOf('apply'))}).` : ch ? `Aplica para que el juego tenga lo que ves (${keyLabel(keyOf('apply'))}).` : S.ws === 'rodaje' ? 'Lista para rodar: prepara la toma.' : 'Lista para rodar: pasa a Rodaje y prepara la toma.';
+  const estado = ch === null ? (S.other ? `En el juego está «${esc(otherName())}»` : 'Nada en el juego') : ch ? `${pl(ch, 'cambio', 'cambios')} sin aplicar` : 'Aplicada y leída';
+  const next = !S.doc.entities.length ? 'La escena está vacía: añade tu primer objeto desde Añadir.' : ch === null ? `Aplica la escena para ponerla en el juego (${keyLabel(keyOf('apply'))}).` : ch ? `Aplica para que el juego tenga lo que ves (${keyLabel(keyOf('apply'))}).` : S.ws === 'rodaje' ? 'Lista para rodar: prepara la toma.' : 'Lista para rodar: pasa a Rodaje y prepara la toma.';
   const cont = [pl(n.actor, 'actor', 'actores'), pl(n.objeto, 'objeto', 'objetos'), pl(n.infectado, 'infectado', 'infectados'), pl(n.animal, 'animal', 'animales'), pl(S.doc.cameras.length, 'cámara', 'cámaras')].join(' · ');
   return `<div class="ident">${gl('ambiente')}<div style="min-width:0;flex:1"><input id="f-docname" value="${esc(S.doc.name)}" aria-label="Nombre de la escena"><div class="cn">Escena de Chernarus</div></div></div>
   <div class="sec"><h4>Estado <span class="where">${S.world ? `leída hace <span data-since="${S.world.at}"></span>` : ''}</span></h4><p>${estado}</p><p class="mut">${next}</p>${S.world ? `<div class="btnrow"><button class="btn sm" data-act="observe">${ic('eye')} Leer el juego</button></div>` : ''}</div>
@@ -2091,8 +2109,20 @@ function renderHint() {
   const h = $('#hint');
   if (S.placing) { h.hidden = false; h.innerHTML = `Colocando <b>${esc(clsName(S.placing.kind, S.placing.cls))}</b>. Clic en el mapa para ponerlo, Ctrl + clic para seguir poniendo, <kbd>Intro</kbd> lo pone en el centro. Clic derecho o <kbd>Esc</kbd> cancela.`; }
   else if (S.markArm) { h.hidden = false; h.innerHTML = `Haz clic en el mapa para poner la marca. <kbd>Esc</kbd> cancela.`; }
-  else h.hidden = true;
+  else { const t = selHint(); h.hidden = !t; h.innerHTML = t; }
+  h.classList.toggle('soft', !S.placing && !S.markArm);
   $('#mapwrap').classList.toggle('placing', !!(S.placing || S.markArm));
+}
+// Con algo seleccionado: cómo moverlo, girarlo y borrarlo, con la rejilla y las teclas de ahora (UX-18)
+function selHint() {
+  if (!S.sel || !['ent', 'mark', 'key', 'cam'].includes(S.sel.type) || editBlock()) return '';
+  const k = id => keyOf(id) ? `<kbd>${keyLabel(keyOf(id))}</kbd>` : '', m = v => nf(v, v < 1 ? 1 : 0);
+  const mv = S.grid.move ? `a saltos de ${m(S.grid.step)} m` : 'libre', rt = S.grid.rot ? `de ${S.grid.rstep}° en ${S.grid.rstep}°` : 'libre';
+  const del = k('del') ? ` · ${k('del')} borra` : '';
+  if (S.sel.type !== 'ent') return `Arrastra para mover ${mv} · Alt, fino${del}`;
+  const ids = selIds(); if (!ids.length) return '';
+  if (ids.every(id => S.locked[id])) return `${ids.length === 1 ? 'Está bloqueado' : 'Están bloqueados'}: ${k('unlock') ? k('unlock') + ' desbloquea' : 'desbloquéalo en la Jerarquía'}`;
+  return `Arrastra para mover ${mv} · Mayús + arrastrar gira ${rt} · Alt, fino${del}${k('dup') ? ` · ${k('dup')} duplica` : ''}`;
 }
 function renderBanner() {
   const b = $('#banner'); let html = '', cls = '';
@@ -2132,20 +2162,48 @@ function openMenu(anchor, html) {
   const f = m.querySelector('button:not(:disabled), input'); if (f) f.focus();
 }
 function closeMenu() { $('#menu').hidden = true; menuFor = null; }
+// Escenas: Nueva y Abrir. Cambiar de escena no toca el juego; la que está en él sigue hasta aplicar (UX-15)
+const docEntry = key => S.docs.find(d => d.key === key);
+const otherName = () => S.other ? docEntry(S.other.key).doc.name : '';
+const docBlock = () => takeActive() || S.applying || S.take.unconfirmed ? 'Para o desarma la toma, o espera a la orden en curso, antes de cambiar de escena.' : '';
+const docItems = () => S.docs.slice().reverse().map(d => `<button class="mi" data-act="doc-open" data-v="${d.key}" ${docBlock() && d.key !== S.cur ? 'disabled' : ''}>${esc(d.doc.name)} <span class="k" style="color:var(--muted);font-size:12px">${d.key === S.cur ? 'abierta' : ''}${(S.world && d.key === S.cur) || (S.other && S.other.key === d.key) ? `${d.key === S.cur ? ' · ' : ''}en el juego` : ''}</span></button>`).join('');
+function openMenuDocs(anchor) { openMenu(anchor, `<h5>Abrir escena</h5>${docItems()}${docBlock() ? `<div class="note">${docBlock()}</div>` : ''}`); }
+function openDoc(key) {
+  if (key === S.cur) return closeMenu();
+  if (docBlock()) return toast(docBlock());
+  const cur = docEntry(S.cur);
+  Object.assign(cur, {doc: S.doc, undo: S.undo, redo: S.redo, take: {n: S.take.n, cam: S.take.cam, log: S.take.log, dirty: S.take.dirty}, ui: {hidden: S.hidden, locked: S.locked, collapsed: S.collapsed}});
+  // lo que hay en el juego se queda: si era de la escena que se deja, pasa a «otra escena en el juego»
+  if (S.world) S.other = {key: S.cur, world: S.world, obs: S.obs, amb: S.worldAmb, ambAt: S.worldAmbAt};
+  S.world = null; S.obs = {}; S.worldAmb = null;
+  if (S.other && S.other.key === key) { S.world = S.other.world; S.obs = S.other.obs; S.worldAmb = S.other.amb; S.worldAmbAt = S.other.ambAt; S.other = null; }
+  const d = docEntry(key);
+  S.cur = key; S.doc = d.doc; S.undo = d.undo; S.redo = d.redo;
+  Object.assign(S.take, d.take, {state: 'idle', checks: [], t: 0, msg: '', op: null, lag: {}}); Object.assign(S, d.ui);
+  S.sel = null; S.placing = null; S.markArm = false; S.scrub = 0; S.treeq = '';
+  closeMenu(); fit(); renderAll();
+}
+function newDoc() {
+  if (docBlock()) return toast(docBlock());
+  const used = S.docs.filter(d => /^Escena sin título/.test(d.doc.name)).length, key = 'd' + (S.docs.length + 1);
+  // vacía, con la cámara de serie en el centro del mapa: una escena siempre tiene al menos una cámara
+  const doc = {name: 'Escena sin título' + (used ? ' ' + (used + 1) : ''), rev: 1, ambiente: clone(DOC14.ambiente), entities: [], cameras: [{id: 'cam-1', name: 'Cámara 1', keys: [{t: 0, x: +V.cx.toFixed(1), y: 2, z: +V.cz.toFixed(1), yaw: 0, pitch: -5, fov: 50, focus: 10}]}]};
+  S.docs.push({key, doc, undo: [], redo: [], take: {n: 1, cam: 'cam-1', log: [], dirty: true}, ui: {hidden: {}, locked: {}, collapsed: {}}});
+  openDoc(key);
+}
 function sceneMenu(anchor) {
+  const dis = docBlock() ? 'disabled' : '';
   openMenu(anchor, `<h5>Escena</h5>
-    <button class="mi" data-act="m-new">Nueva escena</button>
-    <button class="mi" data-act="m-open">Abrir… <kbd class="k">Ctrl+O</kbd></button>
+    <button class="mi" data-act="m-new" ${dis}>Nueva escena</button>
+    <button class="mi" data-act="m-open" ${dis}>Abrir… <kbd class="k">Ctrl+O</kbd></button>
     <h5>Recientes</h5>
-    <button class="mi" data-act="m-close">${esc(S.doc.name)} <span class="k" style="color:var(--muted);font-size:12px">abierta</span></button>
-    <button class="mi" data-act="m-recent">Persecución en Berezino</button>
-    <button class="mi" data-act="m-recent">escena-basica-cine</button>
+    ${docItems()}
     <hr>
     <button class="mi" data-act="m-save">Guardar <kbd class="k">Ctrl+S</kbd></button>
     <button class="mi" data-act="m-saveas">Guardar como… <kbd class="k">Ctrl+Mayús+S</kbd></button>
     <button class="mi" data-act="reload">Recargar desde disco</button>
     <button class="mi" data-act="m-export">Exportar el JSON de la escena</button>
-    <div class="note">Mismo orden que el menú File del DayZ Editor. Nueva escena va sin tecla porque Ctrl+N lo atiende el navegador antes que la web. En este prototipo solo hay una escena cargada.</div>`);
+    <div class="note">Mismo orden que el menú File del DayZ Editor. Nueva escena va sin tecla porque Ctrl+N lo atiende el navegador antes que la web.${docBlock() ? ' ' + docBlock() : ''}</div>`);
 }
 const LAYOUTS = {
   director: {name: 'De fábrica', c1: 256, c3: 320, bh: 220, ph: 50, swap: false, nl: false, nr: false, both: false, de: false, dr: true},
@@ -2293,6 +2351,16 @@ function srcLabel(u) {
   return page ? `${m[1]} · ${page}` : m[1];
 }
 function renderGuide() {
+  // el recorrido de una toma, como el Guided Tour del Game Master de Reforger, con las teclas de ahora (UX-15)
+  const kb = id => keyOf(id) ? ` <kbd>${keyLabel(keyOf(id))}</kbd>` : '';
+  $('#tour').innerHTML = [
+    `<b>Crea la escena.</b> En Escena, abre Añadir, busca lo que quieras y haz clic en el mapa para ponerlo. Arrastra para moverlo; Mayús + arrastrar lo gira.`,
+    `<b>Aplica.</b> «Aplicar escena»${kb('apply')} quita del juego lo que había y crea la escena entera; después la lee para confirmar qué hay.`,
+    `<b>Pon la cámara.</b> En tu juego, lleva la cámara libre adonde quieras y, en Rodaje, usa «Nueva cámara desde la cámara libre».`,
+    `<b>Prepara la toma.</b>${kb('prep')} comprueba de una vez que el juego tiene lo que ves y deja la toma armada.`,
+    `<b>Rueda.</b>${kb('roll')} rueda la toma armada. El vídeo lo graba una herramienta externa, como OBS.`,
+    `<b>Para.</b>${kb('stop')} para la toma siempre, aunque haya un menú abierto${keyOf('stop2') ? `; ${keyLabel(keyOf('stop2'))} también` : ''}.`
+  ].map(t => `<li>${t}</li>`).join('');
   $('#refTable').innerHTML = REFS.map(r => `<tr><td>${esc(r[0])}</td><td>${r[1].startsWith('PROPIO') ? `<span class="tag own">Propio</span> ${esc(r[1].replace(/^PROPIO\s*/, ''))}` : esc(r[1])}</td><td>${esc(r[2])}</td><td><a href="${r[3]}" target="_blank" rel="noopener">${esc(srcLabel(r[3]))}</a></td><td>${esc(r[4])}</td></tr>`).join('');
   const sd = {pendiente: 'Validada en el backend; ningún mod la ha recogido todavía. Si caduca sin entregarse, pasa a Fallido: no se hizo.', ejecutando: 'El mod la recogió y la está haciendo.', aplicado: 'El mod confirma que la hizo. Aún falta leer el juego.', observado: 'Una lectura posterior del juego confirma el resultado.', fallido: 'No se hizo, o la lectura no cumple. Dice por qué.', parcial: 'Falló a mitad, o se perdió la respuesta después de entregarla. Sigue así hasta reconciliar; nunca vuelve a «no ocurrió».'};
   $('#stateCards').innerHTML = Object.keys(sd).map(k => `<div class="card">${chip(k)}<p style="margin-top:8px">${sd[k]}</p></div>`).join('');
@@ -2395,8 +2463,8 @@ document.addEventListener('click', e => {
     case 'take-roll': roll(); break;
     case 'ground': groundQuery(selIds()[0]); break;
     case 'grid': gridMenu(b); return;
-    case 'grid-tg': S.grid[v] = !S.grid[v]; renderTop(); gridMenu(menuFor || $('#bGrid')); return;
-    case 'grid-step': { const [g, x] = v.split(':'); if (g === 'm') { S.grid.step = +x; S.grid.move = true; } else { S.grid.rstep = +x; S.grid.rot = true; } renderTop(); gridMenu(menuFor || $('#bGrid')); return; }
+    case 'grid-tg': S.grid[v] = !S.grid[v]; renderTop(); renderHint(); gridMenu(menuFor || $('#bGrid')); return;
+    case 'grid-step': { const [g, x] = v.split(':'); if (g === 'm') { S.grid.step = +x; S.grid.move = true; } else { S.grid.rstep = +x; S.grid.rot = true; } renderTop(); renderHint(); gridMenu(menuFor || $('#bGrid')); return; }
     case 'take-stop': stopTake(); break;
     case 'take-reapply': resetAndPrepare(); break;
     case 'cam-use': S.take.cam = v; renderAll(); break;
@@ -2423,8 +2491,11 @@ document.addEventListener('click', e => {
     case 'hist': histJump(+v); break;
     case 'val-go': { const [t, id, k] = v.split(':'); if (t === 'ent') { select({type: 'ent', ids: [id]}); fit(); } else if (t === 'key') { go('rodaje'); select({type: 'key', cam: id, ki: +k}); } else if (t === 'grp') { S.collapsed[id] = false; renderLeft(); } break; }
     case 'menu-scene': sceneMenu(b); return;
-    case 'm-new': case 'm-open': case 'm-recent': case 'm-saveas': closeMenu(); toast('En este prototipo solo hay una escena cargada.'); break;
-    case 'm-close': closeMenu(); break;
+    case 'm-new': newDoc(); break;
+    case 'm-open': openMenuDocs(menuFor || $('#docBtn')); return;
+    case 'doc-open': openDoc(v); break;
+    case 'm-saveas': closeMenu(); toast(SAVEAS); break;
+    case 'first-add': S.rtab = 'add'; S.addFromMap = false; renderRight(); { const q = $('#libq'); if (q) q.focus(); } break;
     case 'm-save': closeMenu(); toast('Guardado. El estudio guarda cada cambio al momento.', 'ok'); break;
     case 'm-export': closeMenu(); toast('En el producto descarga el JSON de la escena con el esquema v1. Aquí no hay backend.'); break;
     case 'menu-tools': toolsMenu(b); return;
@@ -2448,7 +2519,7 @@ document.addEventListener('click', e => {
     }
     case 'sim-reboot': {
       closeMenu(); S.sim.server = false; renderAll(); toast('Reiniciando el servidor…');
-      setTimeout(() => { S.sim.server = true; S.hb.server = now(); S.epoch = fnv(String(now())).slice(0, 8); S.epochNew = true; S.world = null; S.obs = {}; S.take.dirty = false; if (['armada', 'preparando'].includes(S.take.state)) { S.take.state = 'idle'; S.take.checks = []; } renderAll(); }, 2200);
+      setTimeout(() => { S.sim.server = true; S.hb.server = now(); S.epoch = fnv(String(now())).slice(0, 8); S.epochNew = true; S.world = null; S.obs = {}; S.other = null; S.take.dirty = false; if (['armada', 'preparando'].includes(S.take.state)) { S.take.state = 'idle'; S.take.checks = []; } renderAll(); }, 2200);
       break;
     }
     case 'keys': if (takeActive()) { closeMenu(); toast('Los atajos no se cambian durante la toma.', 'fail'); break; } capture = null; keysDialog(); break;

@@ -168,3 +168,19 @@ Las tres lanes nuevas descartan además lo mismo que el contrato: tocar los ataj
 ## 5. Fuera de M1 (R25)
 
 Las cinco lanes coinciden en que nada de esto pide ampliar M1. Siguen fuera la vista 3D, grabar o controlar OBS, la colaboración, el cambio de mapa, el MCP, los eventos y una IA propia. Parar desde dentro de DayZ con una sola pantalla sigue como decisión aparte (consolidado de octubre, §10). Las lanes nuevas añaden a esta lista las composiciones guardables y un aspecto «de cine» con grano o claqueta en 3D (Gemini y Grok).
+
+## 6. Segunda pasada: lo de DESPUÉS que no necesita el juego
+
+Mientras Astra revisaba lo de AHORA, se hicieron tres mejoras de DESPUÉS que se pueden comprobar sin el juego: UX-18, UX-33 y UX-15. Astra no las ha revisado; entran en su siguiente revisión.
+
+| ID | Qué se hizo | Criterio + | Criterio − |
+|---|---|---|---|
+| UX-18 | Con algo seleccionado, una línea arriba a la izquierda del mapa dice cómo moverlo y girarlo con el paso de la rejilla de ahora, y cómo borrarlo y duplicarlo con las teclas de ahora. Si está bloqueado, dice cómo desbloquearlo. Va en gris, para no confundirse con la de colocar. Las dos ayudas pasan a esa esquina porque, centradas, tapaban los botones del mapa a 1280 y 1440 px | Con «Bidón azul» seleccionado, la línea dice 0,5 m, 15°, Mayús y Supr. Con la rejilla a 1 m y Borrar reasignado a X, dice 1 m y X, y ya no Supr | Sin selección no hay línea. Colocando, la ayuda es la de colocar, sin la de edición. Con la toma armada no hay ayuda de edición. Ya se cumplía antes, porque no había ayuda de edición |
+| UX-33 | La barra de estado lleva, entre las luces y el mundo, la X y la Z del cursor y el pueblo más cercano con su distancia («Stary Sobor, a 160 m»). El mapa ya no lleva las coordenadas en una esquina | Con el cursor sobre el mapa, la barra dice X, Z y el pueblo más cercano con su distancia, y el mapa no lleva coordenadas | Con el cursor fuera del mapa, la barra dice «X — · Z —» y ningún pueblo |
+| UX-15 | «Nueva escena» abre una escena vacía con una cámara. La Jerarquía vacía invita con «Añade tu primer objeto», que abre Añadir. «Abrir…» lista las escenas de la sesión y marca cuál está en el juego. La cabecera avisa de que en el juego hay otra escena, y la nombran su ayuda, la línea de la Jerarquía y la ayuda de Aplicar. Aplicar otra escena quita la del juego y crea la nueva, con un paso que la nombra: es la recomendación de §8.5 del consolidado de octubre mientras Guillermo no elija. La Guía empieza por el recorrido en seis pasos con las teclas de ahora, y la procedencia, la paleta y los referentes pasan a «Acerca del diseño» | «Nueva escena» abre la escena vacía y su botón abre Añadir. La cabecera dice que en el juego hay otra escena, y la ayuda de Aplicar nombra «Amanecer en Stary Sobor». «Abrir…» lista las dos escenas, y al volver trae sus 35 entidades y sus 2 cambios sin aplicar. La Guía empieza por «Recorrido» con seis pasos, y la tabla de referentes va en «Acerca del diseño» | Crear y abrir escenas no manda órdenes al juego ni cambia lo que hay en él hasta aplicar; ya se cumplía antes, porque Nueva y Abrir no hacían nada. Con la toma armada no se crea ni se abre otra escena |
+
+Límites (R25): Nueva y Abrir viven en la sesión del prototipo, sin guardar en disco, y «Guardar como» dice que no está en el prototipo. La escena nueva trae una cámara porque Rodaje necesita al menos una.
+
+Pruebas: `pruebas-mejoras.js` da 51 de 51 contra el prototipo nuevo. Contra el de la primera pasada (`10274b7`) da 43 de 51: fallan los siete «+» nuevos y dos «−», y pasan los dos «−» que ya se cumplían. `pruebas.js` sigue en 64 de 64.
+
+Dos fallos que encontró la prueba y ya están arreglados: un bloque de la Guía se había quedado dentro del fondo de los diálogos, que salía visible y anulaba los atajos, y la ayuda nueva tapaba los botones del mapa.

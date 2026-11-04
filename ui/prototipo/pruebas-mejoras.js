@@ -1,4 +1,4 @@
-// Criterios R26 de las mejoras de noviembre (ui/2026-11-04-ui-mejoras-consolidado.md §2, AHORA): un caso + y uno − por mejora.
+// Criterios R26 de las mejoras de noviembre (ui/2026-11-04-ui-mejoras-consolidado.md §2: AHORA y la segunda pasada): un caso + y uno − por mejora.
 // Uso: node ui/prototipo/pruebas-mejoras.js (necesita Playwright con Chromium). Cada caso abre una página nueva.
 // Contra el prototipo de antes (ESTUDIO_URL=file://… con `git show de37c03:ui/prototipo/estudio.html`) los + tienen que fallar;
 // un − que ya se cumplía antes pasa también allí. El contraste de CU-38 en los dos temas sigue en pruebas.js.
@@ -342,6 +342,104 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const red = await p.evaluate(() => { const b = document.querySelector('#bTopStop'), t = document.createElement('i'); t.style.background = 'var(--rec)'; document.body.appendChild(t); const want = getComputedStyle(t).backgroundColor; t.remove(); return [getComputedStyle(b).backgroundColor, want]; });
     await p.keyboard.press('Escape'); await shows(p, '#slateWrap', /Reaplicar y preparar la/, 3000); await look('parada');
     return [['UX-25 − nunca hay dos botones principales a la vista', worst <= 1, out.join(' · ')], ['UX-25 − rodando, Parar no pierde el rojo de grabar', rolling && red[0] === red[1], `${red[0]} frente a ${red[1]}`]];
+  });
+
+  // --- Segunda pasada (§2, DESPUÉS que no necesita el juego): UX-18, UX-33 y UX-15 ---
+  // UX-18: ayuda breve junto al mapa según lo seleccionado, con la rejilla y las teclas de ahora
+  await R26('UX-18 +', async p => {
+    const res = [], hint = async () => (await p.locator('#hint').isVisible()) ? await T(p, '#hint') : '';
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(200);
+    const h1 = await hint();
+    res.push(['UX-18 + con «Bidón azul» seleccionado, una línea junto al mapa dice cómo moverlo y girarlo con la rejilla de ahora y cómo borrarlo', /0,5 m/.test(h1) && /15°/.test(h1) && /Mayús/.test(h1) && /Supr/.test(h1), h1 || 'sin ayuda']);
+    await p.click('#bGrid'); await p.waitForTimeout(120); await p.click('#menu [data-act="grid-step"][data-v="m:1"]'); await p.click('#status', { position: { x: 3, y: 3 } }); await p.waitForTimeout(150);
+    const h2 = await hint();
+    await p.click('#bTools'); await p.waitForTimeout(120); await p.click('#menu [data-act="keys"]'); await p.waitForTimeout(120);
+    await p.click('[data-act="key-set"][data-v="del"]'); await p.keyboard.press('x'); await p.waitForTimeout(100);
+    await p.click('[data-act="dlg-close"]'); await p.waitForTimeout(150);
+    const h3 = await hint();
+    res.push(['UX-18 + la línea sigue a la rejilla (1 m) y a la tecla de borrar reasignada (X)', /(^|[^,\d])1 m/.test(h2) && /\bX\b/.test(h3) && !/Supr/.test(h3), `rejilla de 1 m: ${h2 || 'sin ayuda'} · Borrar con X: ${h3 || 'sin ayuda'}`]);
+    return res;
+  });
+  await R26('UX-18 −', async p => {
+    const vis = () => p.locator('#hint').isVisible(), edit = /Mayús|arrastra/i;
+    const none = !await vis();
+    // la escena está al tope de objetos: se borra uno para poder colocar, como en pruebas.js
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-20"]'); await p.keyboard.press('Delete'); await p.waitForTimeout(150);
+    await p.click('[data-act="rtab"][data-v="add"]'); await p.click('[data-act="lib-item"]:enabled'); await p.waitForTimeout(150);
+    const placing = await T(p, '#hint');
+    await p.keyboard.press('Escape'); await p.waitForTimeout(150);
+    const what = 'UX-18 − sin selección no hay línea, colocando manda la ayuda de colocar y con la toma armada no hay ayuda de edición';
+    if (!await apply(p) || !await arm(p)) return [[what, false, 'no llegó a armar']];
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]', { timeout: 1000 }).catch(() => {}); await p.waitForTimeout(150);
+    const armed = (await vis()) ? await T(p, '#hint') : '';
+    return [[what, none && /Colocando/.test(placing) && !/Mayús/.test(placing) && !edit.test(armed), `sin selección: ${none ? 'nada' : 'hay ayuda'} · colocando: ${placing || 'nada'} · armada: ${armed || 'nada'}`]];
+  });
+
+  // UX-33: barra de estado por zonas, con las coordenadas del cursor y el pueblo más cercano
+  const TOWNS = [['Chernogorsk', 6700, 2500], ['Elektrozavodsk', 10300, 2250], ['Berezino', 12350, 9550], ['Solnichniy', 13350, 6200], ['Kamyshovo', 12050, 3500], ['Zelenogorsk', 2750, 5250], ['Stary Sobor', 6060, 7760], ['Novy Sobor', 7100, 7700], ['Vybor', 3800, 8900], ['Gorka', 9500, 8900], ['Balota', 4400, 2400], ['Komarovo', 3600, 2400], ['Kabanino', 5300, 8600], ['Prigorodki', 7900, 3200], ['Svetlojarsk', 13900, 13200], ['Krasnostav', 11200, 12300], ['Severograd', 8100, 12700], ['Novodmitrovsk', 11500, 14500], ['Lopatino', 2750, 9900], ['Pustoshka', 3000, 7900]];
+  const num = s => parseFloat(s.replace(/[\s.]/g, '').replace(',', '.'));
+  await R26('UX-33 +', async p => {
+    const b = await p.locator('#map').boundingBox(); await p.mouse.move(b.x + b.width * 0.5, b.y + b.height * 0.5); await p.mouse.move(b.x + b.width * 0.52, b.y + b.height * 0.48); await p.waitForTimeout(150);
+    const st = await T(p, '#status'), inMap = await p.evaluate(() => __r26.texts(document.querySelector('#mapwrap')));
+    const m = st.match(/X ([\d\s.,]+?) · Z ([\d\s.,]+?)(?: ·|$|\s{2}|[A-Za-zÁÉÍÓÚáéíóú])/);
+    let near = '';
+    if (m) { const x = num(m[1]), z = num(m[2]); near = TOWNS.map(t => [t[0], Math.hypot(t[1] - x, t[2] - z)]).sort((a, c) => a[1] - c[1])[0][0]; }
+    const dist = near && new RegExp(near + '[^\\d]{0,4}[\\d.,]+\\s?(m|km)').test(st);
+    return [['UX-33 + con el cursor sobre el mapa, la barra de estado dice X y Z y el pueblo más cercano con su distancia, y el mapa ya no lleva las coordenadas', !!m && dist && !/X [\d.,]+ · Z/.test(inMap), `barra: ${st.slice(0, 160)} · más cerca: ${near || '?'} · coordenadas dentro del mapa: ${/X [\d.,]+ · Z/.test(inMap)}`]];
+  });
+  await R26('UX-33 −', async p => {
+    const b = await p.locator('#map').boundingBox(); await p.mouse.move(b.x + b.width * 0.5, b.y + b.height * 0.5); await p.waitForTimeout(100);
+    await p.mouse.move(b.x + b.width * 0.5, b.y - 40); await p.waitForTimeout(150);
+    const st = await T(p, '#status'), town = TOWNS.find(t => st.includes(t[0]));
+    return [['UX-33 − con el cursor fuera del mapa, la barra dice «X — · Z —» y ningún pueblo', /X — · Z —/.test(st) && !town, `barra: ${st.slice(0, 160)}`]];
+  });
+
+  // UX-15: empezar desde una escena vacía; la Guía empieza por el recorrido
+  const sceneMenu = async (p, act) => { await p.click('#docBtn'); await p.waitForTimeout(150); await p.click(`#menu [data-act="${act}"]`); await p.waitForTimeout(200); };
+  await R26('UX-15 + escenas', async p => {
+    const res = [];
+    await sceneMenu(p, 'm-new');
+    const head = await T(p, '#docBtn'), left = await T(p, '#colL'), title = await p.getAttribute('#bApply', 'title');
+    const cta = p.locator('#colL [data-act="first-add"]');
+    const hasCta = await cta.count() && /Añade tu primer objeto/.test(await cta.first().innerText());
+    if (hasCta) { await cta.first().click(); await p.waitForTimeout(150); }
+    const addOpen = await p.evaluate(() => { const t = document.querySelector('[data-act="rtab"][data-v="add"]'); return !!t && t.getAttribute('aria-selected') === 'true' && !!document.querySelector('#libq'); });
+    res.push(['UX-15 + «Nueva escena» abre una escena vacía que invita con «Añade tu primer objeto» (abre Añadir), y la cabecera y la ayuda de Aplicar nombran la escena que sigue en el juego', /Escena sin título/.test(head) && /otra escena/i.test(head) && /vacía/i.test(left) && hasCta && addOpen && /Amanecer en Stary Sobor/.test(title || ''), `cabecera: ${head} · Jerarquía: ${left.slice(0, 90)} · Añadir abierto: ${addOpen} · Aplicar: ${title}`]);
+    await p.click('#docBtn'); await p.waitForTimeout(150); await p.click('#menu [data-act="m-open"]'); await p.waitForTimeout(200);
+    const list = await T(p, '#menu');
+    const back = p.locator('#menu [data-act="doc-open"]', { hasText: 'Amanecer en Stary Sobor' });
+    if (await back.count()) { await back.first().click(); await p.waitForTimeout(250); }
+    const head2 = await T(p, '#docBtn'), sub = await T(p, '#colL .ph .sub');
+    res.push(['UX-15 + «Abrir…» lista las dos escenas, y volver a «Amanecer en Stary Sobor» la trae con sus 35 entidades y sus 2 cambios sin aplicar', /Escena sin título/.test(list) && /Amanecer en Stary Sobor/.test(list) && /Amanecer en Stary Sobor/.test(head2) && /2 cambios sin aplicar/.test(head2) && /35 entidades/.test(sub), `lista: ${list.slice(0, 120)} · cabecera: ${head2} · ${sub}`]);
+    return res;
+  });
+  await R26('UX-15 + Guía', async p => {
+    await p.click('#bGuide'); await p.waitForTimeout(400);
+    const g = await p.evaluate(() => {
+      const hs = [...document.querySelectorAll('#guide h2')].map(h => h.textContent.trim());
+      const first = document.querySelector('#guide h2'), steps = first ? [...(first.nextElementSibling ? first.nextElementSibling.querySelectorAll('li') : [])].map(li => li.textContent.replace(/\s+/g, ' ').trim()) : [];
+      const t = document.querySelector('#refTable'); let h = t, sec = '';
+      while (h && !sec) { h = h.previousElementSibling || (h.parentElement && h.parentElement.id !== 'guide' ? h.parentElement : null); if (h && h.tagName === 'H2') sec = h.textContent.trim(); }
+      return { hs, steps, sec };
+    });
+    const order = [/Crea/i, /Aplica/i, /cámara/i, /Prepara/i, /Rueda/i, /Para/i], ok = g.steps.length === 6 && order.every((re, i) => re.test(g.steps[i]));
+    return [['UX-15 + la Guía empieza por el recorrido en seis pasos (crear, aplicar, cámara, preparar, rodar y parar), y los referentes van en «Acerca del diseño»', /Recorrido/i.test(g.hs[0] || '') && ok && /Acerca del diseño/.test(g.sec), `primera sección: ${g.hs[0]} · pasos: ${g.steps.map(s => s.slice(0, 18)).join(' | ')} · la tabla de referentes va en: ${g.sec || '?'}`]];
+  });
+  await R26('UX-15 −', async p => {
+    const res = [], orders = () => p.evaluate(() => [...document.querySelectorAll('#dock .qrow')].map(r => r.title.split(' · ')[0]).join(','));
+    await dock(p); const before = await orders();
+    await sceneMenu(p, 'm-new'); await sceneMenu(p, 'm-open');
+    const back = p.locator('#menu [data-act="doc-open"]', { hasText: 'Amanecer en Stary Sobor' }); if (await back.count()) { await back.first().click(); await p.waitForTimeout(250); } else await p.keyboard.press('Escape');
+    await dock(p); const after = await orders(), head = await T(p, '#docBtn');
+    res.push(['UX-15 − crear y abrir escenas no toca el juego: ninguna orden nueva en Actividad y la escena del juego no cambia hasta aplicar', !!before && before === after && /2 cambios sin aplicar/.test(head), `órdenes antes ${before.split(',').length} y después ${after.split(',').length} · cabecera: ${head}`]);
+    const what = 'UX-15 − con la toma armada no se crea ni se abre otra escena';
+    if (!await apply(p) || !await arm(p)) return [...res, [what, false, 'no llegó a armar']];
+    await p.click('#docBtn', { timeout: 1000 }).catch(() => {}); await p.waitForTimeout(150);
+    const nb = p.locator('#menu [data-act="m-new"]'), can = (await nb.count()) && await nb.isVisible() && await nb.isEnabled();
+    if (can) { await nb.click(); await p.waitForTimeout(200); }
+    const head2 = await T(p, '#docBtn'), still = await shows(p, '#bTopStop', /Desarmar/, 500);
+    res.push([what, !can && /Amanecer en Stary Sobor/.test(head2) && still, `Nueva escena disponible: ${!!can} · cabecera: ${head2} · sigue armada: ${still}`]);
+    return res;
   });
 
   expect(external.length === 0, 'ninguna petición sale de la página: ' + (external.slice(0, 3).join(' ') || 'ninguna'));
