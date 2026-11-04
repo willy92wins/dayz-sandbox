@@ -26,6 +26,8 @@ El contrato no cambia:
 
 Lo que cambia es la presentación que fijaba el [consolidado de octubre](2026-10-28-ui-m1-consolidado.md). Sus apartados afectados se actualizan al aplicar esta lista, para que no queden dos reglas a la vez.
 
+**Estado:** las mejoras AHORA están en el prototipo y el consolidado de octubre ya está al día. Sus criterios pasan en [prototipo/pruebas-mejoras.js](prototipo/pruebas-mejoras.js) (41 de 41) y fallan contra el prototipo de antes; el detalle está en la §12 del consolidado de octubre. Falta la revisión cruzada de Astra.
+
 ## 1. En qué coinciden
 
 Las dos críticas llegan a lo mismo por caminos distintos:
@@ -161,7 +163,7 @@ Las tres lanes nuevas descartan además lo mismo que el contrato: tocar los ataj
   - §8.4: que el prototipo enseña la opción de las marcas mientras Guillermo no elija.
   
   §7 conserva sus 38 criterios, y §12 dice qué pruebas cambiaron.
-- **`pruebas.js`.** Las comprobaciones de presentación se actualizan: «Aplicar escena» en vez de «Volver a aplicar», Actividad plegada, Añadir en pestaña y los textos nuevos. Las invariantes de operación y seguridad no se tocan. Se añaden las comprobaciones de esta lista.
+- **`pruebas.js`.** Las comprobaciones de presentación se actualizan: «Aplicar escena» en vez de «Volver a aplicar», Actividad plegada, Añadir en pestaña y los textos nuevos. Las invariantes de operación y seguridad no se tocan. Las comprobaciones de esta lista van aparte, en `pruebas-mejoras.js`, para poder pasarlas también contra el prototipo de antes.
 
 ## 5. Fuera de M1 (R25)
 

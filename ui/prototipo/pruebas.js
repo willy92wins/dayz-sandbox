@@ -1,6 +1,7 @@
 // Pruebas del prototipo consolidado (Claude + Astra). Sin backend: todo simulado en la página.
 // Uso: node ui/prototipo/pruebas.js (necesita Playwright con Chromium). CAPTURAS=<carpeta> guarda capturas.
 // Comprueban lo que enseña la interfaz con datos falsos; los efectos en el juego son de F6 y de los gates (consolidado §6).
+// Los criterios de las mejoras de noviembre (R26, un caso + y uno − por mejora) están en pruebas-mejoras.js.
 const path = require('path');
 const { chromium } = require('playwright');
 const URL = process.env.ESTUDIO_URL || 'file://' + path.resolve(__dirname, 'estudio.html');
@@ -18,25 +19,33 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
   const external = [];
   page.on('request', r => { if (!/^(file|data|blob|about):/.test(r.url())) external.push(r.url()); });
   const txt = async sel => (await page.locator(sel).first().innerText().catch(() => '')).replace(/\s+/g, ' ');
-  const waitTxt = async (sel, re, ms = 15000) => { try { await page.waitForFunction(([s, r]) => { const el = document.querySelector(s); return el && new RegExp(r).test(el.innerText); }, [sel, re.source], { timeout: ms }); return true; } catch (e) { return false; } };
+  const waitTxt = async (sel, re, ms = 15000) => { try { await page.waitForFunction(([s, r]) => { const el = document.querySelector(s); return el && el.getClientRects().length > 0 && new RegExp(r).test(el.innerText); }, [sel, re.source], { timeout: ms }); return true; } catch (e) { return false; } };
   const toasts = async () => (await page.locator('#toasts').innerText().catch(() => '')).replace(/\s+/g, ' ');
-  const sim = async v => { await page.click('#bSim'); await page.waitForTimeout(120); await page.click(`#menu [data-act="sim"][data-v="${v}"]`); await page.keyboard.press('Escape'); await page.waitForTimeout(150); };
+  // el menú del simulador se cierra con un clic fuera: con la toma en marcha, Esc la pararía (UX-01)
+  const sim = async v => { await page.click('#bSim'); await page.waitForTimeout(120); await page.click(`#menu [data-act="sim"][data-v="${v}"]`); await page.click('#status', { position: { x: 3, y: 3 } }); await page.waitForTimeout(150); };
   const mapBox = async () => page.locator('#map').boundingBox();
+  // el panel de abajo empieza plegado en Escena (UX-02)
+  const dock = async () => { if (await page.locator('#center.dock-closed').count()) { await page.click('#dock .strip'); await page.waitForTimeout(150); } };
+  // aplicada: sin cambios por aplicar y «Aplicar escena» libre otra vez (UX-04)
+  const applied = async (ms = 15000) => { try { await page.waitForFunction(() => { const d = document.querySelector('#docBtn'), a = document.querySelector('#bApply'); return !!d && /Sin cambios por aplicar/.test(d.innerText) && !!a && !a.disabled && !a.classList.contains('busy'); }, null, { timeout: ms }); return true; } catch (e) { return false; } };
   const selEnt = async id => { await page.click(`#colL [data-act="sel"][data-v="ent:${id}"]`); await page.waitForTimeout(150); await page.locator('#map').hover(); await page.keyboard.press('f'); await page.waitForTimeout(250); };
 
   await page.goto(URL); await page.waitForTimeout(1200);
   await shot('01-escena');
-  expect(await page.locator('#peerBk').isVisible() && await page.locator('#peerSrv').isVisible() && await page.locator('#peerCli').isVisible(), 'tres luces de conexión: Backend, Servidor y Director');
-  expect(/r14 editada · r12 en el juego/.test(await txt('#docBtn')), 'revisión editada frente a la aplicada en la cabecera');
-  const total = await txt('.meter.total');
-  expect(/35 entidades \+ 9 prendas = 44/.test(total) && /S-perf/.test(total), 'presupuesto total combinado: ' + total);
+  expect(await page.locator('#peerBk').isVisible() && await page.locator('#peerSrv').isVisible() && await page.locator('#peerCli').isVisible() && /Backend/.test(await txt('#peerBk')) && /Servidor/.test(await txt('#peerSrv')) && /Tu juego/.test(await txt('#peerCli')), 'tres luces de conexión en la barra de estado: Backend, Servidor y Tu juego');
+  expect(/2 cambios sin aplicar/.test(await txt('#docBtn')) && /revisión 14, en el juego la 12/.test(await page.getAttribute('#docBtn', 'title')), 'cambios sin aplicar en la cabecera; la revisión editada frente a la aplicada, al pasar el ratón');
+  await page.click('[data-act="rtab"][data-v="add"]');
+  const total = await txt('.btotal');
+  expect(/35 entidades y 9 prendas/.test(total) && /Tope total aún sin certificar/.test(total), 'presupuesto total combinado, dentro de Añadir: ' + total);
+  await page.click('[data-act="rtab"][data-v="props"]');
 
   // --- Aplicar con Ctrl+Intro ---
   await page.keyboard.press('Control+Enter');
-  expect(await waitTxt('#bApply', /Volver a aplicar/), 'Ctrl+Intro aplica y termina en observado');
-  expect(/observado/i.test(await txt('#dock .qrow')), 'la orden de aplicar acaba Observado');
+  expect(await applied(), 'Ctrl+Intro aplica y termina sin cambios por aplicar');
+  expect(/observado/i.test(await txt('#dock .strip')), 'la orden de aplicar acaba Observado, a la vista en la tira plegada de Actividad');
 
   // --- Mayús + arrastrar gira (Eden) ---
+  await dock(); // abierto antes de medir el mapa: abrirlo después lo encoge
   await selEnt('obj-12');
   let b = await mapBox(); const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
   const yaw0 = await page.inputValue('#f-yaw');
@@ -49,7 +58,7 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
   expect(yaw0 === '0' && yaw1 === '90', `Mayús + arrastrar gira con rejilla de 15°: ${yaw0} → ${yaw1}`);
   await page.click('[data-act="dtab"][data-v="historial"]'); await page.waitForTimeout(100);
   expect(/Girar Bidón rojo/.test(await txt('#dock')), 'el giro queda en el historial como «Girar Bidón rojo»');
-  await page.click('[data-act="dtab"][data-v="consola"]');
+  await page.click('[data-act="dtab"][data-v="actividad"]');
 
   // --- Mayús + clic sin mover: selección seguida (DayZ Editor) ---
   await page.keyboard.down('Shift'); await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.up(); await page.keyboard.up('Shift'); await page.waitForTimeout(150);
@@ -79,9 +88,9 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
 
   // --- Colocar: lectura del suelo automática (#27) ---
   await selEnt('obj-20'); await page.keyboard.press('Delete'); await page.waitForTimeout(150);
-  await page.click('[data-act="lib-item"]'); b = await mapBox();
+  await page.click('[data-act="rtab"][data-v="add"]'); await page.click('[data-act="lib-item"]'); b = await mapBox();
   await page.mouse.click(b.x + b.width * 0.7, b.y + b.height * 0.3); await page.waitForTimeout(150);
-  expect(await waitTxt('#dock', /Leer el suelo/, 3000), 'colocar lanza «Leer el suelo» en la consola');
+  expect(await waitTxt('#dock', /Leer el suelo/, 3000), 'colocar lanza «Leer el suelo» en Actividad');
   expect(await waitTxt('#colR', /Suelo a [\d.,]+ m, leído en el servidor/, 4000), 'las propiedades enseñan el suelo leído con su edad');
   await shot('03-suelo');
 
@@ -91,7 +100,7 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
   expect(/out_of_map/.test(await txt('#dock')), 'una posición fuera del mapa da out_of_map');
   expect(await page.locator('#bApply').isDisabled(), 'con errores no se puede aplicar');
   await page.click('#bUndo'); await page.waitForTimeout(150);
-  await page.click('[data-act="dtab"][data-v="consola"]');
+  await page.click('[data-act="dtab"][data-v="actividad"]');
 
   // --- D2: se pierde la respuesta después de entregar -> Parcial hasta reconciliar ---
   await page.locator('#map').hover(); await page.keyboard.press('Control+Enter');
@@ -101,7 +110,7 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
   await shot('04-parcial-corte');
   await page.waitForTimeout(800); await sim('server');
   expect(await waitTxt('#dock .qrow', /Observado[\s\S]*Reconciliada tras el corte/, 9000), 'al volver la conexión se reconcilia: Observado, «Reconciliada tras el corte»');
-  expect(await waitTxt('#bApply', /Volver a aplicar/, 3000), 'termina con todo aplicado');
+  expect(await applied(3000), 'termina con todo aplicado');
 
   // --- D2: sin conexión antes de entregar -> Pendiente y luego Fallido «No se entregó» ---
   await page.locator('#map').hover(); await page.keyboard.press('ArrowLeft'); await page.waitForTimeout(100);
@@ -110,14 +119,14 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
   expect(await waitTxt('#dock .qrow', /Fallido[\s\S]*No se entregó/, 12000), 'a los 10 s pasa a Fallido: «No se entregó»');
   await sim('server');
   await page.keyboard.press('Control+Enter');
-  expect(await waitTxt('#bApply', /Volver a aplicar/, 9000), 'con el servidor de vuelta se aplica');
+  expect(await applied(9000), 'con el servidor de vuelta se aplica');
 
   // --- Backend parado ---
   await sim('backend');
-  expect(/hace/.test(await txt('#peerSrv')) && /última noticia/.test(await page.getAttribute('#peerSrv', 'title')) && await page.locator('#peerSrv.stale').count() === 1 && await page.locator('#peerCli.stale').count() === 1, 'sin backend, Servidor y Director enseñan «hace X» sin color y la última noticia en el título');
+  expect(/hace/.test(await txt('#peerSrv')) && /última noticia/.test(await page.getAttribute('#peerSrv', 'title')) && await page.locator('#peerSrv.stale').count() === 1 && await page.locator('#peerCli.stale').count() === 1, 'sin backend, Servidor y Tu juego enseñan «hace X» sin color y la última noticia en el título');
   expect(/Sin conexión con el backend/.test(await txt('#banner')), 'aviso «Sin conexión con el backend»');
   expect(await page.locator('#bApply').isDisabled(), 'sin backend Aplicar está desactivado');
-  expect(/esto es lo último que se supo/.test(await txt('#dock')), 'la consola dice que es lo último que se supo');
+  expect(/esto es lo último que se supo/.test(await txt('#dock')), 'Actividad dice que es lo último que se supo');
   await selEnt('obj-13'); await page.keyboard.press('ArrowUp'); await page.waitForTimeout(150);
   expect(/no se puede guardar ningún cambio/.test(await toasts()), 'sin backend no se guarda ningún cambio');
   expect(await page.locator('#colR fieldset.lockf[disabled]').count() === 1, 'sin backend las propiedades quedan bloqueadas');
@@ -129,17 +138,17 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
   await page.keyboard.press('2'); await page.waitForTimeout(300);
   expect(/Preparar toma Mayús\+F9/.test(await txt('#slateWrap')), 'el botón de preparar enseña Mayús+F9');
   await page.keyboard.press('Shift+F9');
-  expect(await waitTxt('#slateWrap', /Desarmar/, 6000), 'Mayús+F9 prepara y la toma queda armada');
+  expect(await waitTxt('#bTopStop', /Desarmar/, 6000), 'Mayús+F9 prepara y la toma queda armada');
   expect(/Rodar Intro/.test(await txt('#slateWrap')), 'Rodar enseña Intro');
   expect(await page.locator('#colR fieldset.lockf[disabled]').count() === 1, 'con la toma armada las propiedades se bloquean');
   await page.keyboard.press('Control+z'); await page.waitForTimeout(150);
   expect(/Durante la toma no se edita/.test(await toasts()), 'Ctrl+Z durante la toma se rechaza con el motivo');
   await page.keyboard.press('Space'); await page.waitForTimeout(150);
-  expect(/Espacio solo para una toma que rueda/.test(await toasts()) && /Desarmar/.test(await txt('#slateWrap')), 'Espacio con la toma armada no rueda: avisa');
+  expect(/Espacio solo para una toma que rueda/.test(await toasts()) && await page.locator('#bTopStop').isVisible() && /Desarmar/.test(await txt('#bTopStop')), 'Espacio con la toma armada no rueda: avisa');
   await shot('06-armada');
   await page.keyboard.press('Enter');
-  expect(await waitTxt('#slateWrap', /Parar/, 1500), 'Intro rueda la toma armada');
-  expect(await page.locator('#recBadge').isVisible() && /RODANDO/.test(await txt('#recBadge')) && /OBS/.test(await txt('#recBadge')), 'insignia «RODANDO» que dice que el vídeo lo graba OBS');
+  expect(await waitTxt('#bTopStop', /Parar/, 1500), 'Intro rueda la toma armada');
+  expect(await page.locator('#recBadge').isVisible() && /Rodando/.test(await txt('#recBadge')) && /herramienta externa, como OBS/.test(await txt('#recBadge')), 'insignia «Rodando» que dice que el vídeo lo graba una herramienta externa, como OBS');
   const stopFree = await page.evaluate(() => { const b = document.querySelector('#bTopStop'); if (!b || b.hidden) return false; const r = b.getBoundingClientRect(); const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!el && (el === b || b.contains(el)); });
   expect(stopFree, 'rodando, Parar está en la barra de arriba y nada lo tapa (B5)');
   await page.waitForTimeout(1500); await shot('07-rodando');
@@ -153,11 +162,11 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
 
   // --- Toma que pierde al director: Fallida y la orden Parcial hasta reconciliar ---
   await page.click('[data-act="take-reapply"]');
-  expect(await waitTxt('#slateWrap', /Desarmar/, 12000), '«Reaplicar y preparar» aplica y vuelve a armar');
+  expect(await waitTxt('#bTopStop', /Desarmar/, 12000), '«Reaplicar y preparar» aplica y vuelve a armar');
   await page.keyboard.press('Enter'); await page.waitForTimeout(900);
   await sim('director');
   expect(await waitTxt('#slateWrap', /Fallida/, 2000), 'perder al director falla la toma');
-  await page.click('[data-act="rdtab"][data-v="consola"]'); await page.waitForTimeout(100);
+  await page.click('[data-act="rdtab"][data-v="actividad"]'); await page.waitForTimeout(100);
   expect(/Parcial[\s\S]*hombre muerto/.test(await txt('#dock .qrow')), 'la orden de la toma queda Parcial y cita el hombre muerto (F5)');
   await sim('director');
   expect(await waitTxt('#dock .qrow', /Observado[\s\S]*Reconciliada tras el corte: el mod paró/, 3000), 'al volver el director se reconcilia la orden');
@@ -168,11 +177,11 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
   await sim('expansion'); await page.click('[data-act="dtab"][data-v="validacion"]'); await page.waitForTimeout(200);
   const val = await txt('#dock');
   expect(/expansion_unavailable/.test(val) && /\/entities\/\d+/.test(val) && await page.locator('#bApply').isDisabled(), 'sin Expansion: expansion_unavailable con su ruta y Aplicar desactivado (C5)');
-  await sim('expansion'); await page.click('[data-act="dtab"][data-v="consola"]');
+  await sim('expansion'); await page.click('[data-act="dtab"][data-v="actividad"]');
   await sim('fault'); await page.locator('#map').hover(); await page.keyboard.press('Control+Enter');
   expect(await waitTxt('#dock .qrow', /Parcial[\s\S]*Falló al crear la entidad[\s\S]*Se borró todo lo que había creado esta orden/, 12000), 'fallo a mitad: Parcial, nombra la entidad y dice que se borró lo de esa orden (#9)');
   await page.locator('#map').hover(); await page.keyboard.press('Control+Enter');
-  expect(await waitTxt('#bApply', /Volver a aplicar/, 12000), 'el fallo simulado es de una vez: aplicar otra vez termina aplicado');
+  expect(await applied(12000), 'el fallo simulado es de una vez: aplicar otra vez termina aplicado');
   await page.keyboard.press('2'); await page.waitForTimeout(300);
   await sim('dof');
   expect(/profundidad de campo de vídeo está apagada/i.test(await txt('#banner')), 'con la DOF apagada sale el aviso de B3');
@@ -181,14 +190,14 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
   expect(await waitTxt('#colR', /No se puede armar[\s\S]*no_director/, 10000) && /No se puede armar/.test(await txt('#colR')) && !(await page.locator('#recBadge').isVisible()), 'sin director: no_director y la toma no se arma (#4)');
   await sim('director');
   await page.keyboard.press('1'); await page.waitForTimeout(200);
-  const world0 = await txt('#status');
+  const world0 = await page.getAttribute('#stWorld', 'title');
   await page.click('#bSim'); await page.waitForTimeout(150); await page.click('#menu [data-act="sim-reboot"]'); await page.keyboard.press('Escape');
-  expect(await waitTxt('#banner', /mundo nuevo/, 5000) && (await txt('#status')) !== world0, 'reinicio del servidor: aviso de mundo nuevo y otro epoch en la barra de estado (#10)');
+  expect(await waitTxt('#banner', /el mundo es nuevo/, 5000) && (await page.getAttribute('#stWorld', 'title')) !== world0, 'reinicio del servidor: aviso de mundo nuevo y otro epoch en la barra de estado, al pasar el ratón (#10)');
   await page.locator('#map').hover(); await page.keyboard.press('Control+Enter');
-  expect(await waitTxt('#bApply', /Volver a aplicar/, 12000) && !(await page.locator('#banner').isVisible()), 'aplicar en el mundo nuevo quita el aviso');
+  expect(await applied(12000) && !(await page.locator('#banner').isVisible()), 'aplicar en el mundo nuevo quita el aviso');
 
   // --- Atajos: conflicto con una de D4 y Reemplazar ---
-  await page.click('#bKeys'); await page.waitForTimeout(120);
+  await page.click('#bTools'); await page.waitForTimeout(120); await page.click('#menu [data-act="keys"]'); await page.waitForTimeout(120);
   await page.click('[data-act="key-set"][data-v="apply"]'); await page.keyboard.press('Enter'); await page.waitForTimeout(100);
   expect(/no puede quedarse sin tecla/.test(await txt('#kconf')), 'una tecla de D4 no se puede quitar');
   await page.click('#kconf [data-act="key-cancel"]');
@@ -248,27 +257,32 @@ const expect = (c, m) => { if (c) { passes++; console.log('PASS', m); } else { f
       for (const f of await p2.evaluate(audit)) low.add(`${label}: ${f}`);
       seen.push(label);
     };
-    const until = async (sel, re, ms) => p2.waitForFunction(([s, r]) => { const el = document.querySelector(s); return el && new RegExp(r).test(el.innerText); }, [sel, re.source], { timeout: ms }).then(() => true, () => false);
+    const until = async (sel, re, ms) => p2.waitForFunction(([s, r]) => { const el = document.querySelector(s); return el && el.getClientRects().length > 0 && new RegExp(r).test(el.innerText); }, [sel, re.source], { timeout: ms }).then(() => true, () => false);
+    const applied2 = async ms => p2.waitForFunction(() => { const d = document.querySelector('#docBtn'), a = document.querySelector('#bApply'); return /Sin cambios por aplicar/.test(d.innerText) && !a.disabled && !a.classList.contains('busy'); }, null, { timeout: ms }).then(() => true, () => false);
     const sim2 = async v => { await p2.click('#bSim'); await p2.waitForTimeout(120); await p2.click(`#menu [data-act="sim"][data-v="${v}"]`); await p2.keyboard.press('Escape'); await p2.waitForTimeout(150); };
     await p2.goto(URL); await p2.waitForTimeout(800);
     await check('escena');
+    await p2.click('[data-act="rtab"][data-v="add"]'); await check('añadir'); await p2.click('[data-act="rtab"][data-v="props"]');
+    await p2.click('#bLegend'); await check('leyenda'); await p2.click('#bLegend');
+    await p2.click('#bTools'); await p2.waitForTimeout(150); await check('herramientas'); await p2.keyboard.press('Escape');
+    await p2.click('#dock .strip');
     await p2.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p2.locator('#map').hover();
     await p2.keyboard.press('ArrowUp'); await p2.waitForTimeout(150); await p2.keyboard.press('Control+z'); await p2.waitForTimeout(150);
     await p2.click('[data-act="dtab"][data-v="historial"]'); await check('historial con rehacer');
     await p2.click('[data-act="dtab"][data-v="validacion"]'); await check('validación');
-    await p2.click('[data-act="dtab"][data-v="consola"]');
+    await p2.click('[data-act="dtab"][data-v="actividad"]');
     await p2.click('#bSim'); await p2.waitForTimeout(150); await check('menú del simulador'); await p2.keyboard.press('Escape');
     await p2.locator('#map').hover(); await p2.keyboard.press('Control+Enter'); await p2.waitForTimeout(600); await check('aplicando');
-    await until('#bApply', /Volver a aplicar/, 12000); await check('aplicada');
+    await applied2(12000); await check('aplicada');
     await sim2('fault'); await p2.locator('#map').hover(); await p2.keyboard.press('Control+Enter');
     const partial = await until('#dock .qrow', /Parcial/, 12000);
     if (partial) await p2.locator('#dock .chip.parcial').first().scrollIntoViewIfNeeded().catch(() => {});
     await check('fallo a mitad');
-    await p2.locator('#map').hover(); await p2.keyboard.press('Control+Enter'); await until('#bApply', /Volver a aplicar/, 12000);
+    await p2.locator('#map').hover(); await p2.keyboard.press('Control+Enter'); await applied2(12000);
     await sim2('backend'); await p2.waitForTimeout(300); await check('sin backend'); await sim2('backend');
     await p2.keyboard.press('2'); await p2.waitForTimeout(300); await check('rodaje');
-    await p2.keyboard.press('Shift+F9'); const armed = await until('#slateWrap', /Desarmar/, 6000); await check('armada');
-    await p2.keyboard.press('Enter'); const rolling = await until('#slateWrap', /Parar/, 1500); await p2.waitForTimeout(400); await check('rodando');
+    await p2.keyboard.press('Shift+F9'); const armed = await until('#bTopStop', /Desarmar/, 6000); await check('armada');
+    await p2.keyboard.press('Enter'); const rolling = await until('#bTopStop', /Parar/, 1500); await p2.waitForTimeout(400); await check('rodando');
     await p2.keyboard.press('Escape'); await until('#slateWrap', /Reaplicar y preparar la/, 2000); await check('parada');
     await p2.click('#bGuide'); await p2.waitForTimeout(400); await check('guía');
     await c2.close();
