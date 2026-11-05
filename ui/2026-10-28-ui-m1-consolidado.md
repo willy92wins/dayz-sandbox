@@ -299,7 +299,7 @@ Hecha el 2026-11-04 sobre el prototipo con las mejoras AHORA (`10274b7`): [infor
 
 - AR-01: tras un corte en plena toma, la Guía y los Atajos tapaban «Parada sin confirmar». Ahora la toma sigue abierta hasta que una lectura confirma la parada.
 - AR-02: salía «Nada en el juego» sin lectura, mientras se aplicaba o tras un corte. Ahora dice que falta la lectura.
-- AR-03: los números de la rejilla bajaban a 2:1 sobre los edificios. Ahora van sobre una placa opaca, y CU-38 mira también el texto del mapa.
+- AR-03: los números de la rejilla bajaban a 2:1 sobre los edificios. Ahora van sobre una placa opaca, y CU-38 mira también el texto del mapa, en todos los píxeles de cada letra. Una segunda medida en Windows encontró un hueco del halo dentro del «·»; ahora el halo se pinta como imagen (§7 de la lista).
 - AR-04: dos pruebas leían contadores de la propia página. Ahora leen lo que se pinta, y cuatro mutantes comprueban que fallan cuando el dibujo se rompe.
 - AR-05: textos de Tomas a 10 px. Ahora a 12.
 - AR-06: «Ver» dejaba el campo del error oculto detrás de Añadir. Ahora abre Propiedades con el campo a la vista y con el foco.
@@ -330,6 +330,7 @@ Quedan para su siguiente revisión la segunda pasada (UX-18, UX-33 y UX-15) y es
 - `node ui/prototipo/mutantes.js`: el control da 8 de 8 y los cuatro mutantes hacen fallar su caso, con código de salida 0.
 - `node ui/prototipo/pruebas.js`: 64 de 64, con código de salida 0.
 - La sonda del lienzo reproduce las medidas de Astra: el «6150» de antes, sobre un edificio, da 2,03:1 en oscuro y 2,21:1 en claro.
+- Segunda medida, antes de la segunda ronda de Astra: en Windows, AR-03 + fallaba con el margen del 98 % por un hueco del halo dentro del «·», y la prueba de la barra no veía que las zonas se movían. Con el halo como imagen, la sonda sin margen y el criterio de no moverse, `pruebas-mejoras.js` sigue en 66 de 66, y contra `9d1a644` da 64 de 66 (falla AR-03 + en los dos temas). El detalle está en la §7 de la lista.
 - Barra de estado a 1024, 1093, 1280, 1366, 1440 y 1600 px, con y sin backend, y a 390 px, con el cursor en 24 puntos del mapa: nada se pisa ni se sale. A 1024 y 1093 px, y sin backend a 1280, pasa a dos líneas.
 - Capturas revisadas a mano: la página entera a 1280 × 800 en oscuro y a 1440 × 900 en claro, y la barra de estado en cada ancho.
 - Fallos que encontraron las pruebas y ya están arreglados: en la segunda pasada, un bloque de la Guía dentro del fondo de los diálogos, que anulaba los atajos, y la ayuda nueva, que tapaba los botones del mapa; después, la barra de estado, que a 1280 px pisaba sus zonas y a 1024 sacaba «MCP apagado» del borde.

@@ -1416,7 +1416,7 @@ function drawMap() {
   // los números, sobre una placa opaca del color del halo de las etiquetas, que también es opaco: se leen encima de edificios y bosque (CU-38, AR-03)
   nums.forEach(([t, x, y]) => { g.fillStyle = P.halo; g.fillRect(x - 2, y - 11, g.measureText(t).width + 4, 14); g.fillStyle = P.label; g.fillText(t, x, y); });
   // pueblos, en minúscula normal (UX-09)
-  if (V.s < 1.2) { g.textAlign = 'center'; g.font = `600 12px ${FONT_UI}`; TOWNS.forEach(t => { const [x, y] = w2s(t[1], t[2]); if (x < -80 || y < -20 || x > V.w + 80 || y > V.h + 20) return; const label = t[0]; g.lineWidth = 3; g.strokeStyle = P.halo; g.strokeText(label, x, y); g.fillStyle = P.label; g.fillText(label, x, y); }); g.textAlign = 'left'; }
+  if (V.s < 1.2) { g.textAlign = 'center'; g.font = `600 12px ${FONT_UI}`; TOWNS.forEach(t => { const [x, y] = w2s(t[1], t[2]); if (x < -80 || y < -20 || x > V.w + 80 || y > V.h + 20) return; const label = t[0]; halo(g, label, x, y); g.fillStyle = P.label; g.fillText(label, x, y); }); g.textAlign = 'left'; }
   LBL.length = 0; drawScene(g);
   updateScale();
 }
@@ -1443,8 +1443,18 @@ function label(g, txt, x, y, strong, must) {
   for (const dy of [0, 14, -14, 28]) if (!hit([x - 2, y + dy - 11, w, h])) { py = y + dy; break; }
   if (py === null) { if (!(strong || must)) return; py = y; }
   LBL.push([x - 2, py - 11, w, h]);
-  // halo opaco de 4 px: ningún píxel de la letra queda sobre el mapa (CU-38, AR-03)
-  g.lineWidth = 4; g.strokeStyle = P.halo; g.strokeText(txt, x, py); g.fillStyle = P.label; g.fillText(txt, x, py);
+  halo(g, txt, x, py); g.fillStyle = P.label; g.fillText(txt, x, py);
+}
+// Halo opaco de 2 px alrededor de la letra, para que ningún píxel suyo quede sobre el mapa (CU-38, AR-03). Se pinta como imagen, con la
+// letra repetida alrededor: strokeText solo traza el contorno, y dentro de los puntos pequeños («·», el punto de la «i») no dejaba halo.
+// Su lienzo va dentro de la página, oculto: uno suelto elige en Chromium otra variante de la letra, más estrecha, y el halo no casaría.
+const haloCv = document.body.appendChild(Object.assign(document.createElement('canvas'), { hidden: true })), haloG = haloCv.getContext('2d');
+function halo(g, txt, x, y) {
+  const m = g.measureText(txt), d = V.dpr, r = 2, L = Math.ceil(m.actualBoundingBoxLeft) + r + 1, A = Math.ceil(m.actualBoundingBoxAscent) + r + 1;
+  haloCv.width = Math.ceil((L + Math.ceil(m.actualBoundingBoxRight) + r + 1) * d); haloCv.height = Math.ceil((A + Math.ceil(m.actualBoundingBoxDescent) + r + 1) * d);
+  haloG.setTransform(d, 0, 0, d, 0, 0); haloG.font = g.font; haloG.textAlign = g.textAlign; haloG.textBaseline = g.textBaseline; haloG.fillStyle = P.halo;
+  for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) if (dx * dx + dy * dy <= r * r + 1) haloG.fillText(txt, L + dx, A + dy);
+  g.drawImage(haloCv, x - L, y - A, haloCv.width / d, haloCv.height / d);
 }
 function ring(g, x, y, r) { g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.lineWidth = 4; g.strokeStyle = 'rgba(0,0,0,.35)'; g.stroke(); g.lineWidth = 2.4; g.strokeStyle = MC.sel; g.stroke(); }
 // candado dibujado, no un emoji (UX-09)

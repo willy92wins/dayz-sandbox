@@ -27,38 +27,44 @@ const LIB = () => {
   };
   window.__r26 = { shown, vis, texts, metrics };
 };
-// Sonda del lienzo del mapa: cada texto pintado con su tamaño en px de CSS y el contraste de cada píxel de la letra contra lo que ya
-// estaba pintado debajo; y cada trazo y relleno con su posición, su discontinuo y su grosor. Solo graba cuando __cv.on.
+// Sonda del lienzo del mapa: cada texto pintado (con fillText o strokeText) con su tamaño en px de CSS y, en cada píxel de su letra,
+// el contraste de WCAG entre el color del texto y lo que ya estaba pintado debajo. La letra es la que pinta el propio lienzo: antes
+// de pintarla se pinta una vez en blanco y otra en negro, la diferencia dice cuánto cubre cada píxel, y se deja el fondo como estaba.
+// Cuenta como letra cada píxel cubierto al menos a la mitad. Y cada trazo y relleno con su posición, su discontinuo y su grosor.
+// Solo graba cuando __cv.on.
 const PROBE = () => {
-  const P = CanvasRenderingContext2D.prototype, fillText0 = P.fillText, stroke0 = P.stroke, fill0 = P.fill;
+  const P = CanvasRenderingContext2D.prototype, fillText0 = P.fillText, strokeText0 = P.strokeText, stroke0 = P.stroke, fill0 = P.fill;
   const cv = window.__cv = { on: false, texts: [], strokes: [], fills: [] }, cache = {};
   const rgba = c => cache[c] || (cache[c] = (() => { const o = new OffscreenCanvas(1, 1).getContext('2d'); o.fillStyle = c; o.fillRect(0, 0, 1, 1); return Array.from(o.getImageData(0, 0, 1, 1).data); })());
   const lin = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
   const lum = c => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
   const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
   const mine = ctx => cv.on && ctx.canvas && ctx.canvas.id === 'map';
-  P.fillText = function (txt, x, y) {
-    if (mine(this)) {
-      const t = String(txt), T = this.getTransform(), m = this.measureText(t), dpr = this.canvas.width / this.canvas.clientWidth;
-      const rec = { text: t, px: Math.round(parseFloat((this.font.match(/([\d.]+)px/) || [0, 0])[1]) * T.a / dpr * 10) / 10, n: 0, low: 0, min: null };
-      const x0 = Math.max(0, Math.floor(T.a * (x - m.actualBoundingBoxLeft) + T.e)), y0 = Math.max(0, Math.floor(T.d * (y - m.actualBoundingBoxAscent) + T.f));
-      const w = Math.min(this.canvas.width, Math.ceil(T.a * (x + m.actualBoundingBoxRight) + T.e)) - x0, h = Math.min(this.canvas.height, Math.ceil(T.d * (y + m.actualBoundingBoxDescent) + T.f)) - y0;
-      if (w > 0 && h > 0) {
-        const oc = new OffscreenCanvas(w, h).getContext('2d');
-        oc.setTransform(T.a, T.b, T.c, T.d, T.e - x0, T.f - y0); oc.font = this.font; oc.textAlign = this.textAlign; oc.textBaseline = this.textBaseline; oc.fillText(t, x, y);
-        const mask = oc.getImageData(0, 0, w, h).data, bg = this.getImageData(x0, y0, w, h).data, ink = rgba(String(this.fillStyle)), a = ink[3] / 255;
-        let min = 99;
-        for (let i = 0; i < mask.length; i += 4) {
-          if (mask[i + 3] < 200) continue;
-          const b = [bg[i], bg[i + 1], bg[i + 2]], r = ratio([0, 1, 2].map(k => ink[k] * a + b[k] * (1 - a)), b);
-          rec.n++; if (r < 4.5) rec.low++; if (r < min) min = r;
-        }
-        if (rec.n) rec.min = Math.round(min * 100) / 100;
+  const probe = (ctx, draw, style, args) => {
+    const t = String(args[0]), x = args[1], y = args[2], T = ctx.getTransform(), m = ctx.measureText(t), dpr = ctx.canvas.width / ctx.canvas.clientWidth;
+    const rec = { text: t, px: Math.round(parseFloat((ctx.font.match(/([\d.]+)px/) || [0, 0])[1]) * T.a / dpr * 10) / 10, n: 0, low: 0, min: null };
+    const pad = Math.ceil(ctx.lineWidth * Math.abs(T.a)) + 2;
+    const x0 = Math.max(0, Math.floor(T.a * (x - m.actualBoundingBoxLeft) + T.e) - pad), y0 = Math.max(0, Math.floor(T.d * (y - m.actualBoundingBoxAscent) + T.f) - pad);
+    const w = Math.min(ctx.canvas.width, Math.ceil(T.a * (x + m.actualBoundingBoxRight) + T.e) + pad) - x0, h = Math.min(ctx.canvas.height, Math.ceil(T.d * (y + m.actualBoundingBoxDescent) + T.f) + pad) - y0;
+    if (w > 0 && h > 0) {
+      const under = ctx.getImageData(x0, y0, w, h), bg = under.data;
+      ctx.save(); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowColor = 'transparent'; ctx.filter = 'none';
+      ctx[style] = '#fff'; draw.apply(ctx, args); const wh = ctx.getImageData(x0, y0, w, h).data; ctx.putImageData(under, x0, y0);
+      ctx[style] = '#000'; draw.apply(ctx, args); const bk = ctx.getImageData(x0, y0, w, h).data; ctx.putImageData(under, x0, y0);
+      ctx.restore();
+      const ink = rgba(String(ctx[style])), a = ink[3] / 255 * ctx.globalAlpha;
+      let min = 99;
+      for (let i = 0; i < bg.length; i += 4) {
+        if (wh[i] - bk[i] + wh[i + 1] - bk[i + 1] + wh[i + 2] - bk[i + 2] < 383) continue;
+        const b = [bg[i], bg[i + 1], bg[i + 2]], r = ratio([0, 1, 2].map(k => ink[k] * a + b[k] * (1 - a)), b);
+        rec.n++; if (r < 4.5) rec.low++; if (r < min) min = r;
       }
-      cv.texts.push(rec);
+      if (rec.n) rec.min = Math.round(min * 100) / 100;
     }
-    return fillText0.apply(this, arguments);
+    cv.texts.push(rec);
   };
+  P.fillText = function () { if (mine(this)) probe(this, fillText0, 'fillStyle', arguments); return fillText0.apply(this, arguments); };
+  P.strokeText = function () { if (mine(this)) probe(this, strokeText0, 'strokeStyle', arguments); return strokeText0.apply(this, arguments); };
   const at = (ctx, kind) => { const T = ctx.getTransform(), dpr = ctx.canvas.width / ctx.canvas.clientWidth; return { kind, x: Math.round(T.e / dpr), y: Math.round(T.f / dpr), dash: ctx.getLineDash().join(','), lw: ctx.lineWidth }; };
   P.stroke = function () { if (mine(this)) cv.strokes.push(at(this, 'stroke')); return stroke0.apply(this, arguments); };
   P.fill = function () { if (mine(this)) cv.fills.push(at(this, 'fill')); return fill0.apply(this, arguments); };
@@ -104,8 +110,8 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     await p.setViewportSize(vs); await p.waitForTimeout(300);
     return p.evaluate(() => { const cv = window.__cv; cv.on = false; return { texts: cv.texts, strokes: cv.strokes, fills: cv.fills }; });
   };
-  // contraste de lo pintado en el mapa: cada texto, con al menos el 98 % de los píxeles de su letra a 4,5:1 o más
-  const lowTexts = f => f.texts.filter(t => t.n && t.low / t.n > 0.02);
+  // contraste de lo pintado en el mapa: cada texto, con todos los píxeles de su letra a 4,5:1 o más
+  const lowTexts = f => f.texts.filter(t => t.low > 0);
   const showLow = l => l.slice(0, 4).map(t => `«${t.text}» ${t.min}:1 en ${t.low} de ${t.n} px`).join(' · ');
   const mapPct = p => p.evaluate(() => { const r = document.querySelector('#map').getBoundingClientRect(); return Math.round(r.width * r.height / (innerWidth * innerHeight) * 100); });
 
@@ -455,7 +461,8 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const st = await T(p, '#status'), town = TOWNS.find(t => st.includes(t[0]));
     return [['UX-33 − con el cursor fuera del mapa, la barra dice «X — · Z —» y ningún pueblo', /X — · Z —/.test(st) && !town, `barra: ${st.slice(0, 160)}`]];
   });
-  // UX-33: las zonas de la barra no se pisan ni se salen del borde, con el cursor en cualquier punto del mapa; «MCP apagado» se ve entero (CU-35)
+  // UX-33: las zonas de la barra no se pisan ni se salen del borde, con el cursor en cualquier punto del mapa; «MCP apagado» se ve entero (CU-35).
+  // Y no se mueven al pasar el cursor: se mide dónde empieza cada zona respecto de las coordenadas, para que la edad de las luces no cuente.
   const zones = p => p.evaluate(() => {
     const st = document.querySelector('#status'), sr = st.getBoundingClientRect(), cs = getComputedStyle(st);
     const lo = sr.left + parseFloat(cs.paddingLeft) - 0.5, hi = sr.right - parseFloat(cs.paddingRight) + 0.5;
@@ -463,25 +470,28 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const z = els.map(e => { const r = document.createRange(); r.selectNodeContents(e); const q = r.getBoundingClientRect(); return { t: e.textContent.replace(/\s+/g, ' ').trim().slice(0, 24), l: q.left, r: q.right, y: q.top + q.height / 2 }; });
     const bad = z.filter(a => a.l < lo || a.r > hi).map(a => `«${a.t}» se sale`);
     z.forEach(a => z.forEach(b => { if (a !== b && Math.abs(a.y - b.y) < 6 && b.l >= a.l && b.l - a.r < 6) bad.push(`«${a.t}» y «${b.t}» a ${Math.round(b.l - a.r)} px`); }));
-    const m = z.find(a => /MCP apagado/.test(a.t));
-    return { bad, h: Math.round(sr.height), mcp: !!m && m.r <= hi };
+    const m = z.find(a => /MCP apagado/.test(a.t)), x0 = document.querySelector('#cursorXY').getBoundingClientRect().left, pos = {};
+    els.forEach(e => { pos[e.id || e.parentElement.id + ':' + [...e.parentElement.children].indexOf(e)] = [e.textContent.replace(/\s+/g, ' ').trim().slice(0, 24), e.getBoundingClientRect().left - x0]; });
+    return { bad, h: Math.round(sr.height), mcp: !!m && m.r <= hi, pos };
   });
   const sweep = async p => {
-    const b = await p.locator('#map').boundingBox(), bad = new Set(), hs = new Set(); let mcp = true;
+    const b = await p.locator('#map').boundingBox(), bad = new Set(), hs = new Set(), span = {}; let mcp = true;
     for (let i = 0; i < 6; i++) for (let j = 0; j < 4; j++) {
       await p.mouse.move(b.x + b.width * (0.05 + i * 0.18), b.y + b.height * (0.08 + j * 0.28)); await p.waitForTimeout(25);
       const r = await zones(p); r.bad.forEach(x => bad.add(x)); hs.add(r.h); mcp = mcp && r.mcp;
+      Object.entries(r.pos).forEach(([k, [t, x]]) => { const o = span[k] || (span[k] = { t, lo: x, hi: x }); o.lo = Math.min(o.lo, x); o.hi = Math.max(o.hi, x); });
     }
-    return { bad: [...bad], hs: [...hs], mcp };
+    const moved = Object.values(span).filter(o => o.hi - o.lo > 1).map(o => `«${o.t}» se mueve ${Math.round(o.hi - o.lo)} px`);
+    return { bad: [...bad], hs: [...hs], mcp, moved };
   };
   await R26('UX-33 + barra', async p => {
     const out = []; let ok = true;
     for (const [w, h] of [[1280, 800], [1366, 768]]) {
       await p.setViewportSize({ width: w, height: h }); await p.waitForTimeout(200);
-      const r = await sweep(p); ok = ok && !r.bad.length && r.mcp && r.hs.length === 1 && r.hs[0] <= 30;
-      out.push(`${w} px: alto ${r.hs.join('/')} px · ${r.bad.length ? r.bad.slice(0, 3).join(' · ') : 'nada se pisa'} · MCP apagado ${r.mcp ? 'entero' : 'cortado'}`);
+      const r = await sweep(p); ok = ok && !r.bad.length && !r.moved.length && r.mcp && r.hs.length === 1 && r.hs[0] <= 30;
+      out.push(`${w} px: alto ${r.hs.join('/')} px · ${r.bad.length ? r.bad.slice(0, 3).join(' · ') : 'nada se pisa'} · ${r.moved.length ? r.moved.slice(0, 3).join(' · ') : 'nada se mueve'} · MCP apagado ${r.mcp ? 'entero' : 'cortado'}`);
     }
-    return [['UX-33 + a 1280 × 800 y 1366 × 768, con el cursor en 24 puntos del mapa, la barra de estado es una línea que no cambia de alto, sus zonas no se pisan y «MCP apagado» se ve entero', ok, out.join(' · ')]];
+    return [['UX-33 + a 1280 × 800 y 1366 × 768, con el cursor en 24 puntos del mapa, la barra de estado es una línea que no cambia de alto, sus zonas no se pisan ni se mueven y «MCP apagado» se ve entero', ok, out.join(' · ')]];
   }, 1280, 800);
   await R26('UX-33 − barra', async p => {
     const out = []; let ok = true;
@@ -611,13 +621,14 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
       await p.click('#colL [data-act="sel"][data-v="ent:act-mirek"]'); await p.waitForTimeout(200); await look('Mirek');
       for (let i = 0; i < 4; i++) { await p.click('#bZout'); await p.waitForTimeout(120); } await look('alejado');
       await p.keyboard.press('Escape'); await p.keyboard.press('2'); await p.waitForTimeout(300); await look('Rodaje');
-      return [[`AR-03 + en tema ${scheme === 'dark' ? 'oscuro' : 'claro'}, a 1366 × 768, cada texto pintado en el mapa (números de la rejilla, pueblos y etiquetas) llega a 4,5:1 en al menos el 98 % de los píxeles de su letra`, !bad.length, out.join(' · ')]];
+      return [[`AR-03 + en tema ${scheme === 'dark' ? 'oscuro' : 'claro'}, a 1366 × 768, cada texto pintado en el mapa (números de la rejilla, pueblos y etiquetas) llega a 4,5:1 en todos los píxeles de su letra`, !bad.length, out.join(' · ')]];
     }, 1366, 768, scheme);
   }
   await R26('AR-03 −', async p => {
     // la sonda no da por bueno lo que fallaba: el número pintado como antes (tinta translúcida sobre el gris de un edificio) sale por debajo de 4,5:1
-    const r = await p.evaluate(() => { const c = document.querySelector('#map'), g = c.getContext('2d'), d = c.width / c.clientWidth; window.__cv.texts = []; window.__cv.on = true; g.save(); g.setTransform(d, 0, 0, d, 0, 0); g.fillStyle = 'rgb(88,83,74)'; g.fillRect(40, 40, 60, 20); g.font = '500 12px monospace'; g.fillStyle = 'rgba(25,25,15,.8)'; g.fillText('6150', 44, 54); g.restore(); window.__cv.on = false; return window.__cv.texts[0]; });
-    return [['AR-03 − la sonda detecta un número de la rejilla pintado como antes, sin placa, sobre un edificio', !!r && r.n > 0 && r.min < 4.5 && r.low === r.n, r ? `«${r.text}» ${r.min}:1 en ${r.low} de ${r.n} px` : 'la sonda no vio el texto']];
+    const r = await p.evaluate(() => { const c = document.querySelector('#map'), g = c.getContext('2d'), d = c.width / c.clientWidth; window.__cv.texts = []; window.__cv.on = true; g.save(); g.setTransform(d, 0, 0, d, 0, 0); g.fillStyle = 'rgb(88,83,74)'; g.fillRect(40, 40, 60, 20); g.font = '500 12px monospace'; g.fillStyle = 'rgba(25,25,15,.8)'; g.fillText('6150', 44, 54); g.fillStyle = 'rgb(88,83,74)'; g.fillRect(40, 66, 60, 20); g.lineWidth = 1; g.strokeStyle = 'rgba(25,25,15,.8)'; g.strokeText('6250', 44, 80); g.restore(); window.__cv.on = false; return window.__cv.texts; });
+    const [f, s] = r || [], ok = t => !!t && t.n > 0 && t.min < 4.5 && t.low === t.n, see = t => t ? `«${t.text}» ${t.min}:1 en ${t.low} de ${t.n} px` : 'la sonda no lo vio';
+    return [['AR-03 − la sonda detecta un número de la rejilla pintado como antes, sin placa, sobre un edificio, también si se pinta con strokeText', ok(f) && ok(s), `fillText ${see(f)} · strokeText ${see(s)}`]];
   });
   // «Ver» se busca por la fila de su error, que es igual en la versión de antes
   const ver = (p, code) => p.locator('#dock .vrow', { hasText: code }).locator('[data-act="val-go"]').first().click();
