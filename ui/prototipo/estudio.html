@@ -511,7 +511,10 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
 @media (max-width: 900px){
   body{overflow:auto}
   #app{height:auto;min-height:100%;grid-template-rows:auto auto auto}
-  .top{flex-wrap:wrap;padding-block:6px}
+  /* la página se desplaza, pero la barra de arriba, con Parar, y la de estado, con MCP, se quedan a la vista, y los avisos van encima
+     de la de estado, que cambia de alto al partirse en líneas (B5, CU-35, AR2-02) */
+  .top{flex-wrap:wrap;padding-block:6px;position:sticky;top:0;z-index:20}
+  .mapstack{position:fixed;bottom:calc(var(--sth, 40px) + 10px);z-index:20}
   .top .grow{display:none}
   .ws,.ws.swap{display:flex;flex-direction:column;gap:1px}
   .split,.hsep{display:none}
@@ -526,7 +529,7 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
   .qrow .age{text-align:left}
   .vrow{grid-template-columns:1fr}
   .vrow .vc{align-items:flex-start}
-  .status{flex-wrap:wrap;height:auto;padding-block:6px;white-space:normal}
+  .status{flex-wrap:wrap;height:auto;padding-block:6px;white-space:normal;position:sticky;bottom:0;z-index:20}
   .hint{max-width:calc(100% - 70px)}
   .ovl.tr{flex-direction:column}
   .types div{grid-template-columns:1fr;gap:4px}
@@ -638,7 +641,7 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
     <h2>Acerca del diseño</h2>
     <p><span class="tag">Consolidados de Claude y Astra · 2026-10-28 y 2026-11-04</span></p>
     <p>Cada parte de la interfaz está copiada de un juego o un editor que ya funciona, y la tabla de referentes dice de cuál y con qué fuente. Manda primero lo que el creador de DayZ ya conoce (DayZ Editor), después los editores de Bohemia (Eden, Zeus y Reforger), luego las herramientas de cine en juegos, después los editores generales y, para la toma, el transporte de un DAW y el Studio Mode de OBS.</p>
-    <p>Lo único propio es lo que ningún referente necesita porque solo existe aquí: saber qué está de verdad en el juego. Va marcado como propio y apoyado en el patrón conocido más cercano.</p>
+    <p>Lo propio va marcado así en la tabla y apoyado en el patrón conocido más cercano. Es de dos clases: lo que ningún referente necesita porque solo existe aquí, como saber qué está de verdad en el juego, y lo que se adapta a esta web aunque el patrón venga de fuera, como la rueda que gira lo elegido, la letra, la paleta y el paso de cada tecla.</p>
     <p>El estudio junta dos diseños hechos a ciegas, el de Claude y el de Astra, y la revisión de noviembre suma cinco críticas también a ciegas: Claude, Astra, Grok, Muse y Gemini 4. La columna «Propuso» dice de dónde sale cada parte; cuando chocaban, ganó el referente de prioridad más alta y, si no, lo que pide el spec.</p>
 
     <h3>Referentes</h3>
@@ -1285,6 +1288,14 @@ function stopTake() {
   if (S.take.state === 'armada' || S.take.state === 'preparando') { S.take.state = 'idle'; S.take.checks = []; toast('Toma desarmada. No se ha rodado nada.'); renderAll(); return true; }
   return false;
 }
+// La tecla «Parar toma» de tu juego (UX-46): con la toma armada, la desarma; rodando, la para, y la parada dice que fue desde tu juego.
+// Sin conexión no llega a la web, que no da nada por parado sin leerlo: lo pendiente sigue pendiente hasta volver a leer (AR2-06)
+function gameStop() {
+  if (!takeActive()) return;
+  if (!S.sim.backend || !S.sim.server || !S.sim.director) return toast(`En tu juego se pulsó «Parar toma», pero no llega a la web porque se perdió ${lostPeer()}. El mod ya para solo por seguridad; la web lo confirmará al volver la conexión y leer el juego.`);
+  if (S.take.state === 'armada' || S.take.state === 'preparando') { S.take.state = 'idle'; S.take.checks = []; toast('Toma desarmada desde tu juego. No se ha rodado nada.'); return renderAll(); }
+  endTake('parada', `Parada desde tu juego a los ${nf(S.take.t, 1)} s, con la tecla «Parar toma».`, 'juego');
+}
 function resetAndPrepare() { applyScene(() => setTimeout(prepareTake, 300)); }
 
 /* =========================================================
@@ -1444,7 +1455,8 @@ function drawGlyph(g, kind, x, y, yaw, style) {
   else if (kind === 'animal') { g.moveTo(0, -8.75); g.lineTo(7.5, 0); g.lineTo(0, 8.75); g.lineTo(-7.5, 0); g.closePath(); }
   else g.arc(0, 0, 8.75, 0, Math.PI * 2);
   if (style === 'est') { g.fillStyle = hatch(col); g.fill(); g.lineWidth = 1.9; g.strokeStyle = col; g.stroke(); }
-  else if (style === 'draft') { g.fillStyle = 'rgba(255,255,255,.6)'; g.fill(); g.setLineDash([3, 2]); g.lineWidth = 1.9; g.strokeStyle = col; g.stroke(); g.setLineDash([]); }
+  // con extremos planos: los redondos que dejan puestos las carreteras alargaban cada guion y cerraban sus huecos de 2 px a 0,1 px (AR2-01)
+  else if (style === 'draft') { g.fillStyle = 'rgba(255,255,255,.6)'; g.fill(); g.setLineDash([3, 2]); g.lineCap = 'butt'; g.lineWidth = 1.9; g.strokeStyle = col; g.stroke(); g.setLineDash([]); }
   else { g.fillStyle = col; g.fill(); g.lineWidth = 3.2; g.strokeStyle = 'rgba(20,20,14,.75)'; g.stroke(); g.lineWidth = 1.5; g.strokeStyle = 'rgba(255,255,255,.95)'; g.stroke(); }
   g.restore();
   if (style !== 'ghost') { const a = yaw * Math.PI / 180, r0 = kind === 'actor' ? 8.75 : 7.5, r1 = r0 + 6; g.beginPath(); g.moveTo(x + Math.sin(a) * r0, y - Math.cos(a) * r0); g.lineTo(x + Math.sin(a) * r1, y - Math.cos(a) * r1); g.lineCap = 'round'; g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.stroke(); }
@@ -1698,6 +1710,8 @@ function wheelTurn(ev, hit) {
   return true;
 }
 canvas.addEventListener('wheel', ev => {
+  // con Ctrl o Cmd la rueda amplía la página en el navegador: ni gira lo elegido ni acerca el mapa, y no se cancela (AR2-04)
+  if (ev.ctrlKey || ev.metaKey) return;
   ev.preventDefault();
   const [px, py] = local(ev), [wx, wz] = s2w(px, py);
   if (wheelTurn(ev, hitTest(px, py))) return;
@@ -2109,8 +2123,8 @@ function renderDock() {
   const cur = S.ws === 'escena' ? S.dtab : S.rdtab;
   let tools = '';
   if (cur === 'actividad') tools = ['todas', 'activas', 'fallos'].map(f => `<button class="btn sm ${S.qf === f ? '' : 'ghost'}" data-act="qf" data-v="${f}">${{todas: 'Todas', activas: 'En curso', fallos: 'Fallos'}[f]}</button>`).join('');
-  // «Previsualizar» mueve solo la cámara del mapa y no se parece a Rodar (UX-11)
-  if (cur === 'timeline') tools = `<button class="ib" data-act="tl-start" aria-label="Ir al principio">${ic('start')}</button><button class="ib" data-act="tl-prev" aria-label="Clave anterior">${ic('pkey')}</button><button class="btn sm" data-act="tl-play" ${['rodando', 'parando'].includes(S.take.state) ? 'disabled' : ''}>${S.preview ? 'Pausar' : 'Previsualizar'}</button><button class="ib" data-act="tl-next" aria-label="Clave siguiente">${ic('nkey')}</button><button class="ib" data-act="tl-end" aria-label="Ir al final">${ic('end')}</button><span class="mono" style="font-size:12px;color:var(--muted);margin-left:6px" id="tlTime">${tc(camTime())}</span><span class="tlnote">Mueve solo la cámara del mapa; no toca el juego ni los actores</span>`;
+  // «Previsualizar» mueve en el mapa la cámara y los actores estimados, no el juego, y no se parece a Rodar (UX-11, AR2-07)
+  if (cur === 'timeline') tools = `<button class="ib" data-act="tl-start" aria-label="Ir al principio">${ic('start')}</button><button class="ib" data-act="tl-prev" aria-label="Clave anterior">${ic('pkey')}</button><button class="btn sm" data-act="tl-play" ${['rodando', 'parando'].includes(S.take.state) ? 'disabled' : ''}>${S.preview ? 'Pausar' : 'Previsualizar'}</button><button class="ib" data-act="tl-next" aria-label="Clave siguiente">${ic('nkey')}</button><button class="ib" data-act="tl-end" aria-label="Ir al final">${ic('end')}</button><span class="mono" style="font-size:12px;color:var(--muted);margin-left:6px" id="tlTime">${tc(camTime())}</span><span class="tlnote">Vista previa de cámara y actores estimados; no mueve el juego</span>`;
   const bar = `<div class="dockbar${cur === 'timeline' ? ' transport' : ''}"${cur === 'actividad' ? ' data-ref="Filtros de la Log Console: World Editor de Reforger"' : cur === 'timeline' ? ' data-ref="Transporte del Sequencer de Unreal"' : ''}>${tools}<button class="ib" data-act="dock" data-v="close" aria-label="Plegar el panel" title="Plegar el panel">${ic('chev')}</button></div>`;
   let body = '';
   if (cur === 'actividad') {
@@ -2244,6 +2258,8 @@ function closeMenu() { $('#menu').hidden = true; menuFor = null; }
 const docEntry = key => S.docs.find(d => d.key === key);
 const otherName = () => S.other ? docEntry(S.other.key).doc.name : '';
 const docBlock = () => takeActive() || S.applying || S.take.unconfirmed ? 'Para o desarma la toma, o espera a la orden en curso, antes de cambiar de escena.' : '';
+// crear una escena es guardar un documento nuevo: sin backend no se puede, como cualquier otro cambio (CU-37, AR2-03)
+const newBlock = () => offline() ? 'Sin conexión con el backend no se crean escenas, porque no se podrían guardar. Las de la lista se pueden abrir para consultarlas.' : docBlock();
 const docItems = () => S.docs.slice().reverse().map(d => `<button class="mi" data-act="doc-open" data-v="${d.key}" ${docBlock() && d.key !== S.cur ? 'disabled' : ''}>${esc(d.doc.name)} <span class="k" style="color:var(--muted);font-size:12px">${d.key === S.cur ? 'abierta' : ''}${(S.world && d.key === S.cur) || (S.other && S.other.key === d.key) ? `${d.key === S.cur ? ' · ' : ''}en el juego` : ''}</span></button>`).join('');
 function openMenuDocs(anchor) { openMenu(anchor, `<h5>Abrir escena</h5>${docItems()}${docBlock() ? `<div class="note">${docBlock()}</div>` : ''}`); }
 function openDoc(key) {
@@ -2262,7 +2278,7 @@ function openDoc(key) {
   closeMenu(); fit(); renderAll();
 }
 function newDoc() {
-  if (docBlock()) return toast(docBlock());
+  if (newBlock()) return toast(newBlock());
   const used = S.docs.filter(d => /^Escena sin título/.test(d.doc.name)).length, key = 'd' + (S.docs.length + 1);
   // vacía, con la cámara de serie en el centro del mapa: una escena siempre tiene al menos una cámara
   const doc = {name: 'Escena sin título' + (used ? ' ' + (used + 1) : ''), rev: 1, ambiente: clone(DOC14.ambiente), entities: [], cameras: [{id: 'cam-1', name: 'Cámara 1', keys: [{t: 0, x: +V.cx.toFixed(1), y: 2, z: +V.cz.toFixed(1), yaw: 0, pitch: -5, fov: 50, focus: 10}]}]};
@@ -2270,9 +2286,9 @@ function newDoc() {
   openDoc(key);
 }
 function sceneMenu(anchor) {
-  const dis = docBlock() ? 'disabled' : '';
+  const dis = docBlock() ? 'disabled' : '', why = newBlock();
   openMenu(anchor, `<h5>Escena</h5>
-    <button class="mi" data-act="m-new" ${dis}>Nueva escena</button>
+    <button class="mi" data-act="m-new" ${why ? 'disabled' : ''}>Nueva escena</button>
     <button class="mi" data-act="m-open" ${dis}>Abrir… <kbd class="k">Ctrl+O</kbd></button>
     <h5>Recientes</h5>
     ${docItems()}
@@ -2281,7 +2297,7 @@ function sceneMenu(anchor) {
     <button class="mi" data-act="m-saveas">Guardar como… <kbd class="k">Ctrl+Mayús+S</kbd></button>
     <button class="mi" data-act="reload">Recargar desde disco</button>
     <button class="mi" data-act="m-export">Exportar el JSON de la escena</button>
-    <div class="note">Mismo orden que el menú File del DayZ Editor. Nueva escena va sin tecla porque Ctrl+N lo atiende el navegador antes que la web.${docBlock() ? ' ' + docBlock() : ''}</div>`);
+    <div class="note">Mismo orden que el menú File del DayZ Editor. Nueva escena va sin tecla porque Ctrl+N lo atiende el navegador antes que la web.${why ? ' ' + why : ''}</div>`);
 }
 const LAYOUTS = {
   director: {name: 'De fábrica', c1: 256, c3: 320, bh: 220, ph: 50, swap: false, nl: false, nr: false, both: false, de: false, dr: true},
@@ -2343,7 +2359,7 @@ function gridMenu(anchor) {
 }
 function simMenu(anchor) {
   const t = (k, label) => `<button class="mi" data-act="sim" data-v="${k}"><input type="checkbox" ${S.sim[k] ? 'checked' : ''} tabindex="-1"> ${label}</button>`;
-  openMenu(anchor, `<h5>Simular el juego · solo en el prototipo</h5>${t('backend', 'Backend de la web en marcha')}${t('server', 'Servidor conectado')}${t('director', 'Tu juego conectado')}${t('expansion', 'Expansion cargado en el servidor')}${t('dof', 'Profundidad de campo de vídeo activada')}${t('fault', 'Que el próximo Aplicar falle a mitad')}<hr><button class="mi" data-act="sim-reboot">Reiniciar el servidor (mundo nuevo)</button><button class="mi" data-act="sim-gamestop" ${['rodando', 'parando'].includes(S.take.state) ? '' : 'disabled'}>Pulsar «Parar toma» en tu juego</button><div class="note">Sirve para ver cómo responde la interfaz cuando el juego no hace lo que se le pide.</div>`);
+  openMenu(anchor, `<h5>Simular el juego · solo en el prototipo</h5>${t('backend', 'Backend de la web en marcha')}${t('server', 'Servidor conectado')}${t('director', 'Tu juego conectado')}${t('expansion', 'Expansion cargado en el servidor')}${t('dof', 'Profundidad de campo de vídeo activada')}${t('fault', 'Que el próximo Aplicar falle a mitad')}<hr><button class="mi" data-act="sim-reboot">Reiniciar el servidor (mundo nuevo)</button><button class="mi" data-act="sim-gamestop" ${takeActive() ? '' : 'disabled'}>Pulsar «Parar toma» en tu juego</button><div class="note">Sirve para ver cómo responde la interfaz cuando el juego no hace lo que se le pide.</div>`);
 }
 let capture = null;
 function keysDialog() {
@@ -2610,7 +2626,7 @@ document.addEventListener('click', e => {
       setTimeout(() => { S.sim.server = true; S.hb.server = now(); S.epoch = fnv(String(now())).slice(0, 8); S.epochNew = true; S.world = null; S.obs = {}; S.other = null; S.take.dirty = false; if (['armada', 'preparando'].includes(S.take.state)) { S.take.state = 'idle'; S.take.checks = []; } renderAll(); }, 2200);
       break;
     }
-    case 'sim-gamestop': closeMenu(); if (['rodando', 'parando'].includes(S.take.state)) endTake('parada', `Parada desde tu juego a los ${nf(S.take.t, 1)} s, con la tecla «Parar toma».`, 'juego'); break;
+    case 'sim-gamestop': closeMenu(); gameStop(); break;
     case 'keys': if (takeOpen()) { closeMenu(); toast(openWhy('Los atajos no se cambian'), 'fail'); break; } capture = null; keysDialog(); break;
     case 'key-set': capture = capture === v ? null : v; keysDialog(); break;
     case 'keys-reset': KEYMAP = Object.assign({}, ...ACTIONS.map(x => ({[x.id]: x.def}))); lsSet('keys', {}); capture = null; keysDialog(); renderAll(); break;
@@ -2637,7 +2653,8 @@ function previewLoop(last) {
 }
 
 // Rueda encima de un campo numérico: lo sube o lo baja un paso, y con Mayús diez, como los campos de OBS. Si la rueda venía desplazando
-// el panel, lo sigue desplazando aunque pase un campo por debajo; los pasos seguidos de un campo son un solo cambio del historial (UX-45)
+// el panel, lo sigue desplazando aunque pase un campo por debajo; los pasos seguidos de un campo son un solo cambio del historial (UX-45),
+// y los de dos elegidos distintos, dos cambios con su nombre: la clave lleva lo elegido y el campo (AR2-05)
 const fw = {at: 0, scroll: false, acc: 0};
 document.addEventListener('wheel', ev => {
   const inp = ev.target.closest ? ev.target.closest('input[type=number]') : null, t = now();
@@ -2655,7 +2672,7 @@ document.addEventListener('wheel', ev => {
   if (inp.min !== '') v = Math.max(+inp.min, v);
   if (inp.max !== '') v = Math.min(+inp.max, v);
   inp.value = v.toFixed(dec);
-  wheelMerge = 'campo ' + (inp.id || inp.dataset.f + inp.dataset.i); inp.dispatchEvent(new Event('change', {bubbles: true})); wheelMerge = null;
+  wheelMerge = 'campo ' + JSON.stringify(S.sel) + ' ' + (inp.id || inp.dataset.f + inp.dataset.i); inp.dispatchEvent(new Event('change', {bubbles: true})); wheelMerge = null;
 }, {passive: false});
 
 // línea de tiempo: arrastrar el cursor y las claves; un gesto elige a su actor (UX-30)
@@ -2820,6 +2837,7 @@ const rebuild = () => setTimeout(() => { buildTerrain(); if (!$('#guide').hidden
 if (mq.addEventListener) mq.addEventListener('change', rebuild);
 new MutationObserver(rebuild).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
 if (window.ResizeObserver) new ResizeObserver(() => resizeMap()).observe($('#mapwrap')); else window.addEventListener('resize', resizeMap);
+if (window.ResizeObserver) new ResizeObserver(() => document.documentElement.style.setProperty('--sth', $('#status').offsetHeight + 'px')).observe($('#status'));
 
 // arranque
 applyLayout();
