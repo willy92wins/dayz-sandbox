@@ -26,7 +26,7 @@ El contrato no cambia:
 
 Lo que cambia es la presentación que fijaba el [consolidado de octubre](2026-10-28-ui-m1-consolidado.md). Sus apartados afectados se actualizan al aplicar esta lista, para que no queden dos reglas a la vez.
 
-**Estado:** las mejoras AHORA están en el prototipo y el consolidado de octubre ya está al día. Astra las revisó y las dio por NO APTO con ocho hallazgos, que están arreglados y probados (§7). También está hecha y probada una segunda pasada con tres mejoras de DESPUÉS (§6), que Astra aún no ha revisado. Los criterios pasan en [prototipo/pruebas-mejoras.js](prototipo/pruebas-mejoras.js) y fallan contra el prototipo de antes de cada tanda; el detalle está en la §12 del consolidado de octubre.
+**Estado:** las mejoras AHORA están en el prototipo y el consolidado de octubre ya está al día. Astra las revisó y las dio por NO APTO con ocho hallazgos, que están arreglados y probados (§7). También está hecha y probada una segunda pasada con tres mejoras de DESPUÉS (§6). El 5 de noviembre entraron las dos mejoras que pidió Guillermo y sus tres decisiones sobre la §8 de octubre (§8). Astra revisará la segunda pasada, los arreglos y lo del 5 de noviembre en su segunda ronda. Los criterios pasan en [prototipo/pruebas-mejoras.js](prototipo/pruebas-mejoras.js) y fallan contra el prototipo de antes de cada tanda; el detalle está en la §12 del consolidado de octubre.
 
 ## 1. En qué coinciden
 
@@ -151,7 +151,7 @@ Las tres lanes nuevas descartan además lo mismo que el contrato: tocar los ataj
     - Gemini los saca de Añadir (GEM-06). Muse deja las pestañas y añade un botón «Elegir un actor» (MUM-04).
     - Gana Gemini. Las propiedades del actor ya traen el vestuario y los gestos, así que las pestañas repetían lo mismo, y el Asset Browser de Eden solo lista lo que se coloca.
 11. **Dos incoherencias que encontró Gemini.**
-    - El §8.4 de octubre propone que los actores se muevan al mover el cursor de tiempo, pero el prototipo enseña la otra opción: solo sus marcas. Sigue siendo una decisión de Guillermo, y el consolidado de octubre lo dirá (UX-30).
+    - El §8.4 de octubre propone que los actores se muevan al mover el cursor de tiempo, pero el prototipo enseña la otra opción: solo sus marcas. Era una decisión de Guillermo: el 5 de noviembre eligió moverlos como estimación (UX-30, §8).
     - Editar varias entidades por campos (CU-11) no falta por error: el consolidado de octubre ya lo dejó para F6 (§2, «Edición de varios a la vez»).
 
 ## 4. Qué cambia fuera del prototipo
@@ -160,14 +160,14 @@ Las tres lanes nuevas descartan además lo mismo que el contrato: tocar los ataj
   - §2: barra superior, paneles, Biblioteca, Consola y barra de estado.
   - §6: tipos, radios y densidad.
   - La tabla de referentes de la Guía.
-  - §8.4: que el prototipo enseña la opción de las marcas mientras Guillermo no elija.
+  - §8.4: que el prototipo enseña la opción de las marcas mientras Guillermo no elija. Desde el 5 de noviembre, §8.3, §8.4 y §8.5 dicen lo que eligió (§8 de esta lista).
   
   §7 conserva sus 38 criterios, y §12 dice qué pruebas cambiaron.
 - **`pruebas.js`.** Las comprobaciones de presentación se actualizan: «Aplicar escena» en vez de «Volver a aplicar», Actividad plegada, Añadir en pestaña y los textos nuevos. Las invariantes de operación y seguridad no se tocan. Las comprobaciones de esta lista van aparte, en `pruebas-mejoras.js`, para poder pasarlas también contra el prototipo de antes.
 
 ## 5. Fuera de M1 (R25)
 
-Las cinco lanes coinciden en que nada de esto pide ampliar M1. Siguen fuera la vista 3D, grabar o controlar OBS, la colaboración, el cambio de mapa, el MCP, los eventos y una IA propia. Parar desde dentro de DayZ con una sola pantalla sigue como decisión aparte (consolidado de octubre, §10). Las lanes nuevas añaden a esta lista las composiciones guardables y un aspecto «de cine» con grano o claqueta en 3D (Gemini y Grok).
+Las cinco lanes coinciden en que nada de esto pide ampliar M1. Siguen fuera la vista 3D, grabar o controlar OBS, la colaboración, el cambio de mapa, el MCP, los eventos y una IA propia. Parar desde dentro de DayZ, que seguía como decisión aparte, entró en M1 el 5 de noviembre por decisión de Guillermo (UX-46, §8). Las lanes nuevas añaden a esta lista las composiciones guardables y un aspecto «de cine» con grano o claqueta en 3D (Gemini y Grok).
 
 ## 6. Segunda pasada: lo de DESPUÉS que no necesita el juego
 
@@ -227,3 +227,29 @@ Pruebas:
 - Otra queja de Astra era que contra la versión de antes algunos casos fallaban «por excepción», sin llegar a medir. Tres de los nuevos lo hacían: AR-01 + se quedaba parado en un clic que tapaba la Guía, y los dos de AR-06 buscaban un atributo nuevo. Ahora cierran la Guía si se abre y buscan «Ver» por la fila de su error, así que fallan diciendo qué está mal: «Guía abierta, Atajos abiertos, Parar tapado, Reaplicar libre» y «Propiedades detrás, X oculto».
 
 Límites: la sonda mide el lienzo del prototipo en Chromium; el mapa del producto (Leaflet) tendrá que pasar la misma regla cuando exista. Astra no ha revisado aún la segunda pasada ni estos arreglos: entran en su siguiente revisión.
+
+## 8. Lo que pidió y eligió Guillermo el 5 de noviembre
+
+Guillermo pidió dos mejoras. La primera: «no me quedó muy claro cómo rotar la cámara en los personajes y demás, estaría bien que si lo tienes seleccionado con la rueda se rote». La segunda: que los valores numéricos se puedan subir y bajar con el ratón encima del campo y con la rueda. Además eligió en tres puntos abiertos del consolidado de octubre: cómo se ven los actores al mover el cursor de tiempo (§8.4), parar la toma desde dentro del juego (§8.3, C-16) y qué hace Aplicar si en el juego hay otra escena (§8.5). Todo está en el prototipo, con un criterio + y uno −, y entra en la segunda ronda de Astra.
+
+| ID | Qué se hizo | Propuso y referente | Criterio + | Criterio − |
+|---|---|---|---|---|
+| UX-44 | Con el ratón encima de lo seleccionado, la rueda lo gira: una entidad o un grupo, una clave de cámara o una cámara fija. Cada paso es el de la rejilla de giro (15° de serie), y con Alt, 1°; hacia arriba gira a la derecha. Los pasos seguidos son un solo cambio del historial. Lo bloqueado no gira, y nada gira durante la toma. En el resto del mapa la rueda sigue acercando y alejando. Lo dicen la línea de ayuda junto al mapa, la Guía y la nota de la rejilla | Guillermo. PROPIO: ningún referente de la lista gira con la rueda. Eden y Zeus giran con Mayús + arrastrar, que se queda, y en su mapa la rueda acerca ([Zeus](https://community.bistudio.com/wiki/Arma_3_Field_Manual_-_Zeus)) | Con «Bidón azul» seleccionado, dos pasos hacia arriba lo giran 30° y uno con Alt, 1°, en un solo cambio del historial. En Rodaje, un paso encima de la clave K2 elegida gira su rumbo 15° | La rueda encima de algo que no está elegido no lo gira y aleja el mapa, y en un sitio vacío también. Con la toma armada no gira lo elegido. Ya se cumplía antes, porque la rueda solo acercaba y alejaba |
+| UX-45 | Con el ratón encima de un campo numérico, la rueda lo sube o lo baja un paso (0,1 m en la posición, 1° en el rumbo), y con Mayús, diez; hacia arriba sube. Los pasos seguidos de un campo son un solo cambio del historial. Si la rueda venía desplazando el panel, lo sigue desplazando aunque pase un campo por debajo. Ctrl + rueda sigue siendo el zoom del navegador, y un campo apagado no cambia | Guillermo. OBS Studio: la rueda cambia el campo que tiene debajo ([foro de OBS](https://obsproject.com/forum/threads/in-game-scroll-wheel-changing-settings.83422/)). Que siga desplazando el panel es propio, por la queja de ese mismo hilo | Con el ratón encima, dos pasos suben la X de «Bidón azul» 0,2 m y uno con Mayús, 1 m, en un solo cambio del historial. Un paso sube el rumbo 1° | Una rueda que venía de fuera de los campos no cambia el campo que pasa por debajo. Con la toma armada, los campos no cambian. Ya se cumplía antes |
+| UX-30 | Lo que quedaba de UX-30, con la decisión de §8.4. En Rodaje, con el cursor de tiempo movido y sin rodar, cada actor con recorrido se pinta también donde estaría en ese momento, rayado y con «· estimado», sin quitar su sitio ni sus marcas. Es una estimación a 2,8 m/s, la velocidad supuesta de la vista previa, no lo que hará el juego; rodando, el actor va donde lo lleva la toma. La leyenda del mapa explica el rayado. Clic en un gesto de la línea de tiempo elige a su actor y no mueve el cursor de tiempo | Gemini (GEM-08) y Muse (MUM-15). Sequencer de Unreal ([docs](https://dev.epicgames.com/documentation/en-us/unreal-engine/sequencer-cinematic-editor-unreal-engine)) y caminos de Replay Mod ([docs](https://www.replaymod.com/docs/#camera-paths)) | En Rodaje a 3 s, Mirek se pinta también rayado, con «Mirek · estimado» a 12 px y 4,5:1 en todos los píxeles de su letra, y a 5 s el rayado está más adelante. Clic en su gesto «Señalar» elige a Mirek | A 0 s, y rodando, no hay nada rayado ni «estimado». Clic en un gesto no cambia el documento ni mueve el cursor de tiempo; antes lo movía |
+| UX-46 | La decisión de §8.3 (C-16): la toma también se para desde dentro del juego, con la tecla «Parar toma» del mod de cliente, que hace lo mismo que Parar en la web. Con la toma armada o rodando, la cabecera de la toma lo dice con la tecla que dé el backend, y también la ayuda de Parar y la Guía. La parada queda en el aviso, en Tomas y en Actividad, con «tu juego · tecla «Parar toma»» de origen. El simulador la puede pulsar | Gemini, en los puntos abiertos de su crítica, sobre C-16 de Astra. Rockstar Editor: dentro de GTA V, una tecla empieza a grabar y otra para, F1 y F2 de serie ([Rockstar](https://support.rockstargames.com/articles/4gZPiqdUZD8ZhaJ81IPDJr/how-to-record-clips-and-access-the-rockstar-editor-in-gtav-on-pc)) | Armada, la cabecera dice «Parar toma» y su tecla. Rodando, la tecla del juego la para: el aviso, Tomas y Actividad dicen que fue desde tu juego, y Parar deja la barra de arriba | Parar en la web y la tecla del juego casi a la vez dan una sola parada: una toma más en Tomas y una sola orden en Actividad. Ya se cumplía antes, porque no había tecla del juego |
+| UX-47 | La decisión de §8.5: Aplicar quita del juego la otra escena y crea la nueva (#9), como ya hacía UX-15 con su paso «Quitando «…» del juego». Ahora el aviso final también nombra la escena que quitó | Guillermo eligió la recomendación de octubre. PROPIO (#9), como UX-15 | Con «Amanecer en Stary Sobor» en el juego, aplicar una escena nueva termina con «Se quitó «Amanecer en Stary Sobor» del juego» | Reaplicar la escena que ya está en el juego no dice que se quitara otra. Ya se cumplía antes |
+
+Límites (R25):
+
+- La tecla «Parar toma» la pone el mod de cliente. Qué para y cómo se confirma es lo mismo que Parar en la web (B5), y lo decide el plan de F5, en un hilo aparte. El prototipo usa «Fin» de ejemplo; la web enseñará el nombre que dé el backend.
+- La estimación de los actores es la de la línea de tiempo: no lee el juego ni sabe de obstáculos.
+- La rueda no gira las marcas de los actores, porque las marcas no tienen rumbo.
+
+Pruebas:
+
+- `pruebas-mejoras.js`: 76 de 76, código de salida 0.
+- Contra el prototipo de antes de esta tanda (`76caccb`): 70 de 76, código de salida 1, sin ningún caso cortado a medias. Fallan los cinco «+» y UX-30 −, porque el clic en un gesto movía el cursor de tiempo. Pasan los «−» de UX-44, UX-45, UX-46 y UX-47, que ya se cumplían.
+- `mutantes.js`: un mutante más, el actor estimado pintado sin rayado, que hace fallar UX-30 +. El control da 9 de 9 y los cinco mutantes hacen fallar su caso.
+- `pruebas.js`: 64 de 64. Encontró un fallo antes de subirlo: al añadir los referentes nuevos, a la lista le faltaba una coma y la Guía no abría.
+- Capturas revisadas a mano: con «Bidón azul» elegido, la línea de ayuda a 1280 × 800 y 1440 × 900 ocupa dos líneas y no tapa los botones del mapa; y Rodaje con Mirek estimado.

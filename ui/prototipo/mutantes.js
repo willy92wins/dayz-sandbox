@@ -1,4 +1,4 @@
-// Sensibilidad de las pruebas que miran el dibujo del mapa (revisión de Astra, AR-04).
+// Sensibilidad de las pruebas que miran el dibujo del mapa (revisión de Astra, AR-04; el rayado de lo estimado, UX-30).
 // Cada mutante rompe una sola cosa de lo que se pinta, sin tocar los data-* de la página, y su caso de pruebas-mejoras.js
 // tiene que fallar. Antes se pasan los mismos casos contra el prototipo sin tocar: tienen que pasar.
 // Uso: node ui/prototipo/mutantes.js (necesita Playwright con Chromium, como pruebas-mejoras.js).
@@ -9,6 +9,7 @@ const MUTANTES = [
   { name: 'los borradores se pintan sólidos', solo: '^UX-09 −$', cambios: [["drawGlyph(g, kind, x, y, yw === null ? e.yaw : yw, draft ? 'draft' : 'solid');", "drawGlyph(g, kind, x, y, yw === null ? e.yaw : yw, 'solid');"]] },
   { name: 'la letra del mapa baja a 8 px', solo: '^UX-10 −$', cambios: [['${strong ? 600 : 500} 12px ${FONT_UI}', '${strong ? 600 : 500} 8px ${FONT_UI}'], ['600 12px ${FONT_UI}', '600 8px ${FONT_UI}'], ["'500 12px ' + FONT_MONO", "'500 8px ' + FONT_MONO"]] },
   { name: 'las marcas del seleccionado pierden su etiqueta «Mirek · M1»', solo: '^UX-09 \\+$', cambios: [['if (!dim) label(g, `${a.name} · M${i + 1}`, x + 10, y - 7, true);', '']] },
+  { name: 'el actor estimado se pinta sin rayado', solo: '^UX-30 \\+$', cambios: [["drawGlyph(g, kind, qx, qy, e.yaw, 'est');", "drawGlyph(g, kind, qx, qy, e.yaw, 'solid');"]] },
   { name: 'los números de la rejilla vuelven a pintarse sin placa', solo: '^AR-03 \\+ dark$', cambios: [['g.fillStyle = P.halo; g.fillRect(x - 2, y - 11, g.measureText(t).width + 4, 14); g.fillStyle = P.label;', "g.fillStyle = 'rgba(25,25,15,.8)';"]] }
 ];
 const run = (file, solo) => {

@@ -1,4 +1,5 @@
-// Criterios R26 de las mejoras de noviembre (ui/2026-11-04-ui-mejoras-consolidado.md §2: AHORA y la segunda pasada): un caso + y uno − por mejora.
+// Criterios R26 de las mejoras de noviembre (ui/2026-11-04-ui-mejoras-consolidado.md: AHORA y la segunda pasada, §2 y §6, y lo que pidió y eligió
+// Guillermo el 5 de noviembre, §8): un caso + y uno − por mejora.
 // Uso: node ui/prototipo/pruebas-mejoras.js (necesita Playwright con Chromium). Cada caso abre una página nueva.
 // Contra el prototipo de antes (ESTUDIO_URL=file://… con `git show de37c03:ui/prototipo/estudio.html`) los + tienen que fallar;
 // un − que ya se cumplía antes pasa también allí. El contraste de CU-38 en los dos temas sigue en pruebas.js; el del mapa, aquí (AR-03).
@@ -30,7 +31,8 @@ const LIB = () => {
 // Sonda del lienzo del mapa: cada texto pintado (con fillText o strokeText) con su tamaño en px de CSS y, en cada píxel de su letra,
 // el contraste de WCAG entre el color del texto y lo que ya estaba pintado debajo. La letra es la que pinta el propio lienzo: antes
 // de pintarla se pinta una vez en blanco y otra en negro, la diferencia dice cuánto cubre cada píxel, y se deja el fondo como estaba.
-// Cuenta como letra cada píxel cubierto al menos a la mitad. Y cada trazo y relleno con su posición, su discontinuo y su grosor.
+// Cuenta como letra cada píxel cubierto al menos a la mitad. Y cada trazo y relleno con su posición, su discontinuo y su grosor, y si el
+// relleno es un patrón, como el rayado de lo estimado (UX-30).
 // Solo graba cuando __cv.on.
 const PROBE = () => {
   const P = CanvasRenderingContext2D.prototype, fillText0 = P.fillText, strokeText0 = P.strokeText, stroke0 = P.stroke, fill0 = P.fill;
@@ -67,7 +69,7 @@ const PROBE = () => {
   P.strokeText = function () { if (mine(this)) probe(this, strokeText0, 'strokeStyle', arguments); return strokeText0.apply(this, arguments); };
   const at = (ctx, kind) => { const T = ctx.getTransform(), dpr = ctx.canvas.width / ctx.canvas.clientWidth; return { kind, x: Math.round(T.e / dpr), y: Math.round(T.f / dpr), dash: ctx.getLineDash().join(','), lw: ctx.lineWidth }; };
   P.stroke = function () { if (mine(this)) cv.strokes.push(at(this, 'stroke')); return stroke0.apply(this, arguments); };
-  P.fill = function () { if (mine(this)) cv.fills.push(at(this, 'fill')); return fill0.apply(this, arguments); };
+  P.fill = function () { if (mine(this)) cv.fills.push(Object.assign(at(this, 'fill'), { pat: typeof this.fillStyle !== 'string' })); return fill0.apply(this, arguments); };
 };
 const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenogorsk|Stary Sobor|Novy Sobor|Vybor|Gorka|Balota|Komarovo|Kabanino|Prigorodki|Svetlojarsk|Krasnostav|Severograd|Novodmitrovsk|Lopatino|Pustoshka)$/i;
 
@@ -667,6 +669,174 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const s0 = await T(p, '#dock .strip'); await dock(p);
     const hist = await p.evaluate(() => [...document.querySelectorAll('#dock .qrow')].filter(r => r.querySelector('.chip.fallido, .chip.parcial')).length);
     return [['AR-07 − los fallos ya resueltos por una escena aplicada y leída después no mantienen la alarma: la tira dice «Sin problemas»', /Sin problemas/.test(s0) && hist > 0, `tira «${s0}» con ${hist} órdenes fallidas o parciales antiguas en Actividad`]];
+  });
+
+  // --- Lo que pidió y eligió Guillermo el 5 de noviembre (§8): la rueda (UX-44 y UX-45) y sus decisiones de §8.4, §8.3 y §8.5 de octubre ---
+  const nHist = p => p.evaluate(() => { const n = document.querySelector('[data-act="dtab"][data-v="historial"] .n'); return n ? +n.textContent : -1; });
+  const val = async (p, sel) => +(await p.inputValue(sel));
+  const turned = (a, b) => ((b - a) % 360 + 360) % 360;
+  const center = async p => { const r = await p.locator('#map').boundingBox(); return [r.x + r.width / 2, r.y + r.height / 2]; };
+  const over = async (p, sel) => { const b = await p.locator(sel).first().boundingBox(); await p.mouse.move(b.x + b.width / 2, b.y + b.height / 2); await p.waitForTimeout(350); };
+  const wheel = async (p, dy, mod) => { if (mod) await p.keyboard.down(mod); await p.mouse.wheel(0, dy); if (mod) await p.keyboard.up(mod); await p.waitForTimeout(120); };
+  // metros por píxel del mapa, por la regla de la escala
+  const zoomOf = p => p.evaluate(() => { const t = document.querySelector('#scaleTxt').textContent, m = parseFloat(t) * (/km/.test(t) ? 1000 : 1); return parseFloat(document.querySelector('#scaleBar').style.width) / m; });
+  // del mundo a la pantalla, con dos lecturas del cursor en la barra de estado
+  const toScreen = async p => {
+    const r = await p.locator('#map').boundingBox(), a = [r.x + r.width * 0.3, r.y + r.height * 0.35], b = [r.x + r.width * 0.7, r.y + r.height * 0.65];
+    const n = s => parseFloat(s.replace(/\./g, '').replace(',', '.'));
+    const read = async q => { await p.mouse.move(q[0], q[1]); await p.waitForTimeout(80); const m = (await T(p, '#cursorXY')).match(/X ([\d.,-]+) · Z ([\d.,-]+)/); return m ? [n(m[1]), n(m[2])] : null; };
+    const wa = await read(a), wb = await read(b);
+    if (!wa || !wb || wa[0] === wb[0] || wa[1] === wb[1]) return null;
+    return (x, z) => [a[0] + (x - wa[0]) * (b[0] - a[0]) / (wb[0] - wa[0]), a[1] + (z - wa[1]) * (b[1] - a[1]) / (wb[1] - wa[1])];
+  };
+  const scrub = async (p, t) => { const tr = await p.locator('#tlTrack').boundingBox(), ru = await p.locator('#tlRuler').boundingBox(), span = +(await p.getAttribute('#tlTrack', 'data-span')); await p.mouse.click(tr.x + t / span * tr.width, ru.y + ru.height / 2); await p.waitForTimeout(250); };
+  const hatched = f => f.fills.filter(x => x.pat);
+
+  // UX-44: la rueda encima de lo seleccionado lo gira
+  await R26('UX-44 +', async p => {
+    const what = 'UX-44 + con «Bidón azul» seleccionado, la rueda encima lo gira 15° por paso hacia arriba, y con Alt 1°, y los pasos seguidos son un solo cambio del historial; en Rodaje, la rueda encima de la clave K2 elegida gira su rumbo';
+    await dock(p);
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.click('#bFit'); await p.waitForTimeout(250);
+    const c = await center(p), y0 = await val(p, '#f-yaw'), n0 = await nHist(p);
+    await p.mouse.move(c[0], c[1]); await p.waitForTimeout(80);
+    await wheel(p, -100); await wheel(p, -100); const y1 = await val(p, '#f-yaw');
+    await wheel(p, -100, 'Alt'); const y2 = await val(p, '#f-yaw'), n1 = await nHist(p);
+    await p.keyboard.press('2'); await p.waitForTimeout(300);
+    await p.click('#colL [data-act="sel"][data-v="cam:cam-travel"]'); await p.waitForTimeout(150);
+    await p.evaluate(() => { const k = document.querySelectorAll('#colR [data-act="sel"][data-v^="key:cam-travel:"]'); if (k[1]) k[1].click(); }); await p.waitForTimeout(150);
+    if (!await p.locator('#k-yaw').count()) return [[what, false, 'no se encontró el rumbo de la K2']];
+    await p.click('#bFit'); await p.waitForTimeout(250);
+    const kx = await val(p, '#k-x'), kz = await val(p, '#k-z'), k0 = await val(p, '#k-yaw'), map = await toScreen(p);
+    if (!map) return [[what, false, 'no se pudo leer el cursor en la barra de estado']];
+    const [sx, sy] = map(kx, kz); await p.mouse.move(sx, sy); await p.waitForTimeout(80);
+    await wheel(p, -100); const k1 = await val(p, '#k-yaw');
+    return [[what, turned(y0, y1) === 30 && turned(y1, y2) === 1 && n1 === n0 + 1 && turned(k0, k1) === 15, `Bidón azul ${y0}° → ${y1}° → con Alt ${y2}° · historial ${n1 - n0 >= 0 ? '+' : ''}${n1 - n0} · K2 ${k0}° → ${k1}°`]];
+  });
+  await R26('UX-44 −', async p => {
+    const what = 'UX-44 − la rueda encima de algo que no está elegido no lo gira y aleja el mapa, y en un sitio vacío también; con la toma armada no gira lo elegido';
+    await dock(p);
+    await p.click('#colL [data-act="sel"][data-v="ent:act-mirek"]'); await p.click('#bFit'); await p.waitForTimeout(250);
+    const m0 = await val(p, '#f-yaw');
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(150);
+    const c = await center(p), n0 = await nHist(p), z0 = await zoomOf(p);
+    await p.mouse.move(c[0], c[1]); await p.waitForTimeout(80); await wheel(p, 100);
+    const z1 = await zoomOf(p);
+    await p.mouse.move(c[0] - 160, c[1] - 120); await p.waitForTimeout(80); await wheel(p, 100);
+    const z2 = await zoomOf(p), n1 = await nHist(p);
+    await p.click('#colL [data-act="sel"][data-v="ent:act-mirek"]'); await p.waitForTimeout(150); const m1 = await val(p, '#f-yaw');
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(150); const b0 = await val(p, '#f-yaw');
+    if (!await apply(p) || !await arm(p)) return [[what, false, 'no llegó a armar']];
+    await p.click('#bFit'); await p.waitForTimeout(250);
+    const u0 = await p.getAttribute('#bUndo', 'title'), c2 = await center(p);
+    await p.mouse.move(c2[0], c2[1]); await p.waitForTimeout(80); await wheel(p, -100);
+    const b1 = await val(p, '#f-yaw'), u1 = await p.getAttribute('#bUndo', 'title');
+    return [[what, m1 === m0 && z1 < z0 && z2 < z1 && n1 === n0 && b1 === b0 && u1 === u0, `Mirek sin elegir ${m0}° → ${m1}° · escala ${z0.toFixed(2)} → ${z1.toFixed(2)} → en vacío ${z2.toFixed(2)} px/m · historial ${n1 === n0 ? 'igual' : 'cambiado'} · armada: Bidón azul ${b0}° → ${b1}°, documento ${u1 === u0 ? 'igual' : 'cambiado'}`]];
+  });
+
+  // UX-45: la rueda encima de un campo numérico lo sube o lo baja
+  await R26('UX-45 +', async p => {
+    const what = 'UX-45 + con el ratón encima, la rueda sube la X de «Bidón azul» 0,1 m por paso hacia arriba, y con Mayús 1 m, en un solo cambio del historial, y el Rumbo 1° por paso';
+    await dock(p);
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(150);
+    const n0 = await nHist(p), x0 = await val(p, '#f-x');
+    await over(p, '#f-x'); await wheel(p, -100); await wheel(p, -100);
+    const x1 = await val(p, '#f-x'); await wheel(p, -100, 'Shift');
+    const x2 = await val(p, '#f-x'), n1 = await nHist(p);
+    await over(p, '#f-yaw'); const r0 = await val(p, '#f-yaw'); await wheel(p, -100); const r1 = await val(p, '#f-yaw');
+    const d1 = Math.round((x1 - x0) * 10) / 10, d2 = Math.round((x2 - x1) * 10) / 10;
+    return [[what, d1 === 0.2 && d2 === 1 && n1 === n0 + 1 && turned(r0, r1) === 1, `X ${x0} → ${x1} (+${d1}) → con Mayús ${x2} (+${d2}) · historial ${n1 - n0 >= 0 ? '+' : ''}${n1 - n0} · Rumbo ${r0}° → ${r1}°`]];
+  });
+  await R26('UX-45 −', async p => {
+    const what = 'UX-45 − una rueda que venía de fuera de los campos no cambia el campo que pasa por debajo, y con la toma armada los campos no cambian con la rueda';
+    await dock(p);
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(150);
+    const x0 = await val(p, '#f-x'), n0 = await nHist(p);
+    await over(p, '#colR .ph'); await p.mouse.wheel(0, 100); await p.waitForTimeout(40);
+    const b = await p.locator('#f-x').boundingBox(); await p.mouse.move(b.x + b.width / 2, b.y + b.height / 2); await p.mouse.wheel(0, -100); await p.waitForTimeout(150);
+    const x1 = await val(p, '#f-x'), n1 = await nHist(p);
+    if (!await apply(p) || !await arm(p)) return [[what, false, 'no llegó a armar']];
+    if (!await p.locator('#f-x').count()) return [[what, false, 'Propiedades no enseña la X armada']];
+    const a0 = await val(p, '#f-x'), dis = await p.locator('#f-x').isDisabled();
+    await over(p, '#f-x'); await wheel(p, -100); const a1 = await val(p, '#f-x');
+    return [[what, x1 === x0 && n1 === n0 && dis && a1 === a0, `desplazando: X ${x0} → ${x1}, historial ${n1 === n0 ? 'igual' : 'cambiado'} · armada: X ${dis ? 'apagada' : 'encendida'}, ${a0} → ${a1}`]];
+  });
+
+  // UX-30 con la decisión de §8.4: en Rodaje, el cursor de tiempo mueve a los actores como estimación rayada; clic en un gesto elige al actor
+  await R26('UX-30 +', async p => {
+    const what = 'UX-30 + en Rodaje, con el cursor de tiempo a 3 s, Mirek se pinta también rayado donde estaría, con «Mirek · estimado» a 12 px y 4,5:1 en todos los píxeles de su letra, y a 5 s ese rayado está más adelante; clic en su gesto «Señalar» lo elige';
+    await p.keyboard.press('2'); await p.waitForTimeout(300);
+    const look = async t => { await scrub(p, t); const f = await frame(p), e = f.texts.find(x => x.text === 'Mirek · estimado'); return { est: !!e && e.px >= 12 && e.n > 0 && !e.low, e, h: hatched(f) }; };
+    const a = await look(3), b = await look(5);
+    const moved = a.h.length && b.h.length ? Math.round(Math.hypot(b.h[0].x - a.h[0].x, b.h[0].y - a.h[0].y)) : 0;
+    const g = p.locator('.lane .gest', { hasText: 'Señalar' });
+    if (!await g.count()) return [[what, false, 'no hay gesto «Señalar» en la línea de tiempo']];
+    await g.click(); await p.waitForTimeout(200);
+    const picked = await p.evaluate(() => { const ps = document.querySelectorAll('#colR .panel'), last = ps[ps.length - 1]; return !!last && /Mirek/.test(last.innerText) && !!last.querySelector('#f-x'); });
+    return [[what, a.est && a.h.length === 1 && b.est && b.h.length === 1 && moved >= 3 && picked, `a 3 s: ${a.h.length} rayado${a.e ? ` y «Mirek · estimado» a ${a.e.px} px, ${a.e.low ? `${a.e.min}:1 en ${a.e.low} de ${a.e.n} px` : 'todo a 4,5:1 o más'}` : ', sin «estimado»'} · a 5 s: ${b.h.length} rayado, ${moved} px más allá · clic en «Señalar»: ${picked ? 'elige a Mirek' : 'no lo elige'}`]];
+  });
+  await R26('UX-30 −', async p => {
+    const what = 'UX-30 − en Rodaje a 0 s, y rodando, no hay nada rayado ni «estimado» en el mapa; clic en un gesto no cambia el documento ni mueve el cursor de tiempo';
+    await p.keyboard.press('2'); await p.waitForTimeout(300);
+    const count = f => hatched(f).length + f.texts.filter(x => /estimado/.test(x.text)).length;
+    const at0 = count(await frame(p));
+    await scrub(p, 3); const t0 = await T(p, '#tlTime'), u0 = await p.getAttribute('#bUndo', 'title');
+    const g = p.locator('.lane .gest', { hasText: 'Señalar' });
+    if (!await g.count()) return [[what, false, 'no hay gesto «Señalar» en la línea de tiempo']];
+    await g.click(); await p.waitForTimeout(200);
+    const t1 = await T(p, '#tlTime'), u1 = await p.getAttribute('#bUndo', 'title');
+    await p.keyboard.press('1'); await p.waitForTimeout(250);
+    if (!await apply(p) || !await arm(p) || !await roll(p)) return [[what, false, 'no llegó a rodar']];
+    await p.waitForTimeout(1500);
+    const live = count(await frame(p));
+    return [[what, at0 === 0 && live === 0 && t0 === t1 && u0 === u1, `a 0 s: ${at0} rayados o «estimado» · rodando: ${live} · cursor de tiempo ${t0} → ${t1} · documento ${u0 === u1 ? 'igual' : 'cambiado'}`]];
+  });
+
+  // UX-46, la decisión de §8.3 (C-16): la tecla «Parar toma» del mod de cliente para la toma desde dentro del juego
+  await R26('UX-46 +', async p => {
+    const what = 'UX-46 + armada, la barra de la toma dice que también se para desde tu juego con «Parar toma» y su tecla; rodando, esa tecla la para: el aviso, Tomas y Actividad dicen que fue desde tu juego, y Parar deja la barra de arriba';
+    if (!await apply(p) || !await arm(p)) return [[what, false, 'no llegó a armar']];
+    const slate = await T(p, '#slateWrap');
+    if (!await roll(p)) return [[what, false, 'no llegó a rodar']];
+    await p.waitForTimeout(600); await p.click('#bSim'); await p.waitForTimeout(120);
+    const item = p.locator('#menu [data-act="sim-gamestop"]');
+    if (!await item.count()) { await p.click('#status', { position: { x: 3, y: 3 } }); return [[what, false, `armada: «${slate.slice(0, 90)}» · el simulador no tiene la tecla del juego`]]; }
+    await item.click();
+    const toast = await W(p, () => /desde tu juego/.test(document.querySelector('#toasts').innerText), null, 2000), top = await p.locator('#bTopStop').isVisible();
+    await p.click('[data-act="ltab"][data-v="tomas"]'); await p.waitForTimeout(150); const takes = await T(p, '#colL');
+    await dock(p); await p.click('[data-act="rdtab"][data-v="actividad"]'); await p.waitForTimeout(150); const act = await T(p, '#dock');
+    const named = /Parar toma/.test(slate) && /\bFin\b/.test(slate), log = /desde tu juego/.test(takes), op = /tecla «Parar toma»/.test(act);
+    return [[what, named && toast && !top && log && op, `armada: ${named ? 'nombra «Parar toma» (Fin)' : 'no la nombra'} · aviso: ${toast ? 'desde tu juego' : 'no lo dice'} · Parar ${top ? 'sigue arriba' : 'deja la barra'} · Tomas: ${log ? 'desde tu juego' : 'no lo dice'} · Actividad: ${op ? 'tu juego · tecla «Parar toma»' : 'no lo dice'}`]];
+  });
+  await R26('UX-46 −', async p => {
+    const what = 'UX-46 − Parar en la web y la tecla del juego casi a la vez dan una sola parada: una toma más en Tomas y una sola orden de esa toma en Actividad';
+    if (!await apply(p) || !await arm(p)) return [[what, false, 'no llegó a armar']];
+    const tn = (await T(p, '#slateWrap .tn')) || 'Toma', count = () => p.evaluate(() => { const n = document.querySelector('[data-act="ltab"][data-v="tomas"] .n'); return n ? +n.textContent : -1; });
+    const k0 = await count();
+    if (!await roll(p)) return [[what, false, 'no llegó a rodar']];
+    await p.waitForTimeout(600);
+    // Parar en la web y, en la misma tarea, la tecla del juego: la segunda llega mientras la web espera la confirmación
+    const game = await p.evaluate(() => { document.querySelector('#bTopStop').click(); document.querySelector('#bSim').click(); const b = document.querySelector('#menu [data-act="sim-gamestop"]'); if (b) b.click(); return !!b; });
+    if (!game) await p.click('#status', { position: { x: 3, y: 3 } });
+    await p.waitForTimeout(1200);
+    const k1 = await count();
+    await dock(p); await p.click('[data-act="rdtab"][data-v="actividad"]'); await p.waitForTimeout(150);
+    const ops = await p.evaluate(tn => [...document.querySelectorAll('#dock .qrow')].filter(r => r.innerText.includes(tn)).length, tn);
+    return [[what, k1 === k0 + 1 && ops === 1, `${game ? 'web y juego' : 'solo la web (no hay tecla del juego)'} · Tomas ${k0} → ${k1} · órdenes de la ${tn}: ${ops}`]];
+  });
+
+  // UX-47, la decisión de §8.5: Aplicar quita la otra escena y crea la nueva, y el aviso nombra la que quitó
+  await R26('UX-47 +', async p => {
+    const what = 'UX-47 + con «Amanecer en Stary Sobor» en el juego, aplicar una escena nueva la quita, y el aviso final dice «Se quitó «Amanecer en Stary Sobor» del juego»';
+    await p.click('#docBtn'); await p.waitForTimeout(150);
+    if (!await p.locator('#menu [data-act="m-new"]').count()) return [[what, false, 'no hay «Nueva escena»']];
+    await p.click('#menu [data-act="m-new"]'); await p.waitForTimeout(300);
+    const ok = await apply(p), msg = await T(p, '#toasts');
+    return [[what, ok && /Se quitó «Amanecer en Stary Sobor» del juego/.test(msg), `aviso: «${msg.slice(-150)}»`]];
+  });
+  await R26('UX-47 −', async p => {
+    const what = 'UX-47 − reaplicar la escena que ya está en el juego no dice que se quitara otra';
+    const ok = await apply(p), msg = await T(p, '#toasts');
+    return [[what, ok && /Escena aplicada y leída/.test(msg) && !/Se quitó/.test(msg), `aviso: «${msg.slice(-150)}»`]];
   });
 
   expect(external.length === 0, 'ninguna petición sale de la página: ' + (external.slice(0, 3).join(' ') || 'ninguna'));

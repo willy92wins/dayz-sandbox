@@ -2,11 +2,11 @@
 
 2026-10-28 · Junta las dos lanes ciegas del [brief común](2026-10-28-ui-m1-brief.md): la de [Claude](2026-10-28-ui-m1-claude.md) y la de [Astra](astra/2026-10-28-ui-m1-astra.md) (Codex), por decisión de Guillermo («que la UI se haga entre Astra y tú»). Contrato: [product-spec.md](../product-spec.md) y el plan cerrado [plans/2026-10-26-m1-cine-v2.md](../plans/2026-10-26-m1-cine-v2.md). Si este documento choca con cualquiera de los dos, ganan ellos.
 
-**Noviembre:** el 2026-11-04 se aplicaron las mejoras AHORA de la [lista de las cinco críticas](2026-11-04-ui-mejoras-consolidado.md) (UX-01 a UX-14 y UX-25), una segunda pasada (UX-18, UX-33 y UX-15) y los arreglos de la revisión de Astra (AR-01 a AR-08). Este documento ya describe la interfaz con esos cambios; qué se decidió y por qué está en esa lista.
+**Noviembre:** el 2026-11-04 se aplicaron las mejoras AHORA de la [lista de las cinco críticas](2026-11-04-ui-mejoras-consolidado.md) (UX-01 a UX-14 y UX-25), una segunda pasada (UX-18, UX-33 y UX-15) y los arreglos de la revisión de Astra (AR-01 a AR-08). El 2026-11-05 entraron la rueda (UX-44 y UX-45) y tres decisiones de Guillermo sobre la sección 8 (UX-30, UX-46 y UX-47). Este documento ya describe la interfaz con esos cambios; qué se decidió y por qué está en esa lista.
 
 El diseño navegable es [prototipo/estudio.html](prototipo/estudio.html): una sola página con datos de ejemplo, sin backend, con un simulador de fallos del juego. Sus pruebas están en [prototipo/pruebas.js](prototipo/pruebas.js), y los criterios de las mejoras de noviembre en [prototipo/pruebas-mejoras.js](prototipo/pruebas-mejoras.js). La Guía del prototipo (botón «Guía») enseña la misma tabla de referentes que la sección 9.
 
-**Estado:** consolidado, mejorado en noviembre y probado en el navegador. Astra revisó el prototipo con las mejoras y lo dio por NO APTO con 8 hallazgos; están arreglados y probados (sección 11). Nada de esto toca el código de F0 ni el bridge.
+**Estado:** consolidado, mejorado en noviembre y probado en el navegador. Astra revisó el prototipo con las mejoras y lo dio por NO APTO con 8 hallazgos; están arreglados y probados (sección 11). Lo del 5 de noviembre entra con ellos en su segunda revisión. Nada de esto toca el código de F0 ni el bridge.
 
 ## 1. Cómo se consolidó
 
@@ -21,8 +21,8 @@ Un chasis común y dos modos, como el Game Master de Reforger cambia entre Game 
 
 - **Paneles acoplados** de borde a borde, con separadores de 1 px y sin huecos ni radios, como en el World Editor de Reforger y en Unreal 5 (UX-02).
 - **Barra superior (los dos modos), en tres grupos (UX-03):** a la izquierda, el documento: su nombre con el menú de escena (nueva escena y abrir, UX-15), «2 cambios sin aplicar» y la edad del guardado (la revisión, al pasar el ratón), deshacer y rehacer. En el centro, Escena y Rodaje con su tecla (`1`, `2`). A la derecha, las acciones: Quitar del juego, Aplicar escena, «Ir a rodaje» cuando la escena está aplicada y leída (UX-07) y el menú Herramientas (paneles, layouts, atajos y ocultar la interfaz). Aparte, con borde discontinuo, lo que solo existe en el prototipo: el simulador, los referentes y la Guía. Durante la toma se esconden Quitar del juego y Aplicar escena y aparece Parar (o Desarmar) con su tecla; tras un corte se queda como «Parada sin confirmar» hasta leer el juego, y hasta entonces no se abren la Guía ni los Atajos ni sale ninguna orden (UX-01, AR-01). Nunca hay dos acciones principales a la vista (UX-25).
-- **Escena:** Jerarquía a la izquierda, con una línea arriba que dice qué hay en el juego y la edad de la lectura, o que falta la lectura mientras se aplica o tras un corte (UX-06, AR-02); mapa en el centro, con la leyenda plegable dentro y, con algo seleccionado, una línea arriba a la izquierda que dice cómo moverlo, girarlo y borrarlo con la rejilla y las teclas de ahora (UX-18); a la derecha, Propiedades y Añadir en pestañas, o las dos a la vez desde Herramientas, con el presupuesto dentro de Añadir (UX-08); abajo, Actividad, Historial y Validación, plegados en una tira con la última orden (estado, edad y origen) y el número de problemas: errores de validación y órdenes fallidas o parciales sin resolver (UX-02, AR-07).
-- **Rodaje:** Cámaras y Tomas a la izquierda; encima del mapa, la cabecera de toma con su número, la cámara, el estado, el reloj y la acción que toca (Preparar, Rodar o Reaplicar y preparar), que nombra la comprobación que falla y ofrece su arreglo; abajo, la Vista previa del mapa y Actividad, abiertas; a la derecha, Preparación («7 de 7 comprobaciones» con su edad, y los fallos abiertos) y Propiedades (UX-11).
+- **Escena:** Jerarquía a la izquierda, con una línea arriba que dice qué hay en el juego y la edad de la lectura, o que falta la lectura mientras se aplica o tras un corte (UX-06, AR-02); mapa en el centro, con la leyenda plegable dentro y, con algo seleccionado, una línea arriba a la izquierda que dice cómo moverlo, girarlo (también con la rueda encima, UX-44) y borrarlo con la rejilla y las teclas de ahora (UX-18); a la derecha, Propiedades y Añadir en pestañas, o las dos a la vez desde Herramientas, con el presupuesto dentro de Añadir (UX-08); abajo, Actividad, Historial y Validación, plegados en una tira con la última orden (estado, edad y origen) y el número de problemas: errores de validación y órdenes fallidas o parciales sin resolver (UX-02, AR-07).
+- **Rodaje:** Cámaras y Tomas a la izquierda; encima del mapa, la cabecera de toma con su número, la cámara, el estado, el reloj y la acción que toca (Preparar, Rodar o Reaplicar y preparar), que nombra la comprobación que falla y ofrece su arreglo; abajo, la Vista previa del mapa y Actividad, abiertas; con el cursor de tiempo movido, cada actor con recorrido se ve también rayado donde estaría (UX-30); a la derecha, Preparación («7 de 7 comprobaciones» con su edad, y los fallos abiertos) y Propiedades (UX-11).
 - **Barra de estado, que no se toca:** las luces Backend, Servidor y Tu juego con su nombre y su edad en segundos enteros; la X y la Z del cursor y el pueblo más cercano con su distancia (UX-33); el mapa (el epoch, al pasar el ratón), la versión del juego y si Expansion está cargado; la validación («Escena sin errores», o «sin validar» si falta el backend) y «MCP apagado» (UX-03). Si no cabe en una línea, pasa a dos antes que pisar algo.
 - **Tres capas que nunca se mezclan:** el documento (lo que se edita; vive en el backend, #7), el juego (lo que hay de verdad, con su edad y su origen) y la toma (lo que se rueda).
 
@@ -31,7 +31,7 @@ Un chasis común y dos modos, como el Game Master de Reforger cambia entre Game 
 1. **Preparar la escena.** Añadir, por tipo (Tab con el mapa activo la abre y Esc vuelve): clic en el nombre y clic en el mapa (Ctrl + clic para seguir colocando, clic derecho cancela), o Intro, que lo pone en el centro del mapa. Lo nuevo queda seleccionado con sus propiedades a la vista. Al colocar se lee el suelo en el servidor y Propiedades enseña la altura leída con su edad. Se mueve arrastrando, con las flechas (Alt, 0,1 m) o escribiendo X y Z; se gira con Mayús + arrastrar o escribiendo el rumbo. Las rejillas de movimiento y de giro se encienden y se apagan. Cada cambio es una transacción con nombre en el Historial (A5) y se guarda al momento.
 2. **Aplicar.** `Ctrl+Intro` o «Aplicar escena». La orden pasa por validar, reservar presupuesto, quitar lo que había, crear por lotes, leer y publicar (#9). Su fila en Actividad dice el estado de D2, el paso en curso, el origen y la edad de la petición y, aparte, la de la lectura (UX-13). Solo una lectura la deja en Observado; si la respuesta se pierde después de entregarla, queda Parcial («Falta confirmar el resultado») y se reconcilia leyendo al volver la conexión (#23). Mientras no hay lectura, la Jerarquía y Propiedades lo dicen, y nunca «Nada en el juego» (AR-02).
 3. **Rodar.** En Rodaje, `Mayús+F9` o «Preparar toma» lee el juego: escena aplicada y observada, tu juego conectado, cámara lista con su hash, vestuario, actores en su marca, hora y clima, y HUD. Cada lectura es una fila con su resultado y su arreglo («Reaplicar y preparar»), y la cabecera de toma nombra la que falla. Solo con todo bien queda Armada, y entonces Intro rueda. La barra superior late y la insignia dice «Rodando» y que el vídeo lo graba una herramienta externa, como OBS.
-4. **Parar.** `Esc`, `Espacio` o Parar, fijo en la barra de arriba. `Esc` para aunque haya un menú, un diálogo o la Guía abiertos, y la Guía y los Atajos no se abren durante la toma ni mientras falte confirmar su parada (UX-01, AR-01). La toma queda en «Parando…» hasta que tu juego lo confirma, y Tomas apunta el control devuelto en segundos (B5 pide menos de 1 s). Con la toma armada, `Esc` desarma; `Espacio` nunca rueda.
+4. **Parar.** `Esc`, `Espacio` o Parar, fijo en la barra de arriba. `Esc` para aunque haya un menú, un diálogo o la Guía abiertos, y la Guía y los Atajos no se abren durante la toma ni mientras falte confirmar su parada (UX-01, AR-01). La toma queda en «Parando…» hasta que tu juego lo confirma, y Tomas apunta el control devuelto en segundos (B5 pide menos de 1 s). Con la toma armada, `Esc` desarma; `Espacio` nunca rueda. Desde dentro del juego la para la tecla «Parar toma» del mod de cliente, y la cabecera de la toma lo dice con su tecla (UX-46).
 5. **Quitar y repetir.** Tras una toma, «Reaplicar y preparar» aplica la escena entera y vuelve a armar (B6). «Quitar del juego» quita todo lo de la escena y deja el documento como estaba.
 6. **Recargar.** «Recargar desde disco» y «Leer el juego ahora» están en las propiedades de la escena. Recargar la página vuelve a pintar lo último que da el backend.
 7. **Cuando algo se cae.** Sin servidor, las órdenes nuevas se quedan Pendiente y caducan a Fallido «No se entregó». Sin backend, las luces quedan en gris con «hace X», un aviso lo dice, Actividad enseña «lo último que se supo» y no se puede guardar ni aplicar nada. Si se pierde tu juego o el backend durante la toma, la toma falla, su orden queda Parcial explicando el hombre muerto del mod (F5: para la cámara y los actores por seguridad), Parar se queda como «Parada sin confirmar» y todo se reconcilia al leer. Si el servidor se reinicia, aviso de mundo nuevo con el epoch nuevo hasta volver a aplicar.
@@ -100,7 +100,7 @@ Solo donde las lanes diferían o donde la prueba del prototipo cambió algo. El 
 | Ir a Escena | `1` | Propio |
 | Ir a Rodaje | `2` | Propio |
 
-Gestos del mapa: clic selecciona; Ctrl + clic añade o quita; Mayús + clic selecciona seguidos (DayZ Editor). Arrastrar mueve lo seleccionado; Mayús + arrastrar lo gira (Eden). Botón derecho y arrastrar mueve el mapa y la rueda acerca (Eden). Mayús + clic derecho añade una marca al actor elegido (Eden). Las flechas mueven lo seleccionado con el paso de la rejilla y Alt mueve fino, 0,1 m y 1° (DayZ Editor). Lo bloqueado no se arrastra.
+Gestos del mapa: clic selecciona; Ctrl + clic añade o quita; Mayús + clic selecciona seguidos (DayZ Editor). Arrastrar mueve lo seleccionado; Mayús + arrastrar lo gira (Eden). Botón derecho y arrastrar mueve el mapa y la rueda acerca (Eden); con el ratón encima de lo seleccionado, la rueda lo gira con la rejilla de giro, y con Alt de grado en grado (propio, UX-44). La rueda encima de un campo numérico lo sube o lo baja un paso, y con Mayús diez (OBS, UX-45). Mayús + clic derecho añade una marca al actor elegido (Eden). Las flechas mueven lo seleccionado con el paso de la rejilla y Alt mueve fino, 0,1 m y 1° (DayZ Editor). Lo bloqueado no se arrastra.
 
 Reglas: los atajos no actúan mientras se escribe en un campo (`Esc` deshace lo escrito y `Ctrl+Intro` aplica). Una tecla mantenida no repite Aplicar, Preparar ni Rodar. `Intro` coloca mientras se está colocando y rueda con la toma armada: los dos contextos nunca coinciden. Los atajos son de la web y no llegan con DayZ en primer plano (punto abierto C-16).
 
@@ -196,9 +196,9 @@ El manifiesto de cada prueba guarda revisión y hash, operación, epoch y genera
 
 1. **Tema de serie:** oscuro (lo propuesto, por las sesiones largas junto al juego) o claro. Los dos están hechos.
 2. **Pasos de las rejillas:** 0,5 m y 15° (Alt, 0,1 m y 1°) son propios. Si se verifican los de serie de Eden o del DayZ Editor, ganan esos.
-3. **Parar desde dentro del juego (C-16):** hoy se para desde el navegador y, si algo se cae, el hombre muerto del mod (F5). Una tecla en el cliente queda fuera de M1 salvo que la quieras.
-4. **Vista previa:** mientras no elijas, el prototipo enseña la opción de las marcas: al mover el cursor de tiempo, los actores se quedan en su sitio con sus marcas, y solo se mueven en el mapa mientras rueda la toma. La otra opción es moverlos con una velocidad supuesta, rayados como estimación (UX-30 de la lista de noviembre).
-5. **Aplicar otra escena encima de la que hay en el juego:** Astra la bloquea hasta resetear la anterior; #9 ya resetea y crea. Recomiendo seguir #9 con un aviso que nombre la escena que se quita.
+3. **Parar desde dentro del juego (C-16):** resuelto el 2026-11-05. Guillermo la quiere en M1: la tecla «Parar toma» del mod de cliente para la toma igual que Parar en la web. La web enseña la tecla que dé el backend (UX-46), y el plan de F5 lo recoge en un hilo aparte.
+4. **Vista previa:** resuelto el 2026-11-05. Guillermo elige moverlos: al mover el cursor de tiempo, cada actor con recorrido se pinta también donde estaría, rayado como estimación a la velocidad supuesta, sin quitar su sitio ni sus marcas (UX-30 de la lista de noviembre).
+5. **Aplicar otra escena encima de la que hay en el juego:** resuelto el 2026-11-05. Guillermo elige seguir #9: Aplicar quita la escena del juego y crea la nueva, con un aviso que nombra la que se quita (UX-15 y UX-47). Astra la bloqueaba hasta resetear la anterior.
 6. **Nombre de Aplicar:** resuelto en noviembre. Es «Aplicar escena», con nombre fijo, y los cambios sin aplicar van junto al nombre de la escena (UX-04).
 
 ### Para los contratos (F1, F2 y los spikes)
@@ -214,7 +214,7 @@ El manifiesto de cada prueba guarda revisión y hash, operación, epoch y genera
 
 ## 9. Procedencia de cada parte
 
-Las fuentes se consultaron el 2026-10-27, el 2026-10-28 y el 2026-11-04.
+Las fuentes se consultaron el 2026-10-27, el 2026-10-28, el 2026-11-04 y el 2026-11-05.
 
 | # | Parte de la interfaz | Referente | Qué se copia | Fuente | Propuso |
 |---|---|---|---|---|---|
@@ -282,10 +282,13 @@ Las fuentes se consultaron el 2026-10-27, el 2026-10-28 y el 2026-11-04.
 | 62 | Marcas y claves con su dueño, lo demás atenuado, y leyenda plegable dentro del mapa | Eden (mapa 2D) y Replay Mod (caminos de cámara) | Iconos de entidades en el mapa 2D y claves numeradas en el camino | [replaymod.com](https://www.replaymod.com/docs/#camera-paths) | Las cinco |
 | 63 | La edad de la lectura, aparte de la de la petición | PROPIO (D2 y decisión #23), sobre el Session Inspector de UEFN | Duración frente a fecha de fin de cada operación | [dev.epicgames.com](https://dev.epicgames.com/documentation/fortnite/uefn-session-inspector) | Astra |
 | 64 | Paneles acoplados de borde a borde que se ajustan; layouts guardados | Roblox Studio y Dockview (decisión #21) | Acoplar paneles y guardar la disposición (D3) | [create.roblox.com](https://create.roblox.com/docs/studio/overview#layout-customization) | Las dos |
+| 65 | La rueda encima de lo seleccionado lo gira; en el resto del mapa acerca y aleja | PROPIO (petición de Guillermo, UX-44) | Ningún referente de la lista gira con la rueda: Eden y Zeus giran con Mayús + arrastrar, y en su mapa la rueda acerca | [community.bistudio.com](https://community.bistudio.com/wiki/Arma_3_Field_Manual_-_Zeus) | Guillermo |
+| 66 | La rueda encima de un campo numérico lo sube o lo baja un paso, y con Mayús diez | OBS Studio (campos de Qt) | La rueda cambia el campo que tiene debajo; aquí, si venía desplazando el panel, lo sigue desplazando | [obsproject.com](https://obsproject.com/forum/threads/in-game-scroll-wheel-changing-settings.83422/) | Guillermo |
+| 67 | En Rodaje, con el cursor de tiempo movido, el actor también se pinta rayado donde estaría; clic en un gesto elige a su actor | Sequencer de Unreal y caminos de Replay Mod | Al arrastrar el cursor de tiempo, lo animado se ve donde está en ese instante; aquí es una estimación a la velocidad supuesta y va rayada (UX-30) | [dev.epicgames.com](https://dev.epicgames.com/documentation/en-us/unreal-engine/sequencer-cinematic-editor-unreal-engine) | Gemini 4 y Muse |
+| 68 | La toma también se para desde tu juego, con la tecla «Parar toma» del mod de cliente | Rockstar Editor | Dentro de GTA V, una tecla empieza a grabar y otra para (F1 y F2 de serie), sin salir del juego (UX-46) | [support.rockstargames.com](https://support.rockstargames.com/articles/4gZPiqdUZD8ZhaJ81IPDJr/how-to-record-clips-and-access-the-rockstar-editor-in-gtav-on-pc) | Gemini 4 |
 
 ## 10. Fuera de M1 (R25)
 
-- Una tecla de parar dentro del cliente del juego.
 - Una vista de calibración del mapa con los tres puntos de la georreferencia.
 - Selección por recuadro en el mapa, cuando se verifique cómo la hace Eden.
 - Composiciones reutilizables, exportar a otros editores y temas ampliables (C-05 de Astra).
@@ -308,7 +311,7 @@ Hecha el 2026-11-04 sobre el prototipo con las mejoras AHORA (`10274b7`): [infor
 
 Mantiene dos disensos fuertes, que llegaron literales a Guillermo: no dar AHORA por cerrado por el verde de las pruebas, y no presentar como copiados de Unreal o Reforger los valores exactos de letra, tamaño y paleta. Al primero responden AR-01 a AR-07 y las pruebas nuevas; al segundo, AR-08. De lo que noviembre eligió frente a su lane, deja de sostener el disenso en los tres puntos: los 13 px (pide comprobar la lectura a escala real antes de elegir entre 13 y 14), «Quitar del juego» y «MCP apagado» en la barra de estado. Ninguno de sus hallazgos toca lo que se le quitó de su lane en octubre.
 
-Quedan para su siguiente revisión la segunda pasada (UX-18, UX-33 y UX-15) y estos arreglos.
+Quedan para su siguiente revisión la segunda pasada (UX-18, UX-33 y UX-15), estos arreglos y lo del 5 de noviembre (UX-44, UX-45, UX-30, UX-46 y UX-47).
 
 ## 12. Verificación y cambios
 
@@ -334,6 +337,13 @@ Quedan para su siguiente revisión la segunda pasada (UX-18, UX-33 y UX-15) y es
 - Barra de estado a 1024, 1093, 1280, 1366, 1440 y 1600 px, con y sin backend, y a 390 px, con el cursor en 24 puntos del mapa: nada se pisa ni se sale. A 1024 y 1093 px, y sin backend a 1280, pasa a dos líneas.
 - Capturas revisadas a mano: la página entera a 1280 × 800 en oscuro y a 1440 × 900 en claro, y la barra de estado en cada ancho.
 - Fallos que encontraron las pruebas y ya están arreglados: en la segunda pasada, un bloque de la Guía dentro del fondo de los diálogos, que anulaba los atajos, y la ayuda nueva, que tapaba los botones del mapa; después, la barra de estado, que a 1280 px pisaba sus zonas y a 1024 sacaba «MCP apagado» del borde.
+
+**5 de noviembre (UX-44, UX-45, UX-30, UX-46 y UX-47):**
+
+- `node ui/prototipo/pruebas-mejoras.js`: 76 de 76, código de salida 0. Contra `76caccb`, el prototipo de antes de esta tanda, da 70 de 76: fallan los cinco «+» y UX-30 −, y pasan los «−» que ya se cumplían (el detalle está en la §8 de la lista de noviembre).
+- `node ui/prototipo/mutantes.js`: el control da 9 de 9 y los cinco mutantes hacen fallar su caso; el nuevo pinta sin rayado al actor estimado.
+- `node ui/prototipo/pruebas.js`: 64 de 64. Con la tabla de referentes de la Guía en 68 filas.
+- Capturas revisadas a mano: la línea de ayuda con algo elegido, a 1280 × 800 y 1440 × 900, no tapa los botones del mapa; y Rodaje con Mirek estimado.
 
 Cambios del prototipo al consolidar: paleta y letra del DayZ Editor; los atajos de la sección 5; los gestos de Eden en el mapa y las rejillas; «Leer el suelo» al colocar; Parcial tras un corte después de entregar y su reconciliación; las tres luces y el backend caído; «Parando…», control devuelto, hombre muerto, bloqueo de edición durante la toma y la insignia de OBS; el total del presupuesto; «Probar ambiente» y «Leer el juego ahora»; la Guía con 54 referentes y su procedencia.
 

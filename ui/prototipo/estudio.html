@@ -377,6 +377,7 @@ details.tech .tb .mono{font-size:12px;word-break:break-all}
 .tick.minor{top:18px;border-color:var(--line)}
 .lane{position:relative;height:46px;border-bottom:1px solid var(--line)}
 .lane .seglbl{position:absolute;top:12px;height:22px;border-radius:4px;font-size:12px;line-height:22px;padding:0 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--fg-2);background:color-mix(in srgb,var(--fg-2) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--fg-2) 30%,transparent)}
+.lane button.seglbl{border:0;font-family:inherit;text-align:left;cursor:pointer}
 .lane .seglbl.est{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--fg-2) 14%,transparent) 0 5px,transparent 5px 10px)}
 .lane .seglbl.gest{color:var(--fg);background:color-mix(in srgb,var(--st-part) 18%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--st-part) 60%,transparent)}
 .lane .seglbl.cam{background:color-mix(in srgb,var(--cam) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--cam) 50%,transparent)}
@@ -855,6 +856,8 @@ const S = {
   undo: [{name: 'Mover Volga de policía', before: clone(R12), after: clone(R13), t: 0}, {name: 'Añadir Bidón amarillo', before: clone(R13), after: clone(DOC14), t: 0}],
   redo: [], world: null, worldAmb: null, worldAmbAt: 0, obs: {}, queue: [],
   sim: {backend: true, server: true, director: true, expansion: true, dof: true, fault: false},
+  // la tecla «Parar toma» del mod de cliente, con el nombre que da el backend; se cambia en los controles del juego (C-16, UX-46). «Fin» es un ejemplo
+  stopKey: 'Fin',
   hb: {backend: T0, server: T0, client: T0}, epoch: '7c19e2a4', epochNew: false, qsnap: null,
   grid: {move: true, step: 0.5, rot: true, rstep: 15}, ground: {},
   sel: null, placing: null, keepPlacing: false, markArm: false,
@@ -952,7 +955,9 @@ function editBlock() {
 /* =========================================================
    Documento: transacciones con nombre (A5)
    ========================================================= */
+let wheelMerge = null;
 function commit(name, fn, merge) {
+  merge = merge || wheelMerge;
   const why = editBlock(); if (why) { toast(why, 'fail'); renderRight(); return false; }
   const before = clone(S.doc);
   fn(S.doc);
@@ -1066,7 +1071,7 @@ function applyScene(after) {
   if (errs.length) { S.dtab = 'validacion'; if (S.ws !== 'escena') go('escena'); L.de = true; applyLayout(); renderAll(); return toast(`No se aplica: ${errs.length === 1 ? 'hay un error' : 'hay ' + errs.length + ' errores'} en la escena. Los tienes en la pestaña Validación.`, 'fail'); }
   const snap = clone(S.doc), roots = snap.entities.length;
   const kids = snap.entities.filter(e => e.kind === 'actor').reduce((n, a) => n + ward(a.wardrobe).items.length, 0);
-  const fault = S.sim.fault; S.sim.fault = false;
+  const fault = S.sim.fault, gone = S.other ? otherName() : ''; S.sim.fault = false;
   const op = newOp({verb: 'scene_apply', rev: snap.rev, label: 'Aplicar escena', target: snap.name, stages: ['Validar', 'Reservar presupuesto', 'Quitar lo anterior', 'Crear entidades', 'Leer el mundo', 'Publicar'].map(n => ({name: n, st: ''}))});
   S.applying = op.id; renderAll();
   deliver(op, 'server', () => runSteps(op, 'server', [
@@ -1095,7 +1100,7 @@ function applyScene(after) {
     let maxErr = 0; Object.keys(S.obs).forEach(id => { const w = S.world.ents[id], o = S.obs[id]; maxErr = Math.max(maxErr, Math.hypot(w.x - o.x, w.z - o.z)); });
     op.stages.forEach(s => { s.st = 'ok'; });
     setOp(op, {state: 'observado', origin: 'servidor · lectura del mundo', detail: `${roots} de ${roots} entidades y ${kids} prendas · conteos exactos por clase · error de posición máx. ${nf(maxErr, 2)} m`});
-    opDone(op); toast(`Escena aplicada y leída: ${roots} entidades en su sitio.`, 'ok');
+    opDone(op); toast(`Escena aplicada y leída: ${roots} entidades en su sitio.${gone ? ` Se quitó «${gone}» del juego.` : ''}`, 'ok');
     if (after) after();
   }));
 }
@@ -1240,7 +1245,7 @@ function loopTake() {
 // hasta leerlo, la parada no está confirmada y Parar se queda como «Parada sin confirmar» (UX-01, UX-12)
 const lostPeer = () => !S.sim.backend ? 'el backend' : !S.sim.server ? 'el servidor' : 'tu juego';
 const lostWhy = when => `Se perdió ${lostPeer()} ${when}. Por seguridad, el mod para solo la cámara y los actores cuando pierde la conexión (hombre muerto), pero falta confirmarlo leyendo el juego. Se comprueba sola al volver la conexión; después, reaplica y prepara la toma siguiente.`;
-function endTake(state, why) {
+function endTake(state, why, from) {
   const t = S.take.t, n = S.take.n, ctl = S.take.stopReq ? (now() - S.take.stopReq) / 1000 : 0;
   document.body.classList.remove('rolling');
   const entry = {n, state, dur: state === 'terminada' ? S.take.dur : t, cam: S.take.cam, at: now(), why: why || (state === 'parada' ? `Parada a los ${nf(t, 1)} s. Control devuelto en ${nf(ctl, 2)} s.` : '')};
@@ -1250,10 +1255,10 @@ function endTake(state, why) {
   const op = S.queue.find(o => o.id === S.take.op);
   if (op) {
     if (state === 'terminada') setOp(op, {state: 'observado', detail: `Terminada en ${nf(entry.dur, 2)} s · desfase ${actors().map(a => `${a.name} ${entry.lag[a.id]} ms`).join(', ')}`});
-    else if (state === 'parada') setOp(op, {state: 'observado', detail: entry.why});
+    else if (state === 'parada') setOp(op, Object.assign({state: 'observado', detail: entry.why}, from === 'juego' ? {origin: 'tu juego · tecla «Parar toma»'} : {}));
     else { op.lost = true; op.recon = `el mod paró la cámara y los actores a los ${nf(t, 1)} s`; setOp(op, {state: 'parcial', detail: why}); }
   }
-  toast(state === 'terminada' ? `Toma ${pad2(n)} terminada en ${nf(entry.dur, 2)} s.` : state === 'parada' ? `Toma ${pad2(n)} parada a los ${nf(t, 1)} s. Control devuelto en ${nf(ctl, 2)} s.` : `Toma ${pad2(n)}: parada sin confirmar. Se perdió ${lostPeer()}; el mod para solo por seguridad y se confirma al volver la conexión.`, state === 'terminada' ? 'ok' : state === 'parada' ? '' : 'fail');
+  toast(state === 'terminada' ? `Toma ${pad2(n)} terminada en ${nf(entry.dur, 2)} s.` : state === 'parada' ? (from === 'juego' ? `Toma ${pad2(n)} parada desde tu juego a los ${nf(t, 1)} s.` : `Toma ${pad2(n)} parada a los ${nf(t, 1)} s. Control devuelto en ${nf(ctl, 2)} s.`) : `Toma ${pad2(n)}: parada sin confirmar. Se perdió ${lostPeer()}; el mod para solo por seguridad y se confirma al volver la conexión.`, state === 'terminada' ? 'ok' : state === 'parada' ? '' : 'fail');
   renderAll();
 }
 function reconcileTakes() {
@@ -1420,6 +1425,15 @@ function drawMap() {
   LBL.length = 0; drawScene(g);
   updateScale();
 }
+// Rayado de lo estimado, como los tramos estimados de la línea de tiempo (UX-30)
+const HATCH = {};
+function hatch(col) {
+  if (HATCH[col]) return HATCH[col];
+  const c = document.createElement('canvas'), h = c.getContext('2d'); c.width = c.height = 6;
+  h.fillStyle = 'rgba(255,255,255,.8)'; h.fillRect(0, 0, 6, 6); h.strokeStyle = col; h.lineWidth = 1.6;
+  h.beginPath(); h.moveTo(-1, 7); h.lineTo(7, -1); h.moveTo(-1, 1); h.lineTo(1, -1); h.moveTo(5, 7); h.lineTo(7, 5); h.stroke();
+  return (HATCH[col] = ctx.createPattern(c, 'repeat'));
+}
 function drawGlyph(g, kind, x, y, yaw, style) {
   const col = MC[{objeto: 'obj', infectado: 'zmb', animal: 'ani', actor: 'act'}[kind]];
   // un 25 % más grandes, con contorno y una muesca hacia donde mira (UX-09)
@@ -1429,7 +1443,8 @@ function drawGlyph(g, kind, x, y, yaw, style) {
   else if (kind === 'infectado') { g.rotate(yaw * Math.PI / 180); g.moveTo(0, -8.75); g.lineTo(7.5, 6.25); g.lineTo(-7.5, 6.25); g.closePath(); }
   else if (kind === 'animal') { g.moveTo(0, -8.75); g.lineTo(7.5, 0); g.lineTo(0, 8.75); g.lineTo(-7.5, 0); g.closePath(); }
   else g.arc(0, 0, 8.75, 0, Math.PI * 2);
-  if (style === 'draft') { g.fillStyle = 'rgba(255,255,255,.6)'; g.fill(); g.setLineDash([3, 2]); g.lineWidth = 1.9; g.strokeStyle = col; g.stroke(); g.setLineDash([]); }
+  if (style === 'est') { g.fillStyle = hatch(col); g.fill(); g.lineWidth = 1.9; g.strokeStyle = col; g.stroke(); }
+  else if (style === 'draft') { g.fillStyle = 'rgba(255,255,255,.6)'; g.fill(); g.setLineDash([3, 2]); g.lineWidth = 1.9; g.strokeStyle = col; g.stroke(); g.setLineDash([]); }
   else { g.fillStyle = col; g.fill(); g.lineWidth = 3.2; g.strokeStyle = 'rgba(20,20,14,.75)'; g.stroke(); g.lineWidth = 1.5; g.strokeStyle = 'rgba(255,255,255,.95)'; g.stroke(); }
   g.restore();
   if (style !== 'ghost') { const a = yaw * Math.PI / 180, r0 = kind === 'actor' ? 8.75 : 7.5, r1 = r0 + 6; g.beginPath(); g.moveTo(x + Math.sin(a) * r0, y - Math.cos(a) * r0); g.lineTo(x + Math.sin(a) * r1, y - Math.cos(a) * r1); g.lineCap = 'round'; g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.stroke(); }
@@ -1512,7 +1527,7 @@ function drawScene(g) {
     if (!S.layers[kind]) return;
     S.doc.entities.filter(e => e.kind === kind && !S.hidden[e.id]).forEach(e => {
       let p = dragPos('ent', e.id) || {x: e.x, z: e.z};
-      // los actores solo se mueven en el mapa mientras rueda: el cursor de la línea de tiempo no los mueve
+      // mientras rueda, el actor va donde lo lleva la toma; con el cursor de tiempo, se pinta aparte su estimación (UX-30)
       if (kind === 'actor' && live) p = actorAt(e, Math.max(0, t - (S.take.lag[e.id] || 0) / 1000));
       const st = entState(e), [x, y] = w2s(p.x, p.z), draft = st !== 'observado';
       const yw = dragYaw(e.id);
@@ -1520,6 +1535,9 @@ function drawScene(g) {
       if (yw !== null) label(g, Math.round(yw) + '°', x + 15, y - 12, true, true);
       if (kind === 'actor') {
         label(g, e.name, x + 15, y + 4, true);
+        // en Rodaje, con el cursor de tiempo movido y sin rodar, el actor con recorrido se pinta también donde estaría, rayado: es una
+        // estimación a la velocidad supuesta, no lo que hará el juego (§8.4 de octubre, UX-30)
+        if (inRod && !live && t > 0 && !['HOLD', 'ROAM'].includes(e.behaviour) && actorPlan(e).total > 0) { const q = actorAt(e, t), [qx, qy] = w2s(q.x, q.z); drawGlyph(g, kind, qx, qy, e.yaw, 'est'); label(g, `${e.name} · estimado`, qx + 15, qy + 4, false, true); }
         if (live) gestureSpans(e).forEach(sp => { if (t >= sp.start && t <= sp.end) { g.beginPath(); g.arc(x, y, 15 + 3 * Math.sin(now() / 120), 0, Math.PI * 2); g.strokeStyle = MC.mark; g.lineWidth = 2; g.stroke(); label(g, sp.name, x + 15, y + 18, false, true); } });
       }
       if (sel && sel.type === 'ent' && sel.ids.includes(e.id)) { ring(g, x, y, kind === 'actor' ? 15 : 12.5); if (kind !== 'actor') label(g, e.name, x + 15, y + 4, false, true); }
@@ -1658,9 +1676,31 @@ function endDrag() {
 canvas.addEventListener('pointerup', endDrag);
 canvas.addEventListener('pointercancel', endDrag);
 canvas.addEventListener('dblclick', ev => { const [px, py] = local(ev), hit = hitTest(px, py); if (hit) { select(hit.type === 'ent' ? {type: 'ent', ids: [hit.id]} : hit); focusProps(); } });
+// Con el ratón encima de lo seleccionado, la rueda gira su rumbo a saltos de la rejilla de giro, y con Alt de grado en grado; hacia
+// arriba, a la derecha. En el resto del mapa, la rueda acerca y aleja, como en Eden y en el mapa del juego (UX-44)
+let wheelAcc = 0, wheelAt = 0;
+function wheelTurn(ev, hit) {
+  const sel = S.sel;
+  if (!hit || !sel || editBlock()) return false;
+  let ids = null, key = null;
+  if (hit.type === 'ent' && sel.type === 'ent' && selIds().includes(hit.id)) ids = selIds().filter(id => !S.locked[id]);
+  else if (hit.type === 'key' && sel.type === 'key' && sel.cam === hit.cam && sel.ki === hit.ki) key = hit;
+  else if (hit.type === 'cam' && sel.type === 'cam' && sel.cam === hit.cam) key = {cam: hit.cam, ki: 0};
+  else return false;
+  if (now() - wheelAt > 300) wheelAcc = 0;
+  wheelAt = now(); wheelAcc += ev.deltaY * (ev.deltaMode === 1 ? 33 : 1);
+  const n = Math.trunc(wheelAcc / 100);
+  if (!n || (ids && !ids.length)) return true;
+  wheelAcc -= n * 100;
+  const d = -n * (ev.altKey ? 1 : S.grid.rstep), turn = y => ((Math.round(y + d) % 360) + 360) % 360;
+  if (key) { const c = camById(key.cam); commit(`Girar K${key.ki + 1} de ${c.name}`, doc => { const k = doc.cameras.find(q => q.id === c.id).keys[key.ki]; k.yaw = turn(k.yaw); }, `rueda ${c.id} ${key.ki}`); }
+  else commit(ids.length === 1 ? 'Girar ' + ent(ids[0]).name : `Girar ${ids.length} entidades`, doc => { ids.forEach(id => { const e = doc.entities.find(x => x.id === id); e.yaw = turn(e.yaw); }); }, 'rueda ' + ids.join(' '));
+  return true;
+}
 canvas.addEventListener('wheel', ev => {
   ev.preventDefault();
   const [px, py] = local(ev), [wx, wz] = s2w(px, py);
+  if (wheelTurn(ev, hitTest(px, py))) return;
   V.s = clamp(V.s * Math.exp(-ev.deltaY * 0.0015), 0.035, 14);
   V.cx = wx - (px - V.w / 2) / V.s; V.cz = wz + (py - V.h / 2) / V.s; markMap();
 }, {passive: false});
@@ -1793,7 +1833,7 @@ function renderTop() {
   st.hidden = !(['armada', 'rodando', 'parando'].includes(ts) || unc);
   st.classList.toggle('stop', ts !== 'armada' || unc); st.classList.toggle('busy', ts === 'parando' || unc); st.disabled = ts === 'parando' || unc;
   st.innerHTML = unc ? `${sm('parcial')} Parada sin confirmar` : ts === 'parando' ? `${sm('ejecutando')} Parando…` : `${ic('stop')} ${ts === 'rodando' ? 'Parar' : 'Desarmar'} <kbd>${keyLabel(keyOf('stop'))}</kbd>`;
-  st.title = unc ? 'Se perdió la conexión durante la toma. El mod para solo la cámara y los actores por seguridad; se confirma al leer el juego cuando vuelva la conexión.' : ts === 'armada' ? 'Desarma la toma sin rodar' : `Para la toma (${keyLabel(keyOf('stop'))}${keyOf('stop2') ? ' o ' + keyLabel(keyOf('stop2')) : ''})`;
+  st.title = unc ? 'Se perdió la conexión durante la toma. El mod para solo la cámara y los actores por seguridad; se confirma al leer el juego cuando vuelva la conexión.' : ts === 'armada' ? 'Desarma la toma sin rodar' : `Para la toma (${keyLabel(keyOf('stop'))}${keyOf('stop2') ? ' o ' + keyLabel(keyOf('stop2')) : ''}). Desde tu juego, con «Parar toma»${S.stopKey ? ' (' + S.stopKey + ')' : ''}`;
   $('#bTools').innerHTML = `Herramientas ${ic('chev')}`; $('#bTools').title = 'Paneles, layouts, atajos de teclado y ocultar la interfaz';
   $('#bSim').innerHTML = `${ic('flask')}<span>Simular</span>`; $('#bSim').title = 'Simular fallos del juego (solo en el prototipo)';
   $('#bRefs').innerHTML = ic('tag'); $('#bRefs').title = 'Ver de qué juego sale cada parte'; $('#bRefs').setAttribute('aria-pressed', String(S.refs));
@@ -2103,7 +2143,7 @@ function timelineHtml() {
     let segs = '';
     if (a.behaviour === 'HOLD' || !Pp.total) segs = `<span class="seglbl" style="left:0;width:${pct(span)}">${a.behaviour === 'ROAM' ? `Deambula en ${a.roam || 15} m` : 'Quieto'}</span>`;
     else { for (let i = 1; i < Pp.pts.length; i++) segs += `<span class="seglbl est" style="left:${pct(Pp.arr[i - 1])};width:calc(${pct(Pp.arr[i] - Pp.arr[i - 1])} - 2px)" title="Estimado a ${nf(SPEED, 1)} m/s; la duración real se mide en la toma">→ M${i}</span>`; if (a.behaviour === 'LOOP') segs += `<span class="seglbl est" style="left:${pct(Pp.total)};width:${pct(Math.max(0, span - Pp.total))}">en bucle</span>`; }
-    gs.forEach(g => { segs += `<span class="seglbl gest" style="left:${pct(g.start)};width:${pct(g.end - g.start)};top:${a.behaviour === 'HOLD' ? 13 : 13}px;z-index:1">${esc(g.name)}</span>`; });
+    gs.forEach(g => { segs += `<button class="seglbl gest" data-act="sel" data-v="ent:${a.id}" title="${esc(g.name)} · clic para elegir a ${esc(a.name)}" style="left:${pct(g.start)};width:${pct(g.end - g.start)};top:${a.behaviour === 'HOLD' ? 13 : 13}px;z-index:1">${esc(g.name)}</button>`; });
     lanesL.push(`<div class="lane-l"><b>${gl('actor')}${esc(a.name)}</b><small>${BEHN[a.behaviour]} · ${pl((a.marks || []).length, 'marca', 'marcas')} · ${pl((a.gestures || []).length, 'gesto', 'gestos')}</small></div>`);
     lanes.push(`<div class="lane">${segs}</div>`);
   });
@@ -2128,6 +2168,7 @@ function renderSlate() {
   else if (st === 'bloqueada') { const f = bad[0] || {fix: 'prep', fixTxt: 'Volver a preparar', txt: ''}; if (f.txt) fix = `<span class="tfix">${esc(f.txt)}</span>`; act = `<button class="btn primary" data-act="${f.fix === 'apply' ? 'take-reapply' : 'take-prep'}">${esc(f.fixTxt || 'Volver a preparar')}</button>`; }
   else if (st === 'armada') act = `<button class="btn primary" data-act="take-roll" data-ref="Intro arranca la vista previa: Eden">${ic('play')} Rodar <kbd>${keyLabel(keyOf('roll'))}</kbd></button>`;
   else if (ended) act = `<button class="btn primary" data-act="take-reapply" ${tk.unconfirmed ? `disabled title="${UNC}"` : ''}>${ic('reset')} Reaplicar y preparar la ${pad2(tk.n)}</button>`;
+  if (st === 'armada' || st === 'rodando') fix = `<span class="tfix">También para desde tu juego, con «Parar toma»${S.stopKey ? ` (<kbd>${esc(S.stopKey)}</kbd>)` : ''}</span>`;
   const camOpts = S.doc.cameras.map(x => `<option value="${x.id}" ${x.id === tk.cam ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
   const t = st === 'rodando' || st === 'parando' ? tk.t : (ended && tk.log[0] ? tk.log[0].dur : 0);
   w.innerHTML = `<div class="takebar" data-ref="Transporte de Ableton Live · Studio Mode de OBS"><span class="tn">Toma ${pad2(shown)}</span><label>Cámara <select id="takeCam" ${takeActive() ? 'disabled' : ''}>${camOpts}</select></label><span class="tstate${st === 'bloqueada' || st === 'fallida' ? ' bad' : ''}">${icon}<span>${label}</span></span><span class="grow"></span>${fix}<span class="tc" id="tcBig">${tc(t)}</span><div class="tact">${act}</div></div>`;
@@ -2153,12 +2194,13 @@ function renderHint() {
 function selHint() {
   if (!S.sel || !['ent', 'mark', 'key', 'cam'].includes(S.sel.type) || editBlock()) return '';
   const k = id => keyOf(id) ? `<kbd>${keyLabel(keyOf(id))}</kbd>` : '', m = v => nf(v, v < 1 ? 1 : 0);
-  const mv = S.grid.move ? `a saltos de ${m(S.grid.step)} m` : 'libre', rt = S.grid.rot ? `de ${S.grid.rstep}° en ${S.grid.rstep}°` : 'libre';
+  const mv = S.grid.move ? `a saltos de ${m(S.grid.step)} m` : 'libre', wh = `de ${S.grid.rstep}° en ${S.grid.rstep}°`;
+  const turn = S.grid.rot ? `Mayús + arrastrar o la rueda encima gira ${wh}` : `Mayús + arrastrar gira libre, y la rueda encima ${wh}`;
   const del = k('del') ? ` · ${k('del')} borra` : '';
-  if (S.sel.type !== 'ent') return `Arrastra para mover ${mv} · Alt, fino${del}`;
+  if (S.sel.type !== 'ent') return `Arrastra para mover ${mv}${S.sel.type === 'mark' ? '' : ` · la rueda encima gira ${wh}`} · Alt, fino${del}`;
   const ids = selIds(); if (!ids.length) return '';
   if (ids.every(id => S.locked[id])) return `${ids.length === 1 ? 'Está bloqueado' : 'Están bloqueados'}: ${k('unlock') ? k('unlock') + ' desbloquea' : 'desbloquéalo en la Jerarquía'}`;
-  return `Arrastra para mover ${mv} · Mayús + arrastrar gira ${rt} · Alt, fino${del}${k('dup') ? ` · ${k('dup')} duplica` : ''}`;
+  return `Arrastra para mover ${mv} · ${turn} · Alt, fino${del}${k('dup') ? ` · ${k('dup')} duplica` : ''}`;
 }
 function renderBanner() {
   const b = $('#banner'); let html = '', cls = '';
@@ -2281,6 +2323,7 @@ function renderLegend() {
   const states = [
     ['Relleno', 'en el juego y leído', `<rect x="4" y="4" width="10" height="10" fill="${MC.obj}" stroke="#fff" stroke-width="1.5"/>`],
     ['Contorno discontinuo', 'en el documento y todavía no en el juego', `<rect x="4" y="4" width="10" height="10" fill="rgba(255,255,255,.6)" stroke="${MC.obj}" stroke-width="1.6" stroke-dasharray="2.5 1.8"/>`],
+    ['Rayado', 'dónde estaría un actor en el momento del cursor de tiempo: una estimación', `<defs><pattern id="lgHatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="4" height="4" fill="#fff"/><rect width="1.6" height="4" fill="${MC.act}"/></pattern></defs><circle cx="9" cy="9" r="5.6" fill="url(#lgHatch)" stroke="${MC.act}" stroke-width="1.5"/>`],
     ['Fantasma y línea', 'dónde sigue en el juego y adónde irá al aplicar', `<rect x="1.5" y="9.5" width="7" height="7" fill="${MC.obj}" opacity=".3"/><path d="M5 13 12 6" stroke="rgba(40,40,30,.6)" stroke-dasharray="2 2"/><rect x="9.5" y="1.5" width="7" height="7" fill="rgba(255,255,255,.6)" stroke="${MC.obj}" stroke-dasharray="2 1.5"/>`]
   ];
   $('#legend').innerHTML = `<h5>Qué es cada cosa</h5>${kinds.map(k => `<div>${sw(k[1])}<span>${k[0]}</span></div>`).join('')}<h5>Frente al juego</h5>${states.map(x => `<div>${sw(x[2])}<span><b>${x[0]}</b>: ${x[1]}</span></div>`).join('')}`;
@@ -2296,11 +2339,11 @@ function gridMenu(anchor) {
     <button class="mi" data-act="grid-tg" data-v="move"><input type="checkbox" ${S.grid.move ? 'checked' : ''} tabindex="-1"> Mover a saltos de ${m(S.grid.step)} m</button>${seg(mv, 'm', S.grid.step, v => m(v) + ' m')}
     <h5>Rejilla de giro</h5>
     <button class="mi" data-act="grid-tg" data-v="rot"><input type="checkbox" ${S.grid.rot ? 'checked' : ''} tabindex="-1"> Girar a saltos de ${S.grid.rstep}°</button>${seg(rt, 'r', S.grid.rstep, v => v + '°')}
-    <div class="note">Como los botones de rejilla de la barra de Eden. Mayús + arrastrar gira lo seleccionado, y Alt mueve o gira fino (0,1 m y 1°) aunque la rejilla esté puesta.</div>`);
+    <div class="note">Como los botones de rejilla de la barra de Eden. Mayús + arrastrar, o la rueda encima, gira lo seleccionado, y Alt mueve o gira fino (0,1 m y 1°) aunque la rejilla esté puesta.</div>`);
 }
 function simMenu(anchor) {
   const t = (k, label) => `<button class="mi" data-act="sim" data-v="${k}"><input type="checkbox" ${S.sim[k] ? 'checked' : ''} tabindex="-1"> ${label}</button>`;
-  openMenu(anchor, `<h5>Simular el juego · solo en el prototipo</h5>${t('backend', 'Backend de la web en marcha')}${t('server', 'Servidor conectado')}${t('director', 'Tu juego conectado')}${t('expansion', 'Expansion cargado en el servidor')}${t('dof', 'Profundidad de campo de vídeo activada')}${t('fault', 'Que el próximo Aplicar falle a mitad')}<hr><button class="mi" data-act="sim-reboot">Reiniciar el servidor (mundo nuevo)</button><div class="note">Sirve para ver cómo responde la interfaz cuando el juego no hace lo que se le pide.</div>`);
+  openMenu(anchor, `<h5>Simular el juego · solo en el prototipo</h5>${t('backend', 'Backend de la web en marcha')}${t('server', 'Servidor conectado')}${t('director', 'Tu juego conectado')}${t('expansion', 'Expansion cargado en el servidor')}${t('dof', 'Profundidad de campo de vídeo activada')}${t('fault', 'Que el próximo Aplicar falle a mitad')}<hr><button class="mi" data-act="sim-reboot">Reiniciar el servidor (mundo nuevo)</button><button class="mi" data-act="sim-gamestop" ${['rodando', 'parando'].includes(S.take.state) ? '' : 'disabled'}>Pulsar «Parar toma» en tu juego</button><div class="note">Sirve para ver cómo responde la interfaz cuando el juego no hace lo que se le pide.</div>`);
 }
 let capture = null;
 function keysDialog() {
@@ -2377,7 +2420,11 @@ const REFS = [
   ['Detalles técnicos plegados: ids, clases, huellas y revisiones', 'World Editor de Reforger (Object Properties)', 'Las propiedades, separadas de la información de la entidad', 'https://community.bistudio.com/wiki/Arma_Reforger:World_Editor', 'Las dos'],
   ['Marcas y claves con su dueño, lo demás atenuado, y leyenda plegable dentro del mapa', 'Eden (mapa 2D) y Replay Mod (caminos de cámara)', 'Iconos de entidades en el mapa 2D y claves numeradas en el camino', 'https://www.replaymod.com/docs/#camera-paths', 'Las cinco'],
   ['La edad de la lectura, aparte de la de la petición', 'PROPIO (D2 y decisión #23), sobre el Session Inspector de UEFN', 'Duración frente a fecha de fin de cada operación', 'https://dev.epicgames.com/documentation/fortnite/uefn-session-inspector', 'Astra'],
-  ['Paneles acoplados de borde a borde que se ajustan; layouts guardados', 'Roblox Studio y Dockview (decisión #21)', 'Acoplar paneles y guardar la disposición (D3)', 'https://create.roblox.com/docs/studio/overview#layout-customization', 'Las dos']
+  ['Paneles acoplados de borde a borde que se ajustan; layouts guardados', 'Roblox Studio y Dockview (decisión #21)', 'Acoplar paneles y guardar la disposición (D3)', 'https://create.roblox.com/docs/studio/overview#layout-customization', 'Las dos'],
+  ['La rueda encima de lo seleccionado lo gira; en el resto del mapa acerca y aleja', 'PROPIO (petición de Guillermo, UX-44)', 'Ningún referente de la lista gira con la rueda: Eden y Zeus giran con Mayús + arrastrar, y en su mapa la rueda acerca', 'https://community.bistudio.com/wiki/Arma_3_Field_Manual_-_Zeus', 'Guillermo'],
+  ['La rueda encima de un campo numérico lo sube o lo baja un paso, y con Mayús diez', 'OBS Studio (campos de Qt)', 'La rueda cambia el campo que tiene debajo; aquí, si venía desplazando el panel, lo sigue desplazando', 'https://obsproject.com/forum/threads/in-game-scroll-wheel-changing-settings.83422/', 'Guillermo'],
+  ['En Rodaje, con el cursor de tiempo movido, el actor también se pinta rayado donde estaría; clic en un gesto elige a su actor', 'Sequencer de Unreal y caminos de Replay Mod', 'Al arrastrar el cursor de tiempo, lo animado se ve donde está en ese instante; aquí es una estimación a la velocidad supuesta y va rayada (UX-30)', 'https://dev.epicgames.com/documentation/en-us/unreal-engine/sequencer-cinematic-editor-unreal-engine', 'Gemini 4 y Muse'],
+  ['La toma también se para desde tu juego, con la tecla «Parar toma» del mod de cliente', 'Rockstar Editor', 'Dentro de GTA V, una tecla empieza a grabar y otra para (F1 y F2 de serie), sin salir del juego (UX-46)', 'https://support.rockstargames.com/articles/4gZPiqdUZD8ZhaJ81IPDJr/how-to-record-clips-and-access-the-rockstar-editor-in-gtav-on-pc', 'Gemini 4']
 ];
 const SRC = [['community.bistudio.com/wiki/', 'Wiki de Bohemia'], ['github.com/InclementDab/DayZ-Editor/wiki/', 'Wiki del DayZ Editor'], ['raw.githubusercontent.com/wiki/InclementDab/DayZ-Editor/', 'Wiki del DayZ Editor'], ['dev.epicgames.com/documentation/unreal-engine/', 'Documentación de Unreal'], ['dev.epicgames.com/documentation/en-us/unreal-engine/', 'Documentación de Unreal'], ['dev.epicgames.com/', 'Documentación de UEFN'], ['gtabase.com/', 'GTABase'], ['badlion.net/wiki/', 'Wiki de Badlion'], ['replaymod.com/', 'Documentación de Replay Mod'], ['docs.unrealengine.com/', 'Documentación de Unreal'], ['reaper.fm/guides/', 'Guía de REAPER'], ['ableton.com/en/manual/', 'Manual de Ableton Live'], ['obsproject.com/kb/', 'Guía de OBS'], ['support.microsoft.com/', 'Soporte de Microsoft'], ['chromium.org/', 'Chromium'], ['create.roblox.com/docs/', 'Documentación de Roblox'], ['dzcommander.com/', 'DZ Commander'], ['dockview.dev/', 'Documentación de Dockview']];
 function srcLabel(u) {
@@ -2390,12 +2437,12 @@ function renderGuide() {
   // el recorrido de una toma, como el Guided Tour del Game Master de Reforger, con las teclas de ahora (UX-15)
   const kb = id => keyOf(id) ? ` <kbd>${keyLabel(keyOf(id))}</kbd>` : '';
   $('#tour').innerHTML = [
-    `<b>Crea la escena.</b> En Escena, abre Añadir, busca lo que quieras y haz clic en el mapa para ponerlo. Arrastra para moverlo; Mayús + arrastrar lo gira.`,
+    `<b>Crea la escena.</b> En Escena, abre Añadir, busca lo que quieras y haz clic en el mapa para ponerlo. Arrastra para moverlo; con la rueda encima, o con Mayús + arrastrar, lo giras.`,
     `<b>Aplica.</b> «Aplicar escena»${kb('apply')} quita del juego lo que había y crea la escena entera; después la lee para confirmar qué hay.`,
     `<b>Pon la cámara.</b> En tu juego, lleva la cámara libre adonde quieras y, en Rodaje, usa «Nueva cámara desde la cámara libre».`,
     `<b>Prepara la toma.</b>${kb('prep')} comprueba de una vez que el juego tiene lo que ves y deja la toma armada.`,
     `<b>Rueda.</b>${kb('roll')} rueda la toma armada. El vídeo lo graba una herramienta externa, como OBS.`,
-    `<b>Para.</b>${kb('stop')} para la toma siempre, aunque haya un menú abierto${keyOf('stop2') ? `; ${keyLabel(keyOf('stop2'))} también` : ''}.`
+    `<b>Para.</b>${kb('stop')} para la toma siempre, aunque haya un menú abierto${keyOf('stop2') ? `; ${keyLabel(keyOf('stop2'))} también` : ''}. Desde tu juego la para la tecla «Parar toma» del mod${S.stopKey ? ` (ahora <kbd>${esc(S.stopKey)}</kbd>)` : ''}, que se cambia en los controles del juego.`
   ].map(t => `<li>${t}</li>`).join('');
   $('#refTable').innerHTML = REFS.map(r => `<tr><td>${esc(r[0])}</td><td>${r[1].startsWith('PROPIO') ? `<span class="tag own">Propio</span> ${esc(r[1].replace(/^PROPIO\s*/, ''))}` : esc(r[1])}</td><td>${esc(r[2])}</td><td><a href="${r[3]}" target="_blank" rel="noopener">${esc(srcLabel(r[3]))}</a></td><td>${esc(r[4])}</td></tr>`).join('');
   const sd = {pendiente: 'Validada en el backend; ningún mod la ha recogido todavía. Si caduca sin entregarse, pasa a Fallido: no se hizo.', ejecutando: 'El mod la recogió y la está haciendo.', aplicado: 'El mod confirma que la hizo. Aún falta leer el juego.', observado: 'Una lectura posterior del juego confirma el resultado.', fallido: 'No se hizo, o la lectura no cumple. Dice por qué.', parcial: 'Falló a mitad, o se perdió la respuesta después de entregarla. Sigue así hasta reconciliar; nunca vuelve a «no ocurrió».'};
@@ -2563,6 +2610,7 @@ document.addEventListener('click', e => {
       setTimeout(() => { S.sim.server = true; S.hb.server = now(); S.epoch = fnv(String(now())).slice(0, 8); S.epochNew = true; S.world = null; S.obs = {}; S.other = null; S.take.dirty = false; if (['armada', 'preparando'].includes(S.take.state)) { S.take.state = 'idle'; S.take.checks = []; } renderAll(); }, 2200);
       break;
     }
+    case 'sim-gamestop': closeMenu(); if (['rodando', 'parando'].includes(S.take.state)) endTake('parada', `Parada desde tu juego a los ${nf(S.take.t, 1)} s, con la tecla «Parar toma».`, 'juego'); break;
     case 'keys': if (takeOpen()) { closeMenu(); toast(openWhy('Los atajos no se cambian'), 'fail'); break; } capture = null; keysDialog(); break;
     case 'key-set': capture = capture === v ? null : v; keysDialog(); break;
     case 'keys-reset': KEYMAP = Object.assign({}, ...ACTIONS.map(x => ({[x.id]: x.def}))); lsSet('keys', {}); capture = null; keysDialog(); renderAll(); break;
@@ -2588,8 +2636,31 @@ function previewLoop(last) {
   requestAnimationFrame(() => previewLoop(t));
 }
 
-// línea de tiempo: arrastrar el cursor y las claves
+// Rueda encima de un campo numérico: lo sube o lo baja un paso, y con Mayús diez, como los campos de OBS. Si la rueda venía desplazando
+// el panel, lo sigue desplazando aunque pase un campo por debajo; los pasos seguidos de un campo son un solo cambio del historial (UX-45)
+const fw = {at: 0, scroll: false, acc: 0};
+document.addEventListener('wheel', ev => {
+  const inp = ev.target.closest ? ev.target.closest('input[type=number]') : null, t = now();
+  if (t - fw.at > 300) { fw.scroll = !inp; fw.acc = 0; }
+  fw.at = t;
+  if (!inp || ev.ctrlKey || ev.metaKey || inp.matches(':disabled') || inp.readOnly) return;
+  if (fw.scroll) { if (document.activeElement === inp) inp.blur(); return; }
+  ev.preventDefault();
+  fw.acc += (ev.deltaY || ev.deltaX) * (ev.deltaMode === 1 ? 33 : 1);
+  const n = Math.trunc(fw.acc / 100);
+  if (!n) return;
+  fw.acc -= n * 100;
+  const st = (parseFloat(inp.step) || 1) * (ev.shiftKey ? 10 : 1), dec = (String(inp.step).split('.')[1] || '').length;
+  let v = (parseFloat(inp.value.replace(',', '.')) || 0) - n * st;
+  if (inp.min !== '') v = Math.max(+inp.min, v);
+  if (inp.max !== '') v = Math.min(+inp.max, v);
+  inp.value = v.toFixed(dec);
+  wheelMerge = 'campo ' + (inp.id || inp.dataset.f + inp.dataset.i); inp.dispatchEvent(new Event('change', {bubbles: true})); wheelMerge = null;
+}, {passive: false});
+
+// línea de tiempo: arrastrar el cursor y las claves; un gesto elige a su actor (UX-30)
 document.addEventListener('pointerdown', e => {
+  if (e.target.closest('.lane .gest')) return;
   const key = e.target.closest('.key'), ruler = e.target.closest('#tlRuler'), lane = e.target.closest('.lane');
   const tr = $('#tlTrack'); if (!tr || !(key || ruler || lane)) return;
   const rect = tr.getBoundingClientRect(), span = +tr.dataset.span, tAt = x => clamp((x - rect.left) / rect.width * span, 0, span);
