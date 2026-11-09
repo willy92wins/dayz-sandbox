@@ -1,3 +1,4 @@
+<!doctype html>
 <title>Estudio DayZ Sandbox</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
@@ -75,7 +76,8 @@ button{cursor:pointer}
 *{scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
 .pb:hover,.tlwrap:hover,.menu:hover,.dialog .db:hover,#guide:hover,.tw:hover{scrollbar-color:var(--muted) transparent}
 svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-svg.sm{width:14px;height:14px;flex:none;overflow:visible}
+/* en modo estándar, un icono de estado solo en su línea no toma el alto de una línea de texto (VIS-07) */
+svg.sm{display:block;width:14px;height:14px;flex:none;overflow:visible}
 svg.g{flex:none}
 .spin{transform-origin:8px 8px;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -104,27 +106,29 @@ body.rolling .top{animation:pulse 1.2s ease-in-out infinite}
 .btn.sm{height:26px;padding:0 8px;font-size:12px}
 .btn.full{width:100%}
 .btn .count{min-width:19px;height:19px;padding:0 5px;border-radius:10px;background:color-mix(in srgb,currentColor 16%,transparent);font:600 12px/19px var(--font-body);text-align:center}
-.btn kbd,.mi kbd{margin-left:2px}
+/* dentro de un botón o de un menú, la tecla va en texto tenue y sin caja, como los atajos de los menús de Blender (VIS-10) */
+.btn kbd,.mi kbd,.seg kbd{margin-left:2px;padding:0;border:0;background:none;color:var(--muted);font-weight:400}
 .ib{display:inline-grid;place-items:center;width:30px;height:30px;flex:none;border-radius:4px;border:1px solid transparent;background:transparent;color:var(--fg-2);padding:0}
 .ib:hover:not(:disabled){background:var(--surface-2);color:var(--fg)}
 .ib:disabled{opacity:.32;cursor:not-allowed}
 .ib[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
 kbd{font:500 12px/1 var(--font-body);padding:2px 5px;border-radius:3px;border:1px solid var(--line-strong);background:var(--surface-3);color:var(--fg-2);white-space:nowrap}
-.btn.primary kbd,.btn.stop kbd{background:color-mix(in srgb,currentColor 12%,transparent);border-color:color-mix(in srgb,currentColor 30%,transparent);color:inherit}
-.btn.stop kbd{background:transparent}
-.seg{display:inline-flex;background:var(--chassis);border:1px solid var(--line);border-radius:5px;padding:2px;gap:2px;flex:none}
-.seg button{display:inline-flex;align-items:center;gap:8px;border:0;background:transparent;height:28px;padding:0 10px 0 12px;border-radius:3px;color:var(--fg-2);font:600 13px/1 var(--font-display)}
+/* sobre el ámbar, en Escena y Rodaje, la tecla va al 80 % del color del botón, y en Parar, en su blanco: así llega a 4,5:1 (VIS-10) */
+.btn.primary kbd,.seg kbd{color:color-mix(in srgb,currentColor 80%,transparent)}
+.btn.stop kbd{color:inherit}
+/* la barra de arriba, a un solo alto: Escena y Rodaje, el documento y el grupo del prototipo miden 30 px, como los botones (VIS-08) */
+.seg{display:inline-flex;background:var(--chassis);border:1px solid var(--line);border-radius:5px;padding:1px;gap:2px;flex:none}
+.seg button{display:inline-flex;align-items:center;gap:8px;border:0;background:transparent;height:26px;padding:0 10px 0 12px;border-radius:3px;color:var(--fg-2);font:600 13px/1 var(--font-display)}
 .seg button:hover{color:var(--fg)}
 .seg button[aria-pressed="true"]{background:var(--surface-3);color:var(--fg);box-shadow:inset 0 0 0 1px var(--line-strong)}
-.seg kbd{font-weight:500}
-.docbtn{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;min-width:0;max-width:300px;height:36px;border:0;background:transparent;padding:0 8px;border-radius:4px;text-align:left;flex:0 1 auto}
+.docbtn{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;min-width:0;max-width:300px;height:30px;border:0;background:transparent;padding:0 8px;border-radius:4px;text-align:left;flex:0 1 auto}
 .docbtn:hover{background:var(--surface-2)}
 .docbtn b{font-weight:600;white-space:nowrap;overflow:hidden;max-width:100%;display:flex;align-items:center;gap:4px;line-height:1.1}
 .docbtn b .nm{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .docbtn b svg.i{flex:none;width:14px;height:14px}
 .docbtn small{font-size:12px;line-height:1.1;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .docbtn small.dirty{color:var(--fg-2)}
-.proto{display:flex;align-items:center;gap:2px;padding:2px;margin-left:4px;border:1px dashed var(--line-strong);border-radius:5px;flex:none}
+.proto{display:flex;align-items:center;gap:2px;padding:1px;margin-left:4px;border:1px dashed var(--line-strong);border-radius:5px;flex:none}
 .proto .btn{height:26px;padding:0 8px;font-size:12px}
 .proto .ib{width:26px;height:26px}
 
@@ -216,7 +220,8 @@ body.ui-off .center{grid-template-rows:0 minmax(0,1fr) 0 0}
 .mapwrap.placing #map{cursor:crosshair}
 .mapwrap.panning #map{cursor:grabbing}
 .ovl{position:absolute;display:flex;gap:2px;padding:3px;border-radius:8px;background:color-mix(in srgb,var(--surface) 94%,transparent);border:1px solid var(--line-strong);box-shadow:var(--shadow)}
-.ovl.tr{top:10px;right:10px}
+/* lo que flota arriba del mapa, el grupo del zoom, la ayuda y «Rodando», empieza debajo de los números de la regla de X, que llegan a 16 px (VIS-09) */
+.ovl.tr{top:24px;right:10px}
 .ovl.bl{left:10px;bottom:10px;align-items:center;gap:12px;padding:4px 4px 4px 10px;font-size:12px;color:var(--fg-2)}
 .scale{display:flex;flex-direction:column;gap:3px;font:500 12px/1 var(--font-body);color:var(--fg-2)}
 .scale i{display:block;height:6px;border:1.5px solid var(--fg-2);border-top:0}
@@ -226,7 +231,7 @@ body.ui-off .center{grid-template-rows:0 minmax(0,1fr) 0 0}
 .legend h5{margin:4px 0 0;font:600 12px/1.2 var(--font-display);color:var(--fg)}
 .legend div{display:flex;align-items:center;gap:8px;line-height:1.35}
 .legend .lsw{display:grid;place-items:center;width:22px;height:22px;flex:none;border-radius:3px;background:#d9d5c2}
-.hint{position:absolute;top:10px;left:10px;z-index:4;width:max-content;max-width:calc(100% - 228px);padding:8px 12px;border-radius:8px;background:var(--surface);border:1px solid var(--accent);box-shadow:var(--shadow);font-size:13px;line-height:1.5}
+.hint{position:absolute;top:24px;left:10px;z-index:4;width:max-content;max-width:calc(100% - 228px);padding:8px 12px;border-radius:8px;background:var(--surface);border:1px solid var(--accent);box-shadow:var(--shadow);font-size:13px;line-height:1.5}
 .hint.soft{border-color:var(--line-strong);color:var(--fg-2)}
 .mapstack{position:absolute;left:50%;bottom:54px;transform:translateX(-50%);z-index:5;width:min(560px,calc(100% - 32px));display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
 .banner{pointer-events:auto;width:100%;display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:8px;background:var(--surface);border:1px solid var(--st-fail);box-shadow:var(--shadow);font-size:13px;line-height:1.5}
@@ -235,7 +240,7 @@ body.ui-off .center{grid-template-rows:0 minmax(0,1fr) 0 0}
 .toasts{display:flex;flex-direction:column;align-items:center;width:100%}
 .toast{pointer-events:auto;max-width:100%;background:var(--surface-3);border:1px solid var(--line-strong);border-left-width:3px;border-radius:8px;padding:9px 12px;box-shadow:var(--shadow);font-size:13px;line-height:1.45;color:var(--fg)}
 .toast.ok{border-left-color:var(--st-obs)} .toast.fail{border-left-color:var(--st-fail)} .toast.part{border-left-color:var(--st-part)}
-.recbadge{position:absolute;top:10px;left:10px;z-index:4;display:flex;gap:8px;align-items:center;padding:6px 10px;border-radius:8px;background:var(--rec);color:#fff;font:700 13px/1 var(--font-display);box-shadow:var(--shadow)}
+.recbadge{position:absolute;top:24px;left:10px;z-index:4;display:flex;gap:8px;align-items:center;padding:6px 10px;border-radius:8px;background:var(--rec);color:#fff;font:700 13px/1 var(--font-display);box-shadow:var(--shadow)}
 .recbadge svg.i{width:12px;height:12px;stroke:none}
 .recbadge span{font-weight:500}
 .recbadge small{font:500 12px/1 var(--font-body);padding-left:8px;border-left:1px solid rgba(255,255,255,.4)}
@@ -287,6 +292,9 @@ select.inp{padding:0 4px}
 .nin:focus-within{border-color:var(--accent)}
 .nin input{flex:1;min-width:0;width:100%;height:100%;border:0;background:transparent;padding:0 0 0 8px;font:400 13px/1 var(--font-mono);outline:0}
 .nin i{font-style:normal;color:var(--muted);font-size:12px;padding:0 8px 0 4px}
+/* sin las flechas del navegador: el valor cambia con las flechas del teclado y con la rueda (UX-45) (VIS-11) */
+.nin input{appearance:textfield}
+.nin input::-webkit-inner-spin-button,.nin input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 .pair{display:grid;grid-template-columns:1fr 1fr;gap:6px;min-width:0}
 .kv{display:grid;grid-template-columns:96px minmax(0,1fr);gap:8px;font-size:12px;padding:3px 0;align-items:baseline}
 .kv>span:first-child{color:var(--muted)}
@@ -362,6 +370,8 @@ details.tech .tb .mono{font-size:12px;word-break:break-all}
 .tlnote{font-size:12px;color:var(--muted);margin-left:8px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .qrow{display:grid;grid-template-columns:112px minmax(0,1fr) minmax(0,2fr) 170px 128px;gap:12px;align-items:start;padding:8px 12px;border-bottom:1px solid var(--line);font-size:12px}
 .qrow:last-child{border-bottom:0}
+/* en modo estándar, la celda con el estado de cada orden no toma el alto de una línea de texto (VIS-07) */
+.qrow>span:first-child{display:flex}
 .qrow .op b{font-weight:600;display:block;font-size:13px}
 .qrow .op small{display:block;color:var(--muted);font-size:12px}
 .qrow .det{color:var(--fg-2);line-height:1.45}
@@ -428,9 +438,13 @@ details.checks>summary{padding:6px 12px 8px}
 .camrow{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:8px;align-items:center;width:100%;text-align:left;border:0;background:transparent;border-bottom:1px solid var(--line);padding:8px 12px}
 .camrow:hover{background:var(--surface-2)}
 .camrow[aria-selected="true"]{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
-.camrow b{display:block;font-weight:600;font-size:13px}
-.camrow small{display:block;color:var(--muted);font-size:12px}
-.camrow .live{font:600 12px/1 var(--font-body);color:var(--fg-2);border:1px solid var(--line-strong);border-radius:4px;padding:3px 6px}
+/* el nombre y el resumen de cada cámara van en una línea, con puntos suspensivos, y enteros al pasar el ratón; «En la toma» no los parte (VIS-12) */
+.camrow b{display:block;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.camrow small{display:block;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.camrow .live{white-space:nowrap;font:600 12px/1 var(--font-body);color:var(--fg-2);border:1px solid var(--line-strong);border-radius:4px;padding:3px 6px}
+/* «En la toma» va a la altura del nombre, y el resumen pasa por debajo con todo el ancho (VIS-12) */
+.camrow{row-gap:0} .camrow>span:not(.live){display:contents} .camrow>svg{grid-row:1/3}
+.camrow b{grid-area:1/2} .camrow small{grid-area:2/2/3/4} .camrow .live{grid-area:1/3;padding-block:2px}
 .take{padding:9px 12px;border-bottom:1px solid var(--line);font-size:12px;display:grid;gap:5px}
 .take .th{display:flex;align-items:center;gap:8px}
 .take .th b{font:600 13px/1 var(--font-display)}
@@ -1232,7 +1246,7 @@ function prepareTake() {
       const bad = S.take.checks.filter(c => c.st === 'fail');
       S.take.prepAt = now();
       if (bad.length) { S.take.state = 'bloqueada'; toast(`No se puede armar la toma ${pad2(S.take.n)}: ${bad.length === 1 ? 'falla 1 comprobación' : 'fallan ' + bad.length + ' comprobaciones'}.`, 'fail'); }
-      else { S.take.state = 'armada'; toast(`Toma ${pad2(S.take.n)} armada. ${keyLabel(keyOf('roll'))} para rodar y ${keyLabel(keyOf('stop'))} para desarmar.`, 'ok'); }
+      else { S.take.state = 'armada'; toast(`Toma ${pad2(S.take.n)} armada. ${keyLabel(keyOf('roll'))} para rodar y ${keyLabel(keyOf('stop'))} para desarmar.`, 'ok').dataset.aviso = 'armada'; }
       renderAll(); return;
     }
     const c = S.take.checks[i]; c.st = 'run'; renderTakeParts();
@@ -1242,7 +1256,7 @@ function prepareTake() {
 }
 function spaceStop() {
   if (S.take.state === 'rodando') return stopTake();
-  if (S.take.state === 'armada') { toast(`Espacio solo para una toma que rueda. ${keyLabel(keyOf('roll'))} rueda y ${keyLabel(keyOf('stop'))} desarma.`); return true; }
+  if (S.take.state === 'armada') { toast(`Espacio solo para una toma que rueda. ${keyLabel(keyOf('roll'))} rueda y ${keyLabel(keyOf('stop'))} desarma.`).dataset.aviso = 'armada'; return true; }
   return false;
 }
 function roll() {
@@ -1250,6 +1264,8 @@ function roll() {
   if (offline()) return toast('Sin conexión con el backend: la toma no sale de la web.', 'fail');
   const c = camById(S.take.cam);
   S.take.state = 'rodando'; S.take.t0 = now(); S.take.t = 0; S.take.dur = camDur(c) + 0.04 + Math.random() * 0.2;
+  // los avisos de la toma armada ya no valen rodando, porque dicen cómo desarmar (VIS-13)
+  const av = $('#toasts [data-aviso="armada"]'); if (av) av.remove();
   if (S.take.dur < 1) S.take.dur = 6;
   S.take.lag = {}; actors().forEach(a => { S.take.lag[a.id] = Math.round(30 + Math.random() * 28); });
   document.body.classList.add('rolling');
@@ -1928,7 +1944,7 @@ function renderLeft() {
   } else {
     let html = `<div class="panel"><div class="ph"><div class="tabs" role="tablist"><button role="tab" data-act="ltab" data-v="camaras" aria-selected="${S.ltab === 'camaras'}">Cámaras <span class="n">${S.doc.cameras.length}</span></button><button role="tab" data-act="ltab" data-v="tomas" aria-selected="${S.ltab === 'tomas'}" data-ref="Takes: REAPER">Tomas <span class="n">${S.take.log.length}</span></button></div></div><div class="pb">`;
     if (S.ltab === 'camaras') {
-      html += S.doc.cameras.map(c => { const sel = S.sel && (S.sel.type === 'cam' || S.sel.type === 'key') && S.sel.cam === c.id; const d = camDur(c); return `<button class="camrow" data-act="sel" data-v="cam:${c.id}" aria-selected="${!!sel}" title="Huella de las claves: ${camHash(c)}">${gl('camara')}<span><b>${esc(c.name)}</b><small>${c.keys.length > 1 ? `Camino · ${pl(c.keys.length, 'clave', 'claves')} · ${nf(d, 1)} s` : 'Fija'}</small></span>${c.id === S.take.cam ? '<span class="live">En la toma</span>' : ''}</button>`; }).join('');
+      html += S.doc.cameras.map(c => { const sel = S.sel && (S.sel.type === 'cam' || S.sel.type === 'key') && S.sel.cam === c.id; const d = camDur(c), sum = c.keys.length > 1 ? `Camino · ${pl(c.keys.length, 'clave', 'claves')} · ${nf(d, 1)} s` : 'Fija'; return `<button class="camrow" data-act="sel" data-v="cam:${c.id}" aria-selected="${!!sel}" title="Huella de las claves: ${camHash(c)}">${gl('camara')}<span><b title="${esc(c.name)}">${esc(c.name)}</b><small title="${sum}">${sum}</small></span>${c.id === S.take.cam ? '<span class="live">En la toma</span>' : ''}</button>`; }).join('');
       html += `<div style="padding:10px 12px"><button class="btn sm full" data-act="cam-capture" data-ref="Dump Camera: DayZ Editor">${ic('cam')} Nueva cámara desde la cámara libre</button><div class="note">Mueve la cámara libre del juego hasta encuadrar y captúrala. La pose llega al estudio sin escribir números.</div></div>`;
     } else {
       const fin = S.take.log.filter(l => l.state === 'terminada' && l.lag);
@@ -2266,6 +2282,7 @@ function toast(msg, kind) {
   const el = document.createElement('div'); el.className = 'toast ' + (kind || ''); el.textContent = msg;
   box.appendChild(el);
   setTimeout(() => { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 320); }, kind === 'fail' ? 5200 : 3400);
+  return el;
 }
 let menuFor = null;
 function openMenu(anchor, html) {

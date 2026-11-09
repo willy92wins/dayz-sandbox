@@ -1395,6 +1395,247 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     return [[what, !!r && r.n === 5 && r.whole && r.red && r.hs.length === 1 && r.hs[0] === 26, r ? `${r.labels.join(' · ')} · ${r.whole ? 'enteras' : 'alguna cortada'} · alto ${r.hs.join('/')} px · «Borrar» ${r.red ? 'en rojo' : 'sin el rojo'}` : 'sin las órdenes']];
   }, 1440, 900);
 
+  // --- Revisión visual, segunda ronda (VIS-07 a VIS-13) ---
+  // VIS-07: el archivo se pinta en modo estándar, como la página publicada, y la composición no se mueve
+  await R26('VIS-07 +', async p => {
+    const what = 'VIS-07 + el estudio abierto con file:// se pinta en modo estándar, como la página publicada';
+    const m = await p.evaluate(() => document.compatMode);
+    return [[what, m === 'CSS1Compat', `${m === 'CSS1Compat' ? 'modo estándar' : 'modo de compatibilidad'} (${m})`]];
+  }, 1440, 900);
+  // cada caja a la vista, por su sitio en el árbol; antes se igualan lo que cambia con el reloj (los «hace N s» y las animaciones) y se quitan los avisos, que van y vienen solos
+  const boxes = p => p.evaluate(() => {
+    document.getAnimations().forEach(a => a.cancel());
+    document.querySelectorAll('[data-since]').forEach(e => { e.textContent = (e.dataset.fmt || '%').replace('%', '7 s'); e.removeAttribute('data-since'); });
+    const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); for (let n; (n = tw.nextNode());) if (/hace \d/.test(n.textContent)) n.textContent = n.textContent.replace(/hace \d+ (s|min|h)\b/g, 'hace 7 s');
+    const ts = document.querySelector('#toasts'); if (ts) ts.innerHTML = '';
+    const key = e => { const k = []; for (; e && e !== document.body; e = e.parentElement) k.unshift(e.tagName.toLowerCase() + ':' + [...e.parentElement.children].indexOf(e)); return k.join('>'); };
+    const name = e => e.id ? '#' + e.id : typeof e.className === 'string' && e.className.trim() ? '.' + e.className.trim().split(/\s+/)[0] : e.tagName.toLowerCase();
+    const out = {};
+    for (const e of document.querySelectorAll('body *')) { if (!e.getClientRects().length) continue; const r = e.getBoundingClientRect(); out[key(e)] = `${name(e)} [${[r.left, r.top, r.width, r.height].map(v => Math.round(v * 2) / 2).join(', ')}]`; }
+    return out;
+  });
+  const layouts = async p => {
+    const seen = {}, look = async n => { await p.mouse.move(2, 2); await p.waitForTimeout(250); seen[n] = await boxes(p); };
+    await dock(p); await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(200); await look('Escena con «Bidón azul» elegido y el panel de abajo abierto');
+    if (!await apply(p) || !await arm(p)) return null;
+    await p.waitForTimeout(200); await look('Rodaje con la toma armada');
+    await sim(p, 'backend'); await p.waitForTimeout(300); await look('sin backend');
+    return seen;
+  };
+  await R26('VIS-07 −', async p => {
+    const what = 'VIS-07 − la composición no se mueve: en Escena con algo elegido y el panel de abajo abierto, en Rodaje con la toma armada y sin backend, cada caja está en el mismo sitio y con el mismo tamaño que con el mismo archivo en modo de compatibilidad';
+    if (!/^file:/.test(URL)) return [[what, false, 'la copia en modo de compatibilidad se hace leyendo el archivo del disco: hace falta una dirección file://']];
+    const fs = require('fs'), os = require('os'), { fileURLToPath, pathToFileURL } = require('url');
+    const file = path.join(os.tmpdir(), `estudio-compatibilidad-${process.pid}.html`);
+    fs.writeFileSync(file, fs.readFileSync(fileURLToPath(URL), 'utf8').replace(/^\s*<!doctype html>\s*/i, ''));
+    const c = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+    try {
+      const q = await c.newPage(); q.setDefaultTimeout(3000);
+      q.on('pageerror', e => errors.push(`[pageerror] ${e.message}`)); q.on('request', r => { if (!/^(file|data|blob|about):/.test(r.url())) external.push(r.url()); });
+      await q.goto(pathToFileURL(file).href); await q.waitForTimeout(900);
+      const modes = [await q.evaluate(() => document.compatMode), await p.evaluate(() => document.compatMode)];
+      const a = await layouts(q), b = await layouts(p);
+      if (!a || !b) return [[what, false, 'no llegó a armar']];
+      const diffs = [];
+      for (const n of Object.keys(a)) for (const k of new Set([...Object.keys(a[n]), ...Object.keys(b[n])])) if (a[n][k] !== b[n][k]) diffs.push(`${n}: ${a[n][k] || 'no está'} → ${b[n][k] || 'no está'}`);
+      return [[what, modes[0] === 'BackCompat' && diffs.length === 0, `${modes[1]} frente a ${modes[0]} · ${Object.keys(a).map(n => `${n}: ${Object.keys(a[n]).length} cajas`).join(' · ')} · ${diffs.length ? `${diffs.length} cambian: ${diffs.slice(0, 4).join(' | ')}` : 'ninguna cambia'}`]];
+    } finally { await c.close().catch(() => {}); fs.rmSync(file, { force: true }); }
+  }, 1440, 900);
+
+  // VIS-08: la barra de arriba, a un solo alto, en una fila y entera a 1366 px
+  const topbar = p => p.evaluate(() => {
+    const t = document.querySelector('#top'), tr = t.getBoundingClientRect(), s = document.querySelector('#bTopStop');
+    const items = [...t.children].filter(e => __r26.shown(e) && !e.classList.contains('grow') && !e.classList.contains('brand')), rs = items.map(e => e.getBoundingClientRect()), mids = rs.map(r => r.top + r.height / 2);
+    const sr = s && __r26.shown(s) ? s.getBoundingClientRect() : null;
+    return { hs: items.map((e, i) => `${e.id || e.className.split(' ')[0]} ${Math.round(rs[i].height * 2) / 2}`), spread: Math.max(...rs.map(r => r.height)) - Math.min(...rs.map(r => r.height)), bar: Math.round(tr.height), row: Math.max(...mids) - Math.min(...mids) <= 2 && rs.every(r => r.top >= tr.top - 0.5 && r.bottom <= tr.bottom + 0.5), fits: t.scrollWidth <= t.clientWidth + 1, stop: sr ? Math.round(sr.right) : null, inBar: !!sr && sr.top >= tr.top && sr.bottom <= tr.bottom };
+  });
+  const barStates = async p => {
+    const seen = [], look = async st => { for (const [w, h] of [[1366, 768], [1440, 900]]) { await p.setViewportSize({ width: w, height: h }); await p.waitForTimeout(150); seen.push({ st, w, ...(await topbar(p)), free: await exposed(p) }); } };
+    await look('Escena');
+    if (!await apply(p) || !await arm(p)) return null;
+    await p.mouse.move(700, 500); await look('armada');
+    if (!await roll(p)) return null;
+    await p.waitForTimeout(200); await look('rodando');
+    return seen;
+  };
+  await R26('VIS-08 +', async p => {
+    const what = 'VIS-08 + a 1366 y 1440 px, en Escena, armada y rodando, el documento, Escena y Rodaje, los botones y el grupo del prototipo de la barra de arriba miden lo mismo';
+    const s = await barStates(p);
+    if (!s) return [[what, false, 'no llegó a rodar']];
+    return [[what, s.every(x => x.spread <= 0.5), s.map(x => `${x.st} a ${x.w} px: ${x.spread <= 0.5 ? `todo a ${x.hs[0].split(' ').pop()} px` : x.hs.join(', ')}`).join(' · ')]];
+  }, 1366, 768);
+  await R26('VIS-08 −', async p => {
+    const what = 'VIS-08 − a 1366 y 1440 px, en Escena, armada y rodando, la barra sigue en una fila de 44 px y cabe entera; y Parar está en la barra, en el mismo sitio armada y rodando, y nada lo tapa (B5)';
+    const s = await barStates(p);
+    if (!s) return [[what, false, 'no llegó a rodar']];
+    const stopAt = w => s.filter(x => x.w === w && x.st !== 'Escena').map(x => x.stop), same = [1366, 1440].every(w => { const l = stopAt(w); return l.length === 2 && l[0] !== null && l[0] === l[1]; });
+    const ok = s.every(x => x.bar === 44 && x.row && x.fits) && s.filter(x => x.st !== 'Escena').every(x => x.inBar && x.free) && same;
+    return [[what, ok, s.map(x => `${x.st} a ${x.w} px: ${x.bar} px, ${x.row ? 'una fila' : 'se parte'}, ${x.fits ? 'cabe' : 'no cabe'}${x.st === 'Escena' ? '' : `, Parar acaba en ${x.stop} px${x.inBar ? '' : ' fuera de la barra'}${x.free ? '' : ', tapado'}`}`).join(' · ')]];
+  }, 1366, 768);
+
+  // VIS-09: lo que flota arriba del mapa no tapa los números de la regla de X
+  // las placas de los números de la regla de X, que el mapa pinta a 13 px de alto, en px de la página; se fuerza un fotograma cambiando 1 px la ventana
+  const rulerX = async p => {
+    await p.evaluate(() => {
+      if (!window.__nx) { const P = CanvasRenderingContext2D.prototype, f = P.fillText; P.fillText = function (t, x, y, ...r) { if (this.canvas && this.canvas.id === 'map' && /^\d+$/.test(String(t)) && Math.abs(y - 13) < 0.01) { const T = this.getTransform(), d = this.canvas.width / this.canvas.clientWidth, w = this.measureText(String(t)).width, c = this.canvas.getBoundingClientRect(); window.__nx.push({ t: String(t), l: c.left + (T.a * (x - 2) + T.e) / d, r: c.left + (T.a * (x + w + 2) + T.e) / d, top: c.top + (T.d * (y - 11) + T.f) / d, b: c.top + (T.d * (y + 3) + T.f) / d }); } return f.call(this, t, x, y, ...r); }; }
+      window.__nx = [];
+    });
+    const vs = p.viewportSize(); await p.setViewportSize({ width: vs.width, height: vs.height + 1 }); await p.waitForTimeout(150); await p.evaluate(() => { window.__nx = []; }); await p.setViewportSize(vs); await p.waitForTimeout(300);
+    return p.evaluate(() => {
+      const labs = [...new Map(window.__nx.map(n => [n.t + '@' + Math.round(n.l), n])).values()], name = e => e.id ? '#' + e.id : 'el grupo del zoom';
+      const ov = [...document.querySelectorAll('#hint, .ovl.tr, #recBadge')].filter(__r26.shown), hits = [];
+      for (const n of labs) for (const e of ov) { const r = e.getBoundingClientRect(); if (r.left < n.r && r.right > n.l && r.top < n.b && r.bottom > n.top) hits.push(`${n.t} bajo ${name(e)}`); }
+      return { n: labs.length, over: ov.map(name), hits };
+    });
+  };
+  await R26('VIS-09 +', async p => {
+    const what = 'VIS-09 + a 1366 y 1440 px, con algo elegido y rodando, ni la ayuda del mapa, ni el grupo del zoom, ni «Rodando» tapan ningún número de la regla de X';
+    const seen = [], look = async (st, sizes) => { for (const [w, h] of sizes) { await p.setViewportSize({ width: w, height: h }); await p.waitForTimeout(150); seen.push({ st, w, ...(await rulerX(p)) }); } };
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(200);
+    await look('con «Bidón azul» elegido', [[1366, 768], [1440, 900]]);
+    if (!await apply(p) || !await arm(p) || !await roll(p)) return [[what, false, 'no llegó a rodar']];
+    await p.waitForTimeout(200); await look('rodando', [[1440, 900], [1366, 768]]);
+    return [[what, seen.every(x => x.n > 0 && !x.hits.length && x.over.length > 0), seen.map(x => `${x.st} a ${x.w} px: ${x.n} números, ${x.hits.length ? `tapados ${x.hits.slice(0, 4).join(', ')}${x.hits.length > 4 ? ` y ${x.hits.length - 4} más` : ''}` : `ninguno bajo ${x.over.join(', ')}`}`).join(' · ')]];
+  }, 1366, 768);
+  await R26('VIS-09 −', async p => {
+    const what = 'VIS-09 − con algo elegido, la ayuda del mapa sigue diciendo cómo moverlo, a 10 px del borde izquierdo del mapa, el grupo del zoom sigue a 10 px del derecho y «Acercar» sigue acercando; y rodando, «Rodando» sigue a 10 px del borde izquierdo';
+    const edges = () => p.evaluate(() => { const m = document.querySelector('#mapwrap').getBoundingClientRect(), g = s => { const e = document.querySelector(s); return e && __r26.shown(e) ? e.getBoundingClientRect() : null; }, h = g('#hint'), z = g('.ovl.tr'), r = g('#recBadge'); return { hint: h && Math.round(h.left - m.left), zoom: z && Math.round(m.right - z.right), rec: r && Math.round(r.left - m.left), text: document.querySelector('#hint').innerText.replace(/\s+/g, ' ').trim() }; });
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(200);
+    // el foco se queda en «Acercar», y entonces Intro lo pulsaría en vez de rodar
+    const e1 = await edges(), z0 = await zoomOf(p); await p.click('#bZin'); await p.waitForTimeout(300); const z1 = await zoomOf(p); await p.evaluate(() => document.activeElement.blur());
+    if (!await apply(p) || !await arm(p) || !await roll(p)) return [[what, false, 'no llegó a rodar']];
+    await p.waitForTimeout(200); const e2 = await edges(), rec = await T(p, '#recBadge');
+    return [[what, /^Arrastra para mover/.test(e1.text) && e1.hint === 10 && e1.zoom === 10 && z1 > z0 && /^Rodando/.test(rec) && e2.rec === 10, `ayuda «${e1.text.slice(0, 48)}…» a ${e1.hint} px · zoom a ${e1.zoom} px · «Acercar»: ${z0.toFixed(2)} → ${z1.toFixed(2)} px/m · «${rec.slice(0, 16)}…» a ${e2.rec} px`]];
+  }, 1440, 900);
+
+  // VIS-10: dentro de un botón, de Escena y Rodaje o de un menú, la tecla va en texto tenue y sin caja
+  // cada tecla a la vista con su caja (borde, fondo o relleno), su tamaño y su contraste: su color sobre los fondos de debajo, compuestos en un lienzo de 1 px
+  const keysIn = (p, sel) => p.evaluate(s => {
+    const g = document.createElement('canvas').getContext('2d'), px = () => [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+    const lum = c => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+    return [...document.querySelectorAll(s)].filter(__r26.shown).map(k => {
+      const cs = getComputedStyle(k), host = k.closest('button') || k.parentElement, chain = [];
+      for (let e = k; e; e = e.parentElement) chain.unshift(getComputedStyle(e).backgroundColor);
+      g.clearRect(0, 0, 1, 1); g.fillStyle = '#fff'; g.fillRect(0, 0, 1, 1); chain.forEach(c => { g.fillStyle = c; g.fillRect(0, 0, 1, 1); }); const bg = px();
+      g.fillStyle = cs.color; g.fillRect(0, 0, 1, 1); const a = lum(px()), b = lum(bg);
+      return { key: k.textContent.trim(), host: (host.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 28), off: !!host.disabled, boxed: (cs.borderTopStyle !== 'none' && parseFloat(cs.borderTopWidth) > 0) || !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(cs.backgroundColor) || parseFloat(cs.paddingLeft) > 0, px: parseFloat(cs.fontSize), ratio: Math.round((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) * 100) / 100 };
+    });
+  }, sel);
+  const IN_BUTTONS = '.btn kbd, .seg kbd, .mi kbd';
+  // en Escena con algo elegido y con los dos menús abiertos, y en Rodaje con la toma armada; en el tema que toque
+  const keyStates = async (p, themes) => {
+    const all = [], take = async st => { for (const th of themes) { if (themes.length > 1) { await p.emulateMedia({ colorScheme: th }); await p.waitForTimeout(150); } (await keysIn(p, IN_BUTTONS)).forEach(k => all.push({ ...k, st, th })); } };
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(200); await take('Escena');
+    await p.click('#bTools'); await p.waitForTimeout(150); await take('Herramientas'); await p.keyboard.press('Escape'); await p.waitForTimeout(100);
+    await p.click('#docBtn'); await p.waitForTimeout(150); await take('menú de la escena'); await p.keyboard.press('Escape'); await p.waitForTimeout(100);
+    if (!await apply(p) || !await arm(p)) return null;
+    await take('armada');
+    return all;
+  };
+  await R26('VIS-10 +', async p => {
+    const what = 'VIS-10 + las teclas dentro de los botones, de Escena y Rodaje y de los menús van sin caja: sin borde, sin fondo y sin relleno, también en «Rodar» y en «Desarmar»';
+    const all = await keyStates(p, ['dark']);
+    if (!all) return [[what, false, 'no llegó a armar']];
+    const boxed = all.filter(k => k.boxed), hosts = ['Rodar', 'Desarmar', 'Escena', 'Guardar'].filter(h => all.some(k => k.host.startsWith(h)));
+    return [[what, all.length > 0 && !boxed.length && hosts.length === 4, `${all.length} teclas en ${[...new Set(all.map(k => k.st))].join(', ')} · ${boxed.length ? `con caja: ${[...new Set(boxed.map(k => `«${k.key}» en «${k.host}»`))].slice(0, 5).join(', ')}` : 'ninguna con caja'}${hosts.length === 4 ? '' : ` · no se vieron teclas en ${['Rodar', 'Desarmar', 'Escena', 'Guardar'].filter(h => !hosts.includes(h)).join(', ')}`}`]];
+  }, 1440, 900);
+  await R26('VIS-10 −', async p => {
+    const what = 'VIS-10 − en oscuro y en claro, cada tecla dentro de un botón encendido, de Escena y Rodaje o de un menú se lee a 4,5:1 o más sobre su fondo y a 12 px o más, también en «Rodar» y en «Desarmar»; y las teclas dentro del texto, en la ayuda del mapa y en la Guía, siguen en su caja';
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(200);
+    const hint = await keysIn(p, '#hint kbd');
+    await p.click('#bGuide'); await p.waitForTimeout(400); const guide = await keysIn(p, '#guide kbd'); await p.click('#bGuideClose'); await p.waitForTimeout(300);
+    const all = await keyStates(p, ['dark', 'light']);
+    if (!all) return [[what, false, 'no llegó a armar']];
+    const on = all.filter(k => !k.off), low = on.filter(k => k.ratio < 4.5), tiny = all.filter(k => k.px < 12), worst = th => { const l = on.filter(k => k.th === th); return l.length ? Math.min(...l.map(k => k.ratio)) : 0; };
+    const seen = ['Rodar', 'Desarmar'].every(h => ['dark', 'light'].every(th => on.some(k => k.th === th && k.host.startsWith(h))));
+    const prose = hint.length > 0 && guide.length > 0 && hint.every(k => k.boxed) && guide.every(k => k.boxed);
+    return [[what, on.length > 0 && !low.length && !tiny.length && seen && prose, `${on.length} teclas en botones encendidos · la que menos, ${worst('dark')}:1 en oscuro y ${worst('light')}:1 en claro${low.length ? ` · por debajo: ${low.slice(0, 4).map(k => `«${k.key}» en «${k.host}» (${k.th}) ${k.ratio}:1`).join(', ')}` : ''} · ${tiny.length ? `${tiny.length} por debajo de 12 px` : 'todas a 12 px o más'}${seen ? '' : ' · faltan «Rodar» o «Desarmar»'} · en el texto: ${hint.length} en la ayuda y ${guide.length} en la Guía, ${prose ? 'en su caja' : 'alguna sin caja'}`]];
+  }, 1440, 900);
+
+  // VIS-11: los campos numéricos sin las flechas del navegador
+  await R26('VIS-11 +', async p => {
+    const what = 'VIS-11 + los campos numéricos de Propiedades piden el aspecto de un campo de texto, y con el ratón en el extremo derecho de la X no salen las flechas del navegador';
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(200);
+    const ap = await p.evaluate(() => [...document.querySelectorAll('#colR .nin input')].filter(__r26.shown).map(i => `${i.id} ${getComputedStyle(i).appearance}`));
+    const b = await p.locator('#f-x').boundingBox(), clip = { x: b.x + b.width - 20, y: b.y + 2, width: 18, height: b.height - 4 };
+    await p.mouse.move(2, 2); await p.waitForTimeout(150); const s0 = await p.screenshot({ clip });
+    await p.mouse.move(b.x + b.width - 8, b.y + b.height / 2); await p.waitForTimeout(250); const s1 = await p.screenshot({ clip });
+    const same = s0.equals(s1);
+    return [[what, ap.length > 0 && ap.every(x => / textfield$/.test(x)) && same, `${ap.join(' · ')} · con el ratón encima, el extremo derecho de la X ${same ? 'no cambia' : 'cambia: salen las flechas'}`]];
+  }, 1440, 900);
+  await R26('VIS-11 −', async p => {
+    const what = 'VIS-11 − con el foco en la X, la flecha arriba la sube 0,1 m en un solo cambio del historial y el borde del campo se pone en ámbar; y la rueda encima de la Z la sigue subiendo 0,1 m por paso';
+    await dock(p); await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(150);
+    const n0 = await nHist(p), x0 = await val(p, '#f-x');
+    await p.click('#f-x'); await p.keyboard.press('ArrowUp'); await p.waitForTimeout(200);
+    const x1 = await val(p, '#f-x'), n1 = await nHist(p);
+    const ring = await p.evaluate(() => { const t = document.createElement('i'); t.style.color = 'var(--accent)'; document.body.appendChild(t); const a = getComputedStyle(t).color; t.remove(); const f = document.querySelector('#f-x'); return { on: document.activeElement === f, border: getComputedStyle(f.closest('.nin')).borderTopColor, accent: a }; });
+    await over(p, '#f-z'); const z0 = await val(p, '#f-z'); await wheel(p, -100); const z1 = await val(p, '#f-z');
+    const d1 = Math.round((x1 - x0) * 10) / 10, d2 = Math.round((z1 - z0) * 10) / 10;
+    return [[what, d1 === 0.1 && n1 === n0 + 1 && ring.on && ring.border === ring.accent && d2 === 0.1, `X ${x0} → ${x1} (+${d1}), historial ${n1 - n0 >= 0 ? '+' : ''}${n1 - n0} · ${ring.on ? 'con el foco' : 'sin el foco'}, borde ${ring.border}${ring.border === ring.accent ? ', el ámbar' : ` (el ámbar es ${ring.accent})`} · rueda en la Z: ${z0} → ${z1} (+${d2})`]];
+  }, 1440, 900);
+
+  // VIS-12: los nombres largos de Cámaras van en una línea, con puntos suspensivos y enteros al pasar el ratón; «En la toma» no los parte
+  const camList = p => p.evaluate(() => {
+    const lines = e => { const r = document.createRange(); r.selectNodeContents(e); return new Set([...r.getClientRects()].filter(q => q.width > 0).map(q => Math.round(q.top))).size; };
+    const mid = e => { const q = e.getBoundingClientRect(); return q.top + q.height / 2; };
+    return [...document.querySelectorAll('#colL .camrow')].filter(__r26.shown).map(r => { const b = r.querySelector('b'), s = r.querySelector('small'), lv = r.querySelector('.live');
+      return { v: r.dataset.v, name: b.textContent, sum: s.textContent, nl: lines(b), sl: lines(s), cut: b.scrollWidth > b.clientWidth + 1, ell: getComputedStyle(b).textOverflow === 'ellipsis', title: b.title, live: lv ? { text: lv.textContent, l: lines(lv), whole: lv.scrollWidth <= lv.clientWidth + 1, row: Math.abs(mid(lv) - mid(b)) <= 3 } : null }; });
+  });
+  const toCams = async p => { await p.keyboard.press('2'); await p.waitForTimeout(300); if (await p.locator('[data-act="ltab"][data-v="camaras"][aria-selected="false"]').count()) { await p.click('[data-act="ltab"][data-v="camaras"]'); await p.waitForTimeout(200); } };
+  await R26('VIS-12 +', async p => {
+    const what = 'VIS-12 + a 1366 y 1440 px, cada nombre y cada resumen de Cámaras va en una línea; el nombre cortado acaba en puntos suspensivos y se lee entero al pasar el ratón, y «En la toma» va en la línea del nombre';
+    await toCams(p);
+    const out = []; let ok = true;
+    for (const [w, h] of [[1366, 768], [1440, 900]]) {
+      await p.setViewportSize({ width: w, height: h }); await p.waitForTimeout(150);
+      const l = await camList(p), good = l.length >= 3 && l.every(c => c.nl === 1 && c.sl === 1 && c.title === c.name && (!c.cut || c.ell) && (!c.live || c.live.row)) && l.some(c => c.live); ok = ok && good;
+      out.push(`${w} px: ` + l.map(c => `«${c.name}» ${c.nl} línea${c.nl > 1 ? 's' : ''}${c.cut ? (c.ell ? ', con puntos suspensivos' : ', cortado a secas') : ''}${c.title === c.name ? '' : ', sin el nombre entero al pasar el ratón'}, resumen en ${c.sl}${c.live ? (c.live.row ? ', «En la toma» en su línea' : ', «En la toma» en otra línea') : ''}`).join(' · '));
+    }
+    return [[what, ok, out.join(' | ')]];
+  }, 1366, 768);
+  await R26('VIS-12 −', async p => {
+    const what = 'VIS-12 − a 1366 px los nombres cortos no se cortan, «En la toma» se lee entero en una línea, los resúmenes siguen diciendo «Fija» o el camino con sus claves y sus segundos, y un clic en una cámara la elige';
+    await toCams(p);
+    const l = await camList(p), short = l.filter(c => /^(Plano general|Primer plano de Linda)$/.test(c.name)), live = l.find(c => c.live);
+    const said = l.length >= 3 && l.every(c => /^(Fija|Camino · \d+ claves? · \d+,\d s)$/.test(c.sum));
+    const pick = l.find(c => !c.live);
+    if (pick) { await p.click(`#colL .camrow[data-v="${pick.v}"]`); await p.waitForTimeout(200); }
+    const sel = pick ? await p.getAttribute(`#colL .camrow[data-v="${pick.v}"]`, 'aria-selected') : null;
+    return [[what, short.length >= 2 && short.every(c => !c.cut) && !!live && live.live.whole && live.live.l === 1 && said && sel === 'true', `${short.map(c => `«${c.name}» ${c.cut ? 'cortado' : 'entero'}`).join(' · ')} · ${live ? `«${live.live.text}» ${live.live.whole && live.live.l === 1 ? 'entero en una línea' : 'cortado o partido'}` : 'sin «En la toma»'} · resúmenes: ${l.map(c => `«${c.sum}»`).join(', ')} · clic en «${pick ? pick.name : '?'}»: ${sel === 'true' ? 'elegida' : 'sin elegir'}`]];
+  }, 1366, 768);
+
+  // VIS-13: el aviso de la toma armada se va al rodar. Queda fuera del aspecto: lo pide la coordinación, porque rodando dice cómo desarmar
+  const notes = p => p.evaluate(() => [...document.querySelectorAll('#toasts .toast')].filter(e => __r26.shown(e) && +getComputedStyle(e).opacity > 0.05).map(e => ({ text: e.innerText.replace(/\s+/g, ' ').trim(), fail: e.classList.contains('fail') })));
+  const said = l => l.length ? l.map(x => `«${x.text}»`).join(' ') : 'ningún aviso';
+  await R26('VIS-13 +', async p => {
+    const what = 'VIS-13 + al rodar, el aviso «Toma NN armada…» ya no está a la vista, ni el que sale con Espacio y la toma armada';
+    const armed = l => l.some(x => /^Toma \d+ armada/.test(x.text)), space = l => l.some(x => /^Espacio solo para una toma que rueda/.test(x.text));
+    if (!await apply(p) || !await arm(p)) return [[what, false, 'no llegó a armar']];
+    const t0 = await notes(p);
+    if (!await roll(p)) return [[what, false, 'no llegó a rodar']];
+    await p.waitForTimeout(150); const t1 = await notes(p);
+    await p.keyboard.press('Escape');
+    if (!await shows(p, '#slateWrap', /Reaplicar y preparar la/, 3000)) return [[what, false, `armada: ${said(t0)} → rodando: ${said(t1)} · no llegó a parar`]];
+    await p.click('[data-act="take-reapply"]');
+    if (!await shows(p, '#bTopStop', /Desarmar/, 15000)) return [[what, false, `armada: ${said(t0)} → rodando: ${said(t1)} · no llegó a armar otra vez`]];
+    await p.evaluate(() => { if (document.activeElement) document.activeElement.blur(); }); await p.locator('#map').hover(); await p.keyboard.press('Space'); await p.waitForTimeout(150); const t2 = await notes(p);
+    if (!await roll(p)) return [[what, false, 'no llegó a rodar la segunda vez']];
+    await p.waitForTimeout(150); const t3 = await notes(p);
+    return [[what, armed(t0) && !armed(t1) && space(t2) && !space(t3), `armada: ${said(t0)} → rodando: ${said(t1)} · armada otra vez, con Espacio: ${said(t2)} → rodando: ${said(t3)}`]];
+  }, 1440, 900);
+  await R26('VIS-13 −', async p => {
+    const what = 'VIS-13 − armada, sigue saliendo «Toma NN armada. Intro para rodar y Esc para desarmar.»; y los demás avisos no cambian: sin backend sale «Backend parado…» con la franja de conexión, e Intro dice «Sin conexión con el backend: la toma no sale de la web.», no rueda y el aviso sigue a la vista un segundo después';
+    if (!await apply(p) || !await arm(p)) return [[what, false, 'no llegó a armar']];
+    const t0 = await notes(p);
+    await sim(p, 'backend'); await p.waitForTimeout(300); const t1 = await notes(p), ban = await T(p, '#banner');
+    await p.locator('#map').hover(); await p.keyboard.press('Enter'); await p.waitForTimeout(250); const t2 = await notes(p), st = await T(p, '#bTopStop');
+    await p.waitForTimeout(1000); const t3 = await notes(p);
+    const NO = 'Sin conexión con el backend: la toma no sale de la web.', gone = l => l.length === 1 && l[0].fail && l[0].text === NO;
+    const ok = t0.length === 1 && /^Toma \d+ armada\. \S+ para rodar y \S+ para desarmar\.$/.test(t0[0].text) && t1.length === 1 && t1[0].fail && /^Backend parado/.test(t1[0].text) && /^Sin conexión con el backend/.test(ban) && gone(t2) && /^Desarmar/.test(st) && gone(t3);
+    return [[what, ok, `armada: ${said(t0)} · sin backend: ${said(t1)}, franja «${ban.slice(0, 40)}…» · Intro: ${said(t2)}, Parar dice «${st}» · un segundo después: ${said(t3)}`]];
+  }, 1440, 900);
+
   expect(external.length === 0, 'ninguna petición sale de la página: ' + (external.slice(0, 3).join(' ') || 'ninguna'));
   expect(errors.length === 0, 'sin errores de JavaScript en la página');
   errors.forEach(e => console.log(e));
