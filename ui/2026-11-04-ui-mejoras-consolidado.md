@@ -26,7 +26,7 @@ El contrato no cambia:
 
 Lo que cambia es la presentación que fijaba el [consolidado de octubre](2026-10-28-ui-m1-consolidado.md). Sus apartados afectados se actualizan al aplicar esta lista, para que no queden dos reglas a la vez.
 
-**Estado:** las mejoras AHORA están en el prototipo y el consolidado de octubre ya está al día. Astra las revisó y las dio por NO APTO con ocho hallazgos, que están arreglados y probados (§7). También está hecha y probada una segunda pasada con tres mejoras de DESPUÉS (§6). El 5 de noviembre entraron las dos mejoras que pidió Guillermo y sus tres decisiones sobre la §8 de octubre (§8). Astra revisó la segunda pasada, los arreglos y lo del 5 de noviembre en una segunda ronda, otra vez NO APTO, con siete hallazgos que también están arreglados y probados (§9). Los criterios pasan en [prototipo/pruebas-mejoras.js](prototipo/pruebas-mejoras.js) y fallan contra el prototipo de antes de cada tanda; el detalle está en la §12 del consolidado de octubre.
+**Estado:** las mejoras AHORA están en el prototipo y el consolidado de octubre ya está al día. Astra las revisó y las dio por NO APTO con ocho hallazgos, que están arreglados y probados (§7). También está hecha y probada una segunda pasada con tres mejoras de DESPUÉS (§6). El 5 de noviembre entraron las dos mejoras que pidió Guillermo y sus tres decisiones sobre la §8 de octubre (§8). Astra revisó la segunda pasada, los arreglos y lo del 5 de noviembre en una segunda ronda, otra vez NO APTO, con siete hallazgos que también están arreglados y probados (§9). El 9 de noviembre, una revisión visual aparte, que pidió Guillermo, arregló trece detalles de aspecto y composición (§10). Los criterios pasan en [prototipo/pruebas-mejoras.js](prototipo/pruebas-mejoras.js) y fallan contra el prototipo de antes de cada tanda; el detalle está en la §12 del consolidado de octubre.
 
 ## 1. En qué coinciden
 
@@ -292,3 +292,40 @@ Límites (R25):
 - La pantalla estrecha se ha probado en Chromium a 390, 768, 900 y 901 px, no en móviles ni tabletas de verdad.
 - Lo que Astra deja para más adelante sigue fuera de esta tanda: los textos que se pisan en las escenas densas (UX-16), probar el recorrido de cámara con jugadores de DayZ y Arma (UX-17), y probar con la escala de Windows y con ruedas de verdad.
 - Dos cosas vistas en las capturas, que no son de esta ronda y quedan anotadas sin tocarlas (R20). Por debajo de 1600 px, la nota de la línea de tiempo se corta con puntos suspensivos, como ya pasaba antes: a 1440 px se lee «Vista previa de cámara y actores estimados; no…» y a 1280, «Vista previa de cá…». Y «Guardar» sin backend dice «Guardado. El estudio guarda cada cambio al momento.»: lo último sí está guardado, porque sin backend no se puede cambiar nada, pero el aviso no dice que ahora no hay conexión.
+
+## 10. Revisión visual
+
+El 9 de noviembre Guillermo pidió que la interfaz «sea moderna y se vea bien», y que un subagente la revisara y la dejara lo mejor posible, además del trabajo de Claude y Astra. La revisión visual miró `f9a7d97` sin haber visto el prototipo antes, en dos rondas, con capturas de cada estado a 1366, 1440 y 1920 px en los dos temas, y arregló trece cosas. No toca el contrato ni lo decidido. Siguen igual los seis estados de D2, Parar en la barra, las luces y «MCP apagado», la letra a 13 px con el suelo de 12, las filas de 30 px, los radios, las sombras, el ámbar y los colores del mapa. Ningún token cambia de valor y el dibujo del mapa no se toca. [Su informe](2026-11-09-ui-revision-visual.md) trae cada hallazgo con su captura, su referente con la fuente y sus dos criterios.
+
+| ID | Qué se veía mal | Qué se cambió | Referente |
+|---|---|---|---|
+| VIS-01 | La cabecera de toma cambiaba de alto con el estado, de 46 a 89 px a 1440, y movía el mapa. Armada, «Rodar» caía a otra fila, lejos del reloj | Una sola franja de 46 px en todos los estados desde unos 1360 px, con la acción junto al reloj. Más estrecho, dos filas fijas | Sequencer de Unreal y la barra de transporte de Ableton Live |
+| VIS-02 | En Añadir, la pestaña «Animales» se salía del panel | Las cuatro pestañas se reparten el ancho y caben | PROPIO (UX-08), con el Asset Browser de Eden |
+| VIS-03 | Barras de desplazamiento clásicas, anchas y sin el color del tema | Finas y tenues, y se avivan con el ratón encima | Blender 4 |
+| VIS-04 | La cabecera, las pestañas y el cuerpo de cada panel tenían el mismo gris | La cabecera y las pestañas van en el fondo de las barras; la pestaña activa, en el del panel | Blender 4 y Unreal 5 |
+| VIS-05 | «Aplicar escena» apagado parecía encendido | La acción principal apagada va como cualquier botón apagado, sin ámbar | PROPIO (tabla de tokens), con Blender |
+| VIS-06 | Las órdenes de lo elegido iban en cinco anchos y tres filas desiguales | Dos columnas iguales | Blender 4 |
+| VIS-07 | Abierto como archivo, el prototipo se pintaba en modo de compatibilidad, y publicado, en modo estándar: las pruebas medían otra página | `<!doctype html>`, y los iconos de estado ya no abren una línea de texto. Ninguna caja se mueve | PROPIO, con la norma HTML |
+| VIS-08 | La barra de arriba mezclaba altos de 36, 34, 32 y 30 px | Todo a 30 px, en la misma fila | PROPIO (UX-03) |
+| VIS-09 | La ayuda del mapa, «Rodando» y el zoom tapaban los números de la regla de X | Lo que flota arriba del mapa empieza debajo de los números | PROPIO (CU-38 y AR-03) |
+| VIS-10 | Las teclas dentro de los botones y los menús iban en cajitas que pesaban como el nombre | Texto tenue y sin caja, a 4,5:1 o más. En el texto corrido siguen en su caja | Blender (atajos de los menús) |
+| VIS-11 | Los campos numéricos enseñaban las flechas del navegador | Sin flechas; el teclado y la rueda siguen cambiando el valor | Unreal 5 (`SSpinBox`) |
+| VIS-12 | En Cámaras, los nombres largos se partían en dos líneas | Nombre y resumen en una línea, con puntos suspensivos y enteros al pasar el ratón | Blender y la Jerarquía |
+| VIS-13 | Rodando seguía a la vista «Toma 04 armada. Intro para rodar y Esc para desarmar.» | El aviso se quita al rodar. Queda fuera del aspecto: lo pidió Claude al revisar la primera ronda | UX-14 |
+
+Pruebas:
+
+- `pruebas-mejoras.js`: 125 de 125, código de salida 0. Son las 99 de antes y las 26 del bloque VIS, un caso + y uno − por hallazgo.
+- Contra `f9a7d97`, solo los casos VIS: 15 de 28, con código de salida 1 y sin ninguno cortado a medias. Fallan los trece «+», y pasan los trece «−», que ya se cumplían, y las dos comprobaciones del final.
+- `pruebas.js`: 64 de 64, con el repaso de contraste de todos los textos en los dos temas. En la primera ronda chocó dos veces, y esos cambios se quitaron: el reloj a 22 px, porque el rojo de rodando bajaba a 3,61:1, y la tira de Actividad en el fondo de las barras, porque el chip «Observado» bajaba a 4,49:1 en claro.
+- `mutantes.js`: el control da 10 de 10 y los ocho mutantes hacen fallar su caso.
+- Modo estándar: el mismo archivo con y sin doctype, comparado caja a caja desde 0,5 px en 17 estados a 1440 × 900 en oscuro, 14 a 1366 × 768 en claro y 6 a 390 × 844. No se mueve nada. La Guía sí crece 44,5 px de 8938, porque en modo estándar las tablas heredan las cifras tabulares; así se veía ya publicada.
+- Capturas de antes y después de cada estado, revisadas a mano.
+
+Límites (R25):
+
+- Las fuentes de la máquina de las pruebas son Inter y DejaVu Sans Mono, no Segoe UI Variable ni Cascadia Mono. En Windows debería sobrar algo de sitio. Las barras finas, el modo estándar y los campos sin flechas se miraron en Chromium para Linux; en Windows, Firefox y Safari quedan [sin verificar].
+- Por debajo de unos 1360 px, la cabecera de toma va en dos filas fijas, más altas que la franja.
+- La regla de Y puede quedar debajo de la ayuda, de «Rodando» o de la escala. VIS-09 mira la de X.
+- Anotado sin tocarlo (R20): los campos de posición escriben «6196.0» con punto, y el resto de la interfaz «6195,97» con coma.
+- Propuesta para Guillermo, [sin verificar]: en Windows, la variante «Text» de Segoe UI Variable para la letra de 12 y 13 px, en vez de la «Display».

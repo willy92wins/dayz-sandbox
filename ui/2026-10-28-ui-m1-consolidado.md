@@ -110,11 +110,11 @@ Base: grises fríos por capas (UX-25). Del editor de Unreal 5 y del World Editor
 
 | Token | Oscuro | Claro | Uso |
 |---|---|---|---|
-| `--chassis` · `--bg` | `#111216` · `#16171b` | `#d8dbe0` · `#eceef1` | Chasis, separadores y barras |
+| `--chassis` · `--bg` | `#111216` · `#16171b` | `#d8dbe0` · `#eceef1` | Chasis, separadores y barras, y la cabecera y las pestañas de cada panel (VIS-04) |
 | `--surface` · `--surface-2` · `--surface-3` | `#1c1e23` · `#25272d` · `#2f3239` | `#f7f8fa` · `#ffffff` · `#e3e6ea` | Paneles, campos y realces |
 | `--line` · `--line-strong` | `#2a2d33` · `#3b3f47` | `#d5d8dd` · `#bbc0c7` | Bordes |
 | `--fg` · `--fg-2` · `--muted` · `--faint` | `#ebedf0` · `#c4c8cf` · `#9a9fa9` · `#6b707a` | `#15171b` · `#3a3e45` · `#5d626b` · `#8c919a` | Texto; `--faint` solo en lo desactivado y en iconos |
-| `--primary` con `--primary-ink` | `#e9aa3c` con `#1b1306` | `#dc992e` con `#1b1306` | La acción principal, una sola a la vista: Aplicar escena, Ir a rodaje o la de la cabecera de toma |
+| `--primary` con `--primary-ink` | `#e9aa3c` con `#1b1306` | `#dc992e` con `#1b1306` | La acción principal, una sola a la vista: Aplicar escena, Ir a rodaje o la de la cabecera de toma. Apagada no lleva ámbar: va como cualquier botón apagado (VIS-05) |
 | `--accent` | `#e9aa3c` | `#865106` | Selección, foco, tope alcanzado y paso actual |
 | `--rec` | `#d24137` | `#cc3226` | Rodando y Parar |
 | `--cam` | `#71a8ee` | `#2459a6` | Cámaras y claves |
@@ -124,9 +124,9 @@ Base: grises fríos por capas (UX-25). Del editor de Unreal 5 y del World Editor
 | `--g-obj` · `--g-zmb` · `--g-ani` · `--g-act` | `#cfc7aa` · `#d3836c` · `#c6a767` · `#f5f2e8` | `#5b5446` · `#a8432f` · `#86691c` · `#1d1f19` | Objeto, infectado, animal y actor en el mapa |
 
 - **Letra:** la del sistema a 13 px, con un suelo de 12 para cualquier texto de uso, también lo que se pinta en el mapa (Segoe UI Variable y Cascadia Mono en Windows). La familia y el tamaño son una elección propia: ningún referente comprobado los fija. La monoespaciada, solo en coordenadas y tiempos, y las cifras de tiempos, coordenadas y edades son tabulares. Títulos sin mayúsculas forzadas (UX-10).
-- **Densidad y formas:** filas de 30 px; radio 0 en los paneles, 4 en los controles y 8 en lo que flota (menús, diálogos y avisos); sombra solo en lo que flota; una sola familia de iconos. El ámbar es para la selección, el foco y la acción principal, y el verde solo para lo leído en el juego: la cámara elegida lleva una etiqueta neutra (UX-10).
+- **Densidad y formas:** filas de 30 px; radio 0 en los paneles, 4 en los controles y 8 en lo que flota (menús, diálogos y avisos); sombra solo en lo que flota; una sola familia de iconos. El ámbar es para la selección, el foco y la acción principal, y el verde solo para lo leído en el juego: la cámara elegida lleva una etiqueta neutra (UX-10). Los controles de la barra de arriba miden todos 30 px (VIS-08). Dentro de un botón o de un menú, la tecla va en texto tenue y sin caja; en el texto corrido sigue en su caja (VIS-10). Las barras de desplazamiento son finas y tenues (VIS-03).
 - **Movimiento:** solo gira Ejecutando y late la barra superior al rodar; con `prefers-reduced-motion` no se mueve nada.
-- **Contraste:** todo texto visible pasa WCAG 2.1 AA (criterio 1.4.3: 4,5:1, o 3:1 si es grande) en los dos temas, también sobre las rayas de Parcial y dentro de Parar. Los valores de esta tabla ya están ajustados para eso (CU-38). En el mapa, los números de la rejilla van sobre una placa opaca y las etiquetas con un halo opaco de 4 px, porque pasan por encima de edificios y bosque.
+- **Contraste:** todo texto visible pasa WCAG 2.1 AA (criterio 1.4.3: 4,5:1, o 3:1 si es grande) en los dos temas, también sobre las rayas de Parcial y dentro de Parar. Los valores de esta tabla ya están ajustados para eso (CU-38). En el mapa, los números de la rejilla van sobre una placa opaca y las etiquetas con un halo opaco de 4 px, porque pasan por encima de edificios y bosque. Lo que flota arriba del mapa (la ayuda, «Rodando» y el zoom) empieza debajo de los números de la regla de X, para no taparlos (VIS-09).
 
 **Estados de una orden (D2), por forma además de color.** Es PROPIO (D2 y #23), apoyado en la cola de comandos de DZ Commander y en el Session Inspector de UEFN.
 
@@ -287,6 +287,8 @@ Las fuentes se consultaron el 2026-10-27, el 2026-10-28, el 2026-11-04 y el 2026
 | 67 | En Rodaje, con el cursor de tiempo movido, el actor también se pinta rayado donde estaría; clic en un gesto elige a su actor | Sequencer de Unreal y caminos de Replay Mod | Al arrastrar el cursor de tiempo, lo animado se ve donde está en ese instante; aquí es una estimación a la velocidad supuesta y va rayada (UX-30) | [dev.epicgames.com](https://dev.epicgames.com/documentation/en-us/unreal-engine/sequencer-cinematic-editor-unreal-engine) | Gemini 4 y Muse |
 | 68 | La toma también se para desde tu juego, con la tecla «Parar toma» del mod de cliente | Rockstar Editor | Dentro de GTA V, una tecla empieza a grabar y otra para (F1 y F2 de serie), sin salir del juego (UX-46) | [support.rockstargames.com](https://support.rockstargames.com/articles/4gZPiqdUZD8ZhaJ81IPDJr/how-to-record-clips-and-access-the-rockstar-editor-in-gtav-on-pc) | Gemini 4 |
 
+La revisión visual del 9 de noviembre (VIS-01 a VIS-13) cambia detalles de presentación de estas partes, no añade partes nuevas. Sus referentes y sus fuentes están en su [informe](2026-11-09-ui-revision-visual.md).
+
 ## 10. Fuera de M1 (R25)
 
 - Una vista de calibración del mapa con los tres puntos de la georreferencia.
@@ -362,6 +364,14 @@ Mantiene el disenso fuerte de no cerrar por el verde, ahora por estos fallos, y 
 - `node ui/prototipo/pruebas.js`: 64 de 64, código de salida 0.
 - La sonda del mapa mide ahora el fotograma acabado: los textos que tocan en cada vista, las imágenes con texto, y los píxeles de las rayas y los huecos. Encontró que el contorno de los borradores casi no tenía huecos (0,1 px), por los extremos redondos que heredaba de las carreteras; ahora son planos.
 - Capturas revisadas a mano: a 390 y 768 px rodando, arriba y desplazada hasta el final; el menú de la escena sin backend; la tecla del juego sin conexión, al pulsarla y 4 s después; y Rodaje en tema claro con la nota nueva.
+
+**Revisión visual (VIS-01 a VIS-13):**
+
+- `node ui/prototipo/pruebas-mejoras.js`: 125 de 125, código de salida 0. Contra `f9a7d97`, los 28 casos VIS dan 15 de 28: fallan los trece «+», y pasan los «−», que ya se cumplían, y las dos comprobaciones del final, sin ninguno cortado a medias. El detalle está en la §10 de la lista de noviembre y en el [informe](2026-11-09-ui-revision-visual.md).
+- `node ui/prototipo/mutantes.js`: el control da 10 de 10 y los ocho mutantes hacen fallar su caso.
+- `node ui/prototipo/pruebas.js`: 64 de 64, código de salida 0.
+- La página empieza por `<!doctype html>` y se pinta en modo estándar, abierta como archivo o publicada (VIS-07). Hasta aquí, las pruebas medían en modo de compatibilidad. Comparado caja a caja, el estudio es el mismo en los dos modos, desde 0,5 px.
+- Capturas revisadas a mano: antes y después de cada estado a 1366, 1440 y 1920 px, en los dos temas.
 
 Cambios del prototipo al consolidar: paleta y letra del DayZ Editor; los atajos de la sección 5; los gestos de Eden en el mapa y las rejillas; «Leer el suelo» al colocar; Parcial tras un corte después de entregar y su reconciliación; las tres luces y el backend caído; «Parando…», control devuelto, hombre muerto, bloqueo de edición durante la toma y la insignia de OBS; el total del presupuesto; «Probar ambiente» y «Leer el juego ahora»; la Guía con 54 referentes y su procedencia.
 
