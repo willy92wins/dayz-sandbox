@@ -1236,6 +1236,165 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     return [[what, !!note && !/solo la cámara|ni los actores/.test(note) && !!g && !/Lo único propio/.test(g), `nota: «${note}» · Guía: ${/Lo único propio/.test(g) ? '«Lo único propio…»' : 'sin «Lo único propio»'}`]];
   });
 
+  // --- Revisión visual (VIS): el aspecto, sin tocar lo decidido ---
+  // VIS-01: la cabecera de toma es una sola franja que no cambia de alto con el estado; la acción va en la fila del reloj
+  const slate = p => p.evaluate(() => {
+    const t = document.querySelector('.takebar'); if (!t) return null;
+    const mid = e => { const r = e.getBoundingClientRect(); return r.top + r.height / 2; };
+    const a = [...t.querySelectorAll('.tact .btn')].find(__r26.shown), c = t.querySelector('.tc'), f = t.querySelector('.tfix'), k = f && f.querySelector('kbd');
+    return { h: Math.round(t.getBoundingClientRect().height), map: Math.round(document.querySelector('#mapwrap').getBoundingClientRect().top), row: !a || !c || Math.abs(mid(a) - mid(c)) <= 3,
+      key: !k || (k.getBoundingClientRect().right <= f.getBoundingClientRect().right + 0.5 && f.scrollWidth <= f.clientWidth + 1) };
+  });
+  await R26('VIS-01 +', async p => {
+    const what = 'VIS-01 + lista, armada, rodando, parada y con una comprobación que falla, la cabecera de toma no cambia de alto y el mapa no se mueve, a 1280, 1366 y 1440 px; a 1366 y 1440 es una sola franja de 48 px o menos, con la acción en la fila del reloj; y, armada o rodando, la tecla de «Parar toma» se ve entera';
+    const sizes = [[1280, 800], [1366, 768], [1440, 900]], seen = { 1280: [], 1366: [], 1440: [] };
+    const look = async st => { for (const [w, h] of sizes) { await p.setViewportSize({ width: w, height: h }); await p.waitForTimeout(150); seen[w].push({ st, ...((await slate(p)) || { h: 0, map: -1, row: false, key: false }) }); } };
+    if (!await apply(p)) return [[what, false, 'no llegó a aplicar']];
+    await p.keyboard.press('2'); await p.waitForTimeout(300); await look('lista');
+    if (!await arm(p)) return [[what, false, 'no llegó a armar']];
+    await look('armada');
+    if (!await roll(p)) return [[what, false, 'no llegó a rodar']];
+    await p.waitForTimeout(300); await look('rodando');
+    await p.keyboard.press('Escape'); await shows(p, '#slateWrap', /Reaplicar y preparar la/, 3000); await look('parada');
+    await sim(p, 'director'); await p.click('[data-act="take-reapply"]');
+    const blocked = await shows(p, '.takebar', /Falla «Tu juego conectado»/, 12000); await look('bloqueada');
+    const ok = sizes.every(([w]) => { const l = seen[w], hs = l.map(x => x.h), one = w > 1280; return l.length === 5 && Math.max(...hs) - Math.min(...hs) <= 1 && (!one || (Math.max(...hs) <= 48 && l.every(x => x.row))) && new Set(l.map(x => x.map)).size === 1 && l.filter(x => /armada|rodando/.test(x.st)).every(x => x.key); });
+    const out = sizes.map(([w]) => `${w} px: ` + seen[w].map(x => `${x.st} ${x.h} px${x.row || w <= 1280 ? '' : ', la acción en otra fila'}${x.key ? '' : ', tecla cortada'}`).join(' · ') + ` · mapa en ${[...new Set(seen[w].map(x => x.map))].join(' y ')}`);
+    return [[what, blocked && ok, `${blocked ? '' : 'no llegó a la comprobación que falla · '}${out.join(' | ')}`]];
+  }, 1366, 768);
+  await R26('VIS-01 −', async p => {
+    const what = 'VIS-01 − a 1600 × 960, armada, la cabecera dice entera «También para desde tu juego, con «Parar toma» (Fin)» y el estado es solo «Armada»; rodando, solo «Rodando»; y a 390 px de ancho la cabecera se parte en líneas sin salirse de la pantalla';
+    if (!await apply(p) || !await arm(p)) return [[what, false, 'no llegó a armar']];
+    const s1 = await T(p, '#slateWrap'), st1 = await T(p, '#slateWrap .tstate'), whole = await p.evaluate(() => { const f = document.querySelector('.tfix'); return !!f && f.scrollWidth <= f.clientWidth + 1; });
+    if (!await roll(p)) return [[what, false, 'no llegó a rodar']];
+    await p.waitForTimeout(300); const st2 = await T(p, '#slateWrap .tstate');
+    await p.keyboard.press('Escape'); await shows(p, '#slateWrap', /Reaplicar y preparar la/, 3000);
+    await p.setViewportSize({ width: 390, height: 844 }); await p.waitForTimeout(300);
+    const ph = await p.evaluate(() => { const t = document.querySelector('.takebar'); if (!t) return null; const kids = [...t.children].filter(e => e.getClientRects().length); return { lines: new Set(kids.map(e => { const q = e.getBoundingClientRect(); return Math.round((q.top + q.height / 2) / 8); })).size, inside: kids.every(e => { const q = e.getBoundingClientRect(); return q.left >= -0.5 && q.right <= innerWidth + 0.5; }) && t.scrollWidth <= t.clientWidth + 1 }; });
+    const said = /También para desde tu juego, con «Parar toma» \(Fin\)/.test(s1);
+    return [[what, said && whole && st1 === 'Armada' && st2 === 'Rodando' && !!ph && ph.lines > 1 && ph.inside, `armada: ${said ? 'la frase entera' : `«${s1.slice(0, 90)}»`}${whole ? '' : ', cortada'}, estado «${st1}» · rodando: «${st2}» · a 390 px: ${ph ? `${ph.lines} líneas, ${ph.inside ? 'dentro de la pantalla' : 'se sale'}` : 'sin cabecera'}`]];
+  });
+
+  // VIS-02: las cuatro pestañas de tipo de Añadir caben en el panel
+  const cats = p => p.evaluate(() => {
+    const c = document.querySelector('#colR .cats'); if (!c) return null;
+    const r = c.getBoundingClientRect(), bs = [...c.querySelectorAll('button')];
+    return { n: bs.length, out: bs.filter(b => { const q = b.getBoundingClientRect(); return q.left < r.left - 0.5 || q.right > r.right + 0.5; }).map(b => b.innerText.replace(/\s+/g, ' ').trim()), scroll: c.scrollWidth > c.clientWidth + 1 };
+  });
+  await R26('VIS-02 +', async p => {
+    const what = 'VIS-02 + a 1366, 1440 y 1920 px, las cuatro pestañas de tipo de Añadir caben enteras en el panel y la tira no se desplaza';
+    await p.click('[data-act="rtab"][data-v="add"]'); await p.waitForTimeout(200);
+    const out = []; let ok = true;
+    for (const [w, h] of [[1366, 768], [1440, 900], [1920, 1080]]) {
+      await p.setViewportSize({ width: w, height: h }); await p.waitForTimeout(150);
+      const c = await cats(p), good = !!c && c.n === 4 && !c.out.length && !c.scroll; ok = ok && good;
+      out.push(`${w} px: ${!c ? 'sin pestañas' : c.out.length ? `se sale${c.out.length > 1 ? 'n' : ''} ${c.out.join(', ')}` : `las ${c.n} dentro`}${c && c.scroll ? ', la tira se desplaza' : ''}`);
+    }
+    return [[what, ok, out.join(' · ')]];
+  }, 1366, 768);
+  await R26('VIS-02 −', async p => {
+    const what = 'VIS-02 − cada pestaña de tipo enseña su nombre y su cuenta enteros, a 12 px o más; «Animales» se puede elegir y la elegida lleva el subrayado ámbar';
+    await p.click('[data-act="rtab"][data-v="add"]'); await p.waitForTimeout(200);
+    await p.click('#colR .cats [data-act="lib-cat"][data-v="animal"]'); await p.waitForTimeout(200);
+    const r = await p.evaluate(() => {
+      const t = document.createElement('i'); t.style.color = 'var(--accent)'; document.body.appendChild(t); const amber = getComputedStyle(t).color; t.remove();
+      const bs = [...document.querySelectorAll('#colR .cats button')], on = bs.find(b => b.getAttribute('aria-selected') === 'true');
+      return { labels: bs.map(b => b.innerText.replace(/\s+/g, ' ').trim()), whole: bs.every(b => b.scrollWidth <= b.clientWidth + 1), px: Math.min(...bs.map(b => parseFloat(getComputedStyle(b).fontSize))), on: on ? on.innerText.replace(/\s+/g, ' ').trim() : '', under: !!on && getComputedStyle(on).borderBottomColor === amber };
+    });
+    const named = r.labels.length === 4 && r.labels.every(l => /^(Actores|Objetos|Infectados|Animales) \d+$/.test(l));
+    return [[what, named && r.whole && r.px >= 12 && /^Animales/.test(r.on) && r.under, `${r.labels.join(' · ')} · ${r.whole ? 'enteras' : 'alguna cortada'} · ${r.px} px · elegida «${r.on}», ${r.under ? 'subrayada en ámbar' : 'sin el subrayado ámbar'}`]];
+  });
+
+  // VIS-03: barras de desplazamiento finas y en los colores del tema, tenues hasta que el ratón pasa por encima
+  const sbar = (p, sel) => p.evaluate(s => { const e = document.querySelector(s); if (!e) return null; const cs = getComputedStyle(e); return `${cs.scrollbarWidth} ${cs.scrollbarColor}`; }, sel);
+  await R26('VIS-03 +', async p => {
+    const what = 'VIS-03 + la Jerarquía, Propiedades, los menús y la Guía piden una barra de desplazamiento fina con los colores del tema, tenue, y la del panel que tiene el ratón encima se aviva';
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(150);
+    const m = await p.locator('#map').boundingBox(); await p.mouse.move(m.x + m.width / 2, m.y + m.height / 2); await p.waitForTimeout(100);
+    const l0 = await sbar(p, '#colL .pb'), r0 = await sbar(p, '#colR .pb');
+    const l = await p.locator('#colL .pb').boundingBox(); await p.mouse.move(l.x + l.width / 2, l.y + l.height / 2); await p.waitForTimeout(100);
+    const l1 = await sbar(p, '#colL .pb'), r1 = await sbar(p, '#colR .pb');
+    await p.click('#bTools'); await p.waitForTimeout(150); const menu = await sbar(p, '#menu'); await p.keyboard.press('Escape'); await p.waitForTimeout(100);
+    await p.click('#bGuide'); await p.waitForTimeout(400); const guide = await sbar(p, '#guide');
+    const thin = [l0, r0, menu, guide].every(x => !!x && /^thin /.test(x) && !/auto/.test(x));
+    return [[what, thin && l0 === r0 && l1 !== l0 && r1 === r0, `en reposo: Jerarquía «${l0}», Propiedades «${r0}» · con el ratón en la Jerarquía: «${l1}», Propiedades «${r1}» · menú «${menu}» · Guía «${guide}»`]];
+  }, 1440, 900);
+  await R26('VIS-03 −', async p => {
+    const what = 'VIS-03 − a 1366 × 768 la Jerarquía se sigue desplazando, y las tiras de pestañas siguen sin barra';
+    const r = await p.evaluate(() => { const pb = document.querySelector('#colL .pb'), can = pb.scrollHeight > pb.clientHeight; pb.scrollTop = 120; const moved = pb.scrollTop > 0; pb.scrollTop = 0; return { can, moved, tabs: [...document.querySelectorAll('.tabs')].map(e => getComputedStyle(e).scrollbarWidth) }; });
+    await p.click('[data-act="rtab"][data-v="add"]'); await p.waitForTimeout(150);
+    const cw = await p.evaluate(() => { const c = document.querySelector('#colR .cats'); return c ? getComputedStyle(c).scrollbarWidth : 'sin tira'; });
+    return [[what, r.can && r.moved && r.tabs.length > 0 && r.tabs.every(x => x === 'none') && cw === 'none', `Jerarquía: ${r.can ? 'más larga que el panel' : 'cabe entera'}, ${r.moved ? 'se desplaza' : 'no se desplaza'} · pestañas: ${r.tabs.join(', ')} · tipos de Añadir: ${cw}`]];
+  }, 1366, 768);
+
+  // VIS-04: la cabecera y las pestañas de cada panel son una capa propia; la pestaña activa lleva el fondo del panel
+  await R26('VIS-04 +', async p => {
+    const what = 'VIS-04 + en oscuro, la cabecera de cada panel tiene un fondo distinto del cuerpo; la pestaña activa lleva el fondo del cuerpo y las demás, el de la cabecera';
+    await dock(p);
+    const l = await p.evaluate(() => {
+      const bg = e => { for (; e; e = e.parentElement) { const c = getComputedStyle(e).backgroundColor; if (!/^(transparent|rgba\(0, 0, 0, 0\))$/.test(c)) return c; } return ''; };
+      return [...document.querySelectorAll('.ph')].filter(__r26.shown).map(h => { const box = h.parentElement, b = box.querySelector(':scope > .pb') || box, on = h.querySelector('.tabs [aria-selected="true"]'), off = h.querySelector('.tabs [aria-selected="false"]');
+        return { name: (on || h.querySelector('.pt') || h).innerText.replace(/\s+/g, ' ').trim().slice(0, 24), head: bg(h), body: bg(b), on: on ? bg(on) : null, off: off ? bg(off) : null }; });
+    });
+    const ok = l.length >= 3 && l.every(x => x.head !== x.body && (x.on === null || x.on === x.body) && (x.off === null || x.off === x.head));
+    return [[what, ok, l.map(x => `«${x.name}»: cabecera ${x.head}, cuerpo ${x.body}${x.on ? `, activa ${x.on}` : ''}${x.off ? `, otra ${x.off}` : ''}`).join(' · ') || 'sin cabeceras']];
+  }, 1440, 900);
+  await R26('VIS-04 −', async p => {
+    const what = 'VIS-04 − en claro, la pestaña activa sigue subrayada en ámbar, los paneles, sus cabeceras y sus pestañas siguen sin radio ni sombra, y el nombre de una pestaña sin elegir se lee a 4,5:1 o más sobre su cabecera';
+    const r = await p.evaluate(() => {
+      const t = document.createElement('i'); t.style.color = 'var(--accent)'; document.body.appendChild(t); const amber = getComputedStyle(t).color; t.remove();
+      const on = document.querySelector('#colR .tabs [aria-selected="true"]'), off = document.querySelector('#colR .tabs [aria-selected="false"]'), cs = getComputedStyle(on);
+      const flat = [...document.querySelectorAll('.panel, .ph, .tabs button')].filter(__r26.shown).every(e => { const s = getComputedStyle(e); return parseFloat(s.borderTopLeftRadius) === 0 && s.boxShadow === 'none'; });
+      const bg = e => { for (; e; e = e.parentElement) { const c = getComputedStyle(e).backgroundColor; if (!/^(transparent|rgba\(0, 0, 0, 0\))$/.test(c)) return c; } return 'rgb(255, 255, 255)'; };
+      const lum = c => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; const [r, g, b] = c.match(/[\d.]+/g).map(Number); return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+      const a = lum(getComputedStyle(off).color), b = lum(bg(off));
+      return { under: cs.borderBottomColor === amber && parseFloat(cs.borderBottomWidth) >= 2, flat, ratio: Math.round((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) * 100) / 100, off: off.innerText.trim() };
+    });
+    return [[what, r.under && r.flat && r.ratio >= 4.5, `${r.under ? 'subrayado ámbar' : 'sin el subrayado ámbar'} · ${r.flat ? 'sin radio ni sombra' : 'con radio o sombra'} · «${r.off}» a ${r.ratio}:1`]];
+  }, 1440, 900, 'light');
+
+  // VIS-05: la acción principal apagada se ve como cualquier botón apagado, no como un botón ámbar oscurecido
+  const tops = p => p.evaluate(() => {
+    const v = x => { const t = document.createElement('i'); t.style.cssText = `background:var(${x});color:var(${x})`; document.body.appendChild(t); const c = getComputedStyle(t).color; t.remove(); return c; };
+    const a = document.querySelector('#bApply'), q = document.querySelector('#bReset');
+    return { amber: v('--primary'), ink: v('--primary-ink'), apply: getComputedStyle(a).backgroundColor, color: getComputedStyle(a).color, reset: getComputedStyle(q).backgroundColor, disA: a.disabled, disQ: q.disabled, busy: a.classList.contains('busy'), txt: a.innerText.replace(/\s+/g, ' ').trim() };
+  });
+  await R26('VIS-05 +', async p => {
+    const what = 'VIS-05 + sin backend, «Aplicar escena» apagado pierde el ámbar y se ve igual que «Quitar del juego» apagado';
+    await sim(p, 'backend'); await p.waitForTimeout(300);
+    const r = await tops(p);
+    return [[what, r.disA && r.disQ && r.apply !== r.amber && r.apply === r.reset, `«${r.txt}» ${r.disA ? 'apagado' : 'encendido'}, fondo ${r.apply} (el ámbar es ${r.amber}) · «Quitar del juego» ${r.disQ ? 'apagado' : 'encendido'}, fondo ${r.reset}`]];
+  }, 1440, 900);
+  await R26('VIS-05 −', async p => {
+    const what = 'VIS-05 − encendido, «Aplicar escena» sigue en ámbar con el texto oscuro, y mientras aplica también';
+    const a0 = await tops(p);
+    await p.locator('#map').hover(); await p.keyboard.press('Control+Enter');
+    const busy = await W(p, () => { const a = document.querySelector('#bApply'); return a.disabled && a.classList.contains('busy'); }, null, 2000);
+    const a1 = await tops(p); await free(p);
+    return [[what, !a0.disA && a0.apply === a0.amber && a0.color === a0.ink && busy && a1.apply === a1.amber, `con cambios: «${a0.txt}», fondo ${a0.apply}, texto ${a0.color} · aplicando: ${busy ? `«${a1.txt}», fondo ${a1.apply}` : 'no llegó a aplicar'} · ámbar ${a0.amber}, texto oscuro ${a0.ink}`]];
+  }, 1440, 900);
+
+  // VIS-06: las órdenes de lo elegido van en dos columnas del mismo ancho, no en una nube de anchos distintos
+  const orders = p => p.evaluate(() => {
+    const f = document.querySelector('#colR [data-act="coords"]'), row = f && f.closest('.btnrow'); if (!row) return null;
+    const t = document.createElement('i'); t.style.color = 'var(--st-fail)'; document.body.appendChild(t); const red = getComputedStyle(t).color; t.remove();
+    const bs = [...row.querySelectorAll('.btn')].filter(__r26.shown), rs = bs.map(b => b.getBoundingClientRect()), del = bs.find(b => b.dataset.act === 'del');
+    return { n: bs.length, ws: rs.map(r => Math.round(r.width)), cols: new Set(rs.map(r => Math.round(r.left))).size, rows: new Set(rs.map(r => Math.round(r.top))).size, hs: [...new Set(rs.map(r => Math.round(r.height)))],
+      whole: bs.every(b => b.scrollWidth <= b.clientWidth + 1 && [...b.querySelectorAll('kbd')].every(k => k.getBoundingClientRect().right <= b.getBoundingClientRect().right + 0.5)), red: !!del && getComputedStyle(del).color === red, labels: bs.map(b => b.innerText.replace(/\s+/g, ' ').trim()) };
+  });
+  await R26('VIS-06 +', async p => {
+    const what = 'VIS-06 + con un objeto elegido, sus cinco órdenes van en dos columnas del mismo ancho y en tres filas';
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(200);
+    const r = await orders(p);
+    return [[what, !!r && r.n === 5 && Math.max(...r.ws) - Math.min(...r.ws) <= 1 && r.cols === 2 && r.rows === 3, r ? `${r.n} órdenes, anchos ${r.ws.join('/')} px, ${r.cols} columnas y ${r.rows} filas` : 'sin las órdenes']];
+  }, 1440, 900);
+  await R26('VIS-06 −', async p => {
+    const what = 'VIS-06 − cada orden enseña su nombre y su tecla enteros, siguen con el alto de 26 px y «Borrar» sigue en rojo';
+    await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(200);
+    const r = await orders(p);
+    return [[what, !!r && r.n === 5 && r.whole && r.red && r.hs.length === 1 && r.hs[0] === 26, r ? `${r.labels.join(' · ')} · ${r.whole ? 'enteras' : 'alguna cortada'} · alto ${r.hs.join('/')} px · «Borrar» ${r.red ? 'en rojo' : 'sin el rojo'}` : 'sin las órdenes']];
+  }, 1440, 900);
+
   expect(external.length === 0, 'ninguna petición sale de la página: ' + (external.slice(0, 3).join(' ') || 'ninguna'));
   expect(errors.length === 0, 'sin errores de JavaScript en la página');
   errors.forEach(e => console.log(e));

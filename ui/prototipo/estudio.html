@@ -71,6 +71,9 @@ button{cursor:pointer}
 .mono{font-family:var(--font-mono)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 [hidden]{display:none!important}
+/* barras de desplazamiento finas y tenues, que se avivan con el ratón encima (VIS-03) */
+*{scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
+.pb:hover,.tlwrap:hover,.menu:hover,.dialog .db:hover,#guide:hover,.tw:hover{scrollbar-color:var(--muted) transparent}
 svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 svg.sm{width:14px;height:14px;flex:none;overflow:visible}
 svg.g{flex:none}
@@ -93,6 +96,8 @@ body.rolling .top{animation:pulse 1.2s ease-in-out infinite}
 .btn.busy:disabled{opacity:1;cursor:progress}
 .btn.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-ink);font-weight:600}
 .btn.primary:hover:not(:disabled){background:var(--primary-hover);border-color:var(--primary-hover)}
+/* la principal apagada se ve como cualquier botón apagado, sin ámbar (VIS-05) */
+.btn.primary:disabled:not(.busy){background:var(--surface-2);border-color:var(--line-strong);color:var(--fg)}
 .btn.stop{background:var(--rec);border-color:var(--rec);color:var(--rec-ink);font-weight:600}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--fg-2)}
 .btn.ghost:hover{background:var(--surface-2);color:var(--fg)}
@@ -136,7 +141,7 @@ kbd{font:500 12px/1 var(--font-body);padding:2px 5px;border-radius:3px;border:1p
 .col.rod{display:grid;grid-template-rows:auto 1px minmax(0,1fr)}
 .hsep{background:var(--chassis)}
 .center{display:grid;grid-template-rows:auto minmax(0,1fr) 1px var(--bh);min-height:0;min-width:0}
-.center>#slateWrap{grid-row:1} .center>#mapwrap{grid-row:2} .center>[data-split="b"]{grid-row:3} .center>#dock{grid-row:4}
+.center>#slateWrap{grid-row:1;min-width:0} .center>#mapwrap{grid-row:2} .center>[data-split="b"]{grid-row:3} .center>#dock{grid-row:4}
 .center.dock-closed{grid-template-rows:auto minmax(0,1fr) 0 auto}
 .center.dock-closed>[data-split="b"]{display:none}
 .split{position:relative;background:var(--chassis);border:0;padding:0;touch-action:none;z-index:3}
@@ -150,15 +155,16 @@ body.ui-off .ws{grid-template-columns:0 0 minmax(0,1fr) 0 0}
 body.ui-off .col,body.ui-off .split,body.ui-off #dock,body.ui-off #slateWrap{display:none}
 body.ui-off .center{grid-template-rows:0 minmax(0,1fr) 0 0}
 
+/* la cabecera y las pestañas de cada panel van en el fondo de las barras; la pestaña activa, en el del panel (VIS-04) */
 .panel{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--surface);overflow:hidden;position:relative}
-.ph{display:flex;align-items:center;gap:6px;height:36px;flex:none;padding:0 6px 0 12px;border-bottom:1px solid var(--line);min-width:0}
+.ph{display:flex;align-items:center;gap:6px;height:36px;flex:none;padding:0 6px 0 12px;border-bottom:1px solid var(--line);min-width:0;background:var(--bg)}
 .pt{font:600 13px/1 var(--font-display);color:var(--fg);white-space:nowrap}
 .ph .sub{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .ph .grow{flex:1;min-width:0}
 .tabs{display:flex;gap:2px;align-self:stretch;align-items:stretch;min-width:0;overflow-x:auto;scrollbar-width:none;margin-left:-6px}
 .tabs button{border:0;background:transparent;padding:0 10px;color:var(--muted);font:600 13px/1 var(--font-display);border-top:2px solid transparent;border-bottom:2px solid transparent;display:flex;align-items:center;gap:6px;white-space:nowrap}
 .tabs button:hover{color:var(--fg-2)}
-.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent);background:var(--surface)}
 .tabs .n{font:500 12px/1 var(--font-body);padding:2px 6px;border-radius:8px;background:var(--surface-3);color:var(--fg-2)}
 .tabs .n.bad{background:var(--st-fail);color:var(--st-ink)}
 .tabs .n.live{background:var(--st-exec);color:var(--st-ink)}
@@ -234,19 +240,30 @@ body.ui-off .center{grid-template-rows:0 minmax(0,1fr) 0 0}
 .recbadge span{font-weight:500}
 .recbadge small{font:500 12px/1 var(--font-body);padding-left:8px;border-left:1px solid rgba(255,255,255,.4)}
 
-/* ---------- cabecera de toma (UX-11) ---------- */
-.takebar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;min-width:0;min-height:46px;padding:6px 10px 6px 14px;background:var(--surface);border-bottom:1px solid var(--chassis)}
-.takebar .tn{font:600 15px/1 var(--font-display);white-space:nowrap}
+/* ---------- cabecera de toma (UX-11): una sola franja del mismo alto en todos los estados (VIS-01) ---------- */
+#slateWrap{container-type:inline-size}
+.takebar{display:flex;align-items:center;gap:10px;min-width:0;height:46px;padding:0 10px 0 12px;background:var(--surface);border-bottom:1px solid var(--chassis)}
+.takebar .tn{font:600 15px/1 var(--font-display);white-space:nowrap;flex:none}
 .takebar label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
 .takebar select{height:28px;border-radius:4px;border:1px solid var(--line-strong);background:var(--surface-2);padding:0 6px;max-width:220px;color:var(--fg);font-size:13px}
-.tstate{display:flex;align-items:center;gap:7px;min-width:0;color:var(--fg-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tmeta{display:flex;flex-direction:column;justify-content:center;gap:2px;flex:1 1 0;min-width:0}
+.tstate{display:flex;align-items:center;gap:7px;min-width:0;color:var(--fg-2);white-space:nowrap;overflow:hidden;line-height:1.3}
+.tstate>span:last-child{overflow:hidden;text-overflow:ellipsis}
 .tstate.bad{color:var(--st-fail)}
 .recdot{width:9px;height:9px;border-radius:50%;background:var(--rec);flex:none}
-.takebar .grow{flex:1;min-width:0}
-.tc{font:500 24px/1 var(--font-mono);letter-spacing:.02em;color:var(--fg)}
+.tc{font:500 24px/1 var(--font-mono);letter-spacing:.02em;color:var(--fg);flex:none}
 body.rolling .tc{color:var(--rec)}
-.tact{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.tfix{font-size:12px;color:var(--fg-2);max-width:280px;line-height:1.35}
+.tact{display:flex;gap:8px;align-items:center;flex:none}
+.tfix{font-size:12px;color:var(--muted);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tfix kbd{padding:0 4px}
+@container (max-width: 919px){ .tfix .tfull{display:none} }
+@container (min-width: 920px){ .tfix .tshort{display:none} }
+/* más estrecho no cabe en una fila: dos filas de alto fijo, número, cámara y reloj arriba, y estado y acción abajo */
+@container (max-width: 779px){
+  .takebar{flex-wrap:wrap;row-gap:0;height:auto;padding-block:5px}
+  .takebar::after{content:"";order:3;flex-basis:100%;height:0}
+  .takebar label{flex:1 1 0;min-width:0;min-height:36px} .takebar select{min-width:0} .tc{order:2} .tmeta{order:4;min-height:36px} .tact{order:5}
+}
 
 /* ---------- propiedades ---------- */
 .sec{padding:10px 12px 12px;border-bottom:1px solid var(--line)}
@@ -279,6 +296,10 @@ select.inp{padding:0 4px}
 .note.warn{border-color:color-mix(in srgb,var(--st-part) 55%,transparent);color:var(--fg)}
 .note.bad{border-color:color-mix(in srgb,var(--st-fail) 55%,transparent);color:var(--fg)}
 .btnrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+/* las órdenes de lo elegido, en dos columnas iguales (VIS-06) */
+.btnrow.acts{display:grid;grid-template-columns:1fr 1fr}
+.btnrow.acts .btn{justify-content:flex-start}
+.btnrow.acts kbd{margin-left:auto}
 .rng{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:center}
 .rng output{font:400 12px/1 var(--font-mono);text-align:right}
 input[type=range]{accent-color:var(--accent);width:100%;margin:0}
@@ -300,9 +321,9 @@ details.tech[open]>summary svg.i,details.checks[open]>summary svg.i{transform:no
 details.tech .tb{padding:0 12px 12px}
 details.tech .tb .mono{font-size:12px;word-break:break-all}
 
-/* ---------- añadir (UX-08) ---------- */
-.cats{display:flex;padding:0 6px;border-bottom:1px solid var(--line);flex:none;overflow-x:auto;scrollbar-width:none}
-.cats button{height:32px;padding:0 8px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:600 12px/1 var(--font-display);display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+/* ---------- añadir (UX-08); las cuatro pestañas de tipo reparten el ancho y caben (VIS-02) ---------- */
+.cats{display:flex;padding:0 4px;border-bottom:1px solid var(--line);flex:none;overflow-x:auto;scrollbar-width:none}
+.cats button{flex:1 1 auto;justify-content:center;height:32px;padding:0 4px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:600 12px/1 var(--font-display);display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .cats button:hover{color:var(--fg-2)}
 .cats button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
 .cats .n{font:500 12px/1 var(--font-body);color:var(--muted)}
@@ -1972,7 +1993,7 @@ function entProps(e) {
   html += `</div>`;
   if (e.kind === 'actor') html += actorTake(e);
   html += obsBlock(e);
-  html += `<div class="sec"><div class="btnrow" style="margin-top:0"><button class="btn sm" data-act="fit">${ic('focus')} Encuadrar <kbd>F</kbd></button><button class="btn sm" data-act="coords">${ic('copy')} Coordenadas <kbd>P</kbd></button><button class="btn sm" data-act="dup">${ic('copy')} Duplicar <kbd>Ctrl+J</kbd></button><button class="btn sm" data-act="lockt">${ic(S.locked[e.id] ? 'unlock' : 'lock')} ${S.locked[e.id] ? 'Desbloquear' : 'Bloquear'}</button><button class="btn sm" data-act="del" style="color:var(--st-fail)">${ic('trash')} Borrar <kbd>Supr</kbd></button></div></div>`;
+  html += `<div class="sec"><div class="btnrow acts" style="margin-top:0"><button class="btn sm" data-act="fit">${ic('focus')} Encuadrar <kbd>F</kbd></button><button class="btn sm" data-act="coords">${ic('copy')} Coordenadas <kbd>P</kbd></button><button class="btn sm" data-act="dup">${ic('copy')} Duplicar <kbd>Ctrl+J</kbd></button><button class="btn sm" data-act="lockt">${ic(S.locked[e.id] ? 'unlock' : 'lock')} ${S.locked[e.id] ? 'Desbloquear' : 'Bloquear'}</button><button class="btn sm" data-act="del" style="color:var(--st-fail)">${ic('trash')} Borrar <kbd>Supr</kbd></button></div></div>`;
   html += tech('ent', `<div class="kv"><span>Id</span><span>${esc(e.id)}</span></div><div class="kv"><span>Clase</span><span>${esc(e.cls)}</span></div>${e.kind === 'actor' ? `<div class="kv"><span>Prendas</span><span>${ward(e.wardrobe).items.map(esc).join(' · ')}</span></div>` : ''}`);
   return html;
 }
@@ -1995,7 +2016,7 @@ function multiProps(ids) {
   es.forEach(e => { kinds[e.kind] = (kinds[e.kind] || 0) + 1; });
   return `<div class="ident">${gl('objeto')}<div><b>${ids.length} seleccionados</b><div class="cn">${Object.keys(kinds).map(k => pl(kinds[k], KONE[k], KLABEL[k].toLowerCase())).join(' · ')}</div></div></div>
   <div class="sec"><h4>Juntos</h4><div class="note">Arrástralos en el mapa o muévelos con las flechas (Alt + flechas, despacio). Ctrl + clic añade o quita de la selección y Mayús + clic selecciona seguidos.</div>
-  <div class="btnrow"><button class="btn sm" data-act="fit">${ic('focus')} Encuadrar</button><button class="btn sm" data-act="dup">${ic('copy')} Duplicar</button><button class="btn sm" data-act="lockall">${ic('lock')} Bloquear</button><button class="btn sm" data-act="del" style="color:var(--st-fail)">${ic('trash')} Borrar</button></div></div>`;
+  <div class="btnrow acts"><button class="btn sm" data-act="fit">${ic('focus')} Encuadrar</button><button class="btn sm" data-act="dup">${ic('copy')} Duplicar</button><button class="btn sm" data-act="lockall">${ic('lock')} Bloquear</button><button class="btn sm" data-act="del" style="color:var(--st-fail)">${ic('trash')} Borrar</button></div></div>`;
 }
 function markProps(a, mi) {
   const m = a.marks[mi];
@@ -2179,13 +2200,14 @@ function renderSlate() {
   let fix = '', act = '';
   if (st === 'idle') act = `<button class="btn primary" data-act="take-prep" data-ref="Armar la grabación (Mayús+F9): Ableton Live">Preparar toma${keyOf('prep') ? ` <kbd>${keyLabel(keyOf('prep'))}</kbd>` : ''}</button>`;
   else if (st === 'preparando') act = `<button class="btn" data-act="take-stop">Cancelar</button>`;
-  else if (st === 'bloqueada') { const f = bad[0] || {fix: 'prep', fixTxt: 'Volver a preparar', txt: ''}; if (f.txt) fix = `<span class="tfix">${esc(f.txt)}</span>`; act = `<button class="btn primary" data-act="${f.fix === 'apply' ? 'take-reapply' : 'take-prep'}">${esc(f.fixTxt || 'Volver a preparar')}</button>`; }
+  else if (st === 'bloqueada') { const f = bad[0] || {fix: 'prep', fixTxt: 'Volver a preparar', txt: ''}; if (f.txt) fix = `<span class="tfix" title="${esc(f.txt)}">${esc(f.txt)}</span>`; act = `<button class="btn primary" data-act="${f.fix === 'apply' ? 'take-reapply' : 'take-prep'}">${esc(f.fixTxt || 'Volver a preparar')}</button>`; }
   else if (st === 'armada') act = `<button class="btn primary" data-act="take-roll" data-ref="Intro arranca la vista previa: Eden">${ic('play')} Rodar <kbd>${keyLabel(keyOf('roll'))}</kbd></button>`;
   else if (ended) act = `<button class="btn primary" data-act="take-reapply" ${tk.unconfirmed ? `disabled title="${UNC}"` : ''}>${ic('reset')} Reaplicar y preparar la ${pad2(tk.n)}</button>`;
-  if (st === 'armada' || st === 'rodando') fix = `<span class="tfix">También para desde tu juego, con «Parar toma»${S.stopKey ? ` (<kbd>${esc(S.stopKey)}</kbd>)` : ''}</span>`;
+  // la frase entera cabe a partir de unos 1500 px; más estrecho, la corta (VIS-01), y la entera sale al pasar el ratón
+  if (st === 'armada' || st === 'rodando') fix = `<span class="tfix" title="También para desde tu juego, con «Parar toma»${S.stopKey ? ` (${esc(S.stopKey)})` : ''}"><span class="tfull">También para desde tu juego, con </span><span class="tshort">En tu juego: </span>«Parar toma»${S.stopKey ? ` (<kbd>${esc(S.stopKey)}</kbd>)` : ''}</span>`;
   const camOpts = S.doc.cameras.map(x => `<option value="${x.id}" ${x.id === tk.cam ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
   const t = st === 'rodando' || st === 'parando' ? tk.t : (ended && tk.log[0] ? tk.log[0].dur : 0);
-  w.innerHTML = `<div class="takebar" data-ref="Transporte de Ableton Live · Studio Mode de OBS"><span class="tn">Toma ${pad2(shown)}</span><label>Cámara <select id="takeCam" ${takeActive() ? 'disabled' : ''}>${camOpts}</select></label><span class="tstate${st === 'bloqueada' || st === 'fallida' ? ' bad' : ''}">${icon}<span>${label}</span></span><span class="grow"></span>${fix}<span class="tc" id="tcBig">${tc(t)}</span><div class="tact">${act}</div></div>`;
+  w.innerHTML = `<div class="takebar" data-ref="Transporte de Ableton Live · Studio Mode de OBS"><span class="tn">Toma ${pad2(shown)}</span><label>Cámara <select id="takeCam" ${takeActive() ? 'disabled' : ''}>${camOpts}</select></label><span class="tmeta"><span class="tstate${st === 'bloqueada' || st === 'fallida' ? ' bad' : ''}" title="${esc(label)}">${icon}<span>${label}</span></span>${fix}</span><span class="tc" id="tcBig">${tc(t)}</span><div class="tact">${act}</div></div>`;
 }
 function renderTakeParts() { if (S.ws === 'rodaje') { renderSlate(); const p = $('#colR .prep'); if (p) p.innerHTML = prepHtml(); } renderTop(); }
 function tickTake() {
