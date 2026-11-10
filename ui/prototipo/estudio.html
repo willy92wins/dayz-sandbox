@@ -1553,20 +1553,23 @@ function drawGlyph(g, kind, x, y, yaw, style, cls) {
   // la muesca del objeto sale del borde de su cuadrado, que ya no gira (UX-48)
   if (style !== 'ghost') { const a = yaw * Math.PI / 180, r0 = kind === 'actor' ? 8.75 : kind === 'objeto' ? 8.5 / Math.max(Math.abs(Math.sin(a)), Math.abs(Math.cos(a))) + 1.25 : 7.5, r1 = r0 + 6; g.beginPath(); g.moveTo(x + Math.sin(a) * r0, y - Math.cos(a) * r0); g.lineTo(x + Math.sin(a) * r1, y - Math.cos(a) * r1); g.lineCap = 'round'; g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.stroke(); }
 }
-// Etiquetas sin solaparse: prueba debajo y encima. Se colocan y se pintan al final, encima de los marcadores y, si cabe, donde no tapen
-// ninguno: pintadas entre ellos, el marcador que venía después tapaba media letra, y una que tenía que salir sin sitio se pintaba encima de
-// otra (CU-38, AR3-01). Las secundarias se omiten si no caben sin tapar nada; las que tienen que salir prueban también más lejos antes de
-// tapar un marcador, como la estimación rayada que pasa por una marca, y antes de pisar otra etiqueta.
+// Etiquetas sin solaparse: prueba a la derecha de su marcador, debajo y encima, y si no cabe, a su izquierda, como en los mapas. Se colocan y
+// se pintan al final, encima de los marcadores y, si cabe, donde no tapen ninguno: pintadas entre ellos, el marcador que venía después tapaba
+// media letra, y una que tenía que salir sin sitio se pintaba encima de otra (CU-38, AR3-01). Las secundarias se omiten si no caben sin tapar
+// nada; las que tienen que salir prueban también más lejos antes de tapar un marcador, como la estimación rayada que pasa por una marca, y
+// antes de pisar otra etiqueta.
 const LBL = [], LQ = [], MK = [];
 function label(g, txt, x, y, strong, must) { LQ.push([`${strong ? 600 : 500} 12px ${FONT_UI}`, txt, x, y, strong || must]); }
 function drawLabels(g) {
   const hit = (r, l) => l.some(o => r[0] < o[0] + o[2] && o[0] < r[0] + r[2] && r[1] < o[1] + o[3] && o[1] < r[1] + r[3]);
   LQ.forEach(([f, txt, x, y, key]) => {
-    g.font = f; const w = g.measureText(txt).width + 4, at = dy => [x - 2, y + dy - 11, w, 14], near = [0, 14, -14, 28], far = key ? [-28, 42, -42] : [];
-    let dy = near.concat(far).find(d => !hit(at(d), LBL) && !hit(at(d), MK));
-    if (dy === undefined && key) dy = near.concat(far).find(d => !hit(at(d), LBL));
-    if (dy === undefined) { if (!key) return; dy = 0; }
-    LBL.push(at(dy)); halo(g, txt, x, y + dy); g.fillStyle = P.label; g.fillText(txt, x, y + dy);
+    g.font = f; const w = g.measureText(txt).width + 4, at = ([dx, dy]) => [x + dx - 2, y + dy - 11, w, 14], left = -(w + 24);
+    const spots = d => d.map(dy => [0, dy]).concat(d.map(dy => [left, dy])), all = spots([0, 14, -14, 28]).concat(key ? spots([-28, 42, -42]) : []);
+    let s = all.find(q => !hit(at(q), LBL) && !hit(at(q), MK));
+    if (!s && key) s = all.find(q => !hit(at(q), LBL));
+    if (!s) { if (!key) return; s = [0, 0]; }
+    const [lx, ly] = [x + s[0], y + s[1]];
+    LBL.push(at(s)); halo(g, txt, lx, ly); g.fillStyle = P.label; g.fillText(txt, lx, ly);
   });
   LQ.length = 0;
 }
