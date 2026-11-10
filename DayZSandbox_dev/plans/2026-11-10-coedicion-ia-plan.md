@@ -1,6 +1,6 @@
 # Co-edición en vivo persona + IA: plan de diseño (lane única, v0)
 
-Fecha: 2026-11-10. Estado: **borrador para decidir alcance**; falta Grill Modo B y la revisión de Sol (R22) antes de tocar código.
+Fecha: 2026-11-10. Estado: **alcance decidido** (Guillermo, 2026-11-10 12:35Z: «Adelantarla a M1»; spec: punto 5 de M1 y bloque I). Falta Grill Modo B y la revisión de Sol (R22) antes de tocar código.
 
 Petición de Guillermo (2026-11-10): «es importante que tenga integración completa con la IA, para que pueda trabajar a la vez la persona y la IA y se vean en el momento los cambios que se van haciendo».
 
@@ -111,6 +111,6 @@ Todos estos se prueban **sin el juego** (backend + web + MCP falso), así que no
 
 ## 6. Pendiente
 
-1. Decisión de Guillermo sobre alcance (sección 4).
+1. ~~Decisión de alcance~~: en M1, con F1 + F1-co + F6 (2026-11-10).
 2. Verificar los referentes marcados [sin verificar].
 3. Grill Modo B y revisión de Sol (R22) del plan; después, brief de implementación y reparto (Grok/Muse/Argon), con Sol en R21.

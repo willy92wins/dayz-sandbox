@@ -17,8 +17,9 @@ DayZ Sandbox es un estudio local de escenas para DayZ: desde el navegador, un cr
   2. Rodaje: cámaras guardadas y caminos de cámara con claves (posición, orientación, FOV y enfoque), sin HUD. Una toma lanza a la vez cámara y actores, y se puede parar.
   3. Web: mapa 2D, árbol de escena, inspector, biblioteca de plantillas (objetos, vestuario, gestos), cola con estados observados y layouts personalizables.
   4. Todo local y funcionando con el MCP apagado.
+  5. Co-edición en vivo (decidido el 2026-11-10): la persona y una IA editan el mismo borrador a la vez, cada una ve los cambios de la otra al momento y la IA nunca pisa un cambio humano. La IA entra por la fachada MCP sobre la misma API y solo toca el documento: aplicar, rodar, parar y quitar del juego siguen siendo de la persona (H1).
 - **M2 — Standalone:** IA propia de cine en lugar de Expansion: una "marioneta de ruta" (el actor recorre una ruta con tiempos, trazada en el mapa o grabada del pase del creador, igual en cada toma), más ir a marca y gesto, con las mismas escenas guardadas; cambio de mapa con reinicio de sesión entre los mapas instalados.
-- **M3 — IA opcional:** fachada MCP sobre la misma API, para que una IA proponga y coordine piezas y escenas siempre con aprobación humana.
+- **M3 — IA opcional:** la IA que propone y coordina escenas enteras (H2), siempre con aprobación humana. La fachada MCP y la co-edición se adelantan a M1 (bloque I).
 
 Supuestos confirmados el 2026-10-24: M1 es para uso propio (sin instalador); las tomas se graban con OBS u otra herramienta externa; eventos/RP queda fuera de esta versión.
 
@@ -127,6 +128,18 @@ estás **obligado** a surfacearlo en el **Grill de plan (Modo B)** ANTES de impl
 |---|----------|------------------|--------|
 | H1 | Fachada MCP sobre la misma API (validar, planificar, enviar, aplicar, estado); aplicar exige aprobación en la web ligada al hash del plan | Fixture negativa: una propuesta sin aprobar no llega al juego | ❓ |
 | H2 | Primera IA útil: "prepara una escena con dos supervivientes y una cámara al amanecer" produce un borrador válido y editable, sin ejecutarlo | Test con el borrador validado por A1 | ❓ |
+
+### I — Co-edición en vivo persona + IA (M1, decidido el 2026-11-10)
+
+> **Intent**: la persona y la IA trabajan a la vez sobre la misma escena y cada una ve al momento lo que hace la otra, sin que la IA pise lo humano ni ejecute en el juego. Diseño: `plans/2026-11-10-coedicion-ia-plan.md`.
+
+| # | Criterio | Cómo se verifica | Estado |
+|---|----------|------------------|--------|
+| I1 | Los cambios de los dos autores llegan a todos los clientes en el mismo orden y con el mismo hash; del envío al evento en el otro cliente, p95 < 200 ms en local | 100 operaciones cruzadas; negativa: un cliente que pinta lo que mandó y no lo que llegó acaba con otro hash (CO-1) | ❓ |
+| I2 | La IA nunca pisa un cambio humano: conflicto por campo y entidad en uso por la persona → rechazo con el valor actual | Fixtures `conflict` y `busy_human` con 0 cambios (CO-2, CO-3) | ❓ |
+| I3 | Deshacer por autor y «Deshacer tanda» de la IA, sin pérdida silenciosa de lo retocado después | CO-4 positiva y negativa | ❓ |
+| I4 | La credencial de la IA no puede aplicar, rodar, parar ni quitar del juego; «Pausar IA» corta al momento; con la toma armada no edita nadie | 403 y 0 órdenes en el bridge; `take_locked` (CO-5, CO-7, CO-8) | ❓ |
+| I5 | Reconexión sin estado parcial: se repite lo que falta o llega una instantánea con aviso | Corte corto y corte más largo que el registro (CO-6) | ❓ |
 
 ## Fuera de alcance (explícito) — R25
 
