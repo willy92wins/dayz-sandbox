@@ -808,6 +808,25 @@ const GL = {
   ambiente: '<circle cx="8" cy="8" r="3.2" fill="var(--accent)"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" stroke="var(--accent)" stroke-width="1.3" stroke-linecap="round"/>'
 };
 const gl = k => `<svg class="g" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">${GL[k]}</svg>`;
+// El icono del tipo de cada objeto: un trazado en una rejilla de 16 centrada en 0, el mismo en el mapa y en las listas. Los dibujos
+// son propios; el genérico es para una clase que no está en el catálogo (UX-48)
+const OBJ = {
+  autobus: 'M-5.8 -4.6H5.8A1.2 1.2 0 0 1 7 -3.4V2.4H5.9A1.8 1.8 0 0 1 2.3 2.4H-2.3A1.8 1.8 0 0 1 -5.9 2.4H-7V-3.4A1.2 1.2 0 0 1 -5.8 -4.6Z M-5.6 -3.2h2.8v2.4h-2.8z M-1.4 -3.2h2.8v2.4h-2.8z M2.8 -3.2h2.8v2.4h-2.8z',
+  coche: 'M-7 2.4V0.2Q-7 -0.9 -5.8 -0.9H-4.3L-2.6 -3.9Q-2.4 -4.2 -2 -4.2H1.9Q2.3 -4.2 2.6 -3.9L4.6 -0.9H6Q7 -0.9 7 0.2V2.4H5.9A1.75 1.75 0 0 1 2.4 2.4H-2.4A1.75 1.75 0 0 1 -5.9 2.4Z M-3.3 -1.5L-2 -3.4H-0.5V-1.5Z M0.5 -1.5V-3.4H1.8L3.2 -1.5Z',
+  camion: 'M-7 -4.6H1.2V1.2H2.6V-2.6H5.2L7 -0.6V2.4H6.3A1.7 1.7 0 0 1 2.9 2.4H0.5A1.7 1.7 0 0 1 -2.9 2.4A1.7 1.7 0 0 1 -6.3 2.4H-7Z M3.4 -1.8H5L6.1 -0.4H3.4Z',
+  contenedor: 'M-6.8 -4H6.8V4H-6.8Z M-3.6 -2.6h1.2v5.2h-1.2z M-0.6 -2.6h1.2v5.2h-1.2z M2.4 -2.6h1.2v5.2h-1.2z',
+  tienda: 'M0 -6.6L7 4.8H2.4L0 0.4L-2.4 4.8H-7Z',
+  red: 'M-7 -1.2L-3.6 -5L0 -2.8L3.6 -5L7 -1.2L6 0.6L5 -0.4L4.2 0.6V5H3V0.6L2 -0.4L1 0.6L0 -0.4L-1 0.6L-2 -0.4L-3 0.6V5H-4.2V0.6L-5 -0.4L-6 0.6Z',
+  hoguera: 'M0 -7C2.2 -4.8 3.6 -3 3.6 -0.5C3.6 1.7 2 3 0 3C-2 3 -3.6 1.7 -3.6 -0.5C-3.6 -2.3 -2.5 -3.4 -1.6 -4.6C-1.3 -3.4 -0.8 -2.8 -0.2 -2.5C0.3 -4 0.4 -5.4 0 -7Z M-5.86 6.99L6.14 4.79L5.86 3.21L-6.14 5.41Z M-6.14 4.79L-1.58 5.62L-1.3 4.05L-5.86 3.21Z M1.3 6.15L5.86 6.99L6.14 5.41L1.58 4.58Z',
+  bidon: 'M-2.8 -6.6H2.8Q4 -6.6 4.1 -5.2L4.3 -2.9H-4.3L-4.1 -5.2Q-4 -6.6 -2.8 -6.6Z M-4.4 -1.5H4.4V1.5H-4.4Z M-4.3 2.9H4.3L4.1 5.2Q4 6.6 2.8 6.6H-2.8Q-4 6.6 -4.1 5.2Z',
+  caja: 'M-5.4 -5.4H5.4V5.4H-5.4Z M-3.1 -3.95H3.1L0 -0.85Z M3.95 -3.1V3.1L0.85 0Z M3.1 3.95H-3.1L0 0.85Z M-3.95 3.1V-3.1L-0.85 0Z',
+  foco: 'M-5.8 -5.2L0.4 -7L0.4 -1.6L-5.8 -3.4Z M2.1 -5.01L6.9 -5.81L6.7 -6.99L1.9 -6.19Z M2 -3.7L6.8 -3.7L6.8 -4.9L2 -4.9Z M1.9 -2.41L6.7 -1.61L6.9 -2.79L2.1 -3.59Z M-3.4 -2.7L-2.2 -2.35L-2.2 1L1.4 6.8L0 6.8L-2.2 3.2L-2.2 6.8L-3.4 6.8L-3.4 3.2L-5.6 6.8L-7 6.8L-3.4 1Z',
+  generador: 'M-4.9 -4.2H4.9Q5.8 -4.2 5.8 -3.3V2.1Q5.8 3 4.9 3H4.8V4.3H3.1V3H-3.1V4.3H-4.8V3H-4.9Q-5.8 3 -5.8 2.1V-3.3Q-5.8 -4.2 -4.9 -4.2Z M0.8 -3.1L-2.1 0.2H-0.3L-0.9 2.2L2.1 -0.9H0.3Z',
+  generico: 'M0 -6L5.2 -3.1L0 -0.2L-5.2 -3.1Z M-5.6 -2.2L-0.55 0.7V6.2L-5.6 3.3Z M5.6 -2.2V3.3L0.55 6.2V0.7Z'
+};
+const objTipo = cls => { const f = CATALOG.objeto.find(c => c[0] === cls); return f && OBJ[f[2]] ? f[2] : 'generico'; };
+const glo = cls => `<svg class="g" width="14" height="14" viewBox="-8 -8 16 16" aria-hidden="true"><path d="${OBJ[objTipo(cls)]}" fill="var(--g-obj)" fill-rule="evenodd"/></svg>`;
+const gle = e => e.kind === 'objeto' ? glo(e.cls) : gl(e.kind);
 
 /* =========================================================
    Datos de ejemplo (el catálogo real llega del mod, decisión #8)
@@ -819,7 +838,8 @@ const KLABEL = {objeto: 'Objetos', infectado: 'Infectados', animal: 'Animales', 
 const KONE = {objeto: 'objeto', infectado: 'infectado', animal: 'animal', actor: 'actor'};
 const KCAP = {objeto: 'Objeto', infectado: 'Infectado', animal: 'Animal', actor: 'Actor'};
 const CATALOG = {
-  objeto: [['Land_Wreck_Ikarus', 'Autobús Ikarus'], ['Land_Wreck_Volha_Police', 'Volga de policía'], ['Land_Wreck_Volha_Blue', 'Volga azul'], ['Land_Wreck_V3S', 'Camión V3S'], ['Land_Container_1Bo', 'Contenedor'], ['Land_Container_1Aoh', 'Contenedor abierto'], ['LargeTent', 'Tienda grande'], ['MediumTent', 'Tienda mediana'], ['CarTent', 'Toldo de coche'], ['CamoNet', 'Red de camuflaje'], ['Fireplace', 'Hoguera'], ['Barrel_Red', 'Bidón rojo'], ['Barrel_Blue', 'Bidón azul'], ['Barrel_Green', 'Bidón verde'], ['Barrel_Yellow', 'Bidón amarillo'], ['WoodenCrate', 'Caja de madera'], ['SeaChest', 'Baúl'], ['Spotlight', 'Foco'], ['PowerGenerator', 'Generador']],
+  // cada objeto con el tipo que elige su icono (UX-48)
+  objeto: [['Land_Wreck_Ikarus', 'Autobús Ikarus', 'autobus'], ['Land_Wreck_Volha_Police', 'Volga de policía', 'coche'], ['Land_Wreck_Volha_Blue', 'Volga azul', 'coche'], ['Land_Wreck_V3S', 'Camión V3S', 'camion'], ['Land_Container_1Bo', 'Contenedor', 'contenedor'], ['Land_Container_1Aoh', 'Contenedor abierto', 'contenedor'], ['LargeTent', 'Tienda grande', 'tienda'], ['MediumTent', 'Tienda mediana', 'tienda'], ['CarTent', 'Toldo de coche', 'tienda'], ['CamoNet', 'Red de camuflaje', 'red'], ['Fireplace', 'Hoguera', 'hoguera'], ['Barrel_Red', 'Bidón rojo', 'bidon'], ['Barrel_Blue', 'Bidón azul', 'bidon'], ['Barrel_Green', 'Bidón verde', 'bidon'], ['Barrel_Yellow', 'Bidón amarillo', 'bidon'], ['WoodenCrate', 'Caja de madera', 'caja'], ['SeaChest', 'Baúl', 'caja'], ['Spotlight', 'Foco', 'foco'], ['PowerGenerator', 'Generador', 'generador']],
   infectado: [['ZmbM_FarmerFat_Brown', 'Granjero'], ['ZmbM_HermitSkinny_Beige', 'Ermitaño'], ['ZmbF_CitizenANormal_Blue', 'Ciudadana'], ['ZmbM_CitizenASkinny_Grey', 'Ciudadano'], ['ZmbM_PatrolNormal_Autumn', 'Patrullero'], ['ZmbF_VillagerOld_Green', 'Aldeana'], ['ZmbM_Jacket_brown', 'Hombre con chaqueta'], ['ZmbF_JoggerSkinny_Red', 'Corredora'], ['ZmbM_HunterOld_Autumn', 'Cazador'], ['ZmbM_MotobikerFat_Black', 'Motorista']],
   animal: [['Animal_CervusElaphus', 'Ciervo'], ['Animal_CapreolusCapreolus', 'Corzo'], ['Animal_GallusGallusDomesticus', 'Gallina'], ['Animal_SusScrofa', 'Jabalí'], ['Animal_BosTaurus_Brown', 'Vaca']],
   actor: [['SurvivorM_Mirek', 'Mirek'], ['SurvivorM_Boris', 'Boris'], ['SurvivorM_Denis', 'Denis'], ['SurvivorM_Guo', 'Guo'], ['SurvivorF_Linda', 'Linda'], ['SurvivorF_Maria', 'Maria'], ['SurvivorF_Eva', 'Eva'], ['SurvivorF_Naomi', 'Naomi']]
@@ -1482,12 +1502,16 @@ function hatch(col) {
   h.beginPath(); h.moveTo(-1, 7); h.lineTo(7, -1); h.moveTo(-1, 1); h.lineTo(1, -1); h.moveTo(5, 7); h.lineTo(7, 5); h.stroke();
   return (HATCH[col] = ctx.createPattern(c, 'repeat'));
 }
-function drawGlyph(g, kind, x, y, yaw, style) {
+// los trazados de los iconos de los objetos, hechos una vez para el mapa (UX-48)
+const OBJP = {};
+const objPath = cls => { const t = objTipo(cls); return OBJP[t] || (OBJP[t] = new Path2D(OBJ[t])); };
+function drawGlyph(g, kind, x, y, yaw, style, cls) {
   const col = MC[{objeto: 'obj', infectado: 'zmb', animal: 'ani', actor: 'act'}[kind]];
   // un 25 % más grandes, con contorno y una muesca hacia donde mira (UX-09)
   g.save(); g.translate(x, y); if (style === 'ghost') g.globalAlpha = 0.3;
   g.beginPath();
-  if (kind === 'objeto') { g.rotate(yaw * Math.PI / 180); g.rect(-6.25, -6.25, 12.5, 12.5); }
+  // el objeto, derecho y de 17 px para que su icono se lea; hacia dónde mira lo dice la muesca (UX-48)
+  if (kind === 'objeto') g.rect(-8.5, -8.5, 17, 17);
   else if (kind === 'infectado') { g.rotate(yaw * Math.PI / 180); g.moveTo(0, -8.75); g.lineTo(7.5, 6.25); g.lineTo(-7.5, 6.25); g.closePath(); }
   else if (kind === 'animal') { g.moveTo(0, -8.75); g.lineTo(7.5, 0); g.lineTo(0, 8.75); g.lineTo(-7.5, 0); g.closePath(); }
   else g.arc(0, 0, 8.75, 0, Math.PI * 2);
@@ -1495,8 +1519,11 @@ function drawGlyph(g, kind, x, y, yaw, style) {
   // con extremos planos: los redondos que dejan puestos las carreteras alargaban cada guion y cerraban sus huecos de 2 px a 0,1 px (AR2-01)
   else if (style === 'draft') { g.fillStyle = 'rgba(255,255,255,.6)'; g.fill(); g.setLineDash([3, 2]); g.lineCap = 'butt'; g.lineWidth = 1.9; g.strokeStyle = col; g.stroke(); g.setLineDash([]); }
   else { g.fillStyle = col; g.fill(); g.lineWidth = 3.2; g.strokeStyle = 'rgba(20,20,14,.75)'; g.stroke(); g.lineWidth = 1.5; g.strokeStyle = 'rgba(255,255,255,.95)'; g.stroke(); }
+  // el icono de su tipo a 0,7 (9,8 px), a 2 px del contorno: claro sobre el sólido y del color del objeto sobre el borrador (UX-48)
+  if (kind === 'objeto') { g.scale(0.7, 0.7); g.fillStyle = style === 'draft' ? col : 'rgba(255,255,255,.95)'; g.fill(objPath(cls), 'evenodd'); }
   g.restore();
-  if (style !== 'ghost') { const a = yaw * Math.PI / 180, r0 = kind === 'actor' ? 8.75 : 7.5, r1 = r0 + 6; g.beginPath(); g.moveTo(x + Math.sin(a) * r0, y - Math.cos(a) * r0); g.lineTo(x + Math.sin(a) * r1, y - Math.cos(a) * r1); g.lineCap = 'round'; g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.stroke(); }
+  // la muesca del objeto sale del borde de su cuadrado, que ya no gira (UX-48)
+  if (style !== 'ghost') { const a = yaw * Math.PI / 180, r0 = kind === 'actor' ? 8.75 : kind === 'objeto' ? 8.5 / Math.max(Math.abs(Math.sin(a)), Math.abs(Math.cos(a))) + 1.25 : 7.5, r1 = r0 + 6; g.beginPath(); g.moveTo(x + Math.sin(a) * r0, y - Math.cos(a) * r0); g.lineTo(x + Math.sin(a) * r1, y - Math.cos(a) * r1); g.lineCap = 'round'; g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.stroke(); }
 }
 // Etiquetas sin solaparse: prueba debajo y encima; las secundarias se omiten si no caben.
 const LBL = [];
@@ -1550,7 +1577,7 @@ function drawScene(g) {
   if (S.world) Object.values(S.world.ents).forEach(w => {
     if (!S.layers[w.kind] || S.hidden[w.id]) return;
     const e = ent(w.id);
-    if (!e || entState(e) === 'cambiado') { const o = S.obs[w.id] || w, [x, y] = w2s(o.x, o.z); drawGlyph(g, w.kind, x, y, w.yaw, 'ghost'); }
+    if (!e || entState(e) === 'cambiado') { const o = S.obs[w.id] || w, [x, y] = w2s(o.x, o.z); drawGlyph(g, w.kind, x, y, w.yaw, 'ghost', w.cls); }
     if (e && entState(e) === 'cambiado') { const o = S.obs[w.id] || w, [x1, y1] = w2s(o.x, o.z), [x2, y2] = w2s(e.x, e.z); g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.setLineDash([3, 3]); g.strokeStyle = 'rgba(40,40,30,.55)'; g.lineWidth = 1.2; g.stroke(); g.setLineDash([]); }
   });
   // marcas y recorridos de actores
@@ -1580,7 +1607,7 @@ function drawScene(g) {
       if (kind === 'actor' && live) p = actorAt(e, Math.max(0, t - (S.take.lag[e.id] || 0) / 1000));
       const st = entState(e), [x, y] = w2s(p.x, p.z), draft = st !== 'observado';
       const yw = dragYaw(e.id);
-      drawGlyph(g, kind, x, y, yw === null ? e.yaw : yw, draft ? 'draft' : 'solid');
+      drawGlyph(g, kind, x, y, yw === null ? e.yaw : yw, draft ? 'draft' : 'solid', e.cls);
       if (yw !== null) label(g, Math.round(yw) + '°', x + 15, y - 12, true, true);
       if (kind === 'actor') {
         label(g, e.name, x + 15, y + 4, true);
@@ -1589,7 +1616,7 @@ function drawScene(g) {
         if (inRod && !live && t > 0 && !['HOLD', 'ROAM'].includes(e.behaviour) && actorPlan(e).total > 0) { const q = actorAt(e, t), [qx, qy] = w2s(q.x, q.z); drawGlyph(g, kind, qx, qy, e.yaw, 'est'); label(g, `${e.name} · estimado`, qx + 15, qy + 4, false, true); }
         if (live) gestureSpans(e).forEach(sp => { if (t >= sp.start && t <= sp.end) { g.beginPath(); g.arc(x, y, 15 + 3 * Math.sin(now() / 120), 0, Math.PI * 2); g.strokeStyle = MC.mark; g.lineWidth = 2; g.stroke(); label(g, sp.name, x + 15, y + 18, false, true); } });
       }
-      if (sel && sel.type === 'ent' && sel.ids.includes(e.id)) { ring(g, x, y, kind === 'actor' ? 15 : 12.5); if (kind !== 'actor') label(g, e.name, x + 15, y + 4, false, true); }
+      if (sel && sel.type === 'ent' && sel.ids.includes(e.id)) { ring(g, x, y, kind === 'actor' ? 15 : kind === 'objeto' ? 16 : 12.5); if (kind !== 'actor') label(g, e.name, x + 15, y + 4, false, true); }
       if (S.locked[e.id] && V.s > 1) drawLock(g, x - 1, y - 15);
     });
   });
@@ -1618,7 +1645,7 @@ function drawScene(g) {
     if (sel && sel.type === 'cam' && sel.cam === c.id) { const [x, y] = w2s(keys[0].x, keys[0].z); ring(g, x, y, 14); }
   });
   // mientras se coloca, un fantasma de la entidad sigue al ratón (UX-08)
-  if (S.placing && S.mouse) { const [x, y] = w2s(S.mouse[0], S.mouse[1]); g.save(); g.globalAlpha = 0.75; drawGlyph(g, S.placing.kind, x, y, 0, 'draft'); g.restore(); label(g, clsName(S.placing.kind, S.placing.cls), x + 15, y + 4, true, true); }
+  if (S.placing && S.mouse) { const [x, y] = w2s(S.mouse[0], S.mouse[1]); g.save(); g.globalAlpha = 0.75; drawGlyph(g, S.placing.kind, x, y, 0, 'draft', S.placing.cls); g.restore(); label(g, clsName(S.placing.kind, S.placing.cls), x + 15, y + 4, true, true); }
 }
 function updateScale() {
   const nice = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
@@ -1631,7 +1658,7 @@ function hitTest(px, py) {
   if (S.layers.camaras) for (const c of S.doc.cameras) { if (c.keys.length > 1) for (let i = c.keys.length - 1; i >= 0; i--) if (near(c.keys[i].x, c.keys[i].z, 10)) return {type: 'key', cam: c.id, ki: i}; if (near(c.keys[0].x, c.keys[0].z, 11)) return c.keys.length > 1 ? {type: 'key', cam: c.id, ki: 0} : {type: 'cam', cam: c.id}; }
   if (S.layers.marcas) for (const a of actors()) { if (S.hidden[a.id]) continue; for (let i = (a.marks || []).length - 1; i >= 0; i--) if (near(a.marks[i].x, a.marks[i].z, 10)) return {type: 'mark', id: a.id, mi: i}; }
   const order = ['actor', 'infectado', 'animal', 'objeto'];
-  for (const k of order) { if (!S.layers[k]) continue; const list = S.doc.entities.filter(e => e.kind === k && !S.hidden[e.id]); for (let i = list.length - 1; i >= 0; i--) if (near(list[i].x, list[i].z, k === 'actor' ? 12.5 : 10)) return {type: 'ent', id: list[i].id}; }
+  for (const k of order) { if (!S.layers[k]) continue; const list = S.doc.entities.filter(e => e.kind === k && !S.hidden[e.id]); for (let i = list.length - 1; i >= 0; i--) if (near(list[i].x, list[i].z, k === 'actor' || k === 'objeto' ? 12.5 : 10)) return {type: 'ent', id: list[i].id}; }
   return null;
 }
 let drag = null;
@@ -1908,7 +1935,7 @@ function renderPeers() {
 }
 function treeRow(e) {
   const st = entState(e), sel = S.sel && S.sel.type === 'ent' && S.sel.ids.includes(e.id), mark = st === 'nuevo' || st === 'cambiado';
-  return `<div class="row${S.hidden[e.id] ? ' off' : ''}" role="treeitem" aria-selected="${sel}" tabindex="${sel ? 0 : -1}" data-act="sel" data-v="ent:${e.id}" title="${esc(e.cls)} · ${esc(st === 'fuera' && worldDoubt() ? 'Sin lectura del juego' : ESTATE[st].label)}">${gl(e.kind)}<span class="nm">${esc(e.name)}</span><span class="st ${ESTATE[st].cls}">${mark ? sm(st) : ''}</span><button class="tg${S.locked[e.id] ? ' on' : ''}" data-act="lock" data-v="${e.id}" aria-label="${S.locked[e.id] ? 'Desbloquear' : 'Bloquear'} ${esc(e.name)}">${ic(S.locked[e.id] ? 'lock' : 'unlock')}</button><button class="tg${S.hidden[e.id] ? ' on' : ''}" data-act="eye" data-v="${e.id}" aria-label="${S.hidden[e.id] ? 'Mostrar' : 'Ocultar'} ${esc(e.name)} en el mapa">${ic(S.hidden[e.id] ? 'eyeoff' : 'eye')}</button></div>`;
+  return `<div class="row${S.hidden[e.id] ? ' off' : ''}" role="treeitem" aria-selected="${sel}" tabindex="${sel ? 0 : -1}" data-act="sel" data-v="ent:${e.id}" title="${esc(e.cls)} · ${esc(st === 'fuera' && worldDoubt() ? 'Sin lectura del juego' : ESTATE[st].label)}">${gle(e)}<span class="nm">${esc(e.name)}</span><span class="st ${ESTATE[st].cls}">${mark ? sm(st) : ''}</span><button class="tg${S.locked[e.id] ? ' on' : ''}" data-act="lock" data-v="${e.id}" aria-label="${S.locked[e.id] ? 'Desbloquear' : 'Bloquear'} ${esc(e.name)}">${ic(S.locked[e.id] ? 'lock' : 'unlock')}</button><button class="tg${S.hidden[e.id] ? ' on' : ''}" data-act="eye" data-v="${e.id}" aria-label="${S.hidden[e.id] ? 'Mostrar' : 'Ocultar'} ${esc(e.name)} en el mapa">${ic(S.hidden[e.id] ? 'eyeoff' : 'eye')}</button></div>`;
 }
 // Una línea dice qué hay en el juego y la edad de la lectura; las filas solo llevan icono si algo difiere (UX-06)
 function worldLine() {
@@ -1938,7 +1965,7 @@ function renderLeft() {
     html += `<button class="grp" data-act="grp" data-v="cam" aria-expanded="${camOpen}">${ic('chev')}Cámaras<span class="cnt">${S.doc.cameras.length}</span></button>`;
     if (camOpen) html += S.doc.cameras.map(c => { const sel = S.sel && (S.sel.type === 'cam' || S.sel.type === 'key') && S.sel.cam === c.id; return `<div class="row" role="treeitem" aria-selected="${sel}" data-act="sel" data-v="cam:${c.id}">${gl('camara')}<span class="nm">${esc(c.name)}<span class="cls">${c.keys.length > 1 ? pl(c.keys.length, 'clave', 'claves') : 'fija'}</span></span><span></span><span></span><span></span></div>`; }).join('');
     const gone = removedEnts();
-    if (gone.length) html += `<button class="grp" aria-expanded="true" style="cursor:default">${ic('chev')}Se quitará al aplicar<span class="cnt">${gone.length}</span></button>` + gone.map(w => `<div class="row gone" title="Borrado en el documento; sigue en el juego hasta aplicar">${gl(w.kind)}<span class="nm">${esc(w.name)}</span><span class="st st-fuera">${sm('fuera')}</span><span></span><span></span></div>`).join('');
+    if (gone.length) html += `<button class="grp" aria-expanded="true" style="cursor:default">${ic('chev')}Se quitará al aplicar<span class="cnt">${gone.length}</span></button>` + gone.map(w => `<div class="row gone" title="Borrado en el documento; sigue en el juego hasta aplicar">${gle(w)}<span class="nm">${esc(w.name)}</span><span class="st st-fuera">${sm('fuera')}</span><span></span><span></span></div>`).join('');
     html += `</div></div>`;
     el.innerHTML = html;
   } else {
@@ -1999,7 +2026,7 @@ function groundRow(e) {
 function entProps(e) {
   // el selector enseña el nombre legible; la clase va a los detalles técnicos (UX-05, UX-08)
   const opts = (CATALOG[e.kind] || []).map(c => `<option value="${c[0]}" ${c[0] === e.cls ? 'selected' : ''}>${esc(c[1])}</option>`).join('');
-  let html = `<div class="ident">${gl(e.kind)}<div style="min-width:0;flex:1"><input id="f-name" value="${esc(e.name)}" aria-label="Nombre"><div class="cn">${KCAP[e.kind]}${S.locked[e.id] ? ' · bloqueado' : ''}</div></div></div>`;
+  let html = `<div class="ident">${gle(e)}<div style="min-width:0;flex:1"><input id="f-name" value="${esc(e.name)}" aria-label="Nombre"><div class="cn">${KCAP[e.kind]}${S.locked[e.id] ? ' · bloqueado' : ''}</div></div></div>`;
   html += `<div class="sec"><h4>${e.kind === 'actor' ? 'Personaje y sitio' : 'Clase y sitio'} <span class="where">va al juego al aplicar</span></h4>
     <label class="f"><span class="fl">${e.kind === 'actor' ? 'Personaje' : 'Clase'}</span><select class="inp" id="f-cls">${opts}</select></label>
     <div class="f"><span class="fl">Posición</span><div class="pair">${numIn('f-x', e.x, 0.1, 'X', 1)}${numIn('f-z', e.z, 0.1, 'Z', 1)}</div></div>
@@ -2099,7 +2126,7 @@ function prepHtml() {
 function addHtml(both) {
   const q = S.libq.trim().toLowerCase(), n = counts(S.doc), lk = !!editBlock(), full = n[S.lib] >= CAPS[S.lib];
   const match = c => !q || c[0].toLowerCase().includes(q) || c[1].toLowerCase().includes(q);
-  let items = CATALOG[S.lib].filter(match).map(c => `<button class="item" data-act="lib-item" data-v="${c[0]}" aria-pressed="${!!(S.placing && S.placing.cls === c[0])}" ${full || lk ? 'disabled' : ''} title="${full ? 'Tope alcanzado' : `${esc(c[0])} · clic y después clic en el mapa; Intro lo pone en el centro`}">${gl(S.lib)}<span class="nm">${esc(c[1])}</span><span class="side">${S.lib === 'actor' ? 'superviviente' : ''}</span></button>`).join('');
+  let items = CATALOG[S.lib].filter(match).map(c => `<button class="item" data-act="lib-item" data-v="${c[0]}" aria-pressed="${!!(S.placing && S.placing.cls === c[0])}" ${full || lk ? 'disabled' : ''} title="${full ? 'Tope alcanzado' : `${esc(c[0])} · clic y después clic en el mapa; Intro lo pone en el centro`}">${S.lib === 'objeto' ? glo(c[0]) : gl(S.lib)}<span class="nm">${esc(c[1])}</span><span class="side">${S.lib === 'actor' ? 'superviviente' : ''}</span></button>`).join('');
   if (!items) items = `<div class="empty">Nada con «${esc(S.libq.trim())}» en ${KLABEL[S.lib].toLowerCase()}.<br><button class="btn sm" data-act="lib-clear">Limpiar búsqueda</button></div>`;
   if (full) items = `<div class="note warn" style="margin:6px 12px">Tope de ${KLABEL[S.lib].toLowerCase()} alcanzado (${n[S.lib]} de ${CAPS[S.lib]}). Quita uno para añadir otro.</div>` + items;
   if (lk) items = `<div class="note warn" style="margin:6px 12px">${esc(editBlock())}</div>` + items;
@@ -2368,7 +2395,8 @@ function renderLegend() {
   const sw = inner => `<span class="lsw"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">${inner}</svg></span>`;
   const kinds = [
     ['Actor', `<circle cx="9" cy="9" r="5.6" fill="${MC.act}" stroke="#fff" stroke-width="1.5"/>`],
-    ['Objeto', `<rect x="4" y="4" width="10" height="10" fill="${MC.obj}" stroke="#fff" stroke-width="1.5"/>`],
+    // el cuadrado con un icono dentro: cada objeto lleva el de su tipo (UX-48)
+    ['Objeto, con el icono de su tipo', `<rect x="1.5" y="1.5" width="15" height="15" fill="${MC.obj}" stroke="#fff" stroke-width="1.5"/><path d="${OBJ.bidon}" transform="translate(9 9) scale(.6)" fill="#fff" fill-rule="evenodd"/>`],
     ['Infectado', `<path d="M9 3.2 14.6 13.6H3.4z" fill="${MC.zmb}" stroke="#fff" stroke-width="1.5"/>`],
     ['Animal', `<path d="M9 2.8 15.2 9 9 15.2 2.8 9z" fill="${MC.ani}" stroke="#fff" stroke-width="1.5"/>`],
     ['Cámara y su trayectoria prevista', `<rect x="2.5" y="5.5" width="9" height="7" rx="1.5" fill="${MC.cam}"/><path d="m11.5 8 4-2.2v6.4l-4-2.2z" fill="${MC.cam}"/>`],
@@ -2479,7 +2507,8 @@ const REFS = [
   ['La rueda encima de lo seleccionado lo gira; en el resto del mapa acerca y aleja', 'PROPIO (petición de Guillermo, UX-44)', 'Ningún referente de la lista gira con la rueda: Eden y Zeus giran con Mayús + arrastrar, y en su mapa la rueda acerca', 'https://community.bistudio.com/wiki/Arma_3_Field_Manual_-_Zeus', 'Guillermo'],
   ['La rueda encima de un campo numérico lo sube o lo baja un paso, y con Mayús diez', 'OBS Studio (campos de Qt)', 'La rueda cambia el campo que tiene debajo; aquí, si venía desplazando el panel, lo sigue desplazando', 'https://obsproject.com/forum/threads/in-game-scroll-wheel-changing-settings.83422/', 'Guillermo'],
   ['En Rodaje, con el cursor de tiempo movido, el actor también se pinta rayado donde estaría; clic en un gesto elige a su actor', 'Sequencer de Unreal y caminos de Replay Mod', 'Al arrastrar el cursor de tiempo, lo animado se ve donde está en ese instante; aquí es una estimación a la velocidad supuesta y va rayada (UX-30)', 'https://dev.epicgames.com/documentation/en-us/unreal-engine/sequencer-cinematic-editor-unreal-engine', 'Gemini 4 y Muse'],
-  ['La toma también se para desde tu juego, con la tecla «Parar toma» del mod de cliente', 'Rockstar Editor', 'Dentro de GTA V, una tecla empieza a grabar y otra para (F1 y F2 de serie), sin salir del juego (UX-46)', 'https://support.rockstargames.com/articles/4gZPiqdUZD8ZhaJ81IPDJr/how-to-record-clips-and-access-the-rockstar-editor-in-gtav-on-pc', 'Gemini 4']
+  ['La toma también se para desde tu juego, con la tecla «Parar toma» del mod de cliente', 'Rockstar Editor', 'Dentro de GTA V, una tecla empieza a grabar y otra para (F1 y F2 de serie), sin salir del juego (UX-46)', 'https://support.rockstargames.com/articles/4gZPiqdUZD8ZhaJ81IPDJr/how-to-record-clips-and-access-the-rockstar-editor-in-gtav-on-pc', 'Gemini 4'],
+  ['Cada objeto lleva el icono de su tipo, el mismo en el mapa y en las listas', 'Eden y Arma 3', 'Cada entidad con un icono en la vista y en la lista de entidades; en Arma 3 el icono va con la clase. Los dibujos son propios (UX-48)', 'https://community.bistudio.com/wiki/Eden_Editor:_Terminology', 'Guillermo']
 ];
 const SRC = [['community.bistudio.com/wiki/', 'Wiki de Bohemia'], ['github.com/InclementDab/DayZ-Editor/wiki/', 'Wiki del DayZ Editor'], ['raw.githubusercontent.com/wiki/InclementDab/DayZ-Editor/', 'Wiki del DayZ Editor'], ['dev.epicgames.com/documentation/unreal-engine/', 'Documentación de Unreal'], ['dev.epicgames.com/documentation/en-us/unreal-engine/', 'Documentación de Unreal'], ['dev.epicgames.com/', 'Documentación de UEFN'], ['gtabase.com/', 'GTABase'], ['badlion.net/wiki/', 'Wiki de Badlion'], ['replaymod.com/', 'Documentación de Replay Mod'], ['docs.unrealengine.com/', 'Documentación de Unreal'], ['reaper.fm/guides/', 'Guía de REAPER'], ['ableton.com/en/manual/', 'Manual de Ableton Live'], ['obsproject.com/kb/', 'Guía de OBS'], ['support.microsoft.com/', 'Soporte de Microsoft'], ['chromium.org/', 'Chromium'], ['create.roblox.com/docs/', 'Documentación de Roblox'], ['dzcommander.com/', 'DZ Commander'], ['dockview.dev/', 'Documentación de Dockview']];
 function srcLabel(u) {

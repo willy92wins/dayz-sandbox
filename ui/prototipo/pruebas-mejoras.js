@@ -42,12 +42,19 @@ const LIB = () => {
 // - en cada relleno centrado en su origen, como los marcadores, los píxeles de su interior (a 2 px de CSS del borde) en el fotograma ya
 //   acabado: si alternan dos tonos, como un rayado, o si son del color del relleno, opaco;
 // - en cada contorno discontinuo de un marcador, sus guiones y sus huecos, sacados de su propio trazo pintado con y sin discontinuo, en
-//   cuántos trozos se parte, y en el fotograma acabado el color de los guiones frente al de los huecos.
+//   cuántos trozos se parte, y en el fotograma acabado el color de los guiones frente al de los huecos;
+// - desde UX-48, el icono de un marcador: lo que se pinta con un Path2D en su mismo origen, después de su relleno. Se guarda el `d` con el
+//   que se hizo cada Path2D, y los píxeles que toca el icono salen de su propio dibujo pintado en blanco y en negro, como los de la letra.
+//   Esos píxeles se apartan del interior al mirar si es del color del relleno. Y la forma del relleno: la distancia de su origen al borde
+//   cada 5°.
 // Solo graba cuando __cv.on, y se queda con el último fotograma entero del mapa, que empieza pintando el mar en todo el lienzo.
 const PROBE = () => {
   const P = CanvasRenderingContext2D.prototype, OP = window.OffscreenCanvasRenderingContext2D ? OffscreenCanvasRenderingContext2D.prototype : null;
   const stroke0 = P.stroke, fill0 = P.fill, fillRect0 = P.fillRect;
   const cv = window.__cv = { on: false, texts: [], strokes: [], fills: [], images: [] }, cache = {};
+  // cada Path2D con el `d` con el que se hizo (UX-48)
+  const Path2D0 = window.Path2D, PD = new WeakMap();
+  window.Path2D = new Proxy(Path2D0, { construct(t, a) { const q = Reflect.construct(t, a), d = typeof a[0] === 'string' ? a[0] : a[0] && PD.get(a[0]); if (d) PD.set(q, d); return q; } });
   const rgba = c => cache[c] || (cache[c] = (() => { const o = new OffscreenCanvas(1, 1).getContext('2d'); o.fillStyle = c; o.fillRect(0, 0, 1, 1); return Array.from(o.getImageData(0, 0, 1, 1).data); })());
   const lin = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
   const lum = c => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
@@ -115,13 +122,15 @@ const PROBE = () => {
     }
     return fillRect0.apply(this, arguments);
   };
-  const at = (ctx, kind) => { const T = ctx.getTransform(), dpr = dprOf(ctx); return { kind, x: Math.round(T.e / dpr), y: Math.round(T.f / dpr), dash: ctx.getLineDash().join(','), lw: ctx.lineWidth }; };
+  let seq = 0;
+  const at = (ctx, kind) => { const T = ctx.getTransform(), dpr = dprOf(ctx); return { kind, x: Math.round(T.e / dpr), y: Math.round(T.f / dpr), dash: ctx.getLineDash().join(','), lw: ctx.lineWidth, n: ++seq }; };
   // caja de px del lienzo alrededor del origen, de r px de CSS de radio
   const around = (ctx, T, r) => { const R = Math.ceil(r * dprOf(ctx)), cx = Math.round(T.e), cy = Math.round(T.f), x0 = Math.max(0, cx - R), y0 = Math.max(0, cy - R); return [x0, y0, Math.min(ctx.canvas.width, cx + R) - x0, Math.min(ctx.canvas.height, cy + R) - y0]; };
-  // cuánto cubre el propio trazo cada píxel de la caja: se pinta en blanco y en negro solo dentro de ella, y se devuelve el fondo
-  const cover = (ctx, T, [x0, y0, w, h], dash) => {
+  // cuánto cubre el propio trazo (o el dibujo draw, como el icono de un marcador) cada píxel de la caja: se pinta en blanco y en negro
+  // solo dentro de ella, y se devuelve el fondo
+  const cover = (ctx, T, [x0, y0, w, h], dash, draw) => {
     const under = ctx.getImageData(x0, y0, w, h), clip = new Path2D(); clip.rect(x0, y0, w, h);
-    const paint = c => { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clip(clip); ctx.setTransform(T); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowColor = 'transparent'; ctx.filter = 'none'; if (dash) ctx.setLineDash(dash); ctx.strokeStyle = c; stroke0.call(ctx); ctx.restore(); const d = ctx.getImageData(x0, y0, w, h).data; ctx.putImageData(under, x0, y0); return d; };
+    const paint = c => { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clip(clip); ctx.setTransform(T); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowColor = 'transparent'; ctx.filter = 'none'; if (draw) draw(c); else { if (dash) ctx.setLineDash(dash); ctx.strokeStyle = c; stroke0.call(ctx); } ctx.restore(); const d = ctx.getImageData(x0, y0, w, h).data; ctx.putImageData(under, x0, y0); return d; };
     const wh = paint('#fff'), bk = paint('#000'), cov = new Float32Array(w * h);
     for (let i = 0; i < w * h; i++) cov[i] = (wh[4 * i] - bk[4 * i] + wh[4 * i + 1] - bk[4 * i + 1] + wh[4 * i + 2] - bk[4 * i + 2]) / 765;
     return cov;
@@ -136,6 +145,15 @@ const PROBE = () => {
     }
     return n;
   };
+  // lo que pinta un Path2D, como el icono de un marcador: su `d`, su origen, los píxeles que toca y los que cubre enteros (UX-48)
+  const iconOf = (ctx, T, rec, draw) => {
+    const box = around(ctx, T, 13), [x0, y0, w, h] = box, W = ctx.canvas.width, t = [], f = [];
+    rec.o = [T.e, T.f];
+    if (!(w > 0 && h > 0)) return;
+    const cov = cover(ctx, T, box, null, draw);
+    for (let i = 0; i < w * h; i++) if (cov[i] > 0) { const k = (y0 + Math.floor(i / w)) * W + x0 + i % w; t.push(k); if (cov[i] >= 0.95) f.push(k); }
+    rec.raw = { icon: { t, f } };
+  };
   P.stroke = function () {
     if (!mine(this)) return stroke0.apply(this, arguments);
     pending = null;
@@ -147,6 +165,7 @@ const PROBE = () => {
       for (let i = 0; i < w * h; i++) { const q = [x0 + i % w, y0 + Math.floor(i / w)]; if (dash[i] >= 0.75) on.push(q); else if (full[i] >= 0.75 && dash[i] <= 0.1) off.push(q); }
       rec.raw = { on, off }; rec.gaps = { comps: pieces(dash, w, h), gapPx: off.length, dashPx: on.length };
     }
+    else if (arguments[0] instanceof Path2D0) { const a = arguments; rec.d = PD.get(a[0]) || null; iconOf(this, T, rec, c => { this.strokeStyle = c; stroke0.apply(this, a); }); }
     cv.strokes.push(rec);
     return stroke0.apply(this, arguments);
   };
@@ -163,22 +182,33 @@ const PROBE = () => {
       for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) inside[j * w + i] = this.isPointInPath(x0 + i + 0.5, y0 + j + 0.5) ? 1 : 0;
       const ok = (i, j) => i >= 0 && j >= 0 && i < w && j < h && inside[j * w + i];
       for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) if ([[0, 0], [e, 0], [-e, 0], [0, e], [0, -e], [e, e], [-e, -e], [e, -e], [-e, e]].every(([u, v]) => ok(i + u, j + v))) px.push([x0 + i, y0 + j]);
-      rec.raw = { px };
+      rec.raw = { px }; rec.o = [T.e, T.f];
+      // su forma: la distancia del origen al borde cada 5°. Un cuadrado, gire lo que gire, da la misma a 90° y la mayor entre 1,35 y √2
+      // veces la menor (UX-48)
+      const d = dprOf(this), rho = [];
+      for (let k = 0; k < 72; k++) { const a = k * Math.PI / 36; let lo = 0, hi = 14 * d; for (let n = 0; n < 10; n++) { const m = (lo + hi) / 2; if (this.isPointInPath(T.e + Math.cos(a) * m, T.f + Math.sin(a) * m)) lo = m; else hi = m; } rho.push((lo + hi) / 2 / d); }
+      rec.shape = { sym: Math.round(Math.max(...rho.map((r, k) => Math.abs(r - rho[(k + 18) % 72]))) * 100) / 100, ratio: Math.round(Math.max(...rho) / Math.min(...rho) * 100) / 100 };
     }
+    else if (arguments[0] instanceof Path2D0) { const a = arguments; rec.d = PD.get(a[0]) || null; iconOf(this, T, rec, c => { this.fillStyle = c; fill0.apply(this, a); }); }
     cv.fills.push(rec);
     return r;
   };
   // Al cerrar el fotograma: de cada interior, los dos tonos (se separan por luminancia), qué parte es de cada uno, su contraste y cuántas
-  // veces cambia de tono cada fila de 6 px o más; y la parte del color del relleno, si es opaco. De cada contorno discontinuo, el contraste
-  // entre el color mediano de sus guiones y el de sus huecos.
+  // veces cambia de tono cada fila de 6 px o más; y la parte del color del relleno, si es opaco, en lo que deja ver su icono. De cada
+  // contorno discontinuo, el contraste entre el color mediano de sus guiones y el de sus huecos. De cada icono, su `d`, cuánto del interior
+  // toca, cuánto se sale de él y el contraste entre el color mediano de lo que cubre entero y el de lo que deja ver (UX-48).
   cv.finish = () => {
     const c = document.querySelector('#map'), W = c.width, D = c.getContext('2d').getImageData(0, 0, W, c.height).data;
     const col = ([x, y]) => { const i = 4 * (y * W + x); return [D[i], D[i + 1], D[i + 2]]; };
     const med = cs => { if (!cs.length) return null; const s = cs.slice().sort((a, b) => lum(a) - lum(b)); return s[s.length >> 1]; };
     const r2 = v => Math.round(v * 100) / 100;
+    // el icono de un marcador: lo que se pinta con un Path2D en su mismo origen, después de su relleno y antes del siguiente relleno ahí
+    const marks = cv.fills.filter(f => f.raw && f.raw.px), icons = cv.fills.concat(cv.strokes).filter(r => r.raw && r.raw.icon);
+    const same = (a, b) => a.o[0] === b.o[0] && a.o[1] === b.o[1];
+    marks.forEach(f => { const nx = Math.min(Infinity, ...marks.filter(g => same(g, f) && g.n > f.n).map(g => g.n)); f.raw.own = icons.filter(r => same(r, f) && r.n > f.n && r.n < nx); });
     cv.fills.forEach(f => {
-      if (!f.raw) return;
-      const px = f.raw.px, cs = px.map(col), L = cs.map(lum); delete f.raw;
+      if (!f.raw || !f.raw.px) return;
+      const px = f.raw.px, own = f.raw.own, cs = px.map(col), L = cs.map(lum); delete f.raw;
       if (!cs.length) return;
       const lo = Math.min(...L), hi = Math.max(...L); let thr = (lo + hi) / 2;
       for (let k = 0; k < 12; k++) { let a = 0, na = 0, b = 0, nb = 0; L.forEach(v => { if (v < thr) { a += v; na++; } else { b += v; nb++; } }); if (!na || !nb) break; thr = (a / na + b / nb) / 2; }
@@ -189,8 +219,12 @@ const PROBE = () => {
       let alt = 0, nr = 0;
       Object.values(rows).forEach(r => { if (r.length < 6) return; r.sort((a, b) => a[0] - b[0]); for (let k = 1; k < r.length; k++) if (r[k][0] === r[k - 1][0] + 1 && r[k][1] !== r[k - 1][1]) alt++; nr++; });
       f.stripes = { n: cs.length, light: r2(nl / cs.length), dark: r2(1 - nl / cs.length), ratio: ml && md ? r2(ratio(ml, md)) : 1, alt: nr ? r2(alt / nr) : 0 };
-      if (f.ink) f.solid = { share: f.ink[3] < 0.99 ? 0 : r2(cs.filter(x => Math.max(...[0, 1, 2].map(k => Math.abs(x[k] - f.ink[k]))) <= 24).length / cs.length) };
+      const keys = px.map(([x, y]) => y * W + x), inner = new Set(keys), touch = new Set(own.flatMap(r => r.raw.icon.t)), full = new Set(own.flatMap(r => r.raw.icon.f));
+      const rest = cs.filter((_, i) => !touch.has(keys[i]));
+      if (f.ink) f.solid = { share: f.ink[3] < 0.99 || !rest.length ? 0 : r2(rest.filter(x => Math.max(...[0, 1, 2].map(k => Math.abs(x[k] - f.ink[k]))) <= 24).length / rest.length), left: r2(rest.length / cs.length) };
+      if (own.length) { const fc = cs.filter((_, i) => full.has(keys[i])); f.icon = { d: (own.find(r => r.d) || {}).d || null, n: cs.length, touched: keys.filter(k => touch.has(k)).length, out: [...touch].filter(k => !inner.has(k)).length, ratio: fc.length && rest.length ? r2(ratio(med(fc), med(rest))) : 1 }; }
     });
+    icons.forEach(r => delete r.raw);
     cv.strokes.forEach(s => {
       if (!s.raw) return;
       const on = med(s.raw.on.map(col)), off = med(s.raw.off.map(col)); delete s.raw;
@@ -247,10 +281,13 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
   // Lo que se ve en el fotograma acabado (AR2-01). Rayado: dos tonos a 3:1 o más entre sí, cada uno en al menos un 15 % del interior,
   // que alternan a lo ancho (más de un cambio de tono por fila, de media). Huecos de un contorno discontinuo: se parte en tres trozos o más,
   // hay huecos de verdad (6 px o más) y su color se distingue del de los guiones (1,5:1 o más). Sólido: el 85 % del interior es del color
-  // del relleno, opaco.
+  // del relleno, opaco. Con un icono dentro (UX-48), el 85 % de lo que deja ver el icono, y eso es al menos la mitad del interior: el
+  // relleno sigue siendo lo que más se ve. Se apartan los píxeles que el icono toca, aunque sea un poco: es el margen del suavizado,
+  // medido en vez de supuesto. Cuadrado: la misma distancia al borde a 90° y la mayor entre 1,33 y 1,45 veces la menor (un cuadrado da √2).
   const STRIPES = s => !!s && s.light >= 0.15 && s.dark >= 0.15 && s.ratio >= 3 && s.alt > 1;
   const GAPS = g => !!g && g.comps >= 3 && g.gapPx >= 6 && g.ratio >= 1.5;
-  const SOLID = s => !!s && s.share >= 0.85;
+  const SOLID = s => !!s && s.share >= 0.85 && s.left >= 0.5;
+  const SQUARE = s => !!s && s.sym <= 0.15 && s.ratio >= 1.33 && s.ratio <= 1.45;
   const striped = f => hatched(f).filter(x => STRIPES(x.stripes));
   const showStripes = s => s ? `${Math.round(s.light * 100)} % claro y ${Math.round(s.dark * 100)} % oscuro a ${s.ratio}:1, ${s.alt} cambios por fila` : 'sin interior';
 
@@ -411,9 +448,10 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
   const glyphAt = async (p, id) => {
     await p.click(`#colL [data-v="${id}"]`); await p.focus('#map'); await p.keyboard.press('f'); await p.waitForTimeout(250);
     const f = await frame(p), c = await p.evaluate(() => { const m = document.querySelector('#map'); return [m.clientWidth / 2, m.clientHeight / 2]; });
-    const near = s => Math.abs(s.x - c[0]) <= 3 && Math.abs(s.y - c[1]) <= 3, g = f.strokes.filter(near), fl = f.fills.filter(near), d = g.find(s => s.gaps);
-    return { nominal: g.filter(s => s.dash).length, dashed: g.filter(s => s.dash && GAPS(s.gaps)).length, solid: g.filter(s => !s.dash && s.lw >= 3).length, filled: fl.filter(x => SOLID(x.solid)).length,
-      see: `${d ? `contorno en ${d.gaps.comps} trozos, ${d.gaps.gapPx} px de hueco a ${d.gaps.ratio}:1 de los guiones` : 'sin contorno discontinuo'}, interior ${fl.map(x => x.solid ? Math.round(x.solid.share * 100) + ' % del relleno' : '?').join('/') || 'no visto'}` };
+    // los rellenos con interior: el del icono de un objeto no cuenta como otro marcador (UX-48)
+    const near = s => Math.abs(s.x - c[0]) <= 3 && Math.abs(s.y - c[1]) <= 3, g = f.strokes.filter(near), fl = f.fills.filter(x => near(x) && x.stripes), d = g.find(s => s.gaps);
+    return { nominal: g.filter(s => s.dash).length, dashed: g.filter(s => s.dash && GAPS(s.gaps)).length, solid: g.filter(s => !s.dash && s.lw >= 3).length, filled: fl.filter(x => SOLID(x.solid)).length, fl,
+      see: `${d ? `contorno en ${d.gaps.comps} trozos, ${d.gaps.gapPx} px de hueco a ${d.gaps.ratio}:1 de los guiones` : 'sin contorno discontinuo'}, interior ${fl.map(x => x.solid ? `${Math.round(x.solid.share * 100)} % del relleno${x.icon ? ` en el ${Math.round(x.solid.left * 100)} % que deja el icono` : ''}` : '?').join('/') || 'no visto'}` };
   };
   await R26('UX-09 −', async p => {
     const what = 'UX-09 − lo que está sin aplicar se pinta como documento (contorno discontinuo, con huecos que se ven) y pasa a sólido (relleno opaco) solo tras aplicar y leer';
@@ -1635,6 +1673,74 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const ok = t0.length === 1 && /^Toma \d+ armada\. \S+ para rodar y \S+ para desarmar\.$/.test(t0[0].text) && t1.length === 1 && t1[0].fail && /^Backend parado/.test(t1[0].text) && /^Sin conexión con el backend/.test(ban) && gone(t2) && /^Desarmar/.test(st) && gone(t3);
     return [[what, ok, `armada: ${said(t0)} · sin backend: ${said(t1)}, franja «${ban.slice(0, 40)}…» · Intro: ${said(t2)}, Parar dice «${st}» · un segundo después: ${said(t3)}`]];
   }, 1440, 900);
+
+  // --- UX-48: cada objeto lleva el icono de su tipo, el mismo en el mapa y en las listas (petición de Guillermo) ---
+  // el `d` de los iconos de las listas: el trazado de su svg en cada fila de objeto de la Jerarquía, en los botones de Añadir › Objetos
+  // y en la cabecera de Propiedades
+  const rowIcons = p => p.evaluate(() => [...document.querySelectorAll('#colL .row[data-v^="ent:obj-"]')].map(r => { const q = r.querySelector('svg.g path'); return { id: r.dataset.v, cls: (r.getAttribute('title') || '').split(' · ')[0], d: q ? q.getAttribute('d') : null }; }));
+  const addIcons = async p => {
+    await p.click('[data-act="rtab"][data-v="add"]'); await p.click('[data-act="lib-cat"][data-v="objeto"]'); await p.waitForTimeout(150);
+    const r = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('#colR [data-act="lib-item"]')].map(b => { const q = b.querySelector('svg.g path'); return [b.dataset.v, q ? q.getAttribute('d') : null]; })));
+    await p.click('[data-act="rtab"][data-v="props"]'); await p.waitForTimeout(150);
+    return r;
+  };
+  const propIcon = p => p.evaluate(() => { const q = document.querySelector('#colR .ident svg.g path'); return q ? q.getAttribute('d') : null; });
+  // en el mapa, solo la capa de objetos: así ninguna etiqueta ni otro marcador les cae encima
+  const onlyObjects = async p => {
+    await p.click('#bLayers'); await p.waitForTimeout(150);
+    for (const v of ['actor', 'infectado', 'animal', 'marcas', 'camaras']) { await p.click(`#menu [data-act="layer"][data-v="${v}"]`); await p.waitForTimeout(60); }
+    await p.click('#status', { position: { x: 3, y: 3 } }); await p.waitForTimeout(150);
+  };
+  // el marcador de un objeto encuadrado con F: el último relleno con interior en el centro, por encima de su fantasma si lo tiene
+  const objAt = async (p, id) => { const g = await glyphAt(p, id); return { g, m: g.fl[g.fl.length - 1] || null }; };
+  const UX48T = [['Land_Wreck_Ikarus', 'autobús'], ['Land_Wreck_Volha_Police', 'coche'], ['Land_Wreck_V3S', 'camión'], ['Land_Container_1Bo', 'contenedor'], ['LargeTent', 'tienda'], ['CamoNet', 'red'], ['Fireplace', 'hoguera'], ['Barrel_Red', 'bidón'], ['WoodenCrate', 'caja'], ['Spotlight', 'foco'], ['PowerGenerator', 'generador']];
+  await R26('UX-48 +', async p => {
+    const res = [], add = await addIcons(p), rows = await rowIcons(p);
+    await onlyObjects(p);
+    const seen = [];
+    for (const r of rows) { const { g, m } = await objAt(p, r.id); seen.push(Object.assign({}, r, { draft: g.nominal > 0, ic: m && m.icon, prop: await propIcon(p) })); }
+    const pct = v => Math.round(v * 100);
+    const inside = seen.filter(s => s.ic && s.ic.d && s.ic.out === 0 && s.ic.touched >= 0.15 * s.ic.n);
+    res.push(['UX-48 + cada objeto del mapa lleva dentro de su cuadrado un icono, pintado con su trazado, que no se sale del interior', rows.length === 20 && inside.length === rows.length, `${inside.length} de ${rows.length} objetos con su icono dentro${seen.some(s => s.ic) ? ` · toca entre el ${pct(Math.min(...seen.filter(s => s.ic).map(s => s.ic.touched / s.ic.n)))} y el ${pct(Math.max(...seen.filter(s => s.ic).map(s => s.ic.touched / s.ic.n)))} % del interior y se sale ${Math.max(...seen.filter(s => s.ic).map(s => s.ic.out))} px como mucho` : ''}${seen.filter(s => !inside.includes(s)).slice(0, 3).map(s => ` · ${s.id.slice(4)}: ${s.ic ? `toca ${s.ic.touched} de ${s.ic.n} px y se sale ${s.ic.out}` : 'sin icono'}`).join('')}`]);
+    const byCls = {}; seen.forEach(s => { if (s.ic && s.ic.d && !byCls[s.cls]) byCls[s.cls] = s.ic.d; });
+    const ds = UX48T.map(([c]) => byCls[c]);
+    res.push(['UX-48 + el autobús, el coche, el camión, el contenedor, la tienda, la red, la hoguera, el bidón, la caja, el foco y el generador llevan iconos distintos en el mapa', ds.every(Boolean) && new Set(ds).size === UX48T.length, `${new Set(ds.filter(Boolean)).size} iconos distintos para ${UX48T.length} tipos${UX48T.filter((_, i) => !ds[i]).length ? ` · sin icono: ${UX48T.filter((_, i) => !ds[i]).map(t => t[1]).join(', ')}` : ''}`]);
+    const bad = seen.filter(s => !(s.ic && s.ic.d && s.ic.d === s.d && add[s.cls] === s.d && s.prop === s.d));
+    res.push(['UX-48 + el icono que se pinta en el mapa para cada objeto es el mismo trazado que el de su fila de la Jerarquía, el de su botón de Añadir y el de la cabecera de sus Propiedades', rows.length === 20 && !bad.length, `${rows.length - bad.length} de ${rows.length} iguales${bad.slice(0, 3).map(s => ` · ${s.id.slice(4)}: mapa ${s.ic && s.ic.d ? (s.ic.d === s.d ? '=' : '≠') : 'sin icono'}, Jerarquía ${s.d ? 'con' : 'sin'} icono, Añadir ${add[s.cls] ? (add[s.cls] === s.d ? '=' : '≠') : 'sin icono'}, Propiedades ${s.prop ? (s.prop === s.d ? '=' : '≠') : 'sin icono'}`).join('')}`]);
+    const sol = seen.filter(s => !s.draft && s.ic), dr = seen.filter(s => s.draft && s.ic), low = l => l.length ? Math.min(...l.map(s => s.ic.ratio)) : null;
+    res.push(['UX-48 + el icono queda a 3:1 o más de su cuadrado, en sólido y en borrador', sol.length > 0 && dr.length > 0 && sol.length + dr.length === rows.length && seen.every(s => s.ic && s.ic.ratio >= 3), `sólidos: ${sol.length}, el más bajo a ${low(sol) || '?'}:1 · borradores: ${dr.length}, el más bajo a ${low(dr) || '?'}:1`]);
+    return res;
+  });
+  await R26('UX-48 −', async p => {
+    const res = [], ids = await p.evaluate(() => [...document.querySelectorAll('#colL .row[data-v^="ent:obj-"]')].filter(r => r.querySelector('.st svg')).map(r => r.dataset.v));
+    await onlyObjects(p);
+    const a = []; for (const id of ids) a.push([id, (await objAt(p, id)).g]);
+    if (!await apply(p)) return [['UX-48 − aplicado y leído, el objeto sigue siendo un cuadrado y va sólido', false, 'no llegó a aplicar']];
+    const b = []; for (const id of ids.concat('ent:obj-01')) b.push([id, (await objAt(p, id)).g]);
+    const shape = l => l.map(([id, g]) => `${id.slice(4)} ${g.fl.map(x => x.shape ? `${x.shape.ratio} y ${x.shape.sym} px` : '?').join('/') || 'no visto'}`).join(', ');
+    res.push(['UX-48 − el objeto sigue siendo un cuadrado: sin aplicar y aplicado, la misma distancia al borde a 90° y la mayor √2 veces la menor', a.length > 0 && a.concat(b).every(([, g]) => g.fl.length > 0 && g.fl.every(x => SQUARE(x.shape))), `sin aplicar: ${shape(a) || 'ningún objeto'} · aplicado: ${shape(b)}`]);
+    res.push(['UX-48 − sin aplicar, el objeto va con contorno discontinuo, huecos que se ven y nada sólido', a.length > 0 && a.every(([, g]) => g.dashed > 0 && !g.solid && !g.filled), a.map(([id, g]) => `${id.slice(4)}: ${g.dashed} de ${g.nominal} contornos discontinuos con huecos que se ven y ${g.solid} sólidos (${g.see})`).join(' · ') || 'ningún objeto sin aplicar']);
+    res.push(['UX-48 − aplicado y leído, va sólido con la regla nueva: el 85 % de lo que deja ver el icono es del color del relleno, y eso es al menos la mitad del interior', b.every(([, g]) => g.solid > 0 && g.filled > 0 && !g.nominal), b.map(([id, g]) => `${id.slice(4)}: ${g.solid} sólidos y ${g.nominal} discontinuos (${g.see})`).join(' · ')]);
+    // una clase que no está en el catálogo: en una copia de la página, dos objetos con clases que no están
+    const what = 'UX-48 − una clase que no está en el catálogo lleva el icono genérico: el mismo para dos clases así, distinto del de cada tipo, igual en la Jerarquía, en Propiedades y en el mapa, y sin errores';
+    if (!/^file:/.test(URL)) return res.concat([[what, false, 'la copia se hace leyendo el archivo del disco: hace falta una dirección file://']]);
+    const fs = require('fs'), os = require('os'), { fileURLToPath, pathToFileURL } = require('url');
+    const html = fs.readFileSync(fileURLToPath(URL), 'utf8').replace(/E\('obj-17', 'objeto', '[^']+'/, "E('obj-17', 'objeto', 'Land_Prueba_SinCatalogo'").replace(/E\('obj-15', 'objeto', '[^']+'/, "E('obj-15', 'objeto', 'Prueba_OtraClase'");
+    if (!/Land_Prueba_SinCatalogo/.test(html) || !/Prueba_OtraClase/.test(html)) return res.concat([[what, false, 'no se encontraron obj-15 y obj-17 en el archivo para cambiarles la clase']]);
+    const file = path.join(os.tmpdir(), `estudio-sin-catalogo-${process.pid}.html`); fs.writeFileSync(file, html);
+    const c = await browser.newContext({ viewport: { width: 1600, height: 960 }, colorScheme: 'dark' });
+    try {
+      await c.addInitScript(LIB); await c.addInitScript(PROBE);
+      const q = await c.newPage(), errs = []; q.setDefaultTimeout(3000);
+      q.on('pageerror', e => { errs.push(e.message); errors.push(`[pageerror] ${e.message}`); }); q.on('request', r => { if (!/^(file|data|blob|about):/.test(r.url())) external.push(r.url()); });
+      await q.goto(pathToFileURL(file).href); await q.waitForTimeout(900);
+      const add = await addIcons(q), rows = await rowIcons(q), r17 = rows.find(r => r.id === 'ent:obj-17'), r15 = rows.find(r => r.id === 'ent:obj-15');
+      await onlyObjects(q);
+      const { m } = await objAt(q, 'ent:obj-17'), prop = await propIcon(q), types = new Set(Object.values(add).filter(Boolean)), gen = r17 && r17.d;
+      const ok = !!gen && !!r15 && r15.d === gen && types.size === UX48T.length && !types.has(gen) && !!m && !!m.icon && m.icon.d === gen && prop === gen && !errs.length;
+      return res.concat([[what, ok, `${r17 ? `«${r17.cls}» ${gen ? 'con icono' : 'sin icono'} en la Jerarquía${r15 && gen ? `, ${r15.d === gen ? 'el mismo' : 'otro'} que «${r15.cls}»` : ''}` : 'obj-17 no está'} · ${types.size} iconos de tipo en Añadir, ${gen && types.has(gen) ? 'y el suyo es uno de ellos' : 'ninguno es el suyo'} · mapa: ${m && m.icon ? (m.icon.d === gen ? 'el mismo' : 'otro') : 'sin icono'} · Propiedades: ${prop ? (prop === gen ? 'el mismo' : 'otro') : 'sin icono'} · ${errs.length ? `errores: ${errs.slice(0, 2).join(' | ')}` : 'sin errores'}`]]);
+    } finally { await c.close().catch(() => {}); fs.rmSync(file, { force: true }); }
+  });
 
   expect(external.length === 0, 'ninguna petición sale de la página: ' + (external.slice(0, 3).join(' ') || 'ninguna'));
   expect(errors.length === 0, 'sin errores de JavaScript en la página');
