@@ -894,6 +894,8 @@ const S = {
   undo: [{name: 'Mover Volga de policía', before: clone(R12), after: clone(R13), t: 0}, {name: 'Añadir Bidón amarillo', before: clone(R13), after: clone(DOC14), t: 0}],
   redo: [], world: null, worldAmb: null, worldAmbAt: 0, obs: {}, queue: [],
   sim: {backend: true, server: true, director: true, expansion: true, dof: true, fault: false},
+  // cambia con cada corte o vuelta de una conexión: la lectura al volver que estuviera en camino deja de valer (AR3-02)
+  linkGen: 0,
   // la tecla «Parar toma» del mod de cliente, con el nombre que da el backend; se cambia en los controles del juego (C-16, UX-46). «Fin» es un ejemplo
   stopKey: 'Fin',
   hb: {backend: T0, server: T0, client: T0}, epoch: '7c19e2a4', epochNew: false, qsnap: null,
@@ -941,7 +943,7 @@ const ACTIONS = [
   {id: 'undo', name: 'Deshacer', def: 'Ctrl+Z', ref: 'DayZ Editor', run: () => undo()},
   {id: 'redo', name: 'Rehacer', def: 'Ctrl+Y', ref: 'DayZ Editor y World Editor de Reforger', run: () => redo()},
   {id: 'open', name: 'Abrir escena', def: 'Ctrl+O', ref: 'DayZ Editor', run: () => openMenuDocs($('#docBtn'))},
-  {id: 'save', name: 'Guardar', def: 'Ctrl+S', ref: 'DayZ Editor', run: () => toast('Guardado. El estudio guarda cada cambio al momento.', 'ok')},
+  {id: 'save', name: 'Guardar', def: 'Ctrl+S', ref: 'DayZ Editor', run: () => saveDoc()},
   {id: 'saveas', name: 'Guardar como', def: 'Ctrl+Shift+S', ref: 'DayZ Editor', run: () => toast(SAVEAS)},
   {id: 'del', name: 'Borrar lo seleccionado', def: 'Delete', ref: 'DayZ Editor y Eden', run: () => delSel()},
   {id: 'dup', name: 'Duplicar', def: 'Ctrl+J', ref: 'DayZ Editor', run: () => dupSel()},
@@ -984,6 +986,9 @@ const takeOpen = () => takeActive() || !!S.take.unconfirmed;
 const openWhy = what => S.take.unconfirmed ? `${what} hasta confirmar la parada de la toma: se comprueba sola al volver la conexión.` : `${what} durante la toma.`;
 const UNC = 'Falta confirmar que la toma se paró: se comprueba sola al volver la conexión.';
 const offline = () => !S.sim.backend;
+// sin backend no se guarda: Guardar lo dice y no da nada por guardado (CU-37, AR3-03)
+const saveBlock = () => offline() ? 'Sin conexión con el backend no se guarda: la escena sigue como se guardó la última vez.' : '';
+function saveDoc() { if (saveBlock()) return toast(saveBlock(), 'fail'); toast('Guardado. El estudio guarda cada cambio al momento.', 'ok'); }
 function editBlock() {
   if (offline()) return 'Sin conexión con el backend: no se puede guardar ningún cambio. El documento sigue como en el último guardado.';
   if (takeActive()) return 'Durante la toma no se edita la escena. Para o desarma la toma para seguir.';
@@ -1301,10 +1306,13 @@ function endTake(state, why, from) {
   toast(state === 'terminada' ? `Toma ${pad2(n)} terminada en ${nf(entry.dur, 2)} s.` : state === 'parada' ? (from === 'juego' ? `Toma ${pad2(n)} parada desde tu juego a los ${nf(t, 1)} s.` : `Toma ${pad2(n)} parada a los ${nf(t, 1)} s. Control devuelto en ${nf(ctl, 2)} s.`) : `Toma ${pad2(n)}: parada sin confirmar. Se perdió ${lostPeer()}; el mod para solo por seguridad y se confirma al volver la conexión.`, state === 'terminada' ? 'ok' : state === 'parada' ? '' : 'fail');
   renderAll();
 }
+// La lectura al volver tarda 700 ms y solo vale si en medio no se cortó ni volvió ninguna conexión y siguen las tres; si no, la parada sigue
+// sin confirmar, con su recuperación a la vista, hasta la siguiente vuelta estable (AR3-02)
 function reconcileTakes() {
   if (!S.sim.backend || !S.sim.server || !S.sim.director) return;
+  const gen = S.linkGen;
   S.queue.filter(o => o.verb === 'take' && o.lost && o.state === 'parcial').forEach(o => setTimeout(() => {
-    if (!o.lost) return;
+    if (!o.lost || S.linkGen !== gen || !S.sim.backend || !S.sim.server || !S.sim.director) return;
     setOp(o, {state: 'observado', origin: 'servidor y tu juego · lectura al volver', detail: o.recon + '; la lectura lo confirma.'});
     if (S.take.unconfirmed) { S.take.unconfirmed = false; toast(`Parada confirmada al leer el juego: ${o.recon}.`, 'ok'); renderAll(); }
   }, 700));
@@ -1470,7 +1478,7 @@ function drawMap() {
   nums.forEach(([t, x, y]) => { g.fillStyle = P.halo; g.fillRect(x - 2, y - 11, g.measureText(t).width + 4, 14); g.fillStyle = P.label; g.fillText(t, x, y); });
   // pueblos, en minúscula normal (UX-09)
   if (V.s < 1.2) { g.textAlign = 'center'; g.font = `600 12px ${FONT_UI}`; TOWNS.forEach(t => { const [x, y] = w2s(t[1], t[2]); if (x < -80 || y < -20 || x > V.w + 80 || y > V.h + 20) return; const label = t[0]; halo(g, label, x, y); g.fillStyle = P.label; g.fillText(label, x, y); }); g.textAlign = 'left'; }
-  LBL.length = 0; drawScene(g);
+  LBL.length = 0; MK.length = 0; drawScene(g); drawLabels(g);
   updateScale();
 }
 // Rayado de lo estimado, como los tramos estimados de la línea de tiempo (UX-30)
@@ -1485,6 +1493,7 @@ function hatch(col) {
 function drawGlyph(g, kind, x, y, yaw, style) {
   const col = MC[{objeto: 'obj', infectado: 'zmb', animal: 'ani', actor: 'act'}[kind]];
   // un 25 % más grandes, con contorno y una muesca hacia donde mira (UX-09)
+  if (style !== 'ghost') MK.push([x - 10.5, y - 10.5, 21, 21]);
   g.save(); g.translate(x, y); if (style === 'ghost') g.globalAlpha = 0.3;
   g.beginPath();
   if (kind === 'objeto') { g.rotate(yaw * Math.PI / 180); g.rect(-6.25, -6.25, 12.5, 12.5); }
@@ -1498,16 +1507,22 @@ function drawGlyph(g, kind, x, y, yaw, style) {
   g.restore();
   if (style !== 'ghost') { const a = yaw * Math.PI / 180, r0 = kind === 'actor' ? 8.75 : 7.5, r1 = r0 + 6; g.beginPath(); g.moveTo(x + Math.sin(a) * r0, y - Math.cos(a) * r0); g.lineTo(x + Math.sin(a) * r1, y - Math.cos(a) * r1); g.lineCap = 'round'; g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 4; g.stroke(); g.strokeStyle = col; g.lineWidth = 2; g.stroke(); }
 }
-// Etiquetas sin solaparse: prueba debajo y encima; las secundarias se omiten si no caben.
-const LBL = [];
-function label(g, txt, x, y, strong, must) {
-  g.font = `${strong ? 600 : 500} 12px ${FONT_UI}`;
-  const w = g.measureText(txt).width + 4, h = 14, hit = r => LBL.some(o => r[0] < o[0] + o[2] && o[0] < r[0] + r[2] && r[1] < o[1] + o[3] && o[1] < r[1] + r[3]);
-  let py = null;
-  for (const dy of [0, 14, -14, 28]) if (!hit([x - 2, y + dy - 11, w, h])) { py = y + dy; break; }
-  if (py === null) { if (!(strong || must)) return; py = y; }
-  LBL.push([x - 2, py - 11, w, h]);
-  halo(g, txt, x, py); g.fillStyle = P.label; g.fillText(txt, x, py);
+// Etiquetas sin solaparse: prueba debajo y encima. Se colocan y se pintan al final, encima de los marcadores y, si cabe, donde no tapen
+// ninguno: pintadas entre ellos, el marcador que venía después tapaba media letra, y una que tenía que salir sin sitio se pintaba encima de
+// otra (CU-38, AR3-01). Las secundarias se omiten si no caben sin tapar nada; las que tienen que salir prueban también más lejos antes de
+// tapar un marcador, como la estimación rayada que pasa por una marca, y antes de pisar otra etiqueta.
+const LBL = [], LQ = [], MK = [];
+function label(g, txt, x, y, strong, must) { LQ.push([`${strong ? 600 : 500} 12px ${FONT_UI}`, txt, x, y, strong || must]); }
+function drawLabels(g) {
+  const hit = (r, l) => l.some(o => r[0] < o[0] + o[2] && o[0] < r[0] + r[2] && r[1] < o[1] + o[3] && o[1] < r[1] + r[3]);
+  LQ.forEach(([f, txt, x, y, key]) => {
+    g.font = f; const w = g.measureText(txt).width + 4, at = dy => [x - 2, y + dy - 11, w, 14], near = [0, 14, -14, 28], far = key ? [-28, 42, -42] : [];
+    let dy = near.concat(far).find(d => !hit(at(d), LBL) && !hit(at(d), MK));
+    if (dy === undefined && key) dy = near.concat(far).find(d => !hit(at(d), LBL));
+    if (dy === undefined) { if (!key) return; dy = 0; }
+    LBL.push(at(dy)); halo(g, txt, x, y + dy); g.fillStyle = P.label; g.fillText(txt, x, y + dy);
+  });
+  LQ.length = 0;
 }
 // Halo opaco de 2 px alrededor de la letra, para que ningún píxel suyo quede sobre el mapa (CU-38, AR-03). Se pinta como imagen, con la
 // letra repetida alrededor: strokeText solo traza el contorno, y dentro de los puntos pequeños («·», el punto de la «i») no dejaba halo.
@@ -1530,6 +1545,7 @@ function drawLock(g, x, y) {
 }
 function drawCamBody(g, pose, emph, alpha) {
   const [sx, sy] = w2s(pose.x, pose.z), a = pose.yaw * Math.PI / 180, hf = (pose.fov * Math.PI / 180) / 2, L = clamp(pose.focus * V.s, 30, 170);
+  MK.push([sx - 9.5, sy - 9.5, 19, 19]);
   g.save(); g.globalAlpha = alpha;
   g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + Math.sin(a - hf) * L, sy - Math.cos(a - hf) * L); g.lineTo(sx + Math.sin(a + hf) * L, sy - Math.cos(a + hf) * L); g.closePath();
   g.fillStyle = emph ? 'rgba(36,89,166,.2)' : 'rgba(36,89,166,.1)'; g.fill(); g.strokeStyle = 'rgba(36,89,166,.75)'; g.lineWidth = 1; g.stroke();
@@ -1564,7 +1580,7 @@ function drawScene(g) {
     g.setLineDash([5, 4]); g.strokeStyle = MC.mark; g.lineWidth = 1.6; g.stroke(); g.setLineDash([]);
     pts.slice(1).forEach((p, i) => {
       const [x, y] = w2s(p.x, p.z);
-      g.beginPath(); g.arc(x, y, 6.9, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill(); g.lineWidth = 2.2; g.strokeStyle = MC.mark; g.stroke();
+      g.beginPath(); g.arc(x, y, 6.9, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill(); g.lineWidth = 2.2; g.strokeStyle = MC.mark; g.stroke(); MK.push([x - 7.5, y - 7.5, 15, 15]);
       if (!dim) label(g, `${a.name} · M${i + 1}`, x + 10, y - 7, true);
       if (sel && sel.type === 'mark' && sel.id === a.id && sel.mi === i) ring(g, x, y, 12.5);
     });
@@ -1608,7 +1624,7 @@ function drawScene(g) {
     keys.forEach((k, i) => {
       if (keys.length < 2 && i === 0) return;
       const [x, y] = w2s(k.x, k.z);
-      g.save(); g.globalAlpha = alpha; g.translate(x, y); g.rotate(Math.PI / 4); g.fillStyle = MC.cam; g.fillRect(-5.6, -5.6, 11.2, 11.2); g.lineWidth = 1.5; g.strokeStyle = '#fff'; g.strokeRect(-5.6, -5.6, 11.2, 11.2); g.restore();
+      g.save(); g.globalAlpha = alpha; g.translate(x, y); g.rotate(Math.PI / 4); g.fillStyle = MC.cam; g.fillRect(-5.6, -5.6, 11.2, 11.2); g.lineWidth = 1.5; g.strokeStyle = '#fff'; g.strokeRect(-5.6, -5.6, 11.2, 11.2); g.restore(); MK.push([x - 7.5, y - 7.5, 15, 15]);
       if (!dim) label(g, focus ? `${c.name} · K${i + 1}` : 'K' + (i + 1), x + 10, y + 13, focus);
       if (sel && sel.type === 'key' && sel.cam === c.id && sel.ki === i) ring(g, x, y, 12.5);
     });
@@ -2160,8 +2176,10 @@ function renderDock() {
   const cur = S.ws === 'escena' ? S.dtab : S.rdtab;
   let tools = '';
   if (cur === 'actividad') tools = ['todas', 'activas', 'fallos'].map(f => `<button class="btn sm ${S.qf === f ? '' : 'ghost'}" data-act="qf" data-v="${f}">${{todas: 'Todas', activas: 'En curso', fallos: 'Fallos'}[f]}</button>`).join('');
-  // «Previsualizar» mueve en el mapa la cámara y los actores estimados, no el juego, y no se parece a Rodar (UX-11, AR2-07)
-  if (cur === 'timeline') tools = `<button class="ib" data-act="tl-start" aria-label="Ir al principio">${ic('start')}</button><button class="ib" data-act="tl-prev" aria-label="Clave anterior">${ic('pkey')}</button><button class="btn sm" data-act="tl-play" ${['rodando', 'parando'].includes(S.take.state) ? 'disabled' : ''}>${S.preview ? 'Pausar' : 'Previsualizar'}</button><button class="ib" data-act="tl-next" aria-label="Clave siguiente">${ic('nkey')}</button><button class="ib" data-act="tl-end" aria-label="Ir al final">${ic('end')}</button><span class="mono" style="font-size:12px;color:var(--muted);margin-left:6px" id="tlTime">${tc(camTime())}</span><span class="tlnote">Vista previa de cámara y actores estimados; no mueve el juego</span>`;
+  // «Previsualizar» mueve en el mapa la cámara y los actores estimados, no el juego, y no se parece a Rodar (UX-11, AR2-07). La nota empieza
+  // por lo que más importa, que se lee entero desde 1280 px aunque el resto se corte; la frase completa sale al pasar el ratón, y la nota es
+  // la descripción de Previsualizar para el lector de pantalla (AR3-05)
+  if (cur === 'timeline') tools = `<button class="ib" data-act="tl-start" aria-label="Ir al principio">${ic('start')}</button><button class="ib" data-act="tl-prev" aria-label="Clave anterior">${ic('pkey')}</button><button class="btn sm" data-act="tl-play" aria-describedby="tlNote" ${['rodando', 'parando'].includes(S.take.state) ? 'disabled' : ''}>${S.preview ? 'Pausar' : 'Previsualizar'}</button><button class="ib" data-act="tl-next" aria-label="Clave siguiente">${ic('nkey')}</button><button class="ib" data-act="tl-end" aria-label="Ir al final">${ic('end')}</button><span class="mono" style="font-size:12px;color:var(--muted);margin-left:6px" id="tlTime">${tc(camTime())}</span><span class="tlnote" id="tlNote" title="Previsualizar mueve en el mapa la cámara de la toma y los actores estimados; no mueve nada en el juego.">No mueve el juego: cámara y actores estimados</span>`;
   const bar = `<div class="dockbar${cur === 'timeline' ? ' transport' : ''}"${cur === 'actividad' ? ' data-ref="Filtros de la Log Console: World Editor de Reforger"' : cur === 'timeline' ? ' data-ref="Transporte del Sequencer de Unreal"' : ''}>${tools}<button class="ib" data-act="dock" data-v="close" aria-label="Plegar el panel" title="Plegar el panel">${ic('chev')}</button></div>`;
   let body = '';
   if (cur === 'actividad') {
@@ -2332,11 +2350,11 @@ function sceneMenu(anchor) {
     <h5>Recientes</h5>
     ${docItems()}
     <hr>
-    <button class="mi" data-act="m-save">Guardar <kbd class="k">Ctrl+S</kbd></button>
+    <button class="mi" data-act="m-save" ${saveBlock() ? 'disabled' : ''}>Guardar <kbd class="k">Ctrl+S</kbd></button>
     <button class="mi" data-act="m-saveas">Guardar como… <kbd class="k">Ctrl+Mayús+S</kbd></button>
     <button class="mi" data-act="reload">Recargar desde disco</button>
     <button class="mi" data-act="m-export">Exportar el JSON de la escena</button>
-    <div class="note">Mismo orden que el menú File del DayZ Editor. Nueva escena va sin tecla porque Ctrl+N lo atiende el navegador antes que la web.${why ? ' ' + why : ''}</div>`);
+    <div class="note">Mismo orden que el menú File del DayZ Editor. Nueva escena va sin tecla porque Ctrl+N lo atiende el navegador antes que la web.${why ? ' ' + why : ''}${saveBlock() ? ' Guardar tampoco: la escena sigue como se guardó la última vez.' : ''}</div>`);
 }
 const LAYOUTS = {
   director: {name: 'De fábrica', c1: 256, c3: 320, bh: 220, ph: 50, swap: false, nl: false, nr: false, both: false, de: false, dr: true},
@@ -2639,7 +2657,7 @@ document.addEventListener('click', e => {
     case 'doc-open': openDoc(v); break;
     case 'm-saveas': closeMenu(); toast(SAVEAS); break;
     case 'first-add': S.rtab = 'add'; S.addFromMap = false; renderRight(); { const q = $('#libq'); if (q) q.focus(); } break;
-    case 'm-save': closeMenu(); toast('Guardado. El estudio guarda cada cambio al momento.', 'ok'); break;
+    case 'm-save': closeMenu(); saveDoc(); break;
     case 'm-export': closeMenu(); toast('En el producto descarga el JSON de la escena con el esquema v1. Aquí no hay backend.'); break;
     case 'menu-tools': toolsMenu(b); return;
     case 'lay': L = Object.assign({}, LAYOUTS[v]); applyLayout(); closeMenu(); renderAll(); toast('Layout: ' + LAYOUTS[v].name); break;
@@ -2650,6 +2668,7 @@ document.addEventListener('click', e => {
     case 'menu-sim': simMenu(b); return;
     case 'sim': {
       S.sim[v] = !S.sim[v];
+      if (['backend', 'server', 'director'].includes(v)) S.linkGen++;
       if (v === 'backend') {
         if (S.sim.backend) { S.qsnap = null; S.hb.backend = now(); toast('Backend de vuelta: la web se pone al día con las órdenes y el juego.', 'ok'); }
         else { S.qsnap = clone(S.queue); cancelPlacing(true); toast('Backend parado: la web ya no ve el juego ni guarda cambios.', 'fail'); }
@@ -2661,8 +2680,8 @@ document.addEventListener('click', e => {
       simMenu(menuFor || $('#bSim')); renderAll(); return;
     }
     case 'sim-reboot': {
-      closeMenu(); S.sim.server = false; renderAll(); toast('Reiniciando el servidor…');
-      setTimeout(() => { S.sim.server = true; S.hb.server = now(); S.epoch = fnv(String(now())).slice(0, 8); S.epochNew = true; S.world = null; S.obs = {}; S.other = null; S.take.dirty = false; if (['armada', 'preparando'].includes(S.take.state)) { S.take.state = 'idle'; S.take.checks = []; } renderAll(); }, 2200);
+      closeMenu(); S.sim.server = false; S.linkGen++; renderAll(); toast('Reiniciando el servidor…');
+      setTimeout(() => { S.sim.server = true; S.linkGen++; S.hb.server = now(); S.epoch = fnv(String(now())).slice(0, 8); S.epochNew = true; S.world = null; S.obs = {}; S.other = null; S.take.dirty = false; if (['armada', 'preparando'].includes(S.take.state)) { S.take.state = 'idle'; S.take.checks = []; } renderAll(); }, 2200);
       break;
     }
     case 'sim-gamestop': closeMenu(); gameStop(); break;

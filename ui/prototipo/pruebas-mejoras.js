@@ -34,19 +34,26 @@ const LIB = () => {
 // de pintarla se pinta una vez en blanco y otra en negro, la diferencia dice cuánto cubre cada píxel, y se deja el fondo como estaba.
 // Cuenta como letra cada píxel cubierto al menos a la mitad. Y cada trazo y relleno con su posición, su discontinuo y su grosor, y si el
 // relleno es un patrón, como el rayado de lo estimado (UX-30).
-// Desde la segunda revisión de Astra (AR2-01) mira también lo que se ve, no solo las órdenes de dibujo:
+// Desde la segunda revisión de Astra (AR2-01) mira también lo que se ve, no solo las órdenes de dibujo, y desde la tercera (AR3-01), también
+// la letra:
+// - cada letra, otra vez en el fotograma acabado: el color final de cada píxel de su letra, quitada la parte del fondo que deja ver su borde,
+//   frente al fondo que queda alrededor (el color mediano de los píxeles que rodean la letra sin tocarla, que son su halo o su placa). Así
+//   cuenta lo que se pinte después encima: un velo, unos píxeles repintados o un filtro que borra la letra;
 // - las imágenes que se componen en el mapa. Se apunta qué textos se pintan en cada lienzo, también en los auxiliares y en los que reciben
-//   la imagen de otro, y una imagen con texto solo vale si es el halo de la letra que el mapa pinta justo después dentro de ella. Cualquier
-//   otra imagen con texto, o una imagen que no sea un lienzo, queda como no medida. No sigue el texto metido en un patrón o en putImageData:
-//   si fuera un texto que se espera, lo echa en falta el inventario de la prueba;
+//   la imagen de otro (con drawImage, con getImageData y putImageData o como patrón), y una imagen con texto solo vale si es el halo de la
+//   letra que el mapa pinta justo después dentro de ella. Cualquier otra imagen con texto, una imagen que no sea un lienzo, unos píxeles
+//   puestos en el mapa con putImageData y un relleno con un patrón que lleve texto o que no salga de un lienzo quedan como no medidos;
 // - en cada relleno centrado en su origen, como los marcadores, los píxeles de su interior (a 2 px de CSS del borde) en el fotograma ya
-//   acabado: si alternan dos tonos, como un rayado, o si son del color del relleno, opaco;
-// - en cada contorno discontinuo de un marcador, sus guiones y sus huecos, sacados de su propio trazo pintado con y sin discontinuo, en
-//   cuántos trozos se parte, y en el fotograma acabado el color de los guiones frente al de los huecos.
-// Solo graba cuando __cv.on, y se queda con el último fotograma entero del mapa, que empieza pintando el mar en todo el lienzo.
+//   acabado: si alternan dos tonos en franjas, como un rayado, o si son del color del relleno, opaco;
+// - en cada contorno discontinuo de un marcador, sus guiones y sus huecos: cuántos trozos y cuántos píxeles de hueco salen de su propio trazo,
+//   pintado aparte con y sin discontinuo al pintarlo, y en el fotograma acabado, el color de los guiones frente al de los huecos.
+// No sigue un texto copiado a mano, byte a byte, de un ImageData a otro, ni mira si los huecos se rellenan después con otro color que también
+// se distinga de los guiones. Solo graba cuando __cv.on, y se queda con el último fotograma entero del mapa, que empieza pintando el mar en
+// todo el lienzo. Sus propias lecturas y escrituras de píxeles no cuentan como dibujo.
 const PROBE = () => {
   const P = CanvasRenderingContext2D.prototype, OP = window.OffscreenCanvasRenderingContext2D ? OffscreenCanvasRenderingContext2D.prototype : null;
-  const stroke0 = P.stroke, fill0 = P.fill, fillRect0 = P.fillRect;
+  // las originales: la sonda lee y repone píxeles con estas, que no cuentan como dibujo
+  const stroke0 = P.stroke, fill0 = P.fill, fillRect0 = P.fillRect, gid0 = P.getImageData, pid0 = P.putImageData;
   const cv = window.__cv = { on: false, texts: [], strokes: [], fills: [], images: [] }, cache = {};
   const rgba = c => cache[c] || (cache[c] = (() => { const o = new OffscreenCanvas(1, 1).getContext('2d'); o.fillStyle = c; o.fillRect(0, 0, 1, 1); return Array.from(o.getImageData(0, 0, 1, 1).data); })());
   const lin = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
@@ -56,6 +63,8 @@ const PROBE = () => {
   const dprOf = ctx => ctx.canvas.width / ctx.canvas.clientWidth;
   // qué textos lleva cada lienzo; cambiarle el tamaño lo borra, y con él sus textos
   const TXT = new WeakMap(), tag = (c, t) => { if (!c) return; let s = TXT.get(c); if (!s) TXT.set(c, s = new Set()); s.add(String(t)); };
+  // y qué textos lleva cada ImageData leído de un lienzo, y cada patrón, con si sale de un lienzo
+  const IMG = new WeakMap(), PAT = new WeakMap();
   [window.HTMLCanvasElement, window.OffscreenCanvas].filter(Boolean).forEach(C => ['width', 'height'].forEach(k => {
     const d = Object.getOwnPropertyDescriptor(C.prototype, k);
     Object.defineProperty(C.prototype, k, { configurable: true, enumerable: d.enumerable, get: d.get, set(v) { TXT.delete(this); d.set.call(this, v); } });
@@ -67,25 +76,31 @@ const PROBE = () => {
     const rec = { text: t, px: Math.round(parseFloat((ctx.font.match(/([\d.]+)px/) || [0, 0])[1]) * T.a / dpr * 10) / 10, n: 0, low: 0, min: null };
     if (pending) {
       const b = pending.box, g = [T.a * (x - m.actualBoundingBoxLeft) + T.e, T.d * (y - m.actualBoundingBoxAscent) + T.f, T.a * (x + m.actualBoundingBoxRight) + T.e, T.d * (y + m.actualBoundingBoxDescent) + T.f];
-      pending.halo = pending.texts.every(s => s === t) && g[0] >= b[0] - 1 && g[1] >= b[1] - 1 && g[2] <= b[2] + 1 && g[3] <= b[3] + 1; pending = null;
+      pending.halo = pending.texts.every(s => s === t) && g[0] >= b[0] - 1 && g[1] >= b[1] - 1 && g[2] <= b[2] + 1 && g[3] <= b[3] + 1; rec.halo = pending.halo; pending = null;
     }
     const pad = Math.ceil(ctx.lineWidth * Math.abs(T.a)) + 2;
     const x0 = Math.max(0, Math.floor(T.a * (x - m.actualBoundingBoxLeft) + T.e) - pad), y0 = Math.max(0, Math.floor(T.d * (y - m.actualBoundingBoxAscent) + T.f) - pad);
     const w = Math.min(ctx.canvas.width, Math.ceil(T.a * (x + m.actualBoundingBoxRight) + T.e) + pad) - x0, h = Math.min(ctx.canvas.height, Math.ceil(T.d * (y + m.actualBoundingBoxDescent) + T.f) + pad) - y0;
     if (w > 0 && h > 0) {
-      const under = ctx.getImageData(x0, y0, w, h), bg = under.data;
+      const under = gid0.call(ctx, x0, y0, w, h), bg = under.data;
       ctx.save(); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowColor = 'transparent'; ctx.filter = 'none';
-      ctx[style] = '#fff'; draw.apply(ctx, args); const wh = ctx.getImageData(x0, y0, w, h).data; ctx.putImageData(under, x0, y0);
-      ctx[style] = '#000'; draw.apply(ctx, args); const bk = ctx.getImageData(x0, y0, w, h).data; ctx.putImageData(under, x0, y0);
+      ctx[style] = '#fff'; draw.apply(ctx, args); const wh = gid0.call(ctx, x0, y0, w, h).data; pid0.call(ctx, under, x0, y0);
+      ctx[style] = '#000'; draw.apply(ctx, args); const bk = gid0.call(ctx, x0, y0, w, h).data; pid0.call(ctx, under, x0, y0);
       ctx.restore();
       const ink = rgba(String(ctx[style])), a = ink[3] / 255 * ctx.globalAlpha;
+      // cuánto cubre la letra cada píxel, de 0 a 765; para el fotograma acabado se guardan los de la letra y los que la rodean sin tocarla
+      const s = new Float32Array(w * h), glyph = [], ring = [];
+      for (let k = 0; k < w * h; k++) s[k] = wh[4 * k] - bk[4 * k] + wh[4 * k + 1] - bk[4 * k + 1] + wh[4 * k + 2] - bk[4 * k + 2];
+      const near = (i, j) => { for (let v = -1; v <= 1; v++) for (let u = -1; u <= 1; u++) { const p = i + u, q = j + v; if (p >= 0 && q >= 0 && p < w && q < h && s[q * w + p] >= 16) return true; } return false; };
       let min = 99;
-      for (let i = 0; i < bg.length; i += 4) {
-        if (wh[i] - bk[i] + wh[i + 1] - bk[i + 1] + wh[i + 2] - bk[i + 2] < 383) continue;
-        const b = [bg[i], bg[i + 1], bg[i + 2]], r = ratio([0, 1, 2].map(k => ink[k] * a + b[k] * (1 - a)), b);
+      for (let k = 0; k < w * h; k++) {
+        const i = k % w, j = (k - i) / w;
+        if (s[k] < 383) { if (s[k] < 16 && near(i, j)) ring.push([x0 + i, y0 + j]); continue; }
+        const b = [bg[4 * k], bg[4 * k + 1], bg[4 * k + 2]], r = ratio([0, 1, 2].map(c => ink[c] * a + b[c] * (1 - a)), b);
         rec.n++; if (r < 4.5) rec.low++; if (r < min) min = r;
+        glyph.push([x0 + i, y0 + j, s[k] / 765]);
       }
-      if (rec.n) rec.min = Math.round(min * 100) / 100;
+      if (rec.n) { rec.min = Math.round(min * 100) / 100; rec.raw = { glyph, ring }; }
     }
     cv.texts.push(rec);
   };
@@ -106,12 +121,33 @@ const PROBE = () => {
       }
       return drawImage0.apply(this, arguments);
     };
+    // los píxeles leídos de un lienzo llevan sus textos al lienzo donde se pongan; y en el mapa, unos píxeles puestos a mano no se miden
+    const gid = Q.getImageData, pid = Q.putImageData, cp = Q.createPattern;
+    Q.getImageData = function () { const d = gid.apply(this, arguments), s = TXT.get(this.canvas); if (s && s.size) IMG.set(d, [...s]); return d; };
+    Q.putImageData = function (d, dx, dy, sx = 0, sy = 0, sw = d.width, sh = d.height) {
+      const s = IMG.get(d) || [];
+      s.forEach(t => tag(this.canvas, t));
+      if (mine(this)) { pending = null; cv.images.push({ kind: 'píxeles', texts: s, box: [dx + sx, dy + sy, dx + sx + sw, dy + sy + sh], halo: false }); }
+      return pid.apply(this, arguments);
+    };
+    Q.createPattern = function (src) {
+      const p = cp.apply(this, arguments), s = src && TXT.get(src);
+      if (p) PAT.set(p, { canvas: src instanceof HTMLCanvasElement || (!!window.OffscreenCanvas && src instanceof OffscreenCanvas), texts: s ? [...s] : [] });
+      return p;
+    };
   });
+  // un relleno o un trazo del mapa con un patrón que lleva texto, o que no sale de un lienzo, es una imagen sin medir
+  const patIn = (ctx, style) => {
+    const q = ctx[style]; if (!q || typeof q !== 'object' || !(q instanceof CanvasPattern)) return;
+    const i = PAT.get(q); if (i && i.canvas && !i.texts.length) return;
+    const T = ctx.getTransform(); cv.images.push({ kind: i && i.canvas ? 'patrón' : 'patrón sin lienzo', texts: i ? i.texts : [], box: [T.e, T.f, T.e, T.f], halo: false });
+  };
   P.fillRect = function (x, y, w, h) {
     if (mine(this)) {
       pending = null;
       const T = this.getTransform(), c = this.canvas;
       if (!T.b && !T.c && T.a * x + T.e <= 0.5 && T.d * y + T.f <= 0.5 && T.a * (x + w) + T.e >= c.width - 1 && T.d * (y + h) + T.f >= c.height - 1) Object.assign(cv, { texts: [], strokes: [], fills: [], images: [] });
+      patIn(this, 'fillStyle');
     }
     return fillRect0.apply(this, arguments);
   };
@@ -120,8 +156,8 @@ const PROBE = () => {
   const around = (ctx, T, r) => { const R = Math.ceil(r * dprOf(ctx)), cx = Math.round(T.e), cy = Math.round(T.f), x0 = Math.max(0, cx - R), y0 = Math.max(0, cy - R); return [x0, y0, Math.min(ctx.canvas.width, cx + R) - x0, Math.min(ctx.canvas.height, cy + R) - y0]; };
   // cuánto cubre el propio trazo cada píxel de la caja: se pinta en blanco y en negro solo dentro de ella, y se devuelve el fondo
   const cover = (ctx, T, [x0, y0, w, h], dash) => {
-    const under = ctx.getImageData(x0, y0, w, h), clip = new Path2D(); clip.rect(x0, y0, w, h);
-    const paint = c => { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clip(clip); ctx.setTransform(T); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowColor = 'transparent'; ctx.filter = 'none'; if (dash) ctx.setLineDash(dash); ctx.strokeStyle = c; stroke0.call(ctx); ctx.restore(); const d = ctx.getImageData(x0, y0, w, h).data; ctx.putImageData(under, x0, y0); return d; };
+    const under = gid0.call(ctx, x0, y0, w, h), clip = new Path2D(); clip.rect(x0, y0, w, h);
+    const paint = c => { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clip(clip); ctx.setTransform(T); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowColor = 'transparent'; ctx.filter = 'none'; if (dash) ctx.setLineDash(dash); ctx.strokeStyle = c; stroke0.call(ctx); ctx.restore(); const d = gid0.call(ctx, x0, y0, w, h).data; pid0.call(ctx, under, x0, y0); return d; };
     const wh = paint('#fff'), bk = paint('#000'), cov = new Float32Array(w * h);
     for (let i = 0; i < w * h; i++) cov[i] = (wh[4 * i] - bk[4 * i] + wh[4 * i + 1] - bk[4 * i + 1] + wh[4 * i + 2] - bk[4 * i + 2]) / 765;
     return cov;
@@ -138,7 +174,7 @@ const PROBE = () => {
   };
   P.stroke = function () {
     if (!mine(this)) return stroke0.apply(this, arguments);
-    pending = null;
+    pending = null; patIn(this, 'strokeStyle');
     const rec = at(this, 'stroke'), T = this.getTransform();
     // el contorno discontinuo de un marcador: su trazo rodea su origen
     const box = around(this, T, 13);
@@ -152,7 +188,7 @@ const PROBE = () => {
   };
   P.fill = function () {
     if (!mine(this)) return fill0.apply(this, arguments);
-    pending = null;
+    pending = null; patIn(this, 'fillStyle');
     const rec = Object.assign(at(this, 'fill'), { pat: typeof this.fillStyle !== 'string' }), T = this.getTransform();
     if (typeof this.fillStyle === 'string') { const c = rgba(this.fillStyle); rec.ink = [c[0], c[1], c[2], c[3] / 255 * this.globalAlpha]; }
     const r = fill0.apply(this, arguments);
@@ -168,14 +204,26 @@ const PROBE = () => {
     cv.fills.push(rec);
     return r;
   };
-  // Al cerrar el fotograma: de cada interior, los dos tonos (se separan por luminancia), qué parte es de cada uno, su contraste y cuántas
-  // veces cambia de tono cada fila de 6 px o más; y la parte del color del relleno, si es opaco. De cada contorno discontinuo, el contraste
-  // entre el color mediano de sus guiones y el de sus huecos.
+  // Al cerrar el fotograma: de cada letra, el contraste de cada píxel suyo frente a su fondo. De cada interior, los dos tonos (se separan
+  // por luminancia), qué parte es de cada uno, su contraste, cuántas veces cambia de tono, de media, cada fila de 6 px o más, y si van en
+  // franjas: en la dirección, de 3 en 3 grados, en que el tono cambia menos, qué parte de los píxeles lleva el tono que más hay en su línea
+  // de 1 px de ancho (en líneas de 3 píxeles o más). Un rayado da casi todo; un tablero, poco más de la mitad en cualquier dirección. Y la
+  // parte del color del relleno, si es opaco. De cada contorno discontinuo, el contraste entre el color mediano de sus guiones y el de sus
+  // huecos.
   cv.finish = () => {
-    const c = document.querySelector('#map'), W = c.width, D = c.getContext('2d').getImageData(0, 0, W, c.height).data;
+    const c = document.querySelector('#map'), W = c.width, D = gid0.call(c.getContext('2d'), 0, 0, W, c.height).data;
     const col = ([x, y]) => { const i = 4 * (y * W + x); return [D[i], D[i + 1], D[i + 2]]; };
     const med = cs => { if (!cs.length) return null; const s = cs.slice().sort((a, b) => lum(a) - lum(b)); return s[s.length >> 1]; };
     const r2 = v => Math.round(v * 100) / 100;
+    // la letra: su color final sin la parte del fondo que deja ver su borde, E = (F − B·(1 − cubierto)) / cubierto, frente al fondo B
+    cv.texts.forEach(t => {
+      if (!t.raw) return;
+      const { glyph, ring } = t.raw, B = med(ring.map(col)); delete t.raw;
+      if (!B) return;
+      let low = 0, min = 99;
+      glyph.forEach(([x, y, k]) => { const F = col([x, y]), r = ratio([0, 1, 2].map(c => Math.max(0, Math.min(255, (F[c] - B[c] * (1 - k)) / k))), B); if (r < 4.5) low++; if (r < min) min = r; });
+      t.fin = { n: glyph.length, low, min: r2(min) };
+    });
     cv.fills.forEach(f => {
       if (!f.raw) return;
       const px = f.raw.px, cs = px.map(col), L = cs.map(lum); delete f.raw;
@@ -188,7 +236,15 @@ const PROBE = () => {
       px.forEach(([x, y], i) => (rows[y] = rows[y] || []).push([x, light[i]]));
       let alt = 0, nr = 0;
       Object.values(rows).forEach(r => { if (r.length < 6) return; r.sort((a, b) => a[0] - b[0]); for (let k = 1; k < r.length; k++) if (r[k][0] === r[k - 1][0] + 1 && r[k][1] !== r[k - 1][1]) alt++; nr++; });
-      f.stripes = { n: cs.length, light: r2(nl / cs.length), dark: r2(1 - nl / cs.length), ratio: ml && md ? r2(ratio(ml, md)) : 1, alt: nr ? r2(alt / nr) : 0 };
+      const along = d => {
+        const a = d * Math.PI / 180, nx = -Math.sin(a), ny = Math.cos(a), bins = {};
+        px.forEach(([x, y], i) => { const b = Math.floor(x * nx + y * ny), q = bins[b] || (bins[b] = [0, 0]); q[light[i] ? 1 : 0]++; });
+        let top = 0, all = 0; Object.values(bins).forEach(q => { if (q[0] + q[1] >= 3) { top += Math.max(q[0], q[1]); all += q[0] + q[1]; } });
+        return all ? top / all : 0;
+      };
+      let dir = 0, best = 0;
+      for (let d = 0; d < 180; d += 3) { const v = along(d); if (v > dir) { dir = v; best = d; } }
+      f.stripes = { n: cs.length, light: r2(nl / cs.length), dark: r2(1 - nl / cs.length), ratio: ml && md ? r2(ratio(ml, md)) : 1, alt: nr ? r2(alt / nr) : 0, dir: r2(dir), cross: r2(along(best + 90)) };
       if (f.ink) f.solid = { share: f.ink[3] < 0.99 ? 0 : r2(cs.filter(x => Math.max(...[0, 1, 2].map(k => Math.abs(x[k] - f.ink[k]))) <= 24).length / cs.length) };
     });
     cv.strokes.forEach(s => {
@@ -239,20 +295,26 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     await p.setViewportSize(vs); await p.waitForTimeout(300);
     return p.evaluate(() => { const cv = window.__cv; cv.on = false; cv.finish(); return { texts: cv.texts, strokes: cv.strokes, fills: cv.fills, images: cv.images }; });
   };
-  // contraste de lo pintado en el mapa: cada texto, con todos los píxeles de su letra a 4,5:1 o más
-  const lowTexts = f => f.texts.filter(t => t.low > 0);
-  const showLow = l => l.slice(0, 4).map(t => `«${t.text}» ${t.min}:1 en ${t.low} de ${t.n} px`).join(' · ');
+  // contraste de lo pintado en el mapa: cada texto, con todos los píxeles de su letra a 4,5:1 o más al pintarlo y en el fotograma acabado (AR3-01)
+  const lowTexts = f => f.texts.filter(t => t.low > 0 || (t.n > 0 && (!t.fin || t.fin.low > 0)));
+  const showLow = l => l.slice(0, 4).map(t => t.low > 0 ? `«${t.text}» ${t.min}:1 en ${t.low} de ${t.n} px` : t.fin ? `«${t.text}» al acabar ${t.fin.min}:1 en ${t.fin.low} de ${t.fin.n} px` : `«${t.text}» sin medir al acabar`).join(' · ');
   const mapPct = p => p.evaluate(() => { const r = document.querySelector('#map').getBoundingClientRect(); return Math.round(r.width * r.height / (innerWidth * innerHeight) * 100); });
   const hatched = f => f.fills.filter(x => x.pat);
-  // Lo que se ve en el fotograma acabado (AR2-01). Rayado: dos tonos a 3:1 o más entre sí, cada uno en al menos un 15 % del interior,
-  // que alternan a lo ancho (más de un cambio de tono por fila, de media). Huecos de un contorno discontinuo: se parte en tres trozos o más,
-  // hay huecos de verdad (6 px o más) y su color se distingue del de los guiones (1,5:1 o más). Sólido: el 85 % del interior es del color
-  // del relleno, opaco.
-  const STRIPES = s => !!s && s.light >= 0.15 && s.dark >= 0.15 && s.ratio >= 3 && s.alt > 1;
+  // Lo que se ve en el fotograma acabado (AR2-01). Son umbrales de aceptación de esta prueba, calibrados con el dibujo de la página y con
+  // ataques, no medidas de percepción (AR3-01):
+  // - rayado: dos tonos a 3:1 o más entre sí, cada uno en al menos un 15 % del interior, que alternan a lo ancho (más de un cambio de tono
+  //   por fila, de media, no en cada fila) y en franjas: en su mejor dirección, el 83 % o más de los píxeles lleva el tono de su línea, y en
+  //   la perpendicular, 0,15 menos o más. El rayado de la página da 0,97 frente a 0,61; su azulejo, girado de 5 a 40° o con la muesca de
+  //   un marcador, de 0,87 a 1, con 0,21 a 0,40 de diferencia. Un tablero de 1 a 4 px da 0,80 o menos y 0,07 o menos de diferencia, salvo
+  //   el de 2 px corrido 1 px, que da 0,88 sin diferencia y cae también por su tono oscuro (13 %); un ruido de 1 o 2 px, 0,78 o menos;
+  // - huecos de un contorno discontinuo: su propio trazo, pintado aparte al pintarlo, se parte en tres trozos o más y deja 6 px de hueco o
+  //   más en total (no un hueco de 6 px), y en el fotograma acabado el color de los huecos se distingue del de los guiones (1,5:1 o más);
+  // - sólido: el 85 % del interior, a 2 px del borde, es del color del relleno, opaco. No mira el borde: eso lo mira el contorno.
+  const STRIPES = s => !!s && s.light >= 0.15 && s.dark >= 0.15 && s.ratio >= 3 && s.alt > 1 && s.dir >= 0.83 && s.dir - s.cross >= 0.15;
   const GAPS = g => !!g && g.comps >= 3 && g.gapPx >= 6 && g.ratio >= 1.5;
   const SOLID = s => !!s && s.share >= 0.85;
   const striped = f => hatched(f).filter(x => STRIPES(x.stripes));
-  const showStripes = s => s ? `${Math.round(s.light * 100)} % claro y ${Math.round(s.dark * 100)} % oscuro a ${s.ratio}:1, ${s.alt} cambios por fila` : 'sin interior';
+  const showStripes = s => s ? `${Math.round(s.light * 100)} % claro y ${Math.round(s.dark * 100)} % oscuro a ${s.ratio}:1, ${s.alt} cambios por fila, franjas ${s.dir} frente a ${s.cross}` : 'sin interior';
 
   // --- UX-01: Parar gana a todo durante la toma ---
   await R26('UX-01 +', async p => {
@@ -773,13 +835,14 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     return want;
   };
   // Una vista del mapa se lee si cada texto esperado está pintado, con su letra medida; si cada texto pintado llega a 4,5:1 en todos los
-  // píxeles de su letra, y si ninguna imagen con texto se queda sin medir. Sin textos, o sin inventario, no pasa.
+  // píxeles de su letra, al pintarlo y en el fotograma acabado (AR3-01), y si ninguna imagen con texto se queda sin medir. Sin textos, o sin
+  // inventario, no pasa.
   const unmeasured = i => i.kind !== 'canvas' || (i.texts.length > 0 && !i.halo);
   const missing = (want, seen) => { const c = {}; seen.forEach(t => { c[t] = (c[t] || 0) + 1; }); return want.filter(t => c[t] > 0 ? (c[t]--, false) : true); };
   const readable = async (p, names = []) => {
     const want = await inventory(p, names), f = await frame(p), low = lowTexts(f), img = f.images.filter(unmeasured);
     const miss = want ? missing(want, f.texts.filter(t => t.n > 0).map(t => t.text)) : [];
-    return { ok: !!want && want.length > 0 && f.texts.length > 0 && !miss.length && !low.length && !img.length,
+    return { f, ok: !!want && want.length > 0 && f.texts.length > 0 && !miss.length && !low.length && !img.length,
       info: `${f.texts.length} textos, ${want ? want.length : 'sin'} esperados${miss.length ? `, faltan ${miss.slice(0, 4).map(t => '«' + t + '»').join(', ')}` : ''}${low.length ? ', bajos ' + showLow(low) : ''}${img.length ? `, ${img.length} imágenes sin medir${img[0].texts.length ? ' con «' + img[0].texts.slice(0, 2).join('», «') + '»' : ''}` : ''}` };
   };
   for (const scheme of ['dark', 'light']) {
@@ -1227,7 +1290,7 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     await p.keyboard.press('2'); await p.waitForTimeout(300);
     const note = await T(p, '.tlnote'); await p.click('#bLegend'); await p.waitForTimeout(150); const leg = await T(p, '#legend');
     await p.keyboard.press('1'); await p.waitForTimeout(200); await p.click('#bGuide'); await p.waitForTimeout(400); const g = await about(p);
-    return [[what, /actores estimados/.test(note) && /no mueve el juego/.test(note) && /estimación/.test(leg) && /en el juego y leído/.test(leg) && /solo existe aquí/.test(g) && /rueda/.test(g), `nota: «${note}» · leyenda: ${/estimación/.test(leg) ? 'el rayado es una estimación' : 'no dice qué es el rayado'}${/en el juego y leído/.test(leg) ? ', el relleno, leído' : ''} · Guía: «${g.slice(g.indexOf('Lo propio') >= 0 ? g.indexOf('Lo propio') : 0, (g.indexOf('Lo propio') >= 0 ? g.indexOf('Lo propio') : 0) + 150)}…»`]];
+    return [[what, /actores estimados/.test(note) && /no mueve el juego/i.test(note) && /estimación/.test(leg) && /en el juego y leído/.test(leg) && /solo existe aquí/.test(g) && /rueda/.test(g), `nota: «${note}» · leyenda: ${/estimación/.test(leg) ? 'el rayado es una estimación' : 'no dice qué es el rayado'}${/en el juego y leído/.test(leg) ? ', el relleno, leído' : ''} · Guía: «${g.slice(g.indexOf('Lo propio') >= 0 ? g.indexOf('Lo propio') : 0, (g.indexOf('Lo propio') >= 0 ? g.indexOf('Lo propio') : 0) + 150)}…»`]];
   });
   await R26('AR2-07 −', async p => {
     const what = 'AR2-07 − la nota no dice que solo se mueve la cámara ni que no se tocan los actores, y la Guía no dice que lo único propio es saber qué hay en el juego';
@@ -1635,6 +1698,131 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const ok = t0.length === 1 && /^Toma \d+ armada\. \S+ para rodar y \S+ para desarmar\.$/.test(t0[0].text) && t1.length === 1 && t1[0].fail && /^Backend parado/.test(t1[0].text) && /^Sin conexión con el backend/.test(ban) && gone(t2) && /^Desarmar/.test(st) && gone(t3);
     return [[what, ok, `armada: ${said(t0)} · sin backend: ${said(t1)}, franja «${ban.slice(0, 40)}…» · Intro: ${said(t2)}, Parar dice «${st}» · un segundo después: ${said(t3)}`]];
   }, 1440, 900);
+
+  // --- Tercera revisión de Astra (ui/astra/2026-11-10-ui-revision3-astra.md): AR3-01 a AR3-05 ---
+  // AR3-01: la sonda mide la letra en el fotograma acabado, sigue las copias de píxeles y los patrones, y pide franjas con dirección
+  for (const scheme of ['dark', 'light']) await R26(`AR3-01 + ${scheme}`, async p => {
+    const what = `AR3-01 + en tema ${scheme === 'dark' ? 'oscuro' : 'claro'}, en Rodaje con el cursor a 3 s, cada texto que se espera está pintado y todos los pintados llegan a 4,5:1 en cada píxel de su letra también en el fotograma acabado, cada halo tiene su letra legible encima, ninguna imagen ni patrón con texto queda sin medir, y la estimación de Mirek se ve en franjas con dirección`;
+    await p.keyboard.press('2'); await p.waitForTimeout(300); await scrub(p, 3); await p.mouse.move(5, 5); await p.waitForTimeout(200);
+    const r = await readable(p, ['Mirek', 'Linda', 'Mirek · estimado', 'Mirek · M1', 'Mirek · M2', 'Travelling del autobús · K1', 'Travelling del autobús · K2', 'Travelling del autobús · K3', 'trayectoria prevista']), f = r.f;
+    const halos = f.images.filter(i => i.halo).length, lettered = f.texts.filter(t => t.halo && t.fin && t.fin.n > 0 && !t.fin.low).length;
+    const fin = f.texts.filter(t => t.n > 0), minFin = Math.min(...fin.map(t => t.fin ? t.fin.min : 0)), h = hatched(f);
+    return [[what, r.ok && halos > 0 && lettered === halos && fin.every(t => t.fin) && h.length === 1 && striped(f).length === 1, `${r.info} · ${halos} halos, ${lettered} con su letra legible al acabar · peor letra al acabar ${minFin}:1 · estimación: ${showStripes(h[0] && h[0].stripes)}`]];
+  }, 1600, 960, scheme);
+  await R26('AR3-01 −', async p => {
+    // a mano sobre el mapa: cada ataque de Astra tiene que caer por su propiedad, no por faltar un texto del inventario
+    const r = await p.evaluate(() => {
+      const c = document.querySelector('#map'), g = c.getContext('2d'), d = c.width / c.clientWidth, cv = window.__cv;
+      Object.assign(cv, { texts: [], strokes: [], fills: [], images: [], on: true });
+      g.save(); g.setTransform(d, 0, 0, d, 0, 0);
+      const plate = (t, x, y) => { g.font = '500 12px monospace'; g.fillStyle = 'rgb(200,197,182)'; g.fillRect(x - 2, y - 11, g.measureText(t).width + 4, 14); g.fillStyle = '#222116'; g.fillText(t, x, y); };
+      const aux = (t, color, w = 100, h = 30, r = 0) => { const q = document.createElement('canvas'); q.width = w; q.height = h; const x = q.getContext('2d'); x.font = '500 12px monospace'; x.fillStyle = color; for (let u = -r; u <= r; u++) for (let v = -r; v <= r; v++) if (u * u + v * v <= r * r + 1) x.fillText(t, 2 + u, 15 + v); return q; };
+      // 1. repintado pálido con putImageData después de la letra, como el mutante «texto-final»
+      plate('6150', 44, 54);
+      const b = g.getImageData(42 * d, 43 * d, 40 * d, 14 * d); for (let i = 0; i < b.data.length; i += 4) if (Math.max(b.data[i], b.data[i + 1], b.data[i + 2]) < 136) b.data[i] = b.data[i + 1] = b.data[i + 2] = 136; g.putImageData(b, 42 * d, 43 * d);
+      // 2. un velo pálido encima, sin tocar píxeles a mano
+      plate('6250', 44, 84); g.fillStyle = 'rgba(200,197,182,.75)'; g.fillRect(40, 70, 40, 18);
+      // 3. halo con su letra pintada a opacidad 0, como «halo-sin-letra»
+      g.drawImage(aux('6350', 'rgb(200,197,182)', 60, 24, 2), 40, 100); g.font = '500 12px monospace'; g.fillStyle = '#222116'; g.save(); g.filter = 'opacity(0)'; g.fillText('6350', 42, 115); g.restore();
+      // 4. texto pálido pasado de un lienzo a otro con getImageData y putImageData, como «imagen-sin-tag»
+      const ex = aux('SIN LECTURA', '#888', 150, 24), cp = document.createElement('canvas'); cp.width = 150; cp.height = 24; cp.getContext('2d').putImageData(ex.getContext('2d').getImageData(0, 0, 150, 24), 0, 0); g.drawImage(cp, 40, 130);
+      // 5. texto dentro de un patrón
+      g.fillStyle = g.createPattern(aux('6450', '#888', 40, 20), 'repeat'); g.fillRect(40, 160, 40, 20);
+      // 6. un tablero de 2 px, como «ajedrez2», y el rayado de la página (su mismo azulejo), en un círculo cada uno
+      const tile = draw => { const q = document.createElement('canvas'); q.width = q.height = 6; const h = q.getContext('2d'); draw(h); return g.createPattern(q, 'repeat'); };
+      const chk = tile(h => { h.fillStyle = '#fff'; h.fillRect(0, 0, 6, 6); h.fillStyle = '#000'; for (let yy = 0; yy < 6; yy++) for (let xx = 0; xx < 6; xx++) if ((Math.floor(xx / 2) + Math.floor(yy / 2)) % 2 === 0) h.fillRect(xx, yy, 1, 1); });
+      const hat = tile(h => { h.fillStyle = 'rgba(255,255,255,.8)'; h.fillRect(0, 0, 6, 6); h.strokeStyle = '#18191a'; h.lineWidth = 1.6; h.beginPath(); h.moveTo(-1, 7); h.lineTo(7, -1); h.moveTo(-1, 1); h.lineTo(1, -1); h.moveTo(5, 7); h.lineTo(7, 5); h.stroke(); });
+      [[chk, 200], [hat, 240]].forEach(([pat, x]) => { g.save(); g.translate(x, 60); g.beginPath(); g.arc(0, 0, 8.75, 0, Math.PI * 2); g.fillStyle = pat; g.fill(); g.restore(); });
+      // 7. control: un halo con su letra oscura dentro, que tiene que pasar
+      g.drawImage(aux('6550', 'rgb(200,197,182)', 60, 24, 2), 40, 190); g.font = '500 12px monospace'; g.fillStyle = '#222116'; g.fillText('6550', 42, 205);
+      g.restore(); cv.on = false; cv.finish();
+      return { texts: cv.texts.map(t => ({ text: t.text, n: t.n, low: t.low, fin: t.fin, halo: !!t.halo })), images: cv.images.map(i => ({ kind: i.kind, texts: i.texts, halo: i.halo })), fills: cv.fills.filter(f => f.pat).map(f => f.stripes) };
+    });
+    const tx = t => r.texts.find(x => x.text === t), im = t => r.images.find(i => i.texts.includes(t)), see = t => t ? `«${t.text}» al pintar ${t.low} de ${t.n} px bajos, al acabar ${t.fin ? `${t.fin.low} (${t.fin.min}:1)` : 'sin medir'}` : 'no está';
+    const late = t => !!t && t.n > 0 && t.low === 0 && !!t.fin && t.fin.low > 0;
+    const [a, b, c, k] = ['6150', '6250', '6350', '6550'].map(tx), [chk, hat] = r.fills;
+    return [
+      ['AR3-01 − una letra legible al pintarla y repintada después con píxeles pálidos (putImageData) cae por su contraste en el fotograma acabado, y esos píxeles puestos en el mapa quedan además como imagen sin medir', late(a) && !!im('6150') && unmeasured(im('6150')) && im('6150').kind === 'píxeles', `${see(a)} · ${im('6150') ? im('6150').kind : 'sin imagen'}`],
+      ['AR3-01 − un velo pálido encima de una letra ya pintada cae por su contraste en el fotograma acabado', late(b), see(b)],
+      ['AR3-01 − un halo con su letra pintada a opacidad 0 cuenta como halo, pero su letra cae en el fotograma acabado', late(c) && c.halo, `${see(c)}${c && c.halo ? ', tras su halo' : ''}`],
+      ['AR3-01 − un texto pasado de un lienzo a otro con getImageData y putImageData llega al mapa con su texto y queda sin medir; un patrón con texto, también', !!im('SIN LECTURA') && unmeasured(im('SIN LECTURA')) && !!im('6450') && im('6450').kind === 'patrón' && unmeasured(im('6450')), r.images.filter(i => i.texts.length).map(i => `${i.kind} «${i.texts.slice(0, 2).join('», «')}»${i.texts.length > 2 ? ` y ${i.texts.length - 2} textos más` : ''} ${unmeasured(i) ? 'sin medir' : 'halo'}`).join(' · ')],
+      ['AR3-01 − un tablero de 2 px no cuenta como rayado; el azulejo del rayado de la página, sí', !!chk && !STRIPES(chk) && !!hat && STRIPES(hat), `tablero: ${showStripes(chk)} · rayado: ${showStripes(hat)}`],
+      ['AR3-01 − el control, un halo con su letra oscura, pasa al pintarla y al acabar', !!k && k.halo && k.n > 0 && k.low === 0 && !!k.fin && k.fin.low === 0, see(k)]
+    ];
+  });
+  // AR3-02: la lectura al volver solo vale si la conexión sigue igual cuando llega
+  const flip = (p, v) => p.evaluate(v => { document.querySelector('#bSim').click(); document.querySelector(`#menu [data-act="sim"][data-v="${v}"]`).click(); document.querySelector('#status').click(); }, v);
+  const lostTake = async p => {
+    if (!await apply(p) || !await arm(p) || !await roll(p)) return null;
+    await p.waitForTimeout(600); await dock(p); await p.click('[data-act="rdtab"][data-v="actividad"]'); await p.waitForTimeout(100);
+    return (await T(p, '#slateWrap .tn')) || 'Toma';
+  };
+  const takeRow = (p, tn) => p.evaluate(tn => { const r = [...document.querySelectorAll('#dock .qrow')].filter(x => x.innerText.includes(tn)).pop(); return r ? { obs: !!r.querySelector('.chip.observado'), text: r.innerText.replace(/\s+/g, ' ') } : null; }, tn);
+  const confirmed = p => p.evaluate(() => /Parada confirmada al leer el juego/.test(document.querySelector('#toasts').innerText));
+  await R26('AR3-02 +', async p => {
+    const what = 'AR3-02 + cortado tu juego mientras rueda, la parada queda sin confirmar; al volver la conexión estable se confirma una vez, leyendo, con su origen y una edad nueva, sin sumar otra toma, y se quita la recuperación';
+    const tn = await lostTake(p); if (!tn) return [[what, false, 'no llegó a rodar']];
+    await flip(p, 'director');
+    if (!await shows(p, '#bTopStop', /sin confirmar/, 6000)) return [[what, false, 'no quedó sin confirmar']];
+    // la toma cortada ya está en Tomas al quedar sin confirmar: la lectura al volver no tiene que sumar otra
+    const k0 = await takesN(p); await flip(p, 'director');
+    const conf = await W(p, () => /Parada confirmada al leer el juego/.test(document.querySelector('#toasts').innerText), null, 4000), o = await takeRow(p, tn), k1 = await takesN(p);
+    const gone = await W(p, () => document.querySelector('#bTopStop').hidden, null, 2000);
+    return [[what, conf && !!o && o.obs && /lectura al volver/.test(o.text) && /Leída hace [0-2] s/.test(o.text) && k1 === k0 && gone, `${conf ? 'confirmada' : 'sin confirmar'} · fila: «${o ? o.text.slice(0, 120) : 'no está'}» · Tomas ${k0} → ${k1} · recuperación ${gone ? 'quitada' : 'a la vista'}`]];
+  });
+  for (const [peer, name] of [['director', 'tu juego'], ['server', 'el servidor'], ['backend', 'el backend']]) await R26(`AR3-02 − ${name}`, async p => {
+    const what = `AR3-02 − parada sin confirmar, ${name} vuelve y se corta otra vez a los 100 ms: a los 850 ms no hay Observado ni «lectura al volver» ni aviso de confirmada, y la recuperación sigue a la vista; al volver estable, se confirma una sola vez`;
+    const tn = await lostTake(p); if (!tn) return [[what, false, 'no llegó a rodar']];
+    await flip(p, peer);
+    if (!await shows(p, '#bTopStop', /sin confirmar/, 6000)) return [[what, false, 'no quedó sin confirmar']];
+    await flip(p, peer); await p.waitForTimeout(100); await flip(p, peer); await p.waitForTimeout(850);
+    const o1 = await takeRow(p, tn), c1 = await confirmed(p), st1 = await T(p, '#bTopStop');
+    const fake = c1 || !/sin confirmar/.test(st1) || (!!o1 && (o1.obs || /lectura al volver/.test(o1.text)));
+    await p.evaluate(() => { window.__nConf = 0; new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(x => { if (/Parada confirmada al leer el juego/.test(x.textContent)) window.__nConf++; }))).observe(document.querySelector('#toasts'), { childList: true }); });
+    await flip(p, peer);
+    const conf = await W(p, () => /Parada confirmada al leer el juego/.test(document.querySelector('#toasts').innerText), null, 4000);
+    await p.waitForTimeout(1200);
+    const n = await p.evaluate(() => window.__nConf), o2 = await takeRow(p, tn);
+    return [[what, !fake && conf && n === 1 && !!o2 && o2.obs && /lectura al volver/.test(o2.text), `a los 850 ms: ${c1 ? 'aviso de confirmada' : 'sin aviso'}, Parar «${st1.slice(0, 40)}», fila «${o1 ? o1.text.slice(0, 90) : 'no está'}» · al volver estable: ${conf ? `confirmada (${n} aviso${n === 1 ? '' : 's'})` : 'sin confirmar'}, fila «${o2 ? o2.text.slice(0, 90) : 'no está'}»`]];
+  });
+  // AR3-03: Guardar sin backend no dice «Guardado»
+  const saveOut = async p => { await p.locator('#map').hover(); await p.keyboard.press('Control+s'); await p.waitForTimeout(250); return T(p, '#toasts'); };
+  await R26('AR3-03 +', async p => {
+    const what = 'AR3-03 + con conexión, Ctrl+S y Guardar del menú de la escena dicen «Guardado» y la escena sigue igual';
+    const d0 = await T(p, '#docBtn'), m1 = await saveOut(p);
+    await p.click('#docBtn'); await p.waitForTimeout(150); const dis = await p.locator('#menu [data-act="m-save"]').isDisabled();
+    await p.evaluate(() => { document.querySelector('#toasts').innerHTML = ''; }); await p.click('#menu [data-act="m-save"]'); await p.waitForTimeout(250);
+    const m2 = await T(p, '#toasts'), d1 = await T(p, '#docBtn');
+    return [[what, /Guardado\./.test(m1) && !dis && /Guardado\./.test(m2) && d0.split('·')[0] === d1.split('·')[0], `Ctrl+S: «${m1.slice(-60)}» · menú: Guardar ${dis ? 'apagado' : 'encendido'}, «${m2.slice(-60)}» · escena «${d1}»`]];
+  });
+  await R26('AR3-03 −', async p => {
+    const what = 'AR3-03 − sin backend, Ctrl+S y el menú no dicen «Guardado»: Ctrl+S explica que no se guarda y que la escena sigue como se guardó, Guardar sale apagado con ese motivo, y la escena y su edad no cambian';
+    await sim(p, 'backend'); await p.waitForTimeout(300);
+    const s0 = await p.getAttribute('#docBtn [data-since]', 'data-since'), d0 = await T(p, '#docBtn'), m1 = await saveOut(p);
+    await p.click('#docBtn'); await p.waitForTimeout(150);
+    const dis = await p.locator('#menu [data-act="m-save"]').isDisabled(), note = await T(p, '#menu .note');
+    await p.evaluate(() => { document.querySelector('#toasts').innerHTML = ''; }); await p.click('#menu [data-act="m-save"]', { force: true, timeout: 1000 }).catch(() => {}); await p.waitForTimeout(250);
+    const m2 = await T(p, '#toasts'), s1 = await p.getAttribute('#docBtn [data-since]', 'data-since'), d1 = await T(p, '#docBtn');
+    return [[what, !/Guardado\./.test(m1) && /no se guarda/.test(m1) && /como se guardó la última vez/.test(m1) && dis && /Guardar tampoco/.test(note) && !/Guardado\./.test(m2) && s0 === s1 && d0.split('·')[0] === d1.split('·')[0], `Ctrl+S: «${m1.slice(-90)}» · menú: Guardar ${dis ? 'apagado' : 'encendido'}, nota ${/Guardar tampoco/.test(note) ? 'con el motivo' : 'sin el motivo'} · edad ${s0 === s1 ? 'igual' : 'cambiada'}`]];
+  });
+  // AR3-05: la nota de la línea de tiempo se lee. Lo que se ve de ella acaba donde acaba su caja, menos los puntos suspensivos (8 px)
+  const tlnote = async p => { await p.keyboard.press('2'); await p.waitForTimeout(300); return p.evaluate(() => {
+    const n = document.querySelector('.tlnote'); if (!n || !n.firstChild) return null;
+    const t = n.firstChild, end = i => { const r = document.createRange(); r.setStart(t, 0); r.setEnd(t, i); return r.getBoundingClientRect().right; }, box = n.getBoundingClientRect(), cut = n.scrollWidth > n.clientWidth + 1;
+    const k = t.textContent.search(/no mueve el juego/i), sees = k >= 0 && end(k + 17) <= box.right - (cut ? 8 : 0) + 0.5;
+    const b = document.querySelector('[data-act="tl-play"]'), desc = b && b.getAttribute('aria-describedby') === n.id && !!n.id;
+    return { text: t.textContent, cut, sees, title: n.title || '', desc, w: Math.round(box.width) };
+  }); };
+  const fullNote = n => /actores estimados/.test(n.title) && /no mueve nada en el juego/.test(n.title);
+  for (const [w, h] of [[1280, 800], [1366, 768], [1440, 900]]) await R26(`AR3-05 + ${w}`, async p => {
+    const n = await tlnote(p);
+    return [[`AR3-05 + a ${w} × ${h}, en Rodaje se lee en la nota de la línea de tiempo que no mueve el juego, la frase entera, con la cámara y los actores estimados, sale al pasar el ratón, y la nota es la descripción de Previsualizar`, !!n && n.sees && fullNote(n) && n.desc, n ? `«${n.text}» en ${n.w} px${n.cut ? ', cortada' : ', entera'}; «no mueve el juego» ${n.sees ? 'a la vista' : 'cortado'} · al pasar el ratón: ${n.title ? '«' + n.title + '»' : 'nada'} · Previsualizar ${n.desc ? 'la tiene como descripción' : 'no la tiene'}` : 'no está']];
+  }, w, h);
+  await R26('AR3-05 −', async p => {
+    const out = []; let ok = true;
+    for (const w of [1024, 1100, 1200, 1280, 1366]) { await p.setViewportSize({ width: w, height: 800 }); await p.waitForTimeout(200); const n = await tlnote(p); const bad = !n || (n.cut && !fullNote(n)) || (w >= 1280 && !n.sees); ok = ok && !bad; out.push(`${w}: ${n ? `${n.cut ? (fullNote(n) ? 'cortada, con la frase entera al pasar el ratón' : 'cortada, sin la frase entera') : 'entera'}${n.sees ? '' : ', sin «no mueve el juego» a la vista'}` : 'no está'}`); }
+    return [['AR3-05 − de 1024 a 1366 px, la nota nunca queda cortada sin su frase entera a mano, y desde 1280 px nunca corta «no mueve el juego»', ok, out.join(' · ')]];
+  });
 
   expect(external.length === 0, 'ninguna petición sale de la página: ' + (external.slice(0, 3).join(' ') || 'ninguna'));
   expect(errors.length === 0, 'sin errores de JavaScript en la página');

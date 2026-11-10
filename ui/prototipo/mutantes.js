@@ -1,7 +1,9 @@
 // Sensibilidad de las pruebas que miran el dibujo del mapa (revisión de Astra, AR-04; el rayado de lo estimado, UX-30).
 // Cada mutante rompe una sola cosa de lo que se pinta, sin tocar los data-* de la página, y su caso de pruebas-mejoras.js
 // tiene que fallar. Antes se pasan los mismos casos contra el prototipo sin tocar: tienen que pasar.
-// Los tres últimos son los que Astra dejó vivos en su segunda revisión (AR2-01), copiados de su informe.
+// Los tres que siguen al quinto son los que Astra dejó vivos en su segunda revisión (AR2-01), y los cuatro últimos, los de su tercera
+// (AR3-01), copiados de su generador (ui/astra/2026-11-10-ui-revision3-astra.md, §5.1); el halo sin letra y la imagen sin etiqueta van con
+// el punto de la página donde ahora se pintan las etiquetas, al final del fotograma.
 // Uso: node ui/prototipo/mutantes.js (necesita Playwright con Chromium, como pruebas-mejoras.js).
 const fs = require('fs'), os = require('os'), path = require('path'), { spawnSync } = require('child_process');
 const SRC = fs.readFileSync(path.join(__dirname, 'estudio.html'), 'utf8');
@@ -14,7 +16,11 @@ const MUTANTES = [
   { name: 'los números de la rejilla vuelven a pintarse sin placa', solo: '^AR-03 \\+ dark$', cambios: [['g.fillStyle = P.halo; g.fillRect(x - 2, y - 11, g.measureText(t).width + 4, 14); g.fillStyle = P.label;', "g.fillStyle = 'rgba(25,25,15,.8)';"]] },
   { name: 'los números de la rejilla se pintan pálidos en una imagen aparte', solo: '^AR-03 \\+ ', cambios: [['g.fillStyle = P.label; g.fillText(t, x, y); });', "const c = document.body.appendChild(document.createElement('canvas')); c.hidden = true; c.width = 100; c.height = 30; const q = c.getContext('2d'); q.font = g.font; q.fillStyle = '#888'; q.fillText(t, 2, 15); g.drawImage(c, x - 2, y - 15); c.remove(); });"]] },
   { name: 'el rayado del actor estimado es un blanco sin rayas', solo: '^UX-30 \\+$', cambios: [["h.fillStyle = 'rgba(255,255,255,.8)';", "h.fillStyle = '#fff';"], ['h.lineTo(7, 5); h.stroke();', 'h.lineTo(7, 5);']] },
-  { name: 'el contorno del borrador lleva un guion más largo que él', solo: '^UX-09 −$', cambios: [['g.setLineDash([3, 2]);', 'g.setLineDash([10000, 0.001]);']] }
+  { name: 'el contorno del borrador lleva un guion más largo que él', solo: '^UX-09 −$', cambios: [['g.setLineDash([3, 2]);', 'g.setLineDash([10000, 0.001]);']] },
+  { name: 'los números de la rejilla se repintan pálidos con putImageData después de pintarlos', solo: '^AR-03 \\+ ', cambios: [['g.fillStyle = P.label; g.fillText(t, x, y); });', "g.fillStyle = P.label; g.fillText(t, x, y); const d = V.dpr, ix = Math.max(0, Math.floor((x - 1) * d)), iy = Math.max(0, Math.floor((y - 11) * d)), iw = Math.min(g.canvas.width - ix, Math.ceil((g.measureText(t).width + 2) * d)), ih = Math.min(g.canvas.height - iy, Math.ceil(14 * d)); if (iw > 0 && ih > 0) { const im = g.getImageData(ix, iy, iw, ih); for (let j = 0; j < im.data.length; j += 4) if (Math.max(im.data[j], im.data[j + 1], im.data[j + 2]) < 136) im.data[j] = im.data[j + 1] = im.data[j + 2] = 136; g.putImageData(im, ix, iy); } });"]] },
+  { name: 'un texto pálido llega al mapa copiado de un lienzo a otro con getImageData y putImageData', solo: '^AR-03 \\+ ', cambios: [['drawScene(g); drawLabels(g);', "drawScene(g); drawLabels(g); const extra = document.createElement('canvas'); extra.width = 150; extra.height = 24; const ex = extra.getContext('2d'); ex.fillStyle = P.halo; ex.fillRect(0, 0, 150, 24); ex.font = '12px sans-serif'; ex.fillStyle = '#888'; ex.fillText('SIN LECTURA', 4, 16); const copy = document.createElement('canvas'); copy.width = 150; copy.height = 24; copy.getContext('2d').putImageData(ex.getImageData(0, 0, 150, 24), 0, 0); g.drawImage(copy, 80, V.h - 110);"]] },
+  { name: 'las etiquetas pintan su halo y su letra a opacidad 0', solo: '^AR-03 \\+ ', cambios: [['halo(g, txt, x, y + dy); g.fillStyle = P.label; g.fillText(txt, x, y + dy);', "halo(g, txt, x, y + dy); g.fillStyle = P.label; g.save(); g.filter = 'opacity(0)'; g.fillText(txt, x, y + dy); g.restore();"]] },
+  { name: 'el rayado del actor estimado es un tablero de 2 px', solo: '^UX-30 \\+$|^AR2-01 \\+ claro$', cambios: [['h.beginPath(); h.moveTo(-1, 7); h.lineTo(7, -1); h.moveTo(-1, 1); h.lineTo(1, -1); h.moveTo(5, 7); h.lineTo(7, 5); h.stroke();', "h.fillStyle = '#fff'; h.fillRect(0, 0, 6, 6); h.fillStyle = '#000'; for (let yy = 0; yy < 6; yy++) for (let xx = 0; xx < 6; xx++) if ((Math.floor(xx / 2) + Math.floor(yy / 2)) % 2 === 0) h.fillRect(xx, yy, 1, 1);"]] }
 ];
 const run = (file, solo) => {
   const r = spawnSync(process.execPath, [TEST], { env: Object.assign({}, process.env, { ESTUDIO_URL: 'file://' + file, SOLO: solo }), encoding: 'utf8', timeout: 300000 });
