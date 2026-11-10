@@ -1,15 +1,16 @@
 // Sensibilidad de las pruebas que miran el dibujo del mapa (revisión de Astra, AR-04; el rayado de lo estimado, UX-30).
 // Cada mutante rompe una sola cosa de lo que se pinta, sin tocar los data-* de la página, y su caso de pruebas-mejoras.js
 // tiene que fallar. Antes se pasan los mismos casos contra el prototipo sin tocar: tienen que pasar.
-// Los tres que siguen al quinto son los que Astra dejó vivos en su segunda revisión (AR2-01), y los cuatro últimos, los de su tercera
-// (AR3-01), copiados de su generador (ui/astra/2026-11-10-ui-revision3-astra.md, §5.1); el halo sin letra y la imagen sin etiqueta van con
-// el punto de la página donde ahora se pintan las etiquetas, al final del fotograma.
+// Del sexto al octavo son los que Astra dejó vivos en su segunda revisión (AR2-01), copiados de su informe. Los cuatro siguientes son los de
+// su tercera (AR3-01), copiados de su generador (ui/astra/2026-11-10-ui-revision3-astra.md, §5.1); el halo sin letra y la imagen sin
+// etiqueta van con el punto de la página donde ahora se pintan las etiquetas, al final del fotograma. Los dos siguientes son los de los
+// iconos de los objetos (UX-48), y los cuatro últimos, los de la vista previa de Añadir y la planta del objeto al colocarlo (UX-49).
 // Uso: node ui/prototipo/mutantes.js (necesita Playwright con Chromium, como pruebas-mejoras.js).
 const fs = require('fs'), os = require('os'), path = require('path'), { spawnSync } = require('child_process');
 const SRC = fs.readFileSync(path.join(__dirname, 'estudio.html'), 'utf8');
 const TEST = path.join(__dirname, 'pruebas-mejoras.js');
 const MUTANTES = [
-  { name: 'los borradores se pintan sólidos', solo: '^UX-09 −$', cambios: [["drawGlyph(g, kind, x, y, yw === null ? e.yaw : yw, draft ? 'draft' : 'solid');", "drawGlyph(g, kind, x, y, yw === null ? e.yaw : yw, 'solid');"]] },
+  { name: 'los borradores se pintan sólidos', solo: '^UX-09 −$', cambios: [["drawGlyph(g, kind, x, y, yw === null ? e.yaw : yw, draft ? 'draft' : 'solid', e.cls);", "drawGlyph(g, kind, x, y, yw === null ? e.yaw : yw, 'solid', e.cls);"]] },
   { name: 'la letra del mapa baja a 8 px', solo: '^UX-10 −$', cambios: [['${strong ? 600 : 500} 12px ${FONT_UI}', '${strong ? 600 : 500} 8px ${FONT_UI}'], ['600 12px ${FONT_UI}', '600 8px ${FONT_UI}'], ["'500 12px ' + FONT_MONO", "'500 8px ' + FONT_MONO"]] },
   { name: 'las marcas del seleccionado pierden su etiqueta «Mirek · M1»', solo: '^UX-09 \\+$', cambios: [['if (!dim) label(g, `${a.name} · M${i + 1}`, x + 10, y - 7, true);', '']] },
   { name: 'el actor estimado se pinta sin rayado', solo: '^UX-30 \\+$', cambios: [["drawGlyph(g, kind, qx, qy, e.yaw, 'est');", "drawGlyph(g, kind, qx, qy, e.yaw, 'solid');"]] },
@@ -20,7 +21,13 @@ const MUTANTES = [
   { name: 'los números de la rejilla se repintan pálidos con putImageData después de pintarlos', solo: '^AR-03 \\+ ', cambios: [['g.fillStyle = P.label; g.fillText(t, x, y); });', "g.fillStyle = P.label; g.fillText(t, x, y); const d = V.dpr, ix = Math.max(0, Math.floor((x - 1) * d)), iy = Math.max(0, Math.floor((y - 11) * d)), iw = Math.min(g.canvas.width - ix, Math.ceil((g.measureText(t).width + 2) * d)), ih = Math.min(g.canvas.height - iy, Math.ceil(14 * d)); if (iw > 0 && ih > 0) { const im = g.getImageData(ix, iy, iw, ih); for (let j = 0; j < im.data.length; j += 4) if (Math.max(im.data[j], im.data[j + 1], im.data[j + 2]) < 136) im.data[j] = im.data[j + 1] = im.data[j + 2] = 136; g.putImageData(im, ix, iy); } });"]] },
   { name: 'un texto pálido llega al mapa copiado de un lienzo a otro con getImageData y putImageData', solo: '^AR-03 \\+ ', cambios: [['drawScene(g); drawLabels(g);', "drawScene(g); drawLabels(g); const extra = document.createElement('canvas'); extra.width = 150; extra.height = 24; const ex = extra.getContext('2d'); ex.fillStyle = P.halo; ex.fillRect(0, 0, 150, 24); ex.font = '12px sans-serif'; ex.fillStyle = '#888'; ex.fillText('SIN LECTURA', 4, 16); const copy = document.createElement('canvas'); copy.width = 150; copy.height = 24; copy.getContext('2d').putImageData(ex.getImageData(0, 0, 150, 24), 0, 0); g.drawImage(copy, 80, V.h - 110);"]] },
   { name: 'las etiquetas pintan su halo y su letra a opacidad 0', solo: '^AR-03 \\+ ', cambios: [['halo(g, txt, x, y + dy); g.fillStyle = P.label; g.fillText(txt, x, y + dy);', "halo(g, txt, x, y + dy); g.fillStyle = P.label; g.save(); g.filter = 'opacity(0)'; g.fillText(txt, x, y + dy); g.restore();"]] },
-  { name: 'el rayado del actor estimado es un tablero de 2 px', solo: '^UX-30 \\+$|^AR2-01 \\+ claro$', cambios: [['h.beginPath(); h.moveTo(-1, 7); h.lineTo(7, -1); h.moveTo(-1, 1); h.lineTo(1, -1); h.moveTo(5, 7); h.lineTo(7, 5); h.stroke();', "h.fillStyle = '#fff'; h.fillRect(0, 0, 6, 6); h.fillStyle = '#000'; for (let yy = 0; yy < 6; yy++) for (let xx = 0; xx < 6; xx++) if ((Math.floor(xx / 2) + Math.floor(yy / 2)) % 2 === 0) h.fillRect(xx, yy, 1, 1);"]] }
+  { name: 'el rayado del actor estimado es un tablero de 2 px', solo: '^UX-30 \\+$|^AR2-01 \\+ claro$', cambios: [['h.beginPath(); h.moveTo(-1, 7); h.lineTo(7, -1); h.moveTo(-1, 1); h.lineTo(1, -1); h.moveTo(5, 7); h.lineTo(7, 5); h.stroke();', "h.fillStyle = '#fff'; h.fillRect(0, 0, 6, 6); h.fillStyle = '#000'; for (let yy = 0; yy < 6; yy++) for (let xx = 0; xx < 6; xx++) if ((Math.floor(xx / 2) + Math.floor(yy / 2)) % 2 === 0) h.fillRect(xx, yy, 1, 1);"]] },
+  { name: 'los objetos pierden el icono', solo: '^UX-48 \\+$', cambios: [["if (kind === 'objeto') { g.scale(0.7, 0.7); g.fillStyle = style === 'draft' ? col : 'rgba(255,255,255,.95)'; g.fill(objPath(cls), 'evenodd'); }", '']] },
+  { name: 'el icono tapa todo el cuadrado', solo: '^UX-48 −$', cambios: [["g.scale(0.7, 0.7); g.fillStyle = style === 'draft'", "g.scale(1.6, 1.6); g.fillStyle = style === 'draft'"]] },
+  { name: 'la planta del fantasma va a un tamaño fijo', solo: '^UX-49 \\+$', cambios: [['const fw = d[1] * V.s, fl = d[0] * V.s;', 'const fw = 12, fl = 24;']] },
+  { name: 'la vista previa sale sin planta', solo: '^UX-49 \\+$', cambios: [['<span class="pv-cls">${esc(c[0])}</span>${size}</div>${plan}`;', '<span class="pv-cls">${esc(c[0])}</span>${size}</div>`;']] },
+  { name: 'la vista previa no sigue al teclado', solo: '^UX-49 \\+$', cambios: [['v = libHover || (f && f.dataset.v);', 'v = libHover;']] },
+  { name: 'la vista previa no se aparta cuando falta sitio', solo: '^UX-49 −$', cambios: [['@container (max-height:560px){.prev{display:none}}', '']] }
 ];
 const run = (file, solo) => {
   const r = spawnSync(process.execPath, [TEST], { env: Object.assign({}, process.env, { ESTUDIO_URL: 'file://' + file, SOLO: solo }), encoding: 'utf8', timeout: 300000 });
