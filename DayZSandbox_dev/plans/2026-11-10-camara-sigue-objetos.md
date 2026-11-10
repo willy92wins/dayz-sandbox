@@ -122,5 +122,5 @@ En partida, en el banco de F0 (sonda QA de F0.2 con un verbo nuevo, solo cliente
 
 ## 6. Encaje y decisiones
 
-- **Dónde va.** T08 es M2 y el spec de M1 no tiene seguimiento. Propuesta: T08 pasa a «cámara que sigue a un actor o a un objeto» en M2, y S-track corre antes, en cuanto haya visto bueno para partida, porque su T-hook decide el bucle de cámara de F4. Meterlo en M1 es cambio de alcance: Grill Modo A y un criterio B nuevo en el spec. **Decide Guillermo.**
+- **Dónde va.** T08 es M2 y el spec de M1 no tiene seguimiento. Propuesta: T08 pasa a «cámara que sigue a un actor o a un objeto» en M2, y S-track corre antes, en cuanto haya visto bueno para partida, porque su T-hook decide el bucle de cámara de F4. Meterlo en M1 sería cambio de alcance (Grill Modo A). **Decidido por Guillermo (2026-11-10): M2, con S-track antes**; la prueba en partida sigue necesitando su visto bueno.
 - **Reparto** (G7 y `feedback-sol-per-phase-workers`): el verbo de muestreo de la sonda en Enforce, Grok (escritor); el evaluador `s_track_eval.py` con sus fixtures positivas y negativas, Argon; las negativas inyectadas (§4.2) y su prueba de que fallan, Muse, que no escribe el evaluador; Claude junta y mide; Sol revisa una vez al cerrar la fase.
