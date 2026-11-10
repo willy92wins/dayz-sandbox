@@ -354,6 +354,22 @@ details.tech .tb .mono{font-size:12px;word-break:break-all}
 .btotal{font-size:12px;color:var(--fg-2);line-height:1.5}
 .btotal b{font-weight:600}
 .btotal span{color:var(--muted)}
+/* la vista previa de Añadir, fija entre la lista y el presupuesto: el sitio de la imagen en 16:9, el nombre, la clase, el tamaño y la
+   planta a escala con una barra como la del mapa; del mismo alto en cada tipo, para que la lista no salte (UX-49) */
+.prev{flex:none;display:grid;grid-template-columns:144px minmax(0,1fr);align-content:start;gap:8px 10px;height:104px;padding:10px 12px;border-top:1px solid var(--line);overflow:hidden}
+.prev.plan{height:168px}
+.pv-shot{display:grid;place-items:center;align-content:center;gap:4px;aspect-ratio:16/9;padding:0 6px;border-radius:4px;border:1px solid var(--line);background:var(--surface-2);font-size:12px;line-height:1.3;color:var(--muted);text-align:center}
+.pv-info{display:grid;align-content:start;gap:3px;min-width:0;font-size:13px;line-height:1.35;color:var(--fg-2)}
+.pv-info b{font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pv-cls{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pv-plan{grid-column:1/-1;display:flex;align-items:flex-end;justify-content:space-between;gap:10px;min-width:0}
+.pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}
+.pv-sc{display:grid;justify-items:end;gap:5px;font-size:12px;color:var(--muted);white-space:nowrap}
+.pv-none{grid-column:1/-1;align-self:center;font-size:12px;line-height:1.5;color:var(--muted)}
+/* sin sitio para las dos, como con Propiedades y Añadir a la vez, la vista previa se aparta y la lista sigue a la vista: el panel pide
+   lo de arriba y el presupuesto (unos 284 px), la vista previa (168) y tres filas de la lista (96) (UX-49) */
+.panel:has(> #libPrev){container-type:size}
+@container (max-height:560px){.prev{display:none}}
 
 /* ---------- actividad, historial, validación (UX-02, UX-13) ---------- */
 .strip{display:flex;align-items:center;gap:10px;width:100%;height:32px;padding:0 12px;border:0;background:var(--surface);color:var(--fg-2);font-size:12px;text-align:left;white-space:nowrap;overflow:hidden;flex:none}
@@ -557,6 +573,7 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
   .mapwrap{height:62vh;min-height:320px}
   .col,.col.split2,.col.rod{display:flex;flex-direction:column;gap:1px}
   .col>.panel,.col.split2>.panel,.col.rod>.panel{flex:none}
+  .panel:has(> #libPrev){container-type:normal}
   .panel .pb{max-height:56vh}
   #dock{height:auto}
   #dock .pb{max-height:50vh}
@@ -839,12 +856,14 @@ const KONE = {objeto: 'objeto', infectado: 'infectado', animal: 'animal', actor:
 const KCAP = {objeto: 'Objeto', infectado: 'Infectado', animal: 'Animal', actor: 'Actor'};
 const CATALOG = {
   // cada objeto con el tipo que elige su icono (UX-48)
-  objeto: [['Land_Wreck_Ikarus', 'Autobús Ikarus', 'autobus'], ['Land_Wreck_Volha_Police', 'Volga de policía', 'coche'], ['Land_Wreck_Volha_Blue', 'Volga azul', 'coche'], ['Land_Wreck_V3S', 'Camión V3S', 'camion'], ['Land_Container_1Bo', 'Contenedor', 'contenedor'], ['Land_Container_1Aoh', 'Contenedor abierto', 'contenedor'], ['LargeTent', 'Tienda grande', 'tienda'], ['MediumTent', 'Tienda mediana', 'tienda'], ['CarTent', 'Toldo de coche', 'tienda'], ['CamoNet', 'Red de camuflaje', 'red'], ['Fireplace', 'Hoguera', 'hoguera'], ['Barrel_Red', 'Bidón rojo', 'bidon'], ['Barrel_Blue', 'Bidón azul', 'bidon'], ['Barrel_Green', 'Bidón verde', 'bidon'], ['Barrel_Yellow', 'Bidón amarillo', 'bidon'], ['WoodenCrate', 'Caja de madera', 'caja'], ['SeaChest', 'Baúl', 'caja'], ['Spotlight', 'Foco', 'foco'], ['PowerGenerator', 'Generador', 'generador']],
-  infectado: [['ZmbM_FarmerFat_Brown', 'Granjero'], ['ZmbM_HermitSkinny_Beige', 'Ermitaño'], ['ZmbF_CitizenANormal_Blue', 'Ciudadana'], ['ZmbM_CitizenASkinny_Grey', 'Ciudadano'], ['ZmbM_PatrolNormal_Autumn', 'Patrullero'], ['ZmbF_VillagerOld_Green', 'Aldeana'], ['ZmbM_Jacket_brown', 'Hombre con chaqueta'], ['ZmbF_JoggerSkinny_Red', 'Corredora'], ['ZmbM_HunterOld_Autumn', 'Cazador'], ['ZmbM_MotobikerFat_Black', 'Motorista']],
-  animal: [['Animal_CervusElaphus', 'Ciervo'], ['Animal_CapreolusCapreolus', 'Corzo'], ['Animal_GallusGallusDomesticus', 'Gallina'], ['Animal_SusScrofa', 'Jabalí'], ['Animal_BosTaurus_Brown', 'Vaca']],
-  actor: [['SurvivorM_Mirek', 'Mirek'], ['SurvivorM_Boris', 'Boris'], ['SurvivorM_Denis', 'Denis'], ['SurvivorM_Guo', 'Guo'], ['SurvivorF_Linda', 'Linda'], ['SurvivorF_Maria', 'Maria'], ['SurvivorF_Eva', 'Eva'], ['SurvivorF_Naomi', 'Naomi']]
+  // y cada entrada con sus medidas de muestra, largo, ancho y alto en metros: las de verdad, la caja del modelo, llegan del mod (UX-49)
+  objeto: [['Land_Wreck_Ikarus', 'Autobús Ikarus', 'autobus', [11.4, 2.5, 3.1]], ['Land_Wreck_Volha_Police', 'Volga de policía', 'coche', [4.7, 1.8, 1.5]], ['Land_Wreck_Volha_Blue', 'Volga azul', 'coche', [4.7, 1.8, 1.5]], ['Land_Wreck_V3S', 'Camión V3S', 'camion', [6.9, 2.3, 2.9]], ['Land_Container_1Bo', 'Contenedor', 'contenedor', [6.1, 2.4, 2.6]], ['Land_Container_1Aoh', 'Contenedor abierto', 'contenedor', [6.1, 2.4, 2.6]], ['LargeTent', 'Tienda grande', 'tienda', [6, 4.4, 2.5]], ['MediumTent', 'Tienda mediana', 'tienda', [3.4, 2.6, 1.6]], ['CarTent', 'Toldo de coche', 'tienda', [5.2, 3.4, 2.5]], ['CamoNet', 'Red de camuflaje', 'red', [5, 5, 2]], ['Fireplace', 'Hoguera', 'hoguera', [1, 1, 0.5]], ['Barrel_Red', 'Bidón rojo', 'bidon', [0.6, 0.6, 0.9]], ['Barrel_Blue', 'Bidón azul', 'bidon', [0.6, 0.6, 0.9]], ['Barrel_Green', 'Bidón verde', 'bidon', [0.6, 0.6, 0.9]], ['Barrel_Yellow', 'Bidón amarillo', 'bidon', [0.6, 0.6, 0.9]], ['WoodenCrate', 'Caja de madera', 'caja', [1, 0.6, 0.6]], ['SeaChest', 'Baúl', 'caja', [0.9, 0.5, 0.5]], ['Spotlight', 'Foco', 'foco', [1.2, 1.2, 2.2]], ['PowerGenerator', 'Generador', 'generador', [1.2, 0.8, 0.9]]],
+  infectado: [['ZmbM_FarmerFat_Brown', 'Granjero', [0.6, 0.4, 1.8]], ['ZmbM_HermitSkinny_Beige', 'Ermitaño', [0.5, 0.3, 1.8]], ['ZmbF_CitizenANormal_Blue', 'Ciudadana', [0.5, 0.3, 1.7]], ['ZmbM_CitizenASkinny_Grey', 'Ciudadano', [0.5, 0.3, 1.8]], ['ZmbM_PatrolNormal_Autumn', 'Patrullero', [0.5, 0.3, 1.8]], ['ZmbF_VillagerOld_Green', 'Aldeana', [0.5, 0.3, 1.6]], ['ZmbM_Jacket_brown', 'Hombre con chaqueta', [0.5, 0.3, 1.8]], ['ZmbF_JoggerSkinny_Red', 'Corredora', [0.5, 0.3, 1.7]], ['ZmbM_HunterOld_Autumn', 'Cazador', [0.5, 0.3, 1.8]], ['ZmbM_MotobikerFat_Black', 'Motorista', [0.6, 0.4, 1.8]]],
+  animal: [['Animal_CervusElaphus', 'Ciervo', [2.1, 0.6, 1.3]], ['Animal_CapreolusCapreolus', 'Corzo', [1.2, 0.4, 0.8]], ['Animal_GallusGallusDomesticus', 'Gallina', [0.4, 0.2, 0.4]], ['Animal_SusScrofa', 'Jabalí', [1.5, 0.5, 0.9]], ['Animal_BosTaurus_Brown', 'Vaca', [2.4, 0.8, 1.4]]],
+  actor: [['SurvivorM_Mirek', 'Mirek', [0.5, 0.3, 1.8]], ['SurvivorM_Boris', 'Boris', [0.5, 0.3, 1.8]], ['SurvivorM_Denis', 'Denis', [0.5, 0.3, 1.8]], ['SurvivorM_Guo', 'Guo', [0.5, 0.3, 1.8]], ['SurvivorF_Linda', 'Linda', [0.5, 0.3, 1.7]], ['SurvivorF_Maria', 'Maria', [0.5, 0.3, 1.7]], ['SurvivorF_Eva', 'Eva', [0.5, 0.3, 1.7]], ['SurvivorF_Naomi', 'Naomi', [0.5, 0.3, 1.7]]]
 };
 const clsName = (kind, cls) => { const f = (CATALOG[kind] || []).find(c => c[0] === cls); return f ? f[1] : cls; };
+const dimsOf = (kind, cls) => { const f = (CATALOG[kind] || []).find(c => c[0] === cls); return f ? f[f.length - 1] : null; };
 const WARDROBES = [
   {id: 'partisano', name: 'Partisano de otoño', items: ['M65Jacket_Olive', 'CargoPants_Green', 'MilitaryBoots_Brown', 'Ushanka_Green', 'TaloonBag_Green']},
   {id: 'civil', name: 'Civil de ciudad', items: ['Hoodie_Grey', 'Jeans_Blue', 'AthleticShoes_Brown', 'Bandana_Redpattern']},
@@ -1644,8 +1663,11 @@ function drawScene(g) {
     if (!dim) { const [x, y] = w2s(pose.x, pose.z); label(g, c.name, x + 12, y - 9, false); }
     if (sel && sel.type === 'cam' && sel.cam === c.id) { const [x, y] = w2s(keys[0].x, keys[0].z); ring(g, x, y, 14); }
   });
-  // mientras se coloca, un fantasma de la entidad sigue al ratón (UX-08)
-  if (S.placing && S.mouse) { const [x, y] = w2s(S.mouse[0], S.mouse[1]); g.save(); g.globalAlpha = 0.75; drawGlyph(g, S.placing.kind, x, y, 0, 'draft', S.placing.cls); g.restore(); label(g, clsName(S.placing.kind, S.placing.cls), x + 15, y + 4, true, true); }
+  // mientras se coloca, un fantasma de la entidad sigue al ratón (UX-08); el de un objeto lleva debajo su planta, largo × ancho a la
+  // escala del mapa y discontinua, con un filo claro debajo para que se vea sobre cualquier suelo: para ver si cabe antes de hacer clic (UX-49)
+  if (S.placing && S.mouse) { const [x, y] = w2s(S.mouse[0], S.mouse[1]), d = S.placing.kind === 'objeto' && dimsOf('objeto', S.placing.cls);
+    if (d) { const fw = d[1] * V.s, fl = d[0] * V.s; g.save(); g.translate(x, y); g.beginPath(); g.rect(-fw / 2, -fl / 2, fw, fl); g.lineWidth = 3.5; g.strokeStyle = 'rgba(255,255,255,.7)'; g.stroke(); g.setLineDash([4, 3]); g.lineCap = 'butt'; g.lineWidth = 1.5; g.strokeStyle = MC.obj; g.stroke(); g.restore(); }
+    g.save(); g.globalAlpha = 0.75; drawGlyph(g, S.placing.kind, x, y, 0, 'draft', S.placing.cls); g.restore(); label(g, clsName(S.placing.kind, S.placing.cls), x + 15, y + 4, true, true); }
 }
 function updateScale() {
   const nice = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
@@ -2122,6 +2144,34 @@ function prepHtml() {
   }
   return `<div class="ph"><span class="pt">Preparación</span><span class="sub">Toma ${pad2(shown)} · ${head}</span><span class="grow"></span></div><div class="pb">${body}</div>`;
 }
+// La vista previa de Añadir: lo que está bajo el ratón o con el foco del teclado; si no, lo que se está colocando. La imagen será la
+// captura del juego que llega con el catálogo del mod (decisión #8); en el prototipo no hay ninguna, y lo dice (UX-49)
+let libHover = null, prevKey = null;
+const prevK = it => it ? it.kind + '|' + it.c[0] : '';
+function prevItem() {
+  const a = document.activeElement, f = a && a.closest ? a.closest('#colR [data-act="lib-item"]') : null, v = libHover || (f && f.dataset.v);
+  const c = v && CATALOG[S.lib].find(x => x[0] === v);
+  if (c) return {kind: S.lib, c};
+  const q = S.placing && CATALOG[S.placing.kind].find(x => x[0] === S.placing.cls);
+  return q ? {kind: S.placing.kind, c: q} : null;
+}
+function prevHtml(it) {
+  if (!it) return `<div class="pv-none">Pasa el ratón por la lista, o recórrela con <kbd>Tab</kbd>, para ver aquí cada uno con su tamaño${S.lib === 'objeto' ? ' y su planta' : ''}.</div>`;
+  const {kind, c} = it, [l, w, h] = c[c.length - 1];
+  const big = kind === 'objeto' ? `<svg width="34" height="34" viewBox="-8 -8 16 16" aria-hidden="true"><path d="${OBJ[objTipo(c[0])]}" fill="var(--g-obj)" fill-rule="evenodd"/></svg>` : `<svg width="34" height="34" viewBox="0 0 16 16" aria-hidden="true">${GL[kind]}</svg>`;
+  // de los personajes sirve el alto, y de los animales el largo; de los objetos, la planta
+  const size = (kind === 'objeto' ? [`${nf(l)} × ${nf(w)} m`] : kind === 'animal' ? [`${nf(l)} m de largo`] : []).concat(`${nf(h)} m de alto`).map(t => `<span>${t}</span>`).join('');
+  let plan = '';
+  // la planta vista desde arriba, a la mayor escala que cabe, con una barra de escala como la del mapa
+  if (kind === 'objeto') {
+    const s = [80, 40, 20, 10, 5, 2].find(v => l * v <= 180 && w * v <= 52) || 1, m = [0.5, 1, 2, 5, 10, 20, 50].find(v => v * s >= 30) || 100;
+    plan = `<div class="pv-plan"><i class="pv-fp" style="width:${+(l * s).toFixed(2)}px;height:${+(w * s).toFixed(2)}px"></i><div class="pv-sc"><span>Planta a escala</span><div class="scale"><span>${nf(m, m < 1 ? 1 : 0)} m</span><i style="width:${m * s}px"></i></div></div></div>`;
+  }
+  return `<div class="pv-shot" title="La imagen es una captura hecha en el juego, que llega con el catálogo del mod">${big}<span>Sin captura del juego todavía</span></div><div class="pv-info"><b>${esc(c[1])}</b><span class="pv-cls">${esc(c[0])}</span>${size}</div>${plan}`;
+}
+// alta, con sitio para la planta, si enseña un objeto, o si no enseña nada y la lista es la de los objetos
+const prevPlan = it => (it ? it.kind : S.lib) === 'objeto';
+function showPrev() { const el = $('#libPrev'), it = el && prevItem(); if (!el || prevK(it) === prevKey) return; prevKey = prevK(it); el.classList.toggle('plan', prevPlan(it)); el.innerHTML = prevHtml(it); }
 // Añadir: solo lo que se pone en el mapa, con la búsqueda que se conserva y el presupuesto dentro (UX-08)
 function addHtml(both) {
   const q = S.libq.trim().toLowerCase(), n = counts(S.doc), lk = !!editBlock(), full = n[S.lib] >= CAPS[S.lib];
@@ -2133,9 +2183,11 @@ function addHtml(both) {
   const meters = KINDS.map(k => { const v = n[k], c = CAPS[k], cl = v > c ? 'over' : v === c ? 'full' : ''; return `<div class="meter ${cl}"><span>${KLABEL[k]}</span><span class="b"><i style="width:${Math.min(100, v / c * 100)}%"></i></span><span class="v">${v}/${c}</span></div>`; }).join('');
   const ne = S.doc.entities.length, kids = actors().reduce((s2, x) => s2 + ward(x.wardrobe).items.length, 0);
   const cats = `<div class="cats" role="tablist" aria-label="Tipo">${KINDS.map(k => `<button role="tab" data-act="lib-cat" data-v="${k}" aria-selected="${S.lib === k}">${KLABEL[k]}<span class="n">${CATALOG[k].filter(match).length}</span></button>`).join('')}</div>`;
+  const pit = prevItem(); prevKey = prevK(pit);
   return `${both ? `<div class="ph"><span class="pt">Añadir</span><span class="grow"></span>${S.placing ? `<button class="btn sm ghost" data-act="place-cancel">Cancelar <kbd>Esc</kbd></button>` : ''}</div>` : ''}${cats}
   <label class="search">${ic('search')}<input id="libq" placeholder="Buscar en ${KLABEL[S.lib].toLowerCase()}" value="${esc(S.libq)}" aria-label="Buscar en Añadir"></label>
   <div class="pb"><div class="items">${items}</div></div>
+  <div class="prev${prevPlan(pit) ? ' plan' : ''}" id="libPrev" role="group" aria-label="Vista previa">${prevHtml(pit)}</div>
   <div class="budget" data-ref="Presupuestos del Entity Browser: Game Master de Reforger"><div class="bt"><span>Presupuesto</span><span title="Topes provisionales hasta medir el rendimiento en el servidor">provisional</span></div>${meters}<div class="btotal"><b>${pl(ne, 'entidad', 'entidades')} y ${pl(kids, 'prenda', 'prendas')}</b> · <span>Tope total aún sin certificar</span></div></div>`;
 }
 // A la derecha, Propiedades y Añadir en pestañas, o las dos a la vez desde Herramientas; en Rodaje, Preparación encima (UX-02)
@@ -2158,6 +2210,8 @@ function renderRight() {
     el.innerHTML = `<div class="panel prep" data-ref="Preparar antes de emitir: Studio Mode de OBS">${prepHtml()}</div><div class="hsep"></div>${propsPanel(title)}`;
   }
   if (pf) { const f = document.getElementById(pf); if (f) f.focus(); }
+  // al rehacer la lista se pierde el foco de su botón: la vista previa vuelve a mirar (UX-49)
+  showPrev();
   tick();
 }
 // Problemas: errores de validación y órdenes fallidas o parciales sin resolver. Las resuelve una orden igual
@@ -2508,7 +2562,8 @@ const REFS = [
   ['La rueda encima de un campo numérico lo sube o lo baja un paso, y con Mayús diez', 'OBS Studio (campos de Qt)', 'La rueda cambia el campo que tiene debajo; aquí, si venía desplazando el panel, lo sigue desplazando', 'https://obsproject.com/forum/threads/in-game-scroll-wheel-changing-settings.83422/', 'Guillermo'],
   ['En Rodaje, con el cursor de tiempo movido, el actor también se pinta rayado donde estaría; clic en un gesto elige a su actor', 'Sequencer de Unreal y caminos de Replay Mod', 'Al arrastrar el cursor de tiempo, lo animado se ve donde está en ese instante; aquí es una estimación a la velocidad supuesta y va rayada (UX-30)', 'https://dev.epicgames.com/documentation/en-us/unreal-engine/sequencer-cinematic-editor-unreal-engine', 'Gemini 4 y Muse'],
   ['La toma también se para desde tu juego, con la tecla «Parar toma» del mod de cliente', 'Rockstar Editor', 'Dentro de GTA V, una tecla empieza a grabar y otra para (F1 y F2 de serie), sin salir del juego (UX-46)', 'https://support.rockstargames.com/articles/4gZPiqdUZD8ZhaJ81IPDJr/how-to-record-clips-and-access-the-rockstar-editor-in-gtav-on-pc', 'Gemini 4'],
-  ['Cada objeto lleva el icono de su tipo, el mismo en el mapa y en las listas', 'Eden y Arma 3', 'Cada entidad con un icono en la vista y en la lista de entidades; en Arma 3 el icono va con la clase. Los dibujos son propios (UX-48)', 'https://community.bistudio.com/wiki/Eden_Editor:_Terminology', 'Guillermo']
+  ['Cada objeto lleva el icono de su tipo, el mismo en el mapa y en las listas', 'Eden y Arma 3', 'Cada entidad con un icono en la vista y en la lista de entidades; en Arma 3 el icono va con la clase. Los dibujos son propios (UX-48)', 'https://community.bistudio.com/wiki/Eden_Editor:_Terminology', 'Guillermo'],
+  ['Vista previa al escoger en Añadir, con su tamaño y su planta a escala, y la planta del objeto bajo el cursor al colocarlo', 'Eden (Asset Browser)', 'Una captura del juego por clase, en 16:9, al escoger, y lo que se coloca va con el cursor. Hasta que lleguen las capturas con el catálogo del mod, el icono del tipo (UX-49)', 'https://community.bistudio.com/wiki/Eden_Editor:_Configuring_Asset_Previews', 'Guillermo']
 ];
 const SRC = [['community.bistudio.com/wiki/', 'Wiki de Bohemia'], ['github.com/InclementDab/DayZ-Editor/wiki/', 'Wiki del DayZ Editor'], ['raw.githubusercontent.com/wiki/InclementDab/DayZ-Editor/', 'Wiki del DayZ Editor'], ['dev.epicgames.com/documentation/unreal-engine/', 'Documentación de Unreal'], ['dev.epicgames.com/documentation/en-us/unreal-engine/', 'Documentación de Unreal'], ['dev.epicgames.com/', 'Documentación de UEFN'], ['gtabase.com/', 'GTABase'], ['badlion.net/wiki/', 'Wiki de Badlion'], ['replaymod.com/', 'Documentación de Replay Mod'], ['docs.unrealengine.com/', 'Documentación de Unreal'], ['reaper.fm/guides/', 'Guía de REAPER'], ['ableton.com/en/manual/', 'Manual de Ableton Live'], ['obsproject.com/kb/', 'Guía de OBS'], ['support.microsoft.com/', 'Soporte de Microsoft'], ['chromium.org/', 'Chromium'], ['create.roblox.com/docs/', 'Documentación de Roblox'], ['dzcommander.com/', 'DZ Commander'], ['dockview.dev/', 'Documentación de Dockview']];
 function srcLabel(u) {
@@ -2798,6 +2853,11 @@ document.addEventListener('input', e => {
   else if (t.id === 'libq') { S.libq = t.value; const pos = t.selectionStart; renderRight(); const n = $('#libq'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }
   else if (t.dataset.f && t.dataset.f.startsWith('amb-')) { const o = $('#o-' + t.dataset.f.slice(4)); if (o) o.textContent = nf(+t.value, 2); }
 });
+// la vista previa de Añadir sigue al ratón y al foco del teclado, al que se movió el último; con el ratón entre dos filas o encima
+// de la vista previa, se queda lo que enseñaba (UX-49)
+document.addEventListener('pointerover', e => { const t = e.target.closest ? e.target : null, it = t && t.closest('#colR [data-act="lib-item"]'), v = it ? it.dataset.v : t && t.closest('#colR .items, #libPrev') ? libHover : null; if (v !== libHover) { libHover = v; showPrev(); } });
+document.addEventListener('focusin', e => { if (e.target.closest && e.target.closest('#colR [data-act="lib-item"]')) libHover = null; showPrev(); });
+document.addEventListener('focusout', () => setTimeout(showPrev));
 document.addEventListener('change', e => {
   const t = e.target, id = t.id, f = t.dataset.f, val = t.value;
   const one = selIds().length === 1 ? ent(selIds()[0]) : null;

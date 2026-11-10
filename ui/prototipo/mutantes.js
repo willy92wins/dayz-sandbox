@@ -1,8 +1,8 @@
 // Sensibilidad de las pruebas que miran el dibujo del mapa (revisión de Astra, AR-04; el rayado de lo estimado, UX-30).
 // Cada mutante rompe una sola cosa de lo que se pinta, sin tocar los data-* de la página, y su caso de pruebas-mejoras.js
 // tiene que fallar. Antes se pasan los mismos casos contra el prototipo sin tocar: tienen que pasar.
-// Del sexto al octavo son los que Astra dejó vivos en su segunda revisión (AR2-01), copiados de su informe; los dos últimos, los de los
-// iconos de los objetos (UX-48).
+// Del sexto al octavo son los que Astra dejó vivos en su segunda revisión (AR2-01), copiados de su informe; los dos siguientes, los de los
+// iconos de los objetos (UX-48), y los cuatro últimos, los de la vista previa de Añadir y la planta del objeto al colocarlo (UX-49).
 // Uso: node ui/prototipo/mutantes.js (necesita Playwright con Chromium, como pruebas-mejoras.js).
 const fs = require('fs'), os = require('os'), path = require('path'), { spawnSync } = require('child_process');
 const SRC = fs.readFileSync(path.join(__dirname, 'estudio.html'), 'utf8');
@@ -17,7 +17,11 @@ const MUTANTES = [
   { name: 'el rayado del actor estimado es un blanco sin rayas', solo: '^UX-30 \\+$', cambios: [["h.fillStyle = 'rgba(255,255,255,.8)';", "h.fillStyle = '#fff';"], ['h.lineTo(7, 5); h.stroke();', 'h.lineTo(7, 5);']] },
   { name: 'el contorno del borrador lleva un guion más largo que él', solo: '^UX-09 −$', cambios: [['g.setLineDash([3, 2]);', 'g.setLineDash([10000, 0.001]);']] },
   { name: 'los objetos pierden el icono', solo: '^UX-48 \\+$', cambios: [["if (kind === 'objeto') { g.scale(0.7, 0.7); g.fillStyle = style === 'draft' ? col : 'rgba(255,255,255,.95)'; g.fill(objPath(cls), 'evenodd'); }", '']] },
-  { name: 'el icono tapa todo el cuadrado', solo: '^UX-48 −$', cambios: [["g.scale(0.7, 0.7); g.fillStyle = style === 'draft'", "g.scale(1.6, 1.6); g.fillStyle = style === 'draft'"]] }
+  { name: 'el icono tapa todo el cuadrado', solo: '^UX-48 −$', cambios: [["g.scale(0.7, 0.7); g.fillStyle = style === 'draft'", "g.scale(1.6, 1.6); g.fillStyle = style === 'draft'"]] },
+  { name: 'la planta del fantasma va a un tamaño fijo', solo: '^UX-49 \\+$', cambios: [['const fw = d[1] * V.s, fl = d[0] * V.s;', 'const fw = 12, fl = 24;']] },
+  { name: 'la vista previa sale sin planta', solo: '^UX-49 \\+$', cambios: [['<span class="pv-cls">${esc(c[0])}</span>${size}</div>${plan}`;', '<span class="pv-cls">${esc(c[0])}</span>${size}</div>`;']] },
+  { name: 'la vista previa no sigue al teclado', solo: '^UX-49 \\+$', cambios: [['v = libHover || (f && f.dataset.v);', 'v = libHover;']] },
+  { name: 'la vista previa no se aparta cuando falta sitio', solo: '^UX-49 −$', cambios: [['@container (max-height:560px){.prev{display:none}}', '']] }
 ];
 const run = (file, solo) => {
   const r = spawnSync(process.execPath, [TEST], { env: Object.assign({}, process.env, { ESTUDIO_URL: 'file://' + file, SOLO: solo }), encoding: 'utf8', timeout: 300000 });

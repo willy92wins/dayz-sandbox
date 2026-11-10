@@ -46,7 +46,9 @@ const LIB = () => {
 // - desde UX-48, el icono de un marcador: lo que se pinta con un Path2D en su mismo origen, después de su relleno. Se guarda el `d` con el
 //   que se hizo cada Path2D, y los píxeles que toca el icono salen de su propio dibujo pintado en blanco y en negro, como los de la letra.
 //   Esos píxeles se apartan del interior al mirar si es del color del relleno. Y la forma del relleno: la distancia de su origen al borde
-//   cada 5°.
+//   cada 5°;
+// - desde UX-49, de cada trazo discontinuo que rodea su origen, cuánto mide a lo ancho y a lo alto, y sus guiones y huecos en una caja
+//   que lo abarca entero, como la planta del objeto que se está colocando.
 // Solo graba cuando __cv.on, y se queda con el último fotograma entero del mapa, que empieza pintando el mar en todo el lienzo.
 const PROBE = () => {
   const P = CanvasRenderingContext2D.prototype, OP = window.OffscreenCanvasRenderingContext2D ? OffscreenCanvasRenderingContext2D.prototype : null;
@@ -159,8 +161,14 @@ const PROBE = () => {
     pending = null;
     const rec = at(this, 'stroke'), T = this.getTransform();
     // el contorno discontinuo de un marcador: su trazo rodea su origen
-    const box = around(this, T, 13);
-    if (!arguments.length && rec.dash && box[2] > 0 && box[3] > 0 && this.isPointInPath(T.e, T.f)) {
+    const ring = !arguments.length && rec.dash && this.isPointInPath(T.e, T.f);
+    // hasta dónde llega a cada lado de su origen, a lo ancho y a lo alto, como la planta del objeto al colocarlo (UX-49)
+    if (ring) {
+      const d = dprOf(this), far = (u, v) => { let lo = 0, hi = Math.max(this.canvas.width, this.canvas.height); for (let n = 0; n < 16; n++) { const m = (lo + hi) / 2; if (this.isPointInPath(T.e + u * m, T.f + v * m)) lo = m; else hi = m; } return lo / d; };
+      rec.ext = { w: Math.round((far(1, 0) + far(-1, 0)) * 10) / 10, h: Math.round((far(0, 1) + far(0, -1)) * 10) / 10 };
+    }
+    const box = around(this, T, Math.max(13, rec.ext ? Math.max(rec.ext.w, rec.ext.h) / 2 + 3 : 0));
+    if (ring && box[2] > 0 && box[3] > 0) {
       const [x0, y0, w, h] = box, dash = cover(this, T, box, null), full = cover(this, T, box, []), on = [], off = [];
       for (let i = 0; i < w * h; i++) { const q = [x0 + i % w, y0 + Math.floor(i / w)]; if (dash[i] >= 0.75) on.push(q); else if (full[i] >= 0.75 && dash[i] <= 0.1) off.push(q); }
       rec.raw = { on, off }; rec.gaps = { comps: pieces(dash, w, h), gapPx: off.length, dashPx: on.length };
@@ -1740,6 +1748,85 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
       const ok = !!gen && !!r15 && r15.d === gen && types.size === UX48T.length && !types.has(gen) && !!m && !!m.icon && m.icon.d === gen && prop === gen && !errs.length;
       return res.concat([[what, ok, `${r17 ? `«${r17.cls}» ${gen ? 'con icono' : 'sin icono'} en la Jerarquía${r15 && gen ? `, ${r15.d === gen ? 'el mismo' : 'otro'} que «${r15.cls}»` : ''}` : 'obj-17 no está'} · ${types.size} iconos de tipo en Añadir, ${gen && types.has(gen) ? 'y el suyo es uno de ellos' : 'ninguno es el suyo'} · mapa: ${m && m.icon ? (m.icon.d === gen ? 'el mismo' : 'otro') : 'sin icono'} · Propiedades: ${prop ? (prop === gen ? 'el mismo' : 'otro') : 'sin icono'} · ${errs.length ? `errores: ${errs.slice(0, 2).join(' | ')}` : 'sin errores'}`]]);
     } finally { await c.close().catch(() => {}); fs.rmSync(file, { force: true }); }
+  });
+
+  // --- UX-49: vista previa al escoger en Añadir, y la planta del objeto bajo el cursor al colocarlo (petición de Guillermo) ---
+  const BUS = '#colR [data-act="lib-item"][data-v="Land_Wreck_Ikarus"]';
+  // un sitio libre entre los objetos, para poder colocar: se borra el bidón amarillo
+  const freeObj = async p => { await p.click('#colL [data-act="sel"][data-v="ent:obj-20"]'); await p.focus('#map'); await p.keyboard.press('Delete'); await p.waitForTimeout(200); };
+  const openObjs = async p => { await p.click('[data-act="rtab"][data-v="add"]'); await p.click('[data-act="lib-cat"][data-v="objeto"]'); await p.waitForTimeout(150); };
+  // lo que enseña la vista previa, como se ve: su texto, el `d` de su icono, el tamaño de su planta y la escala de su barra
+  const preview = p => p.evaluate(() => {
+    const el = document.querySelector('#libPrev');
+    if (!el || !__r26.shown(el)) return null;
+    const ic = el.querySelector('svg path'), fp = el.querySelector('.pv-fp'), bar = el.querySelector('.scale'), bi = bar && bar.querySelector('i'), m = bar ? parseFloat(bar.innerText.replace(',', '.')) : NaN;
+    const f = fp && fp.getBoundingClientRect();
+    return { text: el.innerText.replace(/\s+/g, ' ').trim(), d: ic ? ic.getAttribute('d') : null, fp: f ? [f.width, f.height] : null, s: bi && m > 0 ? bi.getBoundingClientRect().width / m : null };
+  });
+  // la del autobús: su nombre y su tamaño, el icono de su fila y el lado largo de su planta a ±1 px de su largo a la escala de la barra
+  const busPrev = (v, d) => {
+    if (!v) return { ok: false, info: 'sin vista previa' };
+    const m = v.text.match(/(\d+(?:,\d+)?) × (\d+(?:,\d+)?) m/), L = m ? parseFloat(m[1].replace(',', '.')) : NaN, Wd = m ? parseFloat(m[2].replace(',', '.')) : NaN;
+    const long = v.fp ? Math.max(...v.fp) : NaN, want = L * v.s, r1 = x => Math.round(x * 10) / 10;
+    return { L, Wd, ok: /Autobús Ikarus/.test(v.text) && !!m && !!d && v.d === d && !!v.fp && !!v.s && Math.abs(long - want) <= 1,
+      info: `«${v.text.slice(0, 90)}» · icono ${v.d ? (v.d === d ? 'el de su fila' : 'otro') : 'ninguno'} · planta ${v.fp ? v.fp.map(r1).join(' × ') + ' px' : 'ninguna'}${v.s && m ? `, a ${r1(v.s)} px/m de su barra: ${m[1]} m son ${r1(want)} px` : v.s ? '' : ', sin barra de escala'}` };
+  };
+  await R26('UX-49 +', async p => {
+    const res = [];
+    await freeObj(p); await openObjs(p);
+    const d = await p.evaluate(s => { const q = document.querySelector(s + ' svg path'); return q ? q.getAttribute('d') : null; }, BUS), tree = (await rowIcons(p)).find(r => r.cls === 'Land_Wreck_Ikarus');
+    await p.hover(BUS); await p.waitForTimeout(150);
+    const a = busPrev(await preview(p), d);
+    res.push(['UX-49 + con el ratón sobre el autobús en Añadir › Objetos, la vista previa dice «Autobús Ikarus» y su tamaño, y lleva el mismo icono que su fila y su planta a escala: el lado largo, a ±1 px de lo que dice su tamaño', a.ok && !!tree && tree.d === d, a.info]);
+    // con el teclado: Tab con el mapa activo abre Añadir con el foco en la búsqueda, y el Tab siguiente llega al primero de la lista
+    await p.mouse.move(2, 2); await p.focus('#map'); await p.keyboard.press('Tab'); await p.keyboard.press('Tab'); await p.waitForTimeout(150);
+    const on = await p.evaluate(s => document.activeElement === document.querySelector(s), BUS), b = busPrev(await preview(p), d);
+    res.push(['UX-49 + con el teclado, al llegar al autobús la vista previa enseña lo mismo', on && b.ok, `${on ? 'el foco, en el autobús' : 'el foco no llega al autobús'} · ${b.info}`]);
+    // al colocarlo, bajo el cursor, un rectángulo discontinuo de largo × ancho a la escala del mapa (la de su barra)
+    await p.click(BUS); await p.waitForTimeout(150);
+    const box = await p.locator('#map').boundingBox(), cx = Math.round(box.width / 2), cy = Math.round(box.height / 2);
+    await p.mouse.move(box.x + cx - 40, box.y + cy - 30); await p.mouse.move(box.x + cx, box.y + cy, { steps: 4 }); await p.waitForTimeout(150);
+    const f = await frame(p), sc = await p.evaluate(() => [document.querySelector('#scaleTxt').textContent, document.querySelector('#scaleBar').getBoundingClientRect().width]);
+    const s = sc[1] / (parseFloat(sc[0].replace(',', '.')) * (/km/.test(sc[0]) ? 1000 : 1)), want = [a.Wd * s, a.L * s].sort((u, v) => u - v);
+    const err = r => { const z = [r.ext.w, r.ext.h].sort((u, v) => u - v); return Math.max(Math.abs(z[0] - want[0]), Math.abs(z[1] - want[1])); };
+    const fp = f.strokes.filter(r => r.ext && Math.abs(r.x - cx) <= 2 && Math.abs(r.y - cy) <= 2).sort((u, v) => err(u) - err(v))[0], r1 = x => Math.round(x * 10) / 10;
+    res.push(['UX-49 + al colocarlo, el mapa lleva bajo el cursor un rectángulo discontinuo de largo·s × ancho·s px, ±1,5 px, con huecos que se ven', !!a.L && !!fp && err(fp) <= 1.5 && GAPS(fp.gaps), `${a.L ? `escala del mapa ${r1(s)} px/m: se esperan ${want.map(r1).join(' × ')} px` : 'sin el tamaño de la vista previa, nada con que comparar'} · ${fp ? `bajo el cursor, uno de ${fp.ext.w} × ${fp.ext.h} px, ${fp.gaps ? `en ${fp.gaps.comps} trozos, ${fp.gaps.gapPx} px de hueco a ${fp.gaps.ratio}:1 de los guiones` : 'sin guiones medidos'}` : 'ningún trazo discontinuo bajo el cursor'}`]);
+    return res;
+  });
+  await R26('UX-49 −', async p => {
+    const res = [];
+    await freeObj(p);
+    const mapAt = () => p.evaluate(() => { const r = document.querySelector('#map').getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(Math.round).join(', '); });
+    const m0 = await mapAt();
+    await openObjs(p); await p.hover(BUS); await p.waitForTimeout(150);
+    const r = await p.evaluate(() => {
+      const el = document.querySelector('#libPrev'), col = document.querySelector('#colR'), seen = el && __r26.shown(el);
+      const url = [col, ...col.querySelectorAll('*')].filter(x => [null, '::before', '::after'].some(ps => { const c = getComputedStyle(x, ps); return /url\(/.test(c.backgroundImage + c.content + (c.maskImage || '') + c.listStyleImage + c.borderImageSource); }));
+      const m = document.querySelector('#map').getBoundingClientRect(), b = seen ? el.getBoundingClientRect() : null;
+      return { text: seen ? el.innerText.replace(/\s+/g, ' ').trim() : '', imgs: col.querySelectorAll('img, picture, video, iframe, object, embed, image').length, url: url.length, over: !!b && b.left < m.right && b.right > m.left && b.top < m.bottom && b.bottom > m.top };
+    });
+    const m1 = await mapAt(), mt = await p.evaluate(() => __r26.metrics());
+    res.push(['UX-49 − sin captura del juego, la vista previa dice que no la hay y no pinta ninguna imagen (ni <img> ni fondo con url())', /sin captura/i.test(r.text) && !r.imgs && !r.url, `${r.text ? `«${r.text.slice(0, 90)}»` : 'sin vista previa'} · en el panel, ${r.imgs} imágenes y ${r.url} fondos con url()`]);
+    res.push(['UX-49 − la vista previa no tapa el mapa: va fuera de él, y el mapa sigue en el mismo sitio y del mismo tamaño', !r.over && m0 === m1, `${r.text ? (r.over ? 'encima del mapa' : 'fuera del mapa') : 'sin vista previa'} · mapa en ${m0} → ${m1}`]);
+    res.push(['UX-49 − con la vista previa a la vista, ninguna letra baja de 12 px (UX-10)', mt.small === 0, `${mt.small} textos por debajo de 12 px${mt.small ? ': ' + mt.smallEj.join(' | ') : ''}`]);
+    // Esc cancela la colocación; e Intro pone el objeto en el centro del mapa, el que dice la coordenada bajo el ratón allí
+    await p.click(BUS); await p.waitForTimeout(150);
+    const armed = await p.locator('[data-act="place-cancel"]').count();
+    await p.keyboard.press('Escape'); await p.waitForTimeout(150);
+    const after = await p.locator('[data-act="place-cancel"]').count();
+    await p.click(BUS); await p.waitForTimeout(150);
+    const box = await p.locator('#map').boundingBox(); await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 3 }); await p.waitForTimeout(100);
+    const xy = (await T(p, '#cursorXY')).match(/X ([\d.,-]+) · Z ([\d.,-]+)/), es = t => parseFloat(t.replace(/\./g, '').replace(',', '.'));
+    await p.keyboard.press('Enter'); await p.waitForTimeout(250);
+    const put = await p.evaluate(() => ({ name: (document.querySelector('#f-name') || {}).value || '', x: parseFloat((document.querySelector('#f-x') || {}).value), z: parseFloat((document.querySelector('#f-z') || {}).value) }));
+    const centred = !!xy && Math.abs(put.x - es(xy[1])) <= 0.6 && Math.abs(put.z - es(xy[2])) <= 0.6;
+    res.push(['UX-49 − Intro sigue poniendo el objeto en el centro del mapa, y Esc cancela la colocación', armed > 0 && after === 0 && put.name === 'Autobús Ikarus' && centred, `Esc: ${armed ? (after ? 'sigue colocando' : 'cancela') : 'no llegó a colocar'} · Intro: ${put.name ? `«${put.name}» en ${put.x} · ${put.z}` : 'nada'}${xy ? `, el centro del mapa en ${es(xy[1])} · ${es(xy[2])}` : ''}`]);
+    // con Propiedades y Añadir a la vez, el panel de Añadir es más bajo: la lista sigue a la vista y el presupuesto, entero
+    await p.click('#bTools'); await p.waitForTimeout(120); await p.click('#menu [data-act="pan"][data-v="both"]'); await p.click('#status', { position: { x: 3, y: 3 } }); await p.waitForTimeout(150);
+    await p.click('[data-act="lib-cat"][data-v="objeto"]'); await p.waitForTimeout(150);
+    const sp = await p.evaluate(() => { const it = document.querySelector('#colR .items'), pb = it && it.parentElement, bg = document.querySelector('#colR .budget'), pan = bg && bg.parentElement, r = x => x.getBoundingClientRect(); return pb && bg ? { list: Math.round(r(pb).height), cut: Math.max(0, Math.round(r(bg).bottom - r(pan).bottom)) } : null; });
+    res.push(['UX-49 − con Propiedades y Añadir a la vez, la lista sigue a la vista, con tres filas o más (90 px), y el presupuesto se ve entero', !!sp && sp.list >= 90 && sp.cut === 0, sp ? `lista de ${sp.list} px · presupuesto cortado ${sp.cut} px` : 'sin la lista de Añadir']);
+    return res;
   });
 
   expect(external.length === 0, 'ninguna petición sale de la página: ' + (external.slice(0, 3).join(' ') || 'ninguna'));
