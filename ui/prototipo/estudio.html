@@ -1513,11 +1513,13 @@ function drawMap() {
   const nums = [];
   for (let x = Math.ceil(wx0 / sp) * sp; x <= wx1; x += sp) { const [sx] = w2s(x, 0); g.beginPath(); g.moveTo(sx + 0.5, 0); g.lineTo(sx + 0.5, V.h); g.stroke(); if (x >= 0 && x <= W0) nums.push([String(x), sx + 3, 13]); }
   for (let z = Math.ceil(wz0 / sp) * sp; z <= wz1; z += sp) { const [, sy] = w2s(0, z); g.beginPath(); g.moveTo(0, sy + 0.5); g.lineTo(V.w, sy + 0.5); g.stroke(); if (z >= 0 && z <= W0) nums.push([String(z), 3, sy - 3]); }
-  // los números, sobre una placa opaca del color del halo de las etiquetas, que también es opaco: se leen encima de edificios y bosque (CU-38, AR-03)
-  nums.forEach(([t, x, y]) => { g.fillStyle = P.halo; g.fillRect(x - 2, y - 11, g.measureText(t).width + 4, 14); g.fillStyle = P.label; g.fillText(t, x, y); });
+  // los números, sobre una placa opaca del color del halo de las etiquetas, que también es opaco: se leen encima de edificios y bosque (CU-38, AR-03).
+  // Se pintan después de los marcadores, como una regla, y su placa cuenta como ocupada para las etiquetas: un marcador o una etiqueta pintados
+  // encima tapaban parte del número. El que caería debajo de lo que flota encima del mapa, o cortado por su borde, no se pinta (UX-50)
+  const ruler = () => nums.forEach(([t, x, y]) => { const b = [x - 2, y - 11, g.measureText(t).width + 4, 14]; if (!inMap(b)) return; LBL.push(b); g.fillStyle = P.halo; g.fillRect(x - 2, y - 11, g.measureText(t).width + 4, 14); g.fillStyle = P.label; g.fillText(t, x, y); });
   // pueblos, en minúscula normal (UX-09)
   if (V.s < 1.2) { g.textAlign = 'center'; g.font = `600 12px ${FONT_UI}`; TOWNS.forEach(t => { const [x, y] = w2s(t[1], t[2]); if (x < -80 || y < -20 || x > V.w + 80 || y > V.h + 20) return; const label = t[0]; halo(g, label, x, y); g.fillStyle = P.label; g.fillText(label, x, y); }); g.textAlign = 'left'; }
-  LBL.length = 0; MK.length = 0; drawScene(g); drawLabels(g);
+  LBL.length = 0; MK.length = 0; floating(g.canvas); drawScene(g); g.font = '500 12px ' + FONT_MONO; g.textAlign = 'left'; ruler(); drawLabels(g);
   updateScale();
 }
 // Rayado de lo estimado, como los tramos estimados de la línea de tiempo (UX-30)
@@ -1557,17 +1559,21 @@ function drawGlyph(g, kind, x, y, yaw, style, cls) {
 // se pintan al final, encima de los marcadores y, si cabe, donde no tapen ninguno: pintadas entre ellos, el marcador que venía después tapaba
 // media letra, y una que tenía que salir sin sitio se pintaba encima de otra (CU-38, AR3-01). Las secundarias se omiten si no caben sin tapar
 // nada; las que tienen que salir prueban también más lejos antes de tapar un marcador, como la estimación rayada que pasa por una marca, y
-// antes de pisar otra etiqueta.
-const LBL = [], LQ = [], MK = [];
+// antes de pisar otra etiqueta. Ninguna va donde la tape lo que flota encima del mapa (el grupo del zoom, la escala y la leyenda, la ayuda o
+// «Rodando») ni donde la corte su borde: allí no se lee, y la prueba del lienzo no lo ve (UX-50).
+const LBL = [], LQ = [], MK = [], FL = [];
+const hit = (r, l) => l.some(o => r[0] < o[0] + o[2] && o[0] < r[0] + r[2] && r[1] < o[1] + o[3] && o[1] < r[1] + r[3]);
+// las cajas de lo que flota encima del mapa, en px del mapa; un texto se lee si su caja cabe en el mapa y no cae debajo de ninguna
+function floating(cv) { const m = cv.getBoundingClientRect(); FL.length = 0; cv.parentElement.querySelectorAll('.ovl, #legend, #hint, #recBadge').forEach(e => { if (!e.offsetParent) return; const r = e.getBoundingClientRect(); FL.push([r.left - m.left, r.top - m.top, r.width, r.height]); }); }
+const inMap = r => r[0] >= 0 && r[1] >= 0 && r[0] + r[2] <= V.w && r[1] + r[3] <= V.h && !hit(r, FL);
 function label(g, txt, x, y, strong, must) { LQ.push([`${strong ? 600 : 500} 12px ${FONT_UI}`, txt, x, y, strong || must]); }
 function drawLabels(g) {
-  const hit = (r, l) => l.some(o => r[0] < o[0] + o[2] && o[0] < r[0] + r[2] && r[1] < o[1] + o[3] && o[1] < r[1] + r[3]);
   LQ.forEach(([f, txt, x, y, key]) => {
     g.font = f; const w = g.measureText(txt).width + 4, at = ([dx, dy]) => [x + dx - 2, y + dy - 11, w, 14], left = -(w + 24);
     const spots = d => d.map(dy => [0, dy]).concat(d.map(dy => [left, dy])), all = spots([0, 14, -14, 28]).concat(key ? spots([-28, 42, -42]) : []);
-    let s = all.find(q => !hit(at(q), LBL) && !hit(at(q), MK));
-    if (!s && key) s = all.find(q => !hit(at(q), LBL));
-    if (!s) { if (!key) return; s = [0, 0]; }
+    let s = all.find(q => inMap(at(q)) && !hit(at(q), LBL) && !hit(at(q), MK));
+    if (!s && key) s = all.find(q => inMap(at(q)) && !hit(at(q), LBL));
+    if (!s) { if (!key || !inMap(at([0, 0]))) return; s = [0, 0]; }
     const [lx, ly] = [x + s[0], y + s[1]];
     LBL.push(at(s)); halo(g, txt, lx, ly); g.fillStyle = P.label; g.fillText(txt, lx, ly);
   });

@@ -52,7 +52,9 @@ const LIB = () => {
 //   Esos píxeles se apartan del interior al mirar si es del color del relleno. Y la forma del relleno: la distancia de su origen al borde
 //   cada 5°;
 // - desde UX-49, de cada trazo discontinuo que rodea su origen, cuánto mide a lo ancho y a lo alto, y sus guiones y huecos en una caja
-//   que lo abarca entero, como la planta del objeto que se está colocando.
+//   que lo abarca entero, como la planta del objeto que se está colocando;
+// - desde UX-50, la caja de cada texto en px de CSS del mapa, para cruzarla con lo que flota encima del mapa y con su borde, que el lienzo
+//   no ve.
 // No sigue un texto copiado a mano, byte a byte, de un ImageData a otro, ni mira si los huecos se rellenan después con otro color que también
 // se distinga de los guiones. Solo graba cuando __cv.on, y se queda con el último fotograma entero del mapa, que empieza pintando el mar en
 // todo el lienzo. Sus propias lecturas y escrituras de píxeles no cuentan como dibujo.
@@ -82,7 +84,8 @@ const PROBE = () => {
   let pending = null;
   const probe = (ctx, draw, style, args) => {
     const t = String(args[0]), x = args[1], y = args[2], T = ctx.getTransform(), m = ctx.measureText(t), dpr = dprOf(ctx);
-    const rec = { text: t, px: Math.round(parseFloat((ctx.font.match(/([\d.]+)px/) || [0, 0])[1]) * T.a / dpr * 10) / 10, n: 0, low: 0, min: null };
+    const rec = { text: t, px: Math.round(parseFloat((ctx.font.match(/([\d.]+)px/) || [0, 0])[1]) * T.a / dpr * 10) / 10, n: 0, low: 0, min: null,
+      box: [T.a * (x - m.actualBoundingBoxLeft) + T.e, T.d * (y - m.actualBoundingBoxAscent) + T.f, T.a * (x + m.actualBoundingBoxRight) + T.e, T.d * (y + m.actualBoundingBoxDescent) + T.f].map(v => Math.round(v / dpr * 10) / 10) };
     if (pending) {
       const b = pending.box, g = [T.a * (x - m.actualBoundingBoxLeft) + T.e, T.d * (y - m.actualBoundingBoxAscent) + T.f, T.a * (x + m.actualBoundingBoxRight) + T.e, T.d * (y + m.actualBoundingBoxDescent) + T.f];
       pending.halo = pending.texts.every(s => s === t) && g[0] >= b[0] - 1 && g[1] >= b[1] - 1 && g[2] <= b[2] + 1 && g[3] <= b[3] + 1; rec.halo = pending.halo; pending = null;
@@ -873,12 +876,14 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const read = async q => { await p.mouse.move(q[0], q[1]); await p.waitForTimeout(80); const m = (await T(p, '#cursorXY')).match(/X ([\d.,-]+) · Z ([\d.,-]+)/); return m ? [num(m[1]), num(m[2])] : null; };
     const wa = await read(a), wb = await read(b);
     if (!wa || !wb || wa[0] === wb[0] || wa[1] === wb[1]) return null;
+    // lo que flota encima del mapa, en px del mapa: el número de la regla de Y que caería debajo no se pinta (UX-50)
+    const fl = await p.evaluate(() => { const m = document.querySelector('#map').getBoundingClientRect(); return [...document.querySelectorAll('#mapwrap .ovl, #legend, #hint, #recBadge')].filter(__r26.shown).map(e => { const b = e.getBoundingClientRect(); return [b.left - m.left, b.top - m.top, b.right - m.left, b.bottom - m.top]; }); });
     const kx = (b[0] - a[0]) / (wb[0] - wa[0]), kz = (b[1] - a[1]) / (wb[1] - wa[1]), s = Math.abs(kx);
     const u = x => a[0] - r.x + (x - wa[0]) * kx, v = z => a[1] - r.y + (z - wa[1]) * kz, wx = q => wa[0] + (q + r.x - a[0]) / kx, wz = q => wa[1] + (q + r.y - a[1]) / kz;
     const sp = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000].find(m => m * s >= 70) || 5000, want = [...names];
     const [x0, x1] = [wx(0), wx(r.width)].sort((m, n) => m - n), [z0, z1] = [wz(0), wz(r.height)].sort((m, n) => m - n);
     for (let x = Math.ceil(x0 / sp) * sp; x <= x1; x += sp) if (x >= 0 && x <= 15360 && u(x) >= 6 && u(x) <= r.width - 56) want.push(String(x));
-    for (let z = Math.ceil(z0 / sp) * sp; z <= z1; z += sp) if (z >= 0 && z <= 15360 && v(z) >= 36 && v(z) <= r.height - 6) want.push(String(z));
+    for (let z = Math.ceil(z0 / sp) * sp; z <= z1; z += sp) if (z >= 0 && z <= 15360 && v(z) >= 36 && v(z) <= r.height - 6 && !fl.some(o => o[0] < 41 && o[2] > 1 && o[1] < v(z) && o[3] > v(z) - 14)) want.push(String(z));
     if (s < 1.2) TOWNS.forEach(([t, x, z]) => { if (u(x) >= 70 && u(x) <= r.width - 70 && v(z) >= 24 && v(z) <= r.height - 12) want.push(t); });
     return want;
   };
@@ -2017,6 +2022,80 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const sp = await p.evaluate(() => { const it = document.querySelector('#colR .items'), pb = it && it.parentElement, bg = document.querySelector('#colR .budget'), pan = bg && bg.parentElement, r = x => x.getBoundingClientRect(); return pb && bg ? { list: Math.round(r(pb).height), cut: Math.max(0, Math.round(r(bg).bottom - r(pan).bottom)) } : null; });
     res.push(['UX-49 − con Propiedades y Añadir a la vez, la lista sigue a la vista, con tres filas o más (90 px), y el presupuesto se ve entero', !!sp && sp.list >= 90 && sp.cut === 0, sp ? `lista de ${sp.list} px · presupuesto cortado ${sp.cut} px` : 'sin la lista de Añadir']);
     return res;
+  });
+
+  // --- UX-50: ningún texto del mapa tapado ni cortado (lo que se vio en las capturas de UX-48 y UX-49, y ya pasaba en 7a047bf) ---
+  // Lo que el lienzo no ve: cada texto del mapa, menos los nombres de los pueblos, que van con el mapa, cabe en él y no cae debajo de lo que
+  // flota encima (el grupo del zoom, la escala y la leyenda, la ayuda y «Rodando»). Lo que sí ve, un marcador o una etiqueta pintados encima
+  // de un número o de otra etiqueta, lo mide el fotograma acabado (AR3-01).
+  const hidden = (p, f) => p.evaluate(texts => {
+    const m = document.querySelector('#map').getBoundingClientRect(), name = e => e.id === 'hint' ? 'la ayuda' : e.id === 'recBadge' ? '«Rodando»' : e.id === 'legend' ? 'la leyenda' : e.classList.contains('tr') ? 'el grupo del zoom' : 'la escala y la leyenda';
+    const ov = [...document.querySelectorAll('#mapwrap .ovl, #legend, #hint, #recBadge')].filter(__r26.shown).map(e => { const b = e.getBoundingClientRect(); return { n: name(e), l: b.left - m.left, t: b.top - m.top, r: b.right - m.left, b: b.bottom - m.top }; });
+    return texts.map(([t, b]) => { const under = ov.filter(o => o.l < b[2] && o.r > b[0] && o.t < b[3] && o.b > b[1]).map(o => o.n); return b[0] < 0 || b[1] < 0 || b[2] > m.width || b[3] > m.height ? `«${t}» cortada por el borde` : under.length ? `«${t}» bajo ${under.join(' y ')}` : ''; }).filter(Boolean);
+  }, f.texts.filter(t => t.box && !TOWNS.some(w => w[0] === t.text)).map(t => [t.text, t.box]));
+  // las tres vistas de las capturas, a 1440 × 900: la escena recién abierta acercada dos veces, de cerca el autobús y los bidones, y colocando el autobús
+  const VIEWS50 = [
+    ['escena', async p => { for (let i = 0; i < 2; i++) { await p.click('#bZin'); await p.waitForTimeout(150); } }],
+    ['de cerca', async p => {
+      await p.click('#colL [data-act="sel"][data-v="ent:obj-01"]');
+      for (const id of ['obj-12', 'obj-13', 'obj-14', 'obj-20']) { await p.keyboard.down('Control'); await p.click(`#colL [data-act="sel"][data-v="ent:${id}"]`); await p.keyboard.up('Control'); }
+      await p.focus('#map'); await p.keyboard.press('f'); await p.waitForTimeout(250); await p.keyboard.press('Escape'); await p.waitForTimeout(150);
+    }],
+    ['colocando', async p => {
+      await freeObj(p); for (let i = 0; i < 2; i++) { await p.click('#bZin'); await p.waitForTimeout(150); }
+      await openObjs(p); await p.click(BUS); await p.waitForTimeout(150);
+      const b = await p.locator('#map').boundingBox(); await p.mouse.move(b.x + b.width * 0.66, b.y + b.height * 0.62, { steps: 4 }); await p.waitForTimeout(150);
+    }]
+  ];
+  for (const scheme of ['dark', 'light']) {
+    await R26(`UX-50 + ${scheme}`, async p => {
+      const out = []; let ok = true;
+      for (const [n, go] of VIEWS50) {
+        if (out.length) { await p.goto(URL); await p.waitForTimeout(900); }
+        await go(p);
+        const r = await readable(p, ['Mirek', 'Linda']), h = await hidden(p, r.f);
+        ok = ok && r.ok && !h.length; out.push(`${n}: ${r.info}${h.length ? ', ' + h.slice(0, 3).join(', ') : ''}`);
+      }
+      return [[`UX-50 + en tema ${scheme === 'dark' ? 'oscuro' : 'claro'}, a 1440 × 900, en la escena recién abierta acercada dos veces, de cerca sobre el autobús y los bidones, y colocando el autobús, cada texto que se espera está pintado, cada píxel de su letra llega a 4,5:1 también al acabar, y ninguno queda debajo de lo que flota encima del mapa ni cortado por su borde`, ok, out.join(' · ')]];
+    }, 1440, 900, scheme);
+  }
+  await R26('UX-50 + regla', async p => {
+    const what = 'UX-50 + Linda junto al borde izquierdo, a la altura de un número de la regla de Y: el número se lee entero encima de su marcador, a 4,5:1 también al acabar, y su nombre sale sin pisarlo';
+    // Linda a 14 px del borde izquierdo del mapa y justo en una línea de la rejilla del centro, puesta con sus campos de posición
+    const f = await toScreen(p), r = await p.locator('#map').boundingBox();
+    if (!f) return [[what, false, 'sin lectura del cursor']];
+    const [ax, az] = f(6000, 7600), [bx, bz] = f(6100, 7700), kx = (bx - ax) / 100, kz = (bz - az) / 100;
+    const sp = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000].find(m => m * Math.abs(kx) >= 70) || 5000, z = Math.round((7600 + (r.y + r.height / 2 - az) / kz) / sp) * sp, x = 6000 + (r.x + 14 - ax) / kx;
+    await p.click('#colL [data-act="sel"][data-v="ent:act-linda"]'); await p.waitForTimeout(150);
+    await p.fill('#f-x', x.toFixed(1)); await p.keyboard.press('Tab'); await p.fill('#f-z', z.toFixed(1)); await p.keyboard.press('Tab'); await p.waitForTimeout(150);
+    await p.focus('#map'); await p.keyboard.press('Escape'); await p.waitForTimeout(150);
+    const at = f(x, z), rd = await readable(p, ['Linda']), h = await hidden(p, rd.f), n = rd.f.texts.find(t => t.text === String(z)), l = rd.f.texts.find(t => t.text === 'Linda');
+    const over = !!n && !!l && n.box[0] < l.box[2] && l.box[0] < n.box[2] && n.box[1] < l.box[3] && l.box[1] < n.box[3];
+    const near = Math.abs(at[0] - r.x - 14) <= 2 && Math.abs(at[1] - r.y - r.height / 2) <= sp * Math.abs(kz) / 2 + 1;
+    return [[what, rd.ok && !h.length && near && !!n && n.n > 0 && !!n.fin && n.fin.low === 0 && !!l && !over, `Linda en ${Math.round(at[0] - r.x)} · ${Math.round(at[1] - r.y)} px del mapa, en la línea de ${z} · ${rd.info}${h.length ? ', ' + h.slice(0, 3).join(', ') : ''} · «${z}» ${n ? (n.fin ? `al acabar ${n.fin.low} de ${n.fin.n} px bajos` : 'sin medir al acabar') : 'no está'} · «Linda» ${l ? (over ? 'encima del número' : 'sin pisarlo') : 'no está'}`]];
+  }, 1440, 900);
+  await R26('UX-50 −', async p => {
+    // a mano sobre el mapa: la prueba ve una etiqueta bajo la escala, una cortada por el borde y un número con un marcador encima, y deja pasar una libre
+    const r = await p.evaluate(() => {
+      const c = document.querySelector('#map'), g = c.getContext('2d'), d = c.width / c.clientWidth, cv = window.__cv, m = c.getBoundingClientRect(), bl = document.querySelector('#mapwrap .ovl.bl').getBoundingClientRect();
+      Object.assign(cv, { texts: [], strokes: [], fills: [], images: [], on: true });
+      g.save(); g.setTransform(d, 0, 0, d, 0, 0);
+      const tag = (t, x, y) => { g.font = '600 12px sans-serif'; g.fillStyle = 'rgb(200,197,182)'; g.fillRect(x - 2, y - 11, g.measureText(t).width + 4, 14); g.fillStyle = '#222116'; g.fillText(t, x, y); };
+      tag('Bajo la escala', bl.left - m.left + 8, bl.top - m.top + 16);
+      tag('Cortada por el borde', c.clientWidth - 40, 200);
+      tag('6650', 60, 300); g.beginPath(); g.moveTo(70, 289); g.lineTo(92, 299); g.lineTo(70, 309); g.closePath(); g.fillStyle = '#c0392b'; g.fill(); g.lineWidth = 2; g.strokeStyle = '#fff'; g.stroke();
+      tag('Libre', 200, 300);
+      g.restore(); cv.on = false; cv.finish();
+      return cv.texts.map(t => ({ text: t.text, n: t.n, low: t.low, fin: t.fin, box: t.box }));
+    });
+    const h = await hidden(p, { texts: r }), tx = t => r.find(x => x.text === t), says = t => h.find(x => x.startsWith(`«${t}»`)) || '';
+    const num = tx('6650'), free = tx('Libre');
+    return [
+      ['UX-50 − una etiqueta pintada debajo de la escala y la leyenda cuenta como tapada', /bajo la escala/.test(says('Bajo la escala')), says('Bajo la escala') || 'no la ve tapada'],
+      ['UX-50 − una etiqueta que se sale por el borde del mapa cuenta como cortada', /cortada por el borde/.test(says('Cortada por el borde')), says('Cortada por el borde') || 'no la ve cortada'],
+      ['UX-50 − un número de la regla con un marcador pintado encima cae por su contraste en el fotograma acabado', !!num && num.n > 0 && num.low === 0 && !!num.fin && num.fin.low > 0, num ? `«6650» al pintar ${num.low} de ${num.n} px bajos, al acabar ${num.fin ? `${num.fin.low} (${num.fin.min}:1)` : 'sin medir'}` : 'no está'],
+      ['UX-50 − el control, una etiqueta libre, ni tapada ni cortada, pasa al pintarla y al acabar', !!free && !says('Libre') && free.n > 0 && free.low === 0 && !!free.fin && free.fin.low === 0, free ? `«Libre» ${says('Libre') || 'ni tapada ni cortada'}, al acabar ${free.fin ? `${free.fin.low} de ${free.fin.n}` : '?'} px bajos` : 'no está']
+    ];
   });
 
   expect(external.length === 0, 'ninguna petición sale de la página: ' + (external.slice(0, 3).join(' ') || 'ninguna'));
