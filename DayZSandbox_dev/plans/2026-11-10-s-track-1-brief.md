@@ -1,6 +1,6 @@
 # S-track·1: calibración de la imagen, lectura del arma y hook de la cámara
 
-2026-11-10 · spec de implementación (R25/R26) de la primera corrida de la sonda S-track del [plan de cámara que sigue objetos](2026-11-10-camara-sigue-objetos.md) v0.3 (commit `62ebc89`) · v1.0.
+2026-11-10 · spec de implementación (R25/R26) de la primera corrida de la sonda S-track del [plan de cámara que sigue objetos](2026-11-10-camara-sigue-objetos.md) v0.3 (commit `62ebc89`) · v1.1 (2026-11-12: desviaciones de la corrida, §6).
 
 Guillermo dio el visto bueno para correr la prueba en partida y calibrar el 2026-11-10 a las 18:07Z («ok probamos y calibramos con ello»).
 
@@ -114,3 +114,23 @@ Código de salida: 0 si todo PASA, 1 si alguna FALLA y 2 si queda algo INCONCLUS
   - Usa una instancia aislada y no toca LIVE ni T130.
   - No hace commit hasta que el hilo lo arbitre.
 - **Sol:** revisa al cerrar la fase, no esta corrida.
+
+## 6. v1.1: lo que cambió al correrla
+
+La lista completa, con el motivo de cada cambio y quién lo decidió, está en el anexo de desviaciones de `DayZSandbox_dev/evidence/s-track/_informe/informe.md` (commit `2dab484`). En resumen:
+- **Banco:** instancia propia de DayZDiag en el puerto 2402, lanzada por WMI. `dayz_test_run` no acepta `-autotest` ni `-strack=`.
+- **Movimiento:** el modo `-strack_move=self` del mod sustituye a `player_move`, que no gira el cuerpo. Usa OverrideMovementSpeed/Angle y OverrideAimChangeX en lazo cerrado.
+- **H-b:** el `modded PlayerBase.EOnPostFrame` local. Ninguna entidad `ECE_LOCAL` recibió eventos por frame.
+- **Calibración:**
+  - secuencia pseudoaleatoria (LCG, semilla 12345) en lugar de pares e impares;
+  - correlación de fase 2D en lugar de bandas;
+  - focal medida.
+- **Casos:** `lookat` a 1,3 m, girando en el sitio; `follow` a 1,2 m detrás y 0,3 m arriba. Así los dos detalles quedan a ≥ 200 px.
+- **Registro:** posiciones relativas a un origen entero.
+- **Evaluador:**
+  - segmentación de giros (> 90° monótonos, ≥ 0,5 s);
+  - plantilla de 32 px con banco de giro y escala;
+  - capturas sin textura o de carga, como no observadas.
+- **Tamaño:** el mod tiene ~1600 líneas, frente a las < 600 orientativas.
+
+El resultado y lo que pasa a S-track·2 están en el §9 del plan.

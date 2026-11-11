@@ -1,6 +1,6 @@
 # Cámara que sigue objetos: armas en manos, accesorios, objetos sueltos y vehículos
 
-2026-11-10 · plan de una lane (Claude) · **v0.3**, tras dos revisiones R22 de Sol (`gpt-6.1-sol`, solo lectura; RECHAZADO sobre la v0.1 y sobre la v0.2; arbitrajes en §7 y §8) · amplía la ficha **T08** del [backlog post-v1](../../backlog-post-v1.md) («Cámara que sigue al actor», M2) a cualquier objeto · contrato: `DayZSandbox_dev/product-spec.md` · cámara base: decisión #16 y F4 del [plan v2](2026-10-26-m1-cine-v2.md).
+2026-11-10 · plan de una lane (Claude) · **v0.4**, tras dos revisiones R22 de Sol (`gpt-6.1-sol`, solo lectura; RECHAZADO sobre la v0.1 y sobre la v0.2; arbitrajes en §7 y §8) y la primera corrida de la sonda, S-track·1 (resultado y cambios en §9) · amplía la ficha **T08** del [backlog post-v1](../../backlog-post-v1.md) («Cámara que sigue al actor», M2) a cualquier objeto · contrato: `DayZSandbox_dev/product-spec.md` · cámara base: decisión #16 y F4 del [plan v2](2026-10-26-m1-cine-v2.md).
 
 Fuentes verificadas: DayZ-Script-Diff `78be1c4` (build 1.30.164289), con rutas relativas a `scripts/`; dayz-mcp `b47d171`; lecciones del vault LL-535 y LL-551. Lo que no está verificado lleva `[sin verificar]` y lo resuelve la sonda S-track (§4).
 
@@ -149,7 +149,7 @@ Una lectura de la cámara hecha en el mismo hook que la coloca solo devuelve lo 
 | Id | Qué mide | PASA |
 |---|---|---|
 | T-lect | La boca y la mira del fusil en manos, leídas de seis formas en el mismo frame: (a) `arma.ModelToWorld(GetMemoryPointPos)`; (b) `GetSelectionPositionWS`; (c) `actor.ModelToWorld(arma.GetSelectionPositionMS)`; (d) hueso `RightHand_Dummy` compuesto con la relación tomada en el primer frame; (e) a partir de `arma.GetRenderTransform`; (f) a partir de `arma.GetWorldPosition` y la orientación del objeto. Cada una se proyecta a pantalla con la pose de cámara del frame identificado. | La lectura cuya proyección cae a ≤ 2 px del detalle detectado en el p95, en las tres repeticiones y también durante el giro. De las que pasen, se elige la más simple. Si ninguna pasa, la medida es INCONCLUSA y se vuelve al plan. (d) no es referencia: es una candidata más. |
-| T-hook | Con la lectura ganadora y para cada modo (`mount` 0,5 m, `look_at` desde una pose fija y `follow` 2 m), en tres hooks: H-a, `MissionGameplay.OnUpdate`; H-b, `EOnPostFrame` de una entidad propia solo de cliente, con duplicados resueltos; H-c, `AddChild` de la cámara al arma (solo `mount`). `mount` se prueba rígido (`smooth_s` 0) y suavizado (0,3), y sobre el arma y sobre el coche. Se mide la deriva en pantalla de la boca y de la mira respecto a donde el modo las deja. | En cada ventana de giro y en el resto por separado: deriva p95 ≤ 2 px a 1080p, los dos detalles observables en ≥ 95 % de los frames de la ventana, y giro aparente sobre el eje óptico ≤ 0,5°. La decisión es por modo, por variante de `mount` y por categoría de objetivo: el primer hook que pase en el orden H-a, H-b, H-c. Lo que no pase con ninguno queda INCONCLUSO y no entra. |
+| T-hook | Con la lectura ganadora y para cada modo (`mount` 0,5 m, `look_at` desde una pose fija y `follow` 2 m), en tres hooks: H-a, `MissionGameplay.OnUpdate`; H-b, `EOnPostFrame` del `PlayerBase` local (`modded`; una entidad propia solo de cliente no recibe eventos por frame, §9), con duplicados resueltos; H-c, `AddChild` de la cámara al arma (solo `mount`). `mount` se prueba rígido (`smooth_s` 0) y suavizado (0,3), y sobre el arma y sobre el coche. Se mide la deriva en pantalla de la boca y de la mira respecto a donde el modo las deja. | En cada ventana de giro y en el resto por separado: deriva p95 ≤ 2 px a 1080p, los dos detalles observables en ≥ 95 % de los frames de la ventana, y giro aparente sobre el eje óptico ≤ 0,5°. La decisión es por modo, por variante de `mount` y por categoría de objetivo: el primer hook que pase en el orden H-a, H-b, H-c. Lo que no pase con ninguno queda INCONCLUSO y no entra. |
 | T-ropa | La pose completa, posición y orientación, de la mochila (`GetWorldPosition` y transform) relativa al hueso `Spine3`, y la de la mira y el silenciador relativa al arma, mientras el actor anda y gira. Contraste en imagen como en T-lect. | Cada categoría por separado. «Sigue» si la pose relativa varía < 1 cm y < 0,5° y su proyección pasa T-lect. Si la mochila no sigue, la ropa va por hueso; si la mira o el silenciador no siguen, `slot` sale de §3.1. |
 | T-red | Tres cosas por separado, en el actor de IA y en el coche. (1) **La cámara frente a lo dibujado:** como T-hook, en imagen. (2) **El filtro:** la pose de la cámara frente a la respuesta analítica del filtro aplicada al ancla leída en el cliente, con su `offset`. (3) **La réplica:** el retraso del ancla leída frente a la pose del servidor, alineada con la base temporal de S-toma. Solo se informa, no es fallo de la cámara. Los pasos se miden en ventanas de 1 s a velocidad casi constante (cambio < 10 %), que es donde vale la regla de la mediana (plan v2, nota de B2). | (1) como T-hook. (2) Error ≤ 2 cm p95. (3) Informe con el retraso, que vale solo si la cota de la base temporal por la velocidad máxima es ≤ 1 cm; si no, (3) es INCONCLUSA. Además, el `smooth_s` mínimo en [0, 2] con el que la cámara cumple «ningún paso mayor que 3 veces la mediana». Si ninguno lo cumple, se informa y la web avisa al elegir ese objetivo, sin prohibirlo. |
 | T-suave | Numérica, sobre el registro (la imagen solo a 60 fps). El objeto suelto salta 1 m. Con `follow`, `smooth_s` en 0, 0,3 y 0,8, con el cliente limitado a 30, 60 y 144 fps. Un régimen cuyos FPS medidos se queden a más de un 10 % de su tope es INCONCLUSO, no se sustituye por otro. El tiempo cuenta desde el primer frame en que el cliente observa el salto en la entrada, no desde la orden del servidor. Además se mide un giro de la cámara de 170° y otro de −170°. | La respuesta medida sigue la exponencial analítica con un error ≤ 2 % del salto en cada frame, para cada `smooth_s` y cada FPS logrado (los FPS medidos, no el tope); con 0, igual al salto en el primer frame. En los giros, la orientación intermedia va por el arco corto, sigue siendo unitaria y coincide entre los FPS a ≤ 0,5°. |
@@ -259,3 +259,35 @@ Arbitra Claude (**⚠ árbitro=lane**). SOL-T22 se recalculó y se sostiene.
 | SOL-T04 (parcial) `mount` rígido y suavizado, categorías, regresión de F4 | MAY | Aceptado | T-hook, §4.4 |
 | SOL-T08 (parcial) la mediana solo a velocidad constante | MAY | Aceptado | T-red |
 | H13 «no hay slerp» | — | Aceptado: «`Math3D` no trae slerp» | H13 |
+
+## 9. Resultado de S-track·1 y cambios de la v0.4
+
+Corrida del 2026-11-10/12 en el PC de Guillermo, según el [brief](2026-11-10-s-track-1-brief.md) v1.1, commit `2dab484`. Informe: `DayZSandbox_dev/evidence/s-track/_informe/informe.md`; la evidencia binaria (capturas PNG y muestras) se queda en el PC, en las rutas de `evidence/s-track/README.md`. **S-track·1 no cierra** (exit 2): cumple los criterios 1, 2 y 3, el 5 en parte y no el 4.
+
+**Lo decidido:**
+- **Calibración de la imagen: PASA.** Con `MakeScreenshot` y `-autotest`, la captura pedida en el frame n muestra la vista escrita en el frame n−1 (k = −1, 100 % y único, en H-a y en H-b). La secuencia de giros es pseudoaleatoria con semilla fija: la alterna de §4.1 tiene periodo 2 y no distingue k de k ± 2.
+- **Detector calibrado: PASA** (p95 0,32 px y 0,056°).
+
+**Lo que sale, sin decidir aún:**
+- **`mount` necesita H-b.** En H-a (`OnUpdate`) la boca y la recámara se desvían juntas entre 30 y 100 px. En H-b la recámara queda a 1,9 px. Los 12-14 px de la boca se atribuyen al detector, no a la cámara: con la cámara rígida sobre el arma la boca no se puede mover respecto a la recámara, y el error crece con la velocidad de giro, como cuando la plantilla arrastra fondo `[inferido]`.
+- **T-lect sin ganadora.** Las lecturas (a), (e) y (f) coinciden entre sí y quedan a 12-14 px por ese error de la boca; (d), el hueso, a ~150 px; (b) y (c), sin cobertura.
+- **Hueco de medida.** La plantilla se toma centrada en la proyección de la primera captura, así que un sesgo constante entre la lectura y el arma no se vería.
+- `look_at`, `follow`, `mount03`, H-c y las seis negativas: INCONCLUSO por cobertura baja.
+
+**Hechos del motor medidos** (también valen para F4):
+- `Camera.SetFOV(1.0472)` a 1920×1080 da f ≈ 681-684 px, ~77° de FOV vertical efectivo, mientras `GetCurrentFOV` devuelve 1,0472. El FOV del documento de escena no se puede convertir a píxeles con el convenio vertical ni con el horizontal: hay que medirlo.
+- Las entidades `ECE_LOCAL` no reciben FRAME ni POSTFRAME (House, ItemBase); `PlayerBase.EOnPostFrame` sí, una vez por frame. Por eso H-b vive en el `PlayerBase` local.
+- `float.ToString` da ~6 cifras: 1 cm a x ≈ 8400 m. Las posiciones de los registros van relativas a un origen entero.
+- Un cliente sin foco no carga texturas, muestra el menú de pausa y baja a ~20 fps. Las corridas se hacen con el cliente al frente.
+- `dayz_test_run` de dayz-mcp no acepta argumentos de cliente, así que el banco es una instancia propia (DayZDiag, puerto 2402).
+
+**Cambios del plan:**
+- §3.6: la cámara de `mount` se escribe en H-b, salvo que S-track·2 lo desmienta. Para `look_at` y `follow` no hay decisión.
+- §4.2, H-b: es el `PlayerBase` local, no una entidad propia.
+- §4.1: la calibración usa una secuencia pseudoaleatoria con semilla fija y mide la focal en lugar de suponerla.
+
+**S-track·2** hereda de S-track·1 T-ropa, T-red, T-suave, el coche, el actor de IA y los criterios K, y suma:
+1. Un detector con plantilla enmascarada sobre el arma, para quitar el error de la boca.
+2. Una plantilla marcada a mano en una captura, independiente de las lecturas, para cerrar el hueco del sesgo constante.
+3. Más cobertura en `look_at`, `follow`, `mount03` y H-c.
+4. Las negativas, que tienen que salir FALLA para que S-track cierre.
