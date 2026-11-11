@@ -586,6 +586,28 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
   .ovl.tr{flex-direction:column}
   .types div{grid-template-columns:1fr;gap:4px}
 }
+/* Co-edición con la IA, simulada (plan 2026-11-10 §2.3): su color, sus tandas y sus avisos */
+:root{--ai:#b9a2ff}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--ai:#5a35c8}}
+:root[data-theme="light"]{--ai:#5a35c8}
+:root[data-theme="dark"]{--ai:#b9a2ff}
+.ai-b{font-size:12px;color:var(--ai);white-space:nowrap}
+.row:has(.ai-b){grid-template-columns:14px minmax(0,1fr) auto 16px 20px 20px}
+.ai-st b{color:var(--ai)}
+.tabs .n.ai{color:var(--ai)}
+.ai-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--ai)}
+.ai-head{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);font-size:13px;color:var(--fg-2)}
+.ai-prop{display:flex;align-items:center;gap:8px;margin:8px 12px;padding:8px 10px;border:1px solid var(--ai);border-radius:4px;font-size:13px}
+.ai-prop span{flex:1}
+.ai-row{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid var(--line);font-size:13px}
+.ai-row .op{display:flex;flex-direction:column;min-width:0}
+.ai-row .op small{color:var(--muted);font-size:12px}
+.ai-row.off{opacity:.7}
+.ai-row .age,.ai-log .age{color:var(--muted);font-size:12px;white-space:nowrap}
+.ai-sub{padding:8px 12px 4px;font-size:12px;color:var(--muted)}
+.ai-log{display:flex;gap:10px;justify-content:space-between;padding:4px 12px;font-size:13px;color:var(--fg-2)}
+.ai-log.fail span:first-child{color:var(--st-fail)}
+.ai-log.wait span:first-child{color:var(--st-part)}
 </style>
 
 <div id="app">
@@ -714,7 +736,7 @@ fieldset.lockf{border:0;margin:0;padding:0;min-width:0}
     <p style="margin-top:12px">Es la letra del sistema: en Windows salen Segoe UI Variable y Cascadia Mono. La familia, el tamaño y los grises son una elección propia; de Unreal 5 y Reforger se copia el patrón (tema oscuro por capas, paneles acoplados y texto denso), no sus valores. El texto va a 13 px con cifras tabulares para que los números no bailen, y nada baja de 12 px. La monoespaciada se queda para coordenadas y tiempos; los nombres de clase y los códigos van en letra normal o en los detalles técnicos. Los menús del DayZ Editor van en minúsculas y sin versalitas, y así van aquí los títulos.</p>
 
     <h3>Fuera de M1</h3>
-    <p>Aunque algún referente lo tenga, no entra en M1: vista 3D en la web, varios directores a la vez, grabar vídeo dentro del producto, cambiar de mapa, la IA y el MCP, y los eventos de roleplay. Tampoco la paleta de comandos ni el modo imán del DayZ Editor: no los pide el spec.</p>
+    <p>Aunque algún referente lo tenga, no entra en M1: vista 3D en la web, varios directores a la vez, grabar vídeo dentro del producto, cambiar de mapa, que la IA proponga escenas enteras y los eventos de roleplay. La IA que edita el borrador a la vez que tú sí entra (decidido el 10 de noviembre); en el prototipo es de ejemplo, en «Simular». Tampoco la paleta de comandos ni el modo imán del DayZ Editor: no los pide el spec.</p>
 
   </div>
 </div>
@@ -1662,6 +1684,7 @@ function drawScene(g) {
       }
       if (sel && sel.type === 'ent' && sel.ids.includes(e.id)) { ring(g, x, y, kind === 'actor' ? 15 : kind === 'objeto' ? 16 : 12.5); if (kind !== 'actor') label(g, e.name, x + 15, y + 4, false, true); }
       if (S.locked[e.id] && V.s > 1) drawLock(g, x - 1, y - 15);
+      aiMark(g, e, x, y);
     });
   });
   // cámaras
@@ -1982,7 +2005,7 @@ function renderPeers() {
 }
 function treeRow(e) {
   const st = entState(e), sel = S.sel && S.sel.type === 'ent' && S.sel.ids.includes(e.id), mark = st === 'nuevo' || st === 'cambiado';
-  return `<div class="row${S.hidden[e.id] ? ' off' : ''}" role="treeitem" aria-selected="${sel}" tabindex="${sel ? 0 : -1}" data-act="sel" data-v="ent:${e.id}" title="${esc(e.cls)} · ${esc(st === 'fuera' && worldDoubt() ? 'Sin lectura del juego' : ESTATE[st].label)}">${gle(e)}<span class="nm">${esc(e.name)}</span><span class="st ${ESTATE[st].cls}">${mark ? sm(st) : ''}</span><button class="tg${S.locked[e.id] ? ' on' : ''}" data-act="lock" data-v="${e.id}" aria-label="${S.locked[e.id] ? 'Desbloquear' : 'Bloquear'} ${esc(e.name)}">${ic(S.locked[e.id] ? 'lock' : 'unlock')}</button><button class="tg${S.hidden[e.id] ? ' on' : ''}" data-act="eye" data-v="${e.id}" aria-label="${S.hidden[e.id] ? 'Mostrar' : 'Ocultar'} ${esc(e.name)} en el mapa">${ic(S.hidden[e.id] ? 'eyeoff' : 'eye')}</button></div>`;
+  return `<div class="row${S.hidden[e.id] ? ' off' : ''}" role="treeitem" aria-selected="${sel}" tabindex="${sel ? 0 : -1}" data-act="sel" data-v="ent:${e.id}" title="${esc(e.cls)} · ${esc(st === 'fuera' && worldDoubt() ? 'Sin lectura del juego' : ESTATE[st].label)}">${gle(e)}<span class="nm">${esc(e.name)}</span>${aiBadge(e.id)}<span class="st ${ESTATE[st].cls}">${mark ? sm(st) : ''}</span><button class="tg${S.locked[e.id] ? ' on' : ''}" data-act="lock" data-v="${e.id}" aria-label="${S.locked[e.id] ? 'Desbloquear' : 'Bloquear'} ${esc(e.name)}">${ic(S.locked[e.id] ? 'lock' : 'unlock')}</button><button class="tg${S.hidden[e.id] ? ' on' : ''}" data-act="eye" data-v="${e.id}" aria-label="${S.hidden[e.id] ? 'Mostrar' : 'Ocultar'} ${esc(e.name)} en el mapa">${ic(S.hidden[e.id] ? 'eyeoff' : 'eye')}</button></div>`;
 }
 // Una línea dice qué hay en el juego y la edad de la lectura; las filas solo llevan icono si algo difiere (UX-06)
 function worldLine() {
@@ -2261,7 +2284,7 @@ function renderDock() {
   const sc = el.querySelector('.pb') ? el.querySelector('.pb').scrollTop : 0;
   const errs = validate(S.doc), active = Q.filter(o => o.state === 'pendiente' || o.state === 'ejecutando').length;
   const tabs = S.ws === 'escena'
-    ? [['actividad', 'Actividad', active ? `<span class="n live">${active}</span>` : ''], ['historial', 'Historial', `<span class="n">${S.undo.length}</span>`], ['validacion', 'Validación', errs.length ? `<span class="n bad">${errs.length}</span>` : '<span class="n">0</span>']]
+    ? [['actividad', 'Actividad', active ? `<span class="n live">${active}</span>` : ''], ['historial', 'Historial', `<span class="n">${S.undo.length}</span>`], ['validacion', 'Validación', errs.length ? `<span class="n bad">${errs.length}</span>` : '<span class="n">0</span>'], ...aiTabs()]
     : [['timeline', 'Vista previa del mapa', ''], ['actividad', 'Actividad', active ? `<span class="n live">${active}</span>` : '']];
   const cur = S.ws === 'escena' ? S.dtab : S.rdtab;
   let tools = '';
@@ -2284,7 +2307,8 @@ function renderDock() {
   } else if (cur === 'validacion') {
     // primero el mensaje; el código y la ruta al campo, al lado (UX-05, CU-02)
     body = errs.length ? errs.map(e => `<div class="vrow"><span>${esc(e.msg)}</span><span class="vc"><code>${e.code}</code><code class="ptr">${esc(e.ptr)}</code></span><button class="btn sm" data-act="val-go" data-v="${esc(e.go)}" data-fld="${esc(e.fld || '')}">Ver</button></div>`).join('') : `<div class="empty"><b>Sin errores.</b> El backend validó la escena hace <span data-since="${S.validatedAt}"></span>: clases del catálogo, dentro del mapa, gestos certificados, presupuesto y tiempos de las cámaras.</div>`;
-  } else body = timelineHtml();
+  } else if (cur === 'ia') body = aiHtml();
+  else body = timelineHtml();
   el.innerHTML = `<div class="ph"><div class="tabs" role="tablist">${tabs.map(t => `<button role="tab" data-act="${S.ws === 'escena' ? 'dtab' : 'rdtab'}" data-v="${t[0]}" aria-selected="${cur === t[0]}" ${t[0] === 'actividad' ? 'data-ref="Log Console: World Editor de Reforger"' : t[0] === 'timeline' ? 'data-ref="Sequencer de Unreal"' : ''}>${t[1]} ${t[2]}</button>`).join('')}</div>${bar}</div><div class="pb">${body}</div>`;
   const pb = el.querySelector('.pb'); if (pb && cur !== 'timeline') pb.scrollTop = sc;
   tick();
@@ -2374,7 +2398,7 @@ function renderBanner() {
 function renderStatus() {
   const errs = validate(S.doc).length;
   const val = offline() ? 'Escena sin validar: falta el backend' : errs ? `<b class="bad">${pl(errs, 'error', 'errores')} en la escena</b>` : 'Escena sin errores';
-  $('#stInfo').innerHTML = `<span id="stWorld" title="Mundo ${S.epoch} · 15 360 m de lado">Chernarus</span><span id="stGame" title="DayZServer ${S.build || '1.30.164200'} retail · Expansion ${S.sim.expansion ? '1.9.80' : 'no cargado'}">DayZ <b>1.30</b> · Expansion <b>${S.sim.expansion ? 'cargado' : 'no cargado'}</b></span><span>${val}</span><span>MCP <b>apagado</b></span>`;
+  $('#stInfo').innerHTML = `<span id="stWorld" title="Mundo ${S.epoch} · 15 360 m de lado">Chernarus</span><span id="stGame" title="DayZServer ${S.build || '1.30.164200'} retail · Expansion ${S.sim.expansion ? '1.9.80' : 'no cargado'}">DayZ <b>1.30</b> · Expansion <b>${S.sim.expansion ? 'cargado' : 'no cargado'}</b></span><span>${val}</span>${aiStatus()}`;
 }
 function tick() {
   const t = now();
@@ -2507,7 +2531,7 @@ function gridMenu(anchor) {
 }
 function simMenu(anchor) {
   const t = (k, label) => `<button class="mi" data-act="sim" data-v="${k}"><input type="checkbox" ${S.sim[k] ? 'checked' : ''} tabindex="-1"> ${label}</button>`;
-  openMenu(anchor, `<h5>Simular el juego · solo en el prototipo</h5>${t('backend', 'Backend de la web en marcha')}${t('server', 'Servidor conectado')}${t('director', 'Tu juego conectado')}${t('expansion', 'Expansion cargado en el servidor')}${t('dof', 'Profundidad de campo de vídeo activada')}${t('fault', 'Que el próximo Aplicar falle a mitad')}<hr><button class="mi" data-act="sim-reboot">Reiniciar el servidor (mundo nuevo)</button><button class="mi" data-act="sim-gamestop" ${takeActive() ? '' : 'disabled'}>Pulsar «Parar toma» en tu juego</button><div class="note">Sirve para ver cómo responde la interfaz cuando el juego no hace lo que se le pide.</div>`);
+  openMenu(anchor, `<h5>Simular el juego · solo en el prototipo</h5>${t('backend', 'Backend de la web en marcha')}${t('server', 'Servidor conectado')}${t('director', 'Tu juego conectado')}${t('expansion', 'Expansion cargado en el servidor')}${t('dof', 'Profundidad de campo de vídeo activada')}${t('fault', 'Que el próximo Aplicar falle a mitad')}${aiSimItem()}<hr><button class="mi" data-act="sim-reboot">Reiniciar el servidor (mundo nuevo)</button><button class="mi" data-act="sim-gamestop" ${takeActive() ? '' : 'disabled'}>Pulsar «Parar toma» en tu juego</button><div class="note">Sirve para ver cómo responde la interfaz cuando el juego no hace lo que se le pide.</div>`);
 }
 let capture = null;
 function keysDialog() {
@@ -2590,9 +2614,12 @@ const REFS = [
   ['En Rodaje, con el cursor de tiempo movido, el actor también se pinta rayado donde estaría; clic en un gesto elige a su actor', 'Sequencer de Unreal y caminos de Replay Mod', 'Al arrastrar el cursor de tiempo, lo animado se ve donde está en ese instante; aquí es una estimación a la velocidad supuesta y va rayada (UX-30)', 'https://dev.epicgames.com/documentation/en-us/unreal-engine/sequencer-cinematic-editor-unreal-engine', 'Gemini 4 y Muse'],
   ['La toma también se para desde tu juego, con la tecla «Parar toma» del mod de cliente', 'Rockstar Editor', 'Dentro de GTA V, una tecla empieza a grabar y otra para (F1 y F2 de serie), sin salir del juego (UX-46)', 'https://support.rockstargames.com/articles/4gZPiqdUZD8ZhaJ81IPDJr/how-to-record-clips-and-access-the-rockstar-editor-in-gtav-on-pc', 'Gemini 4'],
   ['Cada objeto lleva el icono de su tipo, el mismo en el mapa y en las listas', 'Eden y Arma 3', 'Cada entidad con un icono en la vista y en la lista de entidades; en Arma 3 el icono va con la clase. Los dibujos son propios (UX-48)', 'https://community.bistudio.com/wiki/Eden_Editor:_Terminology', 'Guillermo'],
-  ['Vista previa al escoger en Añadir, con su tamaño y su planta a escala, y la planta del objeto bajo el cursor al colocarlo', 'Eden (Asset Browser)', 'Una captura del juego por clase, en 16:9, al escoger, y lo que se coloca va con el cursor. Hasta que lleguen las capturas con el catálogo del mod, el icono del tipo (UX-49)', 'https://community.bistudio.com/wiki/Eden_Editor:_Configuring_Asset_Previews', 'Guillermo']
+  ['Vista previa al escoger en Añadir, con su tamaño y su planta a escala, y la planta del objeto bajo el cursor al colocarlo', 'Eden (Asset Browser)', 'Una captura del juego por clase, en 16:9, al escoger, y lo que se coloca va con el cursor. Hasta que lleguen las capturas con el catálogo del mod, el icono del tipo (UX-49)', 'https://community.bistudio.com/wiki/Eden_Editor:_Configuring_Asset_Previews', 'Guillermo'],
+  ['La IA co-edita: lo que toca lleva su color y «IA · hace…» en el mapa y en la Jerarquía', 'Team Create de Roblox Studio', 'Lo que selecciona cada colaborador se resalta con un color propio en la vista, y su cursor de script también', 'https://create.roblox.com/docs/studio/collaboration', 'Claude'],
+  ['Si la persona y la IA tocan el mismo campo, se queda lo de la persona', 'Figma (multijugador)', 'El servidor manda y en un mismo campo gana el último valor que le llega; aquí la IA no gana nunca a la persona (PROPIO, I2)', 'https://www.figma.com/blog/how-figmas-multiplayer-technology-works/', 'Claude'],
+  ['La IA propone aplicar y aplica la persona; cada tanda de la IA se deshace entera', 'PROPIO (spec H1 e I3), sobre Push Changes de UEFN', 'UEFN separa lo editado de lo que corre; aquí la IA nunca manda nada al juego y Ctrl+Z deshace solo lo tuyo', 'https://dev.epicgames.com/documentation/en-us/fortnite/first-island-04-playtest-your-island-in-fortnite', 'Claude'],
 ];
-const SRC = [['community.bistudio.com/wiki/', 'Wiki de Bohemia'], ['github.com/InclementDab/DayZ-Editor/wiki/', 'Wiki del DayZ Editor'], ['raw.githubusercontent.com/wiki/InclementDab/DayZ-Editor/', 'Wiki del DayZ Editor'], ['dev.epicgames.com/documentation/unreal-engine/', 'Documentación de Unreal'], ['dev.epicgames.com/documentation/en-us/unreal-engine/', 'Documentación de Unreal'], ['dev.epicgames.com/', 'Documentación de UEFN'], ['gtabase.com/', 'GTABase'], ['badlion.net/wiki/', 'Wiki de Badlion'], ['replaymod.com/', 'Documentación de Replay Mod'], ['docs.unrealengine.com/', 'Documentación de Unreal'], ['reaper.fm/guides/', 'Guía de REAPER'], ['ableton.com/en/manual/', 'Manual de Ableton Live'], ['obsproject.com/kb/', 'Guía de OBS'], ['support.microsoft.com/', 'Soporte de Microsoft'], ['chromium.org/', 'Chromium'], ['create.roblox.com/docs/', 'Documentación de Roblox'], ['dzcommander.com/', 'DZ Commander'], ['dockview.dev/', 'Documentación de Dockview']];
+const SRC = [['community.bistudio.com/wiki/', 'Wiki de Bohemia'], ['github.com/InclementDab/DayZ-Editor/wiki/', 'Wiki del DayZ Editor'], ['raw.githubusercontent.com/wiki/InclementDab/DayZ-Editor/', 'Wiki del DayZ Editor'], ['dev.epicgames.com/documentation/unreal-engine/', 'Documentación de Unreal'], ['dev.epicgames.com/documentation/en-us/unreal-engine/', 'Documentación de Unreal'], ['dev.epicgames.com/', 'Documentación de UEFN'], ['gtabase.com/', 'GTABase'], ['badlion.net/wiki/', 'Wiki de Badlion'], ['replaymod.com/', 'Documentación de Replay Mod'], ['docs.unrealengine.com/', 'Documentación de Unreal'], ['reaper.fm/guides/', 'Guía de REAPER'], ['ableton.com/en/manual/', 'Manual de Ableton Live'], ['obsproject.com/kb/', 'Guía de OBS'], ['support.microsoft.com/', 'Soporte de Microsoft'], ['chromium.org/', 'Chromium'], ['create.roblox.com/docs/', 'Documentación de Roblox'], ['dzcommander.com/', 'DZ Commander'], ['dockview.dev/', 'Documentación de Dockview'], ['figma.com/blog/', 'Blog de Figma']];
 function srcLabel(u) {
   const s = u.replace(/^https:\/\/(www\.)?/, '').replace(/[?#].*$/, ''), m = SRC.find(x => s.startsWith(x[0]));
   if (!m) return s;
@@ -2652,6 +2679,7 @@ document.addEventListener('click', e => {
   const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
   const v = b.dataset.v, a = b.dataset.act;
   const inMenu = m.contains(b);
+  if (a.startsWith('ai-')) { aiAct(a, v); if (inMenu) closeMenu(); return; }
   switch (a) {
     case 'ws': go(v); break;
     case 'undo': undo(); break;
@@ -2994,6 +3022,118 @@ if (mq.addEventListener) mq.addEventListener('change', rebuild);
 new MutationObserver(rebuild).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
 if (window.ResizeObserver) new ResizeObserver(() => resizeMap()).observe($('#mapwrap')); else window.addEventListener('resize', resizeMap);
 if (window.ResizeObserver) new ResizeObserver(() => document.documentElement.style.setProperty('--sth', $('#status').offsetHeight + 'px')).observe($('#status'));
+
+/* =========================================================
+   Co-edición con la IA, simulada (DayZSandbox_dev/plans/2026-11-10-coedicion-ia-plan.md §2.2-2.6 y §6). Solo en el prototipo: la IA
+   de verdad entra por su cliente MCP y el backend serializa sus cambios con los de la persona. Aquí una IA de ejemplo lee la escena al
+   conectarse y manda tres tandas con nombre. La persona manda: si cambió un campo después de que la IA lo leyera, a la IA se le rechaza
+   (conflicto) y se queda el valor humano; mientras arrastras una entidad o tienes abierto uno de sus campos, la IA espera (en uso). La IA
+   no entra en el Deshacer de la persona, cada tanda se deshace entera desde la pestaña IA y la IA nunca aplica: solo lo propone
+   ========================================================= */
+const AI = {on: false, paused: false, auto: true, wait: 0, script: [], batches: [], log: [], touched: {}, proposal: null, busyLogged: null, pauseLogged: false, lastAt: 0};
+const AI_START = 2500, AI_STEP = 1200, AI_FRESH = 10000;
+const AI_PLAN = () => {
+  const bus = ent('obj-01'), at = (dx, dz) => bus ? {x: +(bus.x + dx).toFixed(1), z: +(bus.z + dz).toFixed(1)} : null;
+  return [
+    {label: 'IA: dos infectados junto al autobús', ops: [{id: 'zmb-06', set: at(3, -4)}, {id: 'zmb-07', set: at(-3, -5)}]},
+    {label: 'IA: niebla del amanecer a 0,20', ops: [{id: 'ambiente', set: {niebla: 0.2}}]},
+    {label: 'IA: girar el Camión V3S hacia el autobús', ops: [{id: 'obj-03', set: {yaw: 210}}]}
+  ];
+};
+const aiTarget = (d, id) => id === 'ambiente' ? d.ambiente : d.entities.find(e => e.id === id);
+const aiName = id => id === 'ambiente' ? 'el ambiente' : (ent(id) ? ent(id).name : id);
+const FLDN = {x: 'la posición', z: 'la posición', yaw: 'el rumbo', niebla: 'la niebla'};
+// la IA lee la escena al empezar: lo que lee es la base de cada campo que va a cambiar
+function aiRead() {
+  AI.script = AI_PLAN().map((b, i) => ({id: 'ia-' + (AI.batches.length + i + 1), label: b.label, ops: b.ops.filter(o => o.set).map(o => { const t = aiTarget(S.doc, o.id); return {id: o.id, set: o.set, base: t ? Object.fromEntries(Object.keys(o.set).map(k => [k, t[k]])) : null}; })}));
+}
+function aiConnect() { AI.on = true; AI.paused = false; AI.proposal = null; AI.pauseLogged = false; AI.busyLogged = null; aiRead(); AI.wait = now() + AI_START; aiLog('info', 'La IA se conectó y leyó la escena.'); renderAll(); }
+function aiOff() { AI.on = false; AI.script = []; if (S.dtab === 'ia') S.dtab = 'actividad'; renderAll(); }
+function aiLog(kind, msg) { if (AI.log[0] && AI.log[0].msg === msg) { AI.log[0].t = now(); return; } AI.log.unshift({kind, msg, t: now()}); AI.log.length = Math.min(AI.log.length, 8); }
+// un busy por campo abierto o arrastre de la persona
+function aiBusy(id) {
+  if (drag && !drag.pan && drag.ids && drag.ids.includes(id)) return true;
+  const f = document.activeElement;
+  return !!(f && f.closest && f.closest('#colR') && /^(INPUT|SELECT|TEXTAREA)$/.test(f.tagName) && selIds().includes(id));
+}
+// el cambio de la IA va también a cada paso del Deshacer de la persona, para que Ctrl+Z no lo deshaga (deshacer por autor, §2.4)
+function aiWrite(id, vals) {
+  const put = d => { const t = aiTarget(d, id); if (t) Object.assign(t, vals); };
+  put(S.doc); S.undo.forEach(o => { put(o.before); put(o.after); }); S.redo.forEach(o => { put(o.before); put(o.after); });
+  S.doc.rev++; S.savedAt = now(); S.validatedAt = now();
+}
+// una operación de la IA: se acepta, espera o se rechaza con su motivo
+function aiTick() {
+  if (!AI.on || !AI.script.length || now() < AI.wait) return;
+  if (AI.paused) { if (!AI.pauseLogged) { aiLog('fail', 'Rechazado: la IA está en pausa. Sus cambios esperan hasta que la reanudes.'); AI.pauseLogged = true; renderDock(); } return; }
+  const b = AI.script[0], op = b.ops[0];
+  let rec = AI.batches.find(x => x.id === b.id);
+  if (!rec) { rec = {id: b.id, label: b.label, ops: [], t: now(), undone: false, notes: []}; AI.batches.unshift(rec); }
+  const next = () => { b.ops.shift(); if (!b.ops.length) { AI.script.shift(); if (!AI.script.length) { AI.proposal = {hash: docHash(S.doc), t: now()}; aiLog('info', 'La IA terminó sus cambios y propone aplicar la escena. Aplicar sigue siendo cosa tuya.'); } } AI.wait = now() + AI_STEP; };
+  const why = editBlock();
+  if (why) { aiLog('fail', `Rechazado: ${takeActive() ? 'durante la toma nadie edita la escena, tampoco la IA' : 'sin backend no se guarda ningún cambio'}. ${aiName(op.id)} no cambia.`); AI.wait = now() + AI_STEP; renderAll(); return; }
+  const t = aiTarget(S.doc, op.id);
+  if (!t) { aiLog('fail', `Rechazado: ${op.id} ya no está en la escena.`); next(); renderAll(); return; }
+  if (op.id !== 'ambiente' && aiBusy(op.id)) { if (AI.busyLogged !== op.id) { aiLog('wait', `En espera: estás moviendo o editando ${t.name}. La IA lo reintenta cuando lo sueltes.`); AI.busyLogged = op.id; renderDock(); } AI.wait = now() + 400; return; }
+  AI.busyLogged = null;
+  const changed = Object.keys(op.set).filter(k => canon(t[k]) !== canon(op.base[k]));
+  if (changed.length) { aiLog('fail', `Rechazado: cambiaste ${FLDN[changed[0]] || changed[0]} de ${aiName(op.id)} después de que la IA lo leyera. Se queda tu valor.`); next(); renderAll(); return; }
+  const before = Object.fromEntries(Object.keys(op.set).map(k => [k, t[k]]));
+  aiWrite(op.id, op.set); rec.ops.push({id: op.id, before, after: clone(op.set)}); AI.lastAt = now();
+  if (op.id !== 'ambiente') AI.touched[op.id] = now();
+  next(); renderAll();
+}
+// Deshacer tanda: vuelve cada campo de la tanda a lo de antes, salvo lo que la persona cambió después, que se conserva y se dice (CO-4)
+function aiUndo(id) {
+  const rec = AI.batches.find(x => x.id === id); if (!rec || rec.undone) return;
+  const why = editBlock(); if (why) return toast(why, 'fail');
+  const kept = [];
+  rec.ops.slice().reverse().forEach(o => {
+    const t = aiTarget(S.doc, o.id); if (!t) return;
+    const ks = Object.keys(o.after), same = ks.filter(k => canon(t[k]) === canon(o.after[k]));
+    if (same.length < ks.length) kept.push(aiName(o.id));
+    if (same.length) aiWrite(o.id, Object.fromEntries(same.map(k => [k, o.before[k]])));
+    delete AI.touched[o.id];
+  });
+  rec.undone = true; rec.notes = kept;
+  toast(kept.length ? `Tanda deshecha. Se conserva lo que cambiaste después en ${kept.join(' y ')}.` : 'Tanda de la IA deshecha.', kept.length ? '' : 'ok');
+  renderAll();
+}
+// la IA propone y la persona aplica, con la escena que la IA vio (H1, CO-5)
+function aiApply() {
+  if (!AI.proposal) return;
+  if (docHash(S.doc) !== AI.proposal.hash) { toast('La escena cambió desde la propuesta de la IA. Revisa los cambios y aplica con «Aplicar escena».', 'fail'); AI.proposal = null; renderDock(); return; }
+  AI.proposal = null; applyScene();
+}
+function aiAct(a, v) {
+  if (a === 'ai-sim') { if (AI.on) aiOff(); else aiConnect(); return; }
+  if (a === 'ai-pause') { AI.paused = true; AI.pauseLogged = false; toast('IA en pausa: no cambia nada hasta que la reanudes.'); renderAll(); return; }
+  if (a === 'ai-resume') { AI.paused = false; AI.pauseLogged = false; AI.wait = now() + AI_STEP; toast('IA reanudada.'); renderAll(); return; }
+  if (a === 'ai-off') { aiOff(); toast('IA desconectada.'); return; }
+  if (a === 'ai-undo') { aiUndo(v); return; }
+  if (a === 'ai-apply') { aiApply(); return; }
+  if (a === 'ai-dismiss') { AI.proposal = null; renderDock(); }
+}
+const aiFresh = id => AI.touched[id] && now() - AI.touched[id] < AI_FRESH;
+const aiSimItem = () => `<button class="mi" data-act="ai-sim"><input type="checkbox" ${AI.on ? 'checked' : ''} tabindex="-1"> IA co-editora conectada (de ejemplo)</button>`;
+const aiStatus = () => !AI.on ? '<span>MCP <b>apagado</b></span>' : `<span class="ai-st" title="Una IA edita el borrador por MCP; aplicar sigue siendo cosa tuya">IA <b>${AI.paused ? 'en pausa' : now() - AI.lastAt < 3000 ? 'editando' : 'conectada'}</b></span>`;
+const aiTabs = () => AI.on ? [['ia', 'IA', `<span class="n ai">${AI.batches.length}</span>`]] : [];
+const aiBadge = id => aiFresh(id) ? `<span class="ai-b" title="Cambiado por la IA">IA · <span data-since="${AI.touched[id]}" data-fmt="hace %"></span></span>` : '';
+function aiHtml() {
+  const head = `<div class="ai-head"><span class="ai-dot"></span><span>${AI.paused ? 'La IA está en pausa.' : 'La IA edita el mismo borrador que tú. Si tocáis lo mismo, se queda lo tuyo.'}</span><span class="grow"></span>${AI.paused ? '<button class="btn sm" data-act="ai-resume">Reanudar IA</button>' : '<button class="btn sm" data-act="ai-pause">Pausar IA</button>'}<button class="btn sm ghost" data-act="ai-off">Desconectar</button></div>`;
+  const prop = AI.proposal ? `<div class="ai-prop"><span><b>La IA propone aplicar la escena.</b> No se manda nada al juego hasta que lo apliques tú.</span><button class="btn sm" data-act="ai-apply">Aplicar escena</button><button class="btn sm ghost" data-act="ai-dismiss">Descartar</button></div>` : '';
+  const rows = AI.batches.map(r => `<div class="ai-row${r.undone ? ' off' : ''}"><span class="ai-dot"></span><span class="op"><b>${esc(r.label)}</b><small>${pl(r.ops.length, 'cambio', 'cambios')}${r.undone ? ' · deshecha' + (r.notes.length ? `; se conserva lo tuyo en ${esc(r.notes.join(' y '))}` : '') : ''}</small></span><span class="age">hace <span data-since="${r.t}"></span></span>${r.undone || !r.ops.length ? '<span></span>' : `<button class="btn sm ghost" data-act="ai-undo" data-v="${r.id}">Deshacer tanda</button>`}</div>`).join('');
+  const log = AI.log.map(l => `<div class="ai-log ${l.kind}"><span>${esc(l.msg)}</span><span class="age">hace <span data-since="${l.t}"></span></span></div>`).join('');
+  return head + prop + (rows || '<div class="empty">La IA todavía no ha cambiado nada.</div>') + (log ? `<div class="ai-sub">Lo último de la IA</div>${log}` : '');
+}
+// en el mapa, un anillo del color de la IA y «IA · hace 2 s» durante 10 s en lo que acaba de tocar (§2.3)
+function aiMark(g, e, x, y) {
+  if (!aiFresh(e.id)) return;
+  const col = getComputedStyle(document.documentElement).getPropertyValue('--ai').trim() || '#8e6cf0';
+  g.beginPath(); g.arc(x, y, e.kind === 'actor' ? 19 : e.kind === 'objeto' ? 20 : 16.5, 0, Math.PI * 2); g.lineWidth = 2; g.strokeStyle = col; g.stroke();
+  label(g, `IA · hace ${ago(now() - AI.touched[e.id])}`, x + 15, y + 18, false);
+}
+setInterval(() => { aiTick(); if (Object.keys(AI.touched).some(id => now() - AI.touched[id] < AI_FRESH + 1200)) { Object.keys(AI.touched).forEach(id => { if (now() - AI.touched[id] >= AI_FRESH && now() - AI.touched[id] < AI_FRESH + 1200) renderLeft(); }); markMap(); } if (AI.on) renderStatus(); }, 300);
 
 // arranque
 applyLayout();
