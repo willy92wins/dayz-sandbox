@@ -64,6 +64,10 @@ const LIB = () => {
 // - el rayado, además, se repite: dos franjas o más de cada tono en su mejor dirección, y cada tono en no más trozos que franjas, más uno;
 // - y la pantalla: los píxeles de cada texto en una captura del mapa, frente al lienzo, para lo que CSS hace después (un filtro, una opacidad,
 //   un velo encima).
+// Desde la quinta (AR5-01 a AR5-03): en la pantalla, cada píxel de cada texto es el suyo del lienzo, no uno entre sus vecinos; no se aparta
+// más que lo que tapa lo que flota encima, sin margen, y en su sombra vale el lienzo oscurecido como mucho lo que da su opacidad; en la
+// captura, además, la letra llega a 4,5:1 y sus huecos siguen sin tinta, y un texto pintado del que no se ve ningún píxel no pasa. Un
+// lienzo con WebGL o WebGPU, o que pinta otro hilo, sigue de procedencia desconocida aunque se le cambie el tamaño.
 // No sigue un texto copiado a mano, byte a byte, de un ImageData a otro, ni uno hecho con createImageData; no mira si los huecos de un contorno
 // se rellenan después con otro color que también se distinga de los guiones, ni reconoce la letra: mide su contraste, sus huecos y de dónde
 // sale, no que se lea como el carácter que es. Solo graba cuando __cv.on, y se queda con el último fotograma entero del mapa, que empieza
@@ -93,8 +97,10 @@ const PROBE = () => {
   const isCanvas = s => s instanceof HTMLCanvasElement || (!!window.OffscreenCanvas && s instanceof OffscreenCanvas);
   // lo que lleva una fuente de imagen: un lienzo, lo suyo; un ImageBitmap, lo que se apuntó al hacerlo, y si no se apuntó, procedencia
   // desconocida; un ImageData, lo del lienzo de donde se leyó, y si se hizo a mano, nada (byte a byte no se sigue); y cualquier otra imagen
-  // (<img>, <video>, un SVG, un VideoFrame), procedencia desconocida
-  const srcOf = s => isCanvas(s) ? copyOf(TXT.get(s)) : window.ImageBitmap && s instanceof ImageBitmap ? (TXT.has(s) ? copyOf(TXT.get(s)) : { t: new Set(), u: true }) : s instanceof ImageData ? copyOf(IMG.get(s)) : { t: new Set(), u: true };
+  // (<img>, <video>, un SVG, un VideoFrame), procedencia desconocida. Al cambiarle el tamaño a un lienzo se borra lo pintado, sus textos y lo
+  // que le llegó, pero no que pinte con WebGL o WebGPU o desde otro hilo: el contexto sigue ahí y vuelve a pintar sin otro getContext (AR5-03)
+  const ODD = new WeakSet(), ofCanvas = c => { const r = copyOf(TXT.get(c)); if (ODD.has(c)) r.u = true; return r; };
+  const srcOf = s => isCanvas(s) ? ofCanvas(s) : window.ImageBitmap && s instanceof ImageBitmap ? (TXT.has(s) ? copyOf(TXT.get(s)) : { t: new Set(), u: true }) : s instanceof ImageData ? copyOf(IMG.get(s)) : { t: new Set(), u: true };
   [window.HTMLCanvasElement, window.OffscreenCanvas].filter(Boolean).forEach(C => ['width', 'height'].forEach(k => {
     const d = Object.getOwnPropertyDescriptor(C.prototype, k);
     Object.defineProperty(C.prototype, k, { configurable: true, enumerable: d.enumerable, get: d.get, set(v) { TXT.delete(this); d.set.call(this, v); } });
@@ -102,10 +108,10 @@ const PROBE = () => {
   // las vías de un ImageBitmap: hacerlo de una fuente, o sacarlo de un OffscreenCanvas, lleva lo de la fuente; ponerlo en un lienzo con
   // bitmaprenderer le pone lo suyo. Un lienzo con WebGL o WebGPU, o que pinta otro hilo, es de procedencia desconocida (AR4-01)
   if (window.createImageBitmap) { const cib = window.createImageBitmap; window.createImageBitmap = function (src) { const r = srcOf(src); return cib.apply(this, arguments).then(b => { TXT.set(b, r); return b; }); }; }
-  if (window.OffscreenCanvas && OffscreenCanvas.prototype.transferToImageBitmap) { const tt = OffscreenCanvas.prototype.transferToImageBitmap; OffscreenCanvas.prototype.transferToImageBitmap = function () { const r = copyOf(TXT.get(this)), b = tt.apply(this, arguments); TXT.delete(this); TXT.set(b, r); return b; }; }
+  if (window.OffscreenCanvas && OffscreenCanvas.prototype.transferToImageBitmap) { const tt = OffscreenCanvas.prototype.transferToImageBitmap; OffscreenCanvas.prototype.transferToImageBitmap = function () { const r = ofCanvas(this), b = tt.apply(this, arguments); TXT.delete(this); TXT.set(b, r); return b; }; }
   if (window.ImageBitmapRenderingContext) { const tf = ImageBitmapRenderingContext.prototype.transferFromImageBitmap; ImageBitmapRenderingContext.prototype.transferFromImageBitmap = function (b) { TXT.delete(this.canvas); if (b) mix(this.canvas, srcOf(b)); return tf.apply(this, arguments); }; }
-  [window.HTMLCanvasElement, window.OffscreenCanvas].filter(Boolean).forEach(C => { const gc = C.prototype.getContext; C.prototype.getContext = function (type) { if (/webgl|webgpu/i.test(String(type))) taint(this); return gc.apply(this, arguments); }; });
-  if (HTMLCanvasElement.prototype.transferControlToOffscreen) { const tc = HTMLCanvasElement.prototype.transferControlToOffscreen; HTMLCanvasElement.prototype.transferControlToOffscreen = function () { taint(this); return tc.apply(this, arguments); }; }
+  [window.HTMLCanvasElement, window.OffscreenCanvas].filter(Boolean).forEach(C => { const gc = C.prototype.getContext; C.prototype.getContext = function (type) { if (/webgl|webgpu/i.test(String(type))) ODD.add(this); return gc.apply(this, arguments); }; });
+  if (HTMLCanvasElement.prototype.transferControlToOffscreen) { const tc = HTMLCanvasElement.prototype.transferControlToOffscreen; HTMLCanvasElement.prototype.transferControlToOffscreen = function () { ODD.add(this); return tc.apply(this, arguments); }; }
   // la imagen con texto que espera su letra: la siguiente orden de dibujo del mapa decide si era su halo
   let pending = null;
   const probe = (ctx, draw, style, args) => {
@@ -292,26 +298,31 @@ const PROBE = () => {
   // de sus guiones y el de sus huecos. De cada icono, su `d`, cuánto del interior toca, cuánto se sale de él y el contraste entre el color
   // mediano de lo que cubre entero y el de lo que deja ver (UX-48).
   let KEEP = [], KD = null;
+  const med = cs => { if (!cs.length) return null; const s = cs.slice().sort((a, b) => lum(a) - lum(b)); return s[s.length >> 1]; };
+  const r2 = v => Math.round(v * 100) / 100;
+  // la letra: su color final sin la parte del fondo que deja ver su borde, E = (F − B·(1 − cubierto)) / cubierto, frente al fondo B, el color
+  // mediano de los píxeles del anillo que tiene cerca, a 4 px o menos (el de todo el anillo si cerca hay menos de 3): así cuenta un fondo que
+  // cambia solo en una parte del texto (AR4-01). Y sus huecos: los que acaban pareciéndose a la tinta, a menos de 1,5:1 de ella, se han
+  // rellenado después, como una cifra tapada con un bloque de su misma tinta. `col` dice el color de cada píxel: el del lienzo acabado, o el
+  // de la captura de la pantalla (AR5-01)
+  const legible = (col, glyph, ring, holes) => {
+    const rc = ring.map(col), B0 = med(rc);
+    if (!B0) return null;
+    let low = 0, min = 99;
+    glyph.forEach(([x, y, k]) => {
+      const nb = rc.filter((_, i) => Math.abs(ring[i][0] - x) <= 4 && Math.abs(ring[i][1] - y) <= 4), B = nb.length >= 3 ? med(nb) : B0;
+      const F = col([x, y]), r = ratio([0, 1, 2].map(c => Math.max(0, Math.min(255, (F[c] - B[c] * (1 - k)) / k))), B); if (r < 4.5) low++; if (r < min) min = r;
+    });
+    return { n: glyph.length, low, min: r2(min), holes: holes.length, filled: holes.filter(([x, y, ...e]) => ratio(col([x, y]), e) < 1.5).length };
+  };
   cv.finish = () => {
     const c = document.querySelector('#map'), W = c.width, D = gid0.call(c.getContext('2d'), 0, 0, W, c.height).data;
     KD = D; KEEP = cv.texts.map(t => t.raw ? [t.raw.glyph, t.raw.ring, t.raw.holes] : null);
     const col = ([x, y]) => { const i = 4 * (y * W + x); return [D[i], D[i + 1], D[i + 2]]; };
-    const med = cs => { if (!cs.length) return null; const s = cs.slice().sort((a, b) => lum(a) - lum(b)); return s[s.length >> 1]; };
-    const r2 = v => Math.round(v * 100) / 100;
-    // la letra: su color final sin la parte del fondo que deja ver su borde, E = (F − B·(1 − cubierto)) / cubierto, frente al fondo B, el color
-    // mediano de los píxeles del anillo que tiene cerca, a 4 px o menos (el de todo el anillo si cerca hay menos de 3): así cuenta un fondo que
-    // cambia solo en una parte del texto (AR4-01). Y sus huecos: los que acaban pareciéndose a la tinta, a menos de 1,5:1 de ella, se han
-    // rellenado después, como una cifra tapada con un bloque de su misma tinta
     cv.texts.forEach(t => {
       if (!t.raw) return;
-      const { glyph, ring, holes } = t.raw, rc = ring.map(col), B0 = med(rc); delete t.raw;
-      if (!B0) return;
-      let low = 0, min = 99;
-      glyph.forEach(([x, y, k]) => {
-        const nb = rc.filter((_, i) => Math.abs(ring[i][0] - x) <= 4 && Math.abs(ring[i][1] - y) <= 4), B = nb.length >= 3 ? med(nb) : B0;
-        const F = col([x, y]), r = ratio([0, 1, 2].map(c => Math.max(0, Math.min(255, (F[c] - B[c] * (1 - k)) / k))), B); if (r < 4.5) low++; if (r < min) min = r;
-      });
-      t.fin = { n: glyph.length, low, min: r2(min), holes: holes.length, filled: holes.filter(([x, y, ...e]) => ratio(col([x, y]), e) < 1.5).length };
+      const { glyph, ring, holes } = t.raw, f = legible(col, glyph, ring, holes); delete t.raw;
+      if (f) t.fin = f;
     });
     // el icono de un marcador: lo que se pinta con un Path2D en su mismo origen, después de su relleno y antes del siguiente relleno ahí
     const marks = cv.fills.filter(f => f.raw && f.raw.px), icons = cv.fills.concat(cv.strokes).filter(r => r.raw && r.raw.icon);
@@ -366,34 +377,58 @@ const PROBE = () => {
     });
   };
   // Lo que se ve en pantalla, que el lienzo no ve: un filtro o una opacidad de CSS en el mapa o en lo que lo contiene, o algo encima de él
-  // (AR4-01). De cada texto del último fotograma acabado, sus píxeles (su letra, su anillo y sus huecos) en una captura del mapa frente al
-  // lienzo: cuántos se ven distintos. La captura no se escala, y cada píxel del lienzo se busca en el suyo de la captura; como la pantalla
-  // mezcla un píxel con sus vecinos cuando el alto del mapa en CSS no es entero (855,6 px para 856 del lienzo, a 1600 × 960), cuenta como
-  // el del lienzo si en cada canal cae entre el menor y el mayor de sus 3 × 3 vecinos del lienzo, con 8 de 255 de margen. No cuentan los que
-  // caen debajo de lo que flota encima del mapa, con 48 px para su sombra, ni los de los 3 px del borde, donde va el anillo del foco: lo que
-  // tapan es cosa de UX-50. Y cuántos ya no son en el lienzo los que se midieron, si se repintó entre la medida y la captura
+  // (AR4-01). La pantalla pone el lienzo píxel a píxel, sin remuestrearlo, también cuando el alto del mapa en CSS no es entero (855,6 px
+  // para 856 del lienzo, a 1600 × 960: corta la última fila); medido en 18 vistas, de 1280 × 800 a 1920 × 1080, en los dos temas, con
+  // 1 de 255 de diferencia como mucho. Así que cada píxel de cada texto del último fotograma acabado (su letra, su anillo y sus huecos) tiene
+  // que ser en una captura del mapa el suyo del lienzo, a 8 de 255 en cada canal, y no uno cualquiera entre sus vecinos (AR5-01). Antes, el
+  // desplazamiento de toda la captura, de −1 a 1 px en cada eje, que mejor casa con el lienzo, por si la pantalla lo pone una fila más allá.
+  // No cuentan los píxeles que caen debajo de lo que flota encima del mapa, sin más margen, ni los de los 3 px del borde, donde va el anillo
+  // del foco (AR5-02). En la sombra de lo que flota, el píxel vale si es el del lienzo llevado hacia el color de la sombra, en la misma parte
+  // en los tres canales y como mucho lo que oscurece su opacidad; y como una sombra le baja el contraste a lo que cae debajo, además, en la
+  // captura, la letra de cada texto llega a 4,5:1 en cada píxel frente a su fondo, como en el lienzo, y sus huecos siguen sin tinta. Y
+  // cuántos ya no son en el lienzo los que se midieron, si se repintó entre la medida y la captura
   cv.composite = async url => {
     const c = document.querySelector('#map'), W = c.width, H = c.height, d = W / c.clientWidth, im = new Image();
     im.src = url; await im.decode();
     const w = im.naturalWidth, h = im.naturalHeight, o = new OffscreenCanvas(w, h), og = o.getContext('2d'); odraw0.call(og, im, 0, 0);
     const S = ogid0.call(og, 0, 0, w, h).data, D = gid0.call(c.getContext('2d'), 0, 0, W, H).data, m = c.getBoundingClientRect();
-    const ov = [...document.querySelectorAll('#mapwrap .ovl, #legend, #hint, #recBadge, #banner, #toasts > *, #menu, #scrim, #guide')].filter(e => e.getClientRects().length > 0).map(e => { const b = e.getBoundingClientRect(); return [(b.left - m.left - 48) * d, (b.top - m.top - 48) * d, (b.right - m.left + 48) * d, (b.bottom - m.top + 48) * d]; });
-    const off = (x, y) => x < 3 * d || y < 3 * d || x >= W - 3 * d || y >= H - 3 * d || ov.some(q => x >= q[0] && x < q[2] && y >= q[1] && y < q[3]);
-    const dif = (A, B, j) => Math.max(Math.abs(A[j] - B[j]), Math.abs(A[j + 1] - B[j + 1]), Math.abs(A[j + 2] - B[j + 2]));
-    const seen = (x, y) => {
-      const j = 4 * (Math.min(h - 1, Math.floor(y * h / H)) * w + Math.min(w - 1, Math.floor(x * w / W)));
+    // una captura que no tiene el tamaño del lienzo no se compara píxel a píxel: no hay comparación
+    if (Math.abs(w - W) > 1 || Math.abs(h - H) > 1) return KEEP.map(() => null);
+    const els = [...document.querySelectorAll('#mapwrap .ovl, #legend, #hint, #recBadge, #banner, #toasts > *, #menu, #scrim, #guide')].filter(e => e.getClientRects().length > 0);
+    const rect = (b, g = 0, u = 0, v = 0) => [(b.left - m.left + u - g) * d, (b.top - m.top + v - g) * d, (b.right - m.left + u + g) * d, (b.bottom - m.top + v + g) * d];
+    const ov = els.map(e => rect(e.getBoundingClientRect()));
+    // la sombra de cada uno (su box-shadow, sin las de dentro): su color, su opacidad y hasta dónde llega, su caja movida y crecida en su
+    // extensión y en su desenfoque
+    const sh = els.flatMap(e => { const b = e.getBoundingClientRect(); return [...getComputedStyle(e).boxShadow.matchAll(/rgba?\(([^)]*)\)\s+(-?[\d.]+)px\s+(-?[\d.]+)px(?:\s+([\d.]+)px)?(?:\s+(-?[\d.]+)px)?(\s+inset)?/g)].filter(q => !q[6]).map(q => { const k = q[1].split(',').map(Number); return { c: k.slice(0, 3), a: k.length > 3 ? k[3] : 1, r: rect(b, (+q[4] || 0) + (+q[5] || 0), +q[2], +q[3]) }; }); });
+    const inside = (q, x, y) => x >= q[0] && x < q[2] && y >= q[1] && y < q[3];
+    const off = (x, y) => x < 3 * d || y < 3 * d || x >= W - 3 * d || y >= H - 3 * d || ov.some(q => inside(q, x, y));
+    // lo que puede oscurecer la sombra en un píxel: su color y, si caen varias, 1 − el producto de lo que deja pasar cada una
+    const shade = (x, y) => { let pass = 1, col = null; sh.forEach(q => { if (inside(q.r, x, y)) { pass *= 1 - q.a; col = col || q.c; } }); return col ? col.concat(1 - pass) : null; };
+    const fits = (s, q, z) => {
+      let lo = 0, hi = z ? z[3] : 0;
       for (let k = 0; k < 3; k++) {
-        let lo = 255, hi = 0;
-        for (let v = Math.max(0, y - 1); v <= Math.min(H - 1, y + 1); v++) for (let u = Math.max(0, x - 1); u <= Math.min(W - 1, x + 1); u++) { const q = D[4 * (v * W + u) + k]; if (q < lo) lo = q; if (q > hi) hi = q; }
-        if (S[j + k] < lo - 8 || S[j + k] > hi + 8) return false;
+        const v = D[q + k], e = S[s + k] - v, dd = z ? z[k] - v : 0;
+        if (Math.abs(dd) < 0.5) { if (Math.abs(e) > 8) return false; continue; }
+        let a = (e - 8) / dd, b = (e + 8) / dd; if (a > b) [a, b] = [b, a];
+        lo = Math.max(lo, a); hi = Math.min(hi, b);
       }
-      return true;
+      return lo <= hi;
     };
+    let ox = 0, oy = 0, best = Infinity;
+    for (const [u, v] of [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      let bad = 0;
+      for (let y = 4; y < H - 4; y += 5) for (let x = 4; x < W - 4; x += 5) { const X = x + u, Y = y + v; if (X >= 0 && Y >= 0 && X < w && Y < h && !off(x, y) && !fits(4 * (Y * w + X), 4 * (y * W + x), shade(x, y))) bad++; }
+      if (bad < best) { best = bad; ox = u; oy = v; }
+    }
+    const vis = ([x, y]) => !off(x, y) && x + ox >= 0 && y + oy >= 0 && x + ox < w && y + oy < h;
+    const sc = ([x, y]) => { const i = 4 * ((y + oy) * w + x + ox); return [S[i], S[i + 1], S[i + 2]]; };
+    const dif = (A, B, j) => Math.max(Math.abs(A[j] - B[j]), Math.abs(A[j + 1] - B[j + 1]), Math.abs(A[j + 2] - B[j + 2]));
     return KEEP.map(k => {
       if (!k || !KD) return null;
-      let n = 0, diff = 0, moved = 0;
-      k.forEach(l => l.forEach(([x, y]) => { if (off(x, y)) return; n++; if (dif(D, KD, 4 * (y * W + x)) > 2) moved++; else if (!seen(x, y)) diff++; }));
-      return { n, diff, moved };
+      let n = 0, diff = 0, moved = 0, dark = 0;
+      k.forEach(l => l.forEach(([x, y]) => { if (!vis([x, y])) return; n++; const q = 4 * (y * W + x), z = shade(x, y); if (z) dark++; if (dif(D, KD, q) > 2) moved++; else if (!fits(4 * ((y + oy) * w + x + ox), q, z)) diff++; }));
+      const [g, r, hs] = k.map(l => l.filter(vis)), f = g.length && r.length ? legible(sc, g, r, hs) : null;
+      return { n, diff, moved, dark, g: g.length, low: f ? f.low : g.length, min: f ? f.min : null, filled: f ? f.filled : 0, at: [ox, oy] };
     });
   };
 };
@@ -995,7 +1030,8 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
   const unmeasured = i => i.kind !== 'canvas' || !!i.unknown || (i.texts.length > 0 && !i.halo);
   const missing = (want, seen) => { const c = {}; seen.forEach(t => { c[t] = (c[t] || 0) + 1; }); return want.filter(t => c[t] > 0 ? (c[t]--, false) : true); };
   // Desde la cuarta revisión (AR4-01), además: los huecos de cada letra, menos en los pueblos, que van con el mapa y pueden quedar bajo un
-  // marcador, siguen sin la tinta de la letra; y en pantalla, cada píxel de cada texto es el del lienzo (sin filtro, opacidad ni nada encima)
+  // marcador, siguen sin la tinta de la letra; y en pantalla, cada píxel de cada texto es el del lienzo (sin filtro, opacidad ni nada encima).
+  // Y desde la quinta (AR5-01, AR5-02), cada texto pintado se ve en pantalla, y ahí se lee: no vale ninguno del que no se vea ningún píxel
   const composite = async p => {
     const b = await p.locator('#map').boundingBox(), png = await p.screenshot({ clip: { x: b.x, y: b.y, width: b.width, height: b.height } });
     return p.evaluate(u => window.__cv.composite(u), 'data:image/png;base64,' + png.toString('base64'));
@@ -1004,10 +1040,10 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const want = await inventory(p, names), f = await frame(p), cmp = await composite(p);
     f.texts.forEach((t, i) => { t.comp = cmp[i] || null; });
     const low = lowTexts(f), img = f.images.filter(unmeasured), fill = f.texts.filter(t => t.fin && t.fin.filled > 0 && !TOWN.test(t.text));
-    const scr = f.texts.filter(t => t.n > 0 && (!t.comp || t.comp.diff > 0 || t.comp.moved > 0));
+    const scr = f.texts.filter(t => t.n > 0 && (!t.comp || !t.comp.g || t.comp.diff > 0 || t.comp.moved > 0 || t.comp.low > 0 || (t.comp.filled > 0 && !TOWN.test(t.text))));
     const miss = want ? missing(want, f.texts.filter(t => t.n > 0).map(t => t.text)) : [];
     return { f, why: { miss, low, img, fill, scr }, ok: !!want && want.length > 0 && f.texts.length > 0 && !miss.length && !low.length && !img.length && !fill.length && !scr.length,
-      info: `${f.texts.length} textos, ${want ? want.length : 'sin'} esperados${miss.length ? `, faltan ${miss.slice(0, 4).map(t => '«' + t + '»').join(', ')}` : ''}${low.length ? ', bajos ' + showLow(low) : ''}${img.length ? `, ${img.length} imágenes sin medir${img[0].texts.length ? ' con «' + img[0].texts.slice(0, 2).join('», «') + '»' : ''}${img[0].unknown ? ' de procedencia desconocida' : ''}` : ''}${fill.length ? ', rellenados ' + fill.slice(0, 3).map(t => `«${t.text}» ${t.fin.filled} de ${t.fin.holes} huecos`).join(', ') : ''}${scr.length ? ', distintos en pantalla ' + scr.slice(0, 3).map(t => !t.comp ? `«${t.text}» sin captura` : t.comp.moved ? `«${t.text}» repintado antes de la captura (${t.comp.moved} px)` : `«${t.text}» ${t.comp.diff} de ${t.comp.n} px`).join(', ') : ''}` };
+      info: `${f.texts.length} textos, ${want ? want.length : 'sin'} esperados${miss.length ? `, faltan ${miss.slice(0, 4).map(t => '«' + t + '»').join(', ')}` : ''}${low.length ? ', bajos ' + showLow(low) : ''}${img.length ? `, ${img.length} imágenes sin medir${img[0].texts.length ? ' con «' + img[0].texts.slice(0, 2).join('», «') + '»' : ''}${img[0].unknown ? ' de procedencia desconocida' : ''}` : ''}${fill.length ? ', rellenados ' + fill.slice(0, 3).map(t => `«${t.text}» ${t.fin.filled} de ${t.fin.holes} huecos`).join(', ') : ''}${scr.length ? ', distintos en pantalla ' + scr.slice(0, 3).map(t => !t.comp ? `«${t.text}» sin captura comparable` : !t.comp.g ? `«${t.text}» sin ningún píxel de su letra a la vista` : t.comp.moved ? `«${t.text}» repintado antes de la captura (${t.comp.moved} px)` : t.comp.diff ? `«${t.text}» ${t.comp.diff} de ${t.comp.n} px` : t.comp.low ? `«${t.text}» en pantalla ${t.comp.low} de ${t.comp.g} px bajos (${t.comp.min}:1)` : `«${t.text}» en pantalla ${t.comp.filled} huecos con tinta`).join(', ') : ''}` };
   };
   for (const scheme of ['dark', 'light']) {
     await R26(`AR-03 + ${scheme}`, async p => {
@@ -2064,19 +2100,25 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
   // un sitio libre entre los objetos, para poder colocar: se borra el bidón amarillo
   const freeObj = async p => { await p.click('#colL [data-act="sel"][data-v="ent:obj-20"]'); await p.focus('#map'); await p.keyboard.press('Delete'); await p.waitForTimeout(200); };
   const openObjs = async p => { await p.click('[data-act="rtab"][data-v="add"]'); await p.click('[data-act="lib-cat"][data-v="objeto"]'); await p.waitForTimeout(150); };
-  // lo que enseña la vista previa, como se ve: su texto, el `d` de su icono, el tamaño de su planta y la escala de su barra
+  // lo que enseña la vista previa, como se ve: su texto, el `d` de su icono, el tamaño de su planta y la escala de su barra. La planta y la
+  // barra se miden por su caja, y la caja es la planta solo si ni ella ni nada por encima la gira, la inclina, la escala ni la lleva por un
+  // trazado (un transform que no sea solo moverla, rotate, scale, offset-path), y si sus lados están donde dice la caja: un punto a 1 px por
+  // dentro de cada lado, a 1/10, 1/2 y 9/10 de él, da en la planta, y no en algo que la tapa ni en lo que queda fuera de un recorte (AR5-04)
   const preview = p => p.evaluate(() => {
     const el = document.querySelector('#libPrev');
     if (!el || !__r26.shown(el)) return null;
     const ic = el.querySelector('svg path'), fp = el.querySelector('.pv-fp'), bar = el.querySelector('.scale'), bi = bar && bar.querySelector('i'), m = bar ? parseFloat(bar.innerText.replace(',', '.')) : NaN;
-    const f = fp && fp.getBoundingClientRect();
-    return { text: el.innerText.replace(/\s+/g, ' ').trim(), d: ic ? ic.getAttribute('d') : null, fp: f ? [f.width, f.height] : null, s: bi && m > 0 ? bi.getBoundingClientRect().width / m : null };
+    const f = fp && fp.getBoundingClientRect(), bent = new Set();
+    for (const x of [fp, bi]) for (let e = x; e; e = e.parentElement) { const c = getComputedStyle(e); for (const k of ['transform', 'rotate', 'scale', 'offsetPath']) if (c[k] !== 'none' && !(k === 'transform' && /^matrix\(1, 0, 0, 1, [^,]+, [^,]+\)$/.test(c[k]))) bent.add(`${k} en ${e.id ? '#' + e.id : e.classList[0] ? '.' + e.classList[0] : e.tagName.toLowerCase()}`); }
+    const miss = f ? [0.1, 0.5, 0.9].flatMap(t => [[f.left + t * f.width, f.top + 1], [f.left + t * f.width, f.bottom - 1], [f.left + 1, f.top + t * f.height], [f.right - 1, f.top + t * f.height]]).filter(([x, y]) => document.elementFromPoint(x, y) !== fp).length : 0;
+    return { text: el.innerText.replace(/\s+/g, ' ').trim(), d: ic ? ic.getAttribute('d') : null, fp: f ? [f.width, f.height] : null, s: bi && m > 0 ? bi.getBoundingClientRect().width / m : null, bent: [...bent], miss };
   });
   // la planta de la vista previa, a escala en los dos ejes: el largo a lo ancho y el ancho a lo alto, cada uno a ±1 px de su medida a la
   // escala de la barra (AR4-02). Las medidas las pone la prueba, las del catálogo de muestra, y no las lee de la página
   const r1 = x => Math.round(x * 10) / 10;
-  const planFits = (v, L, Wd) => !!v && !!v.fp && !!v.s && Math.abs(v.fp[0] - L * v.s) <= 1 && Math.abs(v.fp[1] - Wd * v.s) <= 1;
-  const showPlan = (v, L, Wd) => !v ? 'sin vista previa' : `planta ${v.fp ? v.fp.map(r1).join(' × ') + ' px' : 'ninguna'}${v.s ? `, a ${r1(v.s)} px/m de su barra${L ? `: ${String(L).replace('.', ',')} × ${String(Wd).replace('.', ',')} m son ${r1(L * v.s)} × ${r1(Wd * v.s)} px` : ''}` : ', sin barra de escala'}`;
+  const planFits0 = (v, L, Wd) => !!v && !!v.fp && !!v.s && Math.abs(v.fp[0] - L * v.s) <= 1 && Math.abs(v.fp[1] - Wd * v.s) <= 1;
+  const planFits = (v, L, Wd) => planFits0(v, L, Wd) && !v.bent.length && !v.miss;
+  const showPlan = (v, L, Wd) => !v ? 'sin vista previa' : `planta ${v.fp ? v.fp.map(r1).join(' × ') + ' px' : 'ninguna'}${v.s ? `, a ${r1(v.s)} px/m de su barra${L ? `: ${String(L).replace('.', ',')} × ${String(Wd).replace('.', ',')} m son ${r1(L * v.s)} × ${r1(Wd * v.s)} px` : ''}` : ', sin barra de escala'}${v.bent.length ? ` · su caja no es la planta: ${v.bent.join(', ')}` : ''}${v.miss ? ` · ${v.miss} de los 12 puntos junto a sus lados no ${v.miss === 1 ? 'da' : 'dan'} en ella` : ''}`;
   // la del autobús: su nombre y su tamaño, 11,4 × 2,5 m, el icono de su fila y su planta a escala en los dos ejes
   const busPrev = (v, d) => {
     if (!v) return { ok: false, info: 'sin vista previa' };
@@ -2314,10 +2356,10 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
 
   // --- AR4: los arreglos de la cuarta revisión de Astra (ui/astra/2026-11-11-ui-revision4-astra.md) ---
   // AR4-01: lo que se le escapaba a la sonda del mapa. El +: con la sonda nueva, las vistas de la página se leen en los dos temas, y la
-  // comparación con la pantalla no es vacía: mira los píxeles de casi todos los textos
+  // comparación con la pantalla no es vacía: mira los píxeles de todos los textos (desde AR5-02; antes, de 8 de cada 10 o más)
   for (const scheme of ['dark', 'light']) await R26(`AR4-01 + ${scheme}`, async p => {
     const r = await readable(p, ['Mirek', 'Linda']), withN = r.f.texts.filter(t => t.n > 0), seen = withN.filter(t => t.comp && t.comp.n > 0);
-    return [[`AR4-01 + en tema ${scheme === 'dark' ? 'oscuro' : 'claro'}, la escena recién abierta se lee con la sonda nueva (letra con su fondo cercano, huecos sin rellenar, procedencia de cada imagen y pantalla igual al lienzo), y la pantalla se compara en los píxeles de 8 de cada 10 textos o más`, r.ok && withN.length > 0 && seen.length >= 0.8 * withN.length, `${r.info} · en pantalla, ${seen.length} de ${withN.length} textos comparados, ${seen.reduce((a, t) => a + t.comp.n, 0)} px`]];
+    return [[`AR4-01 + en tema ${scheme === 'dark' ? 'oscuro' : 'claro'}, la escena recién abierta se lee con la sonda nueva (letra con su fondo cercano, huecos sin rellenar, procedencia de cada imagen y pantalla igual al lienzo), y la pantalla se compara en los píxeles de todos sus textos`, r.ok && withN.length > 0 && seen.length === withN.length, `${r.info} · en pantalla, ${seen.length} de ${withN.length} textos comparados, ${seen.reduce((a, t) => a + t.comp.n, 0)} px`]];
   }, 1600, 960, scheme);
   // El −: cada ataque cae por su propiedad. En la pantalla, lo que CSS hace después del lienzo; a mano sobre el mapa, lo demás
   await R26('AR4-01 − pantalla', async p => {
@@ -2639,6 +2681,193 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
         `al abrir ${showCls(a)} · al enfocar ${showCls(b)} · al volver ${showCls(c)} · la entidad con ${row ? row.cls : '?'} · Historial ${h0} → ${h1}${errs.length ? ` · errores: ${errs.slice(0, 2).join(' | ')}` : ''}`]];
     });
     return r || [[what, false, 'no se encontró obj-17 en el archivo para cambiarle la clase']];
+  });
+
+  // --- AR5: los arreglos de la quinta revisión de Astra (ui/astra/2026-11-11-ui-revision5-astra.md) ---
+  // AR5-01: en la pantalla, cada píxel de cada texto es el suyo del lienzo, y no uno cualquiera entre el más claro y el más oscuro de sus
+  // vecinos. El + mira la escena recién abierta a 1600 × 960, con el mapa de 855,6 px de alto en CSS, y a 1366 × 768, de alto entero; el −,
+  // un filtro de CSS que dilata lo claro 1 px (feMorphology), su ataque: borra las cifras y deja cada canal entre los de sus vecinos
+  const allSeen = r => { const t = r.f.texts.filter(x => x.n > 0); return { n: t.length, ok: t.length > 0 && t.every(x => x.comp && x.comp.g > 0 && !x.comp.diff), at: [...new Set(t.filter(x => x.comp).map(x => x.comp.at.join(', ')))].join(' y ') || 'ninguno' }; };
+  await R26('AR5-01 +', async p => {
+    const res = [];
+    for (const [w, h, say] of [[1600, 960, 'a 1600 × 960, con el mapa de 855,6 px de alto en CSS'], [1366, 768, 'a 1366 × 768, con el mapa de alto entero']]) {
+      if (res.length) { await p.setViewportSize({ width: w, height: h }); await p.waitForTimeout(400); }
+      const r = await readable(p, ['Mirek', 'Linda']), a = allSeen(r);
+      res.push([`AR5-01 + ${say}, la escena recién abierta se lee, y en pantalla cada texto es el lienzo píxel a píxel: todos sus píxeles a la vista, a 8 de 255 o menos`, r.ok && a.ok, `${a.n} textos, con la captura desplazada ${a.at} px para casar con el lienzo · ${r.info}`]);
+    }
+    return res;
+  });
+  await R26('AR5-01 −', async p => {
+    const res = [];
+    for (const [w, h, on, say] of [[1366, 768, '#map', 'a 1366 × 768, en el mapa'], [1600, 960, '#map', 'a 1600 × 960, en el mapa'], [1600, 960, '#mapwrap', 'a 1600 × 960, en lo que contiene el mapa']]) {
+      if (res.length) await p.goto(URL);
+      await p.setViewportSize({ width: w, height: h }); await p.waitForTimeout(900);
+      await p.evaluate(on => {
+        document.body.insertAdjacentHTML('beforeend', '<svg width="0" height="0" style="position:absolute"><filter id="ar5dil"><feMorphology operator="dilate" radius="1"/></filter></svg>');
+        document.querySelector(on).style.filter = 'url(#ar5dil)';
+      }, on);
+      await p.waitForTimeout(150);
+      const r = await readable(p, ['Mirek', 'Linda']), x = r.why, only = !x.miss.length && !x.low.length && !x.img.length && !x.fill.length;
+      res.push([`AR5-01 − con un filtro de CSS que dilata lo claro 1 px ${say}, la vista no se lee, y solo porque en pantalla sus textos no son los del lienzo`, !r.ok && only && x.scr.length > 0, `${x.scr.length} de ${r.f.texts.filter(t => t.n > 0).length} textos distintos en pantalla · ${r.info}`]);
+    }
+    return res;
+  });
+  // AR5-02: no se aparta de la comparación nada más que lo que tapa lo que flota encima del mapa. El +: a 1600 × 960, las cifras de la regla
+  // de arriba junto a los controles (6250, 6275 y 6300), que caen en su sombra y antes no se miraban, se miran y se leen. El −: tapadas en
+  // pantalla sin tocar ni los controles ni el lienzo, con un bloque negro, como en su ataque, o con uno del color de su placa al 80 %; con una
+  // sombra de los controles tan oscura que ya no se leen; y con un aviso encima que tapa una entera, que se queda sin ningún píxel a la vista
+  const nearTop = r => r.f.texts.filter(t => t.n > 0 && t.comp && t.comp.dark > 0 && t.box[1] < 20);
+  await R26('AR5-02 +', async p => {
+    const r = await readable(p, ['Mirek', 'Linda']), q = nearTop(r);
+    return [['AR5-02 + a 1600 × 960, las cifras de la regla de arriba que caen en la sombra de los controles se comparan en pantalla y se leen, con la sombra: todos sus píxeles a la vista, a 4,5:1 o más', r.ok && q.length === 3 && q.every(t => t.comp.g > 0 && !t.comp.diff && !t.comp.low),
+      `${q.map(t => `«${t.text}» ${t.comp.dark} de ${t.comp.n} px en la sombra, ${t.comp.diff} distintos, ${t.comp.min}:1 en pantalla`).join(' · ') || 'ninguna en la sombra'} · ${r.info}`]];
+  }, 1600, 960);
+  await R26('AR5-02 −', async p => {
+    const res = [];
+    for (const [how, say] of [['negro', 'bajo un bloque negro que deja pasar el ratón'], ['placa', 'bajo un bloque del color de su placa al 80 %'], ['sombra', 'bajo una sombra de los controles de 30 px de extensión, negra al 95 %'], ['aviso', 'y un aviso encima que tapa entera la de 6275']]) {
+      if (res.length) { await p.goto(URL); await p.waitForTimeout(900); }
+      const r0 = await readable(p, ['Mirek', 'Linda']), q0 = nearTop(r0), names = q0.map(t => t.text);
+      await p.evaluate(([how, boxes, one]) => {
+        const c = document.querySelector('#map'), m = c.getBoundingClientRect(), d = c.width / c.clientWidth, g = c.getContext('2d');
+        const u = boxes.reduce((a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])]), at = (b, pad) => `left:${m.left + b[0] - pad}px;top:${m.top + b[1] - pad}px;width:${b[2] - b[0] + 2 * pad}px;height:${b[3] - b[1] + 2 * pad}px`;
+        if (how === 'negro') document.body.insertAdjacentHTML('beforeend', `<div style="position:fixed;${at(u, 4)};background:#000;pointer-events:none;z-index:50"></div>`);
+        if (how === 'placa') { const k = g.getImageData(Math.round((u[0] - 1) * d), Math.round((u[1] + 1) * d), 1, 1).data; document.body.insertAdjacentHTML('beforeend', `<div style="position:fixed;${at(u, 4)};background:rgba(${k[0]},${k[1]},${k[2]},.8);pointer-events:none;z-index:50"></div>`); }
+        if (how === 'sombra') document.querySelector('#mapwrap .ovl.tr').style.boxShadow = '0 0 40px 30px rgba(0,0,0,.95)';
+        // el aviso, en la pila de avisos, que se mueve con su transform: se pone en 0, 0 y se lleva a su sitio por lo que se ve
+        if (how === 'aviso' && one) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = 'Aviso'; t.style.cssText = `position:fixed;${at(one, 6)};padding:0;margin:0`; document.querySelector('#toasts').appendChild(t); const r = t.getBoundingClientRect(); t.style.left = 2 * parseFloat(t.style.left) - r.left + 'px'; t.style.top = 2 * parseFloat(t.style.top) - r.top + 'px'; }
+      }, [how, q0.map(t => t.box), (q0.find(t => t.text === '6275') || {}).box || null]);
+      await p.waitForTimeout(150);
+      const r = await readable(p, ['Mirek', 'Linda']), x = r.why, only = !x.miss.length && !x.low.length && !x.img.length && !x.fill.length, hit = x.scr.filter(t => names.includes(t.text)).map(t => t.text);
+      res.push([`AR5-02 − con las cifras de la regla de arriba junto a los controles ${say}, la vista no se lee, y solo porque en pantalla ${how === 'aviso' ? 'esa no se ve' : 'no son las del lienzo o no se leen'}`, names.length === 3 && !r.ok && only && (how === 'aviso' ? hit.includes('6275') : hit.length === 3),
+        `en la sombra de los controles: ${names.join(', ') || 'ninguna'} · en pantalla, mal: ${hit.join(', ') || 'ninguna de ellas'} · ${r.info}`]);
+    }
+    return res;
+  });
+
+  // AR5-03: cambiarle el tamaño a un lienzo borra lo que tenía pintado, pero no que pinte con WebGL. El + mira que un lienzo 2D que llevó
+  // una imagen <img>, vaciado al cambiarle el tamaño y pintado de un color, vale como limpio; el −, que uno con WebGL sigue de procedencia
+  // desconocida antes y después de cambiarle el tamaño con su contexto ya pedido, y lo mismo lo que llega de un OffscreenCanvas con WebGL
+  await R26('AR5-03', async p => {
+    const r = await p.evaluate(async () => {
+      const c = document.querySelector('#map'), g = c.getContext('2d'), d = c.width / c.clientWidth, cv = window.__cv;
+      const src = document.createElement('canvas'); src.width = 90; src.height = 20; { const x = src.getContext('2d'); x.font = '500 12px monospace'; x.fillStyle = '#888'; x.fillText('SIN MEDIR', 2, 15); }
+      const im = new Image(); im.src = src.toDataURL(); await im.decode();
+      const two = document.createElement('canvas'); two.width = 90; two.height = 20; const tx = two.getContext('2d'); tx.drawImage(im, 0, 0); two.width = 40; tx.fillStyle = '#c0392b'; tx.fillRect(0, 0, 40, 20);
+      // unos bloques pálidos, como cifras, pintados con scissor y clear: en uno sin cambiarle el tamaño, y en otro y en un OffscreenCanvas
+      // con el tamaño cambiado después de pedir el contexto, que es lo que le quitaba la marca
+      const pale = q => { q.enable(q.SCISSOR_TEST); q.clearColor(0.53, 0.53, 0.53, 1); for (let i = 0; i < 4; i++) { q.scissor(4 + 10 * i, 6, 6, 12); q.clear(q.COLOR_BUFFER_BIT); } };
+      const gl0 = document.createElement('canvas'); gl0.width = 60; gl0.height = 24; pale(gl0.getContext('webgl', { preserveDrawingBuffer: true }));
+      const gl1 = document.createElement('canvas'), q1 = gl1.getContext('webgl', { preserveDrawingBuffer: true }); gl1.width = 60; gl1.height = 24; pale(q1);
+      const o = new OffscreenCanvas(10, 10), q2 = o.getContext('webgl'); o.width = 60; o.height = 24; pale(q2);
+      const br = document.createElement('canvas'); br.width = 60; br.height = 24; br.getContext('bitmaprenderer').transferFromImageBitmap(o.transferToImageBitmap());
+      Object.assign(cv, { texts: [], strokes: [], fills: [], images: [], on: true });
+      g.save(); g.setTransform(d, 0, 0, d, 0, 0); g.drawImage(two, 200, 100); g.drawImage(gl0, 200, 130); g.drawImage(gl1, 200, 160); g.drawImage(br, 200, 190); g.restore();
+      cv.on = false; cv.finish();
+      return cv.images.map(i => ({ kind: i.kind, texts: i.texts, unknown: !!i.unknown, halo: i.halo }));
+    });
+    const [i2d, gl0, gl1, ibr] = r, say = i => i ? `${i.kind}${i.unknown ? ', de procedencia desconocida' : ''}: ${unmeasured(i) ? 'sin medir' : 'medido'}` : 'no está';
+    return [
+      ['AR5-03 + un lienzo 2D que llevó una imagen <img>, vaciado al cambiarle el tamaño y pintado de un color, vale como limpio y se mide', !!i2d && !i2d.unknown && !unmeasured(i2d), say(i2d)],
+      ['AR5-03 − un lienzo con WebGL es de procedencia desconocida antes de cambiarle el tamaño, y lo sigue siendo después, vuelto a pintar con su mismo contexto; y lo que llega por un ImageBitmap de un OffscreenCanvas con WebGL al que se le cambió el tamaño', [gl0, gl1, ibr].every(i => !!i && i.unknown && unmeasured(i)), `sin cambiar: ${say(gl0)} · cambiado: ${say(gl1)} · el del OffscreenCanvas: ${say(ibr)}`]
+    ];
+  });
+
+  // AR5-04: la planta de la vista previa se mide por sus lados, no por la caja que la envuelve. El + mira las del autobús y el generador
+  // sin tocar, y una movida solo de sitio, que se ve igual; el −, cada forma de dejar la misma caja con otra planta: estrecharla y girarla
+  // 5°, girarla 0,4° sin tocarla, estrecharla y girar lo que la contiene, y recortarle el pie. Todas las daba por buenas el criterio de AR4-02
+  const bend = (p, how) => p.evaluate(how => {
+    const el = document.querySelector('#libPrev'), fp = el.querySelector('.pv-fp'), r = fp.getBoundingClientRect(), t = 5 * Math.PI / 180, c = Math.cos(t), s = Math.sin(t), k = Math.cos(2 * t);
+    window.__pv = el.innerHTML;
+    // los lados que, girados 5°, dejan la misma caja: el autobús pasa de 114 × 25 a 113,1 × 15,2 px
+    const narrow = () => { fp.style.width = (r.width * c - r.height * s) / k + 'px'; fp.style.height = (r.height * c - r.width * s) / k + 'px'; };
+    if (how === 'girada') { narrow(); fp.style.transform = 'rotate(5deg)'; }
+    if (how === 'giro') fp.style.rotate = '0.4deg';
+    if (how === 'contenedor') { narrow(); el.querySelector('.pv-plan').style.transform = 'rotate(5deg)'; }
+    if (how === 'recorte') fp.style.clipPath = 'inset(0 0 40% 0)';
+    if (how === 'movida') fp.style.transform = 'translate(3px, -2px)';
+  }, how);
+  const unbend = p => p.evaluate(() => { document.querySelector('#libPrev').innerHTML = window.__pv; });
+  await R26('AR5-04 +', async p => {
+    await openObjs(p);
+    const out = []; let ok = true;
+    for (const [cls, name, L, Wd] of PLAN4) {
+      await p.hover(`#colR [data-act="lib-item"][data-v="${cls}"]`); await p.waitForTimeout(100);
+      const v = await preview(p); ok = ok && !!v && v.text.includes(name) && planFits(v, L, Wd); out.push(`${name}: ${showPlan(v, L, Wd)}${v && !v.bent.length && !v.miss ? ', nada la gira y sus 12 puntos dan en ella' : ''}`);
+    }
+    await p.hover(BUS); await p.waitForTimeout(100); await bend(p, 'movida');
+    const v = await preview(p); await unbend(p);
+    return [['AR5-04 + la planta del autobús y la del generador, sin tocar, cumplen el criterio por sus lados: nada la gira, ni a su barra, y los 12 puntos junto a sus lados dan en ella', ok, out.join(' · ')],
+      ['AR5-04 + movida 3 px a un lado y 2 px arriba con un transform, la planta del autobús se ve igual y sigue cumpliéndolo', planFits(v, 11.4, 2.5), showPlan(v, 11.4, 2.5)]];
+  });
+  await R26('AR5-04 −', async p => {
+    await openObjs(p); await p.hover(BUS); await p.waitForTimeout(100);
+    const res = [];
+    for (const [how, say] of [['girada', 'estrechada a 113,1 × 15,2 px y girada 5°, con la misma caja de 114 × 25 px'], ['giro', 'girada 0,4° sin tocarla'], ['contenedor', 'estrechada igual y girado 5° lo que la contiene, con su barra'], ['recorte', 'recortada con un clip-path que le quita el 40 % de abajo']]) {
+      await bend(p, how); const v = await preview(p); await unbend(p);
+      res.push([`AR5-04 − ${say}, la planta del autobús ya no cumple el criterio`, !planFits(v, 11.4, 2.5), `${showPlan(v, 11.4, 2.5)} · el criterio de AR4-02, solo con la caja, ${planFits0(v, 11.4, 2.5) ? 'la daba por buena' : 'también la rechazaba'}`]);
+    }
+    return res;
+  });
+
+  // AR5-05: Parar y, mientras dice «Parando…», un corte o un reinicio del servidor. La confirmación que venía en camino ya no vale: la
+  // parada se confirma leyendo el juego, como la de una toma cortada, y en su mundo; nunca con «Control devuelto» ni con el mundo de antes
+  const stopThen = (p, act) => p.evaluate(a => { document.querySelector('#bTopStop').click(); document.querySelector('#bSim').click(); document.querySelector(a === 'reboot' ? '#menu [data-act="sim-reboot"]' : `#menu [data-act="sim"][data-v="${a}"]`).click(); if (a !== 'reboot') document.querySelector('#status').click(); }, act);
+  const rolling = async p => {
+    if (!await apply(p) || !await arm(p) || !await roll(p)) return null;
+    await p.waitForTimeout(600); await dock(p); await p.click('[data-act="rdtab"][data-v="actividad"]'); await p.waitForTimeout(100);
+    return (await T(p, '#slateWrap .tn')) || 'Toma';
+  };
+  const ctlBack = (p, tn) => p.evaluate(tn => /Control devuelto/.test(document.querySelector('#toasts').innerText) || [...document.querySelectorAll('#dock .qrow')].some(r => r.innerText.includes(tn) && /Control devuelto/.test(r.innerText)), tn);
+  const stopState = p => p.evaluate(() => { const s = document.querySelector('#bTopStop'), a = document.querySelector('#bApply'); return { stop: s.hidden ? '' : s.innerText.replace(/\s+/g, ' ').trim(), apply: !a.disabled && !a.hidden }; });
+  await R26('AR5-05 + conectado', async p => {
+    const what = 'AR5-05 + Parar sin ningún corte confirma como siempre: una vez, con «Control devuelto» y su tiempo, y la toma Observada con lo leído en el servidor y tu juego';
+    const tn = await rolling(p); if (!tn) return [[what, false, 'no llegó a rodar']];
+    const k0 = await takesN(p);
+    await p.click('#bTopStop');
+    const back = await W(p, () => /Control devuelto en [\d,]+ s/.test(document.querySelector('#toasts').innerText), null, 2500);
+    await p.waitForTimeout(400);
+    const o = await takeRow(p, tn), k1 = await takesN(p), st = await stopState(p);
+    return [[what, back && !!o && o.obs && /servidor y tu juego/.test(o.text) && !/mundo nuevo|lectura al volver|Reconciliada/.test(o.text) && k1 === k0 + 1 && !st.stop,
+      `${back ? '«Control devuelto» a la vista' : 'sin «Control devuelto»'} · fila: «${o ? o.text.slice(0, 150) : 'no está'}» · Tomas ${k0} → ${k1} · Parar ${st.stop ? `«${st.stop}»` : 'quitado'}`]];
+  });
+  await R26('AR5-05 + reinicio', async p => {
+    const what = 'AR5-05 + Parar y reiniciar el servidor enseguida, mientras dice «Parando…»: al volver, la parada se confirma una vez con el mundo nuevo, con su origen y una edad nueva, sin «Control devuelto» ni otra toma; se quita la recuperación y se puede aplicar otra vez';
+    const tn = await rolling(p); if (!tn) return [[what, false, 'no llegó a rodar']];
+    const k0 = await takesN(p); await countConf(p);
+    await stopThen(p, 'reboot');
+    const parando = await shows(p, '#bTopStop', /Parando/, 500);
+    const conf = await W(p, () => /Parada confirmada/.test(document.querySelector('#toasts').innerText), null, 6000);
+    await p.waitForTimeout(1200);
+    const o = await takeRow(p, tn), k1 = await takesN(p), n = await p.evaluate(() => window.__nConf), back = await ctlBack(p, tn), st = await stopState(p);
+    return [[what, parando && conf && n === 1 && newWorldRow(o) && /Leída hace [0-2] s/.test(o.text) && !back && k1 === k0 + 1 && !st.stop && st.apply,
+      `${parando ? '«Parando…» a la vista' : 'sin «Parando…»'} · ${conf ? `confirmada (${n} aviso${n === 1 ? '' : 's'})` : 'sin confirmar a los 6 s'} · ${back ? '«Control devuelto» a la vista' : 'sin «Control devuelto»'} · fila: «${o ? o.text.slice(0, 150) : 'no está'}» · Tomas ${k0} → ${k1} · Parar ${st.stop ? `«${st.stop}»` : 'quitado'} · Aplicar ${st.apply ? 'disponible' : 'apagado'}`]];
+  });
+  await R26('AR5-05 − tu juego', async p => {
+    const what = 'AR5-05 − Parar y reiniciar enseguida; a los 100 ms de volver el servidor se corta tu juego y se toca dos veces la profundidad de campo: a los 950 ms no hay Observado, ni edad nueva, ni aviso de confirmada, ni «Control devuelto», y la recuperación sigue a la vista; al volver tu juego estable, se confirma una sola vez y con el mundo nuevo';
+    const tn = await rolling(p); if (!tn) return [[what, false, 'no llegó a rodar']];
+    await stopThen(p, 'reboot');
+    const srv = await W(p, () => /se ha reiniciado/.test(document.querySelector('#banner').innerText), null, 4000);
+    await p.waitForTimeout(100); await flip(p, 'director'); await flip(p, 'dof'); await flip(p, 'dof'); await p.waitForTimeout(950);
+    const o1 = await takeRow(p, tn), c1 = await anyConf(p), st1 = await T(p, '#bTopStop'), b1 = await ctlBack(p, tn);
+    const fake = c1 || b1 || !/sin confirmar/.test(st1) || !o1 || o1.obs || !/Sin lectura/.test(o1.text);
+    await countConf(p); await flip(p, 'director');
+    const conf = await W(p, () => /Parada confirmada/.test(document.querySelector('#toasts').innerText), null, 4000);
+    await p.waitForTimeout(1200);
+    const n = await p.evaluate(() => window.__nConf), o2 = await takeRow(p, tn);
+    return [[what, srv && !fake && conf && n === 1 && newWorldRow(o2),
+      `${srv ? 'volvió el servidor' : 'sin aviso de mundo nuevo'} · a los 950 ms: ${c1 ? 'aviso de confirmada' : 'sin aviso'}${b1 ? ', «Control devuelto»' : ''}, Parar «${st1.slice(0, 40)}», fila «${o1 ? o1.text.slice(0, 100) : 'no está'}» · al volver estable: ${conf ? `confirmada (${n} aviso${n === 1 ? '' : 's'})` : 'sin confirmar'}, fila «${o2 ? o2.text.slice(0, 120) : 'no está'}»`]];
+  });
+  await R26('AR5-05 − corte', async p => {
+    const what = 'AR5-05 − Parar y cortar tu juego mientras dice «Parando…», y que vuelva a los 300 ms: la parada no se da por confirmada con «Control devuelto» ni Observada sin leer el juego; se confirma una sola vez al leerlo, con la lectura al volver';
+    const tn = await rolling(p); if (!tn) return [[what, false, 'no llegó a rodar']];
+    await countConf(p);
+    await stopThen(p, 'director'); await p.waitForTimeout(300); await flip(p, 'director'); await p.waitForTimeout(300);
+    const o1 = await takeRow(p, tn), b1 = await ctlBack(p, tn), early = (!!o1 && o1.obs) || b1;
+    const conf = await W(p, () => /Parada confirmada al leer el juego/.test(document.querySelector('#toasts').innerText), null, 4000);
+    await p.waitForTimeout(1200);
+    const n = await p.evaluate(() => window.__nConf), o2 = await takeRow(p, tn), b2 = await ctlBack(p, tn);
+    return [[what, !early && conf && n === 1 && !!o2 && o2.obs && /lectura al volver/.test(o2.text) && !b2,
+      `a los 300 ms de volver: ${early ? `ya Observada o con «Control devuelto» («${o1 ? o1.text.slice(0, 100) : 'no está'}»)` : 'sin confirmar'} · al leer: ${conf ? `confirmada (${n} aviso${n === 1 ? '' : 's'})` : 'sin confirmar'}, fila «${o2 ? o2.text.slice(0, 120) : 'no está'}»${b2 ? ' · «Control devuelto» a la vista' : ''}`]];
   });
 
   expect(external.length === 0, 'ninguna petición sale de la página: ' + (external.slice(0, 3).join(' ') || 'ninguna'));
