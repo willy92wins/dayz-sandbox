@@ -338,7 +338,7 @@ details.tech .tb .mono{font-size:12px;word-break:break-all}
 .items{padding:4px 0}
 .item{display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:8px;width:100%;height:30px;text-align:left;border:0;background:transparent;padding:0 12px}
 .item:hover{background:var(--surface-2)}
-.item:disabled{opacity:.45;cursor:not-allowed}
+.item[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
 .item[aria-pressed="true"]{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
 .item .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item .side{font-size:12px;color:var(--muted)}
@@ -903,7 +903,9 @@ const CATALOG = {
   actor: [['SurvivorM_Mirek', 'Mirek', [0.5, 0.3, 1.8]], ['SurvivorM_Boris', 'Boris', [0.5, 0.3, 1.8]], ['SurvivorM_Denis', 'Denis', [0.5, 0.3, 1.8]], ['SurvivorM_Guo', 'Guo', [0.5, 0.3, 1.8]], ['SurvivorF_Linda', 'Linda', [0.5, 0.3, 1.7]], ['SurvivorF_Maria', 'Maria', [0.5, 0.3, 1.7]], ['SurvivorF_Eva', 'Eva', [0.5, 0.3, 1.7]], ['SurvivorF_Naomi', 'Naomi', [0.5, 0.3, 1.7]]]
 };
 const clsName = (kind, cls) => { const f = (CATALOG[kind] || []).find(c => c[0] === cls); return f ? f[1] : cls; };
-const dimsOf = (kind, cls) => { const f = (CATALOG[kind] || []).find(c => c[0] === cls); return f ? f[f.length - 1] : null; };
+// las medidas de muestra de una entrada, largo, ancho y alto en metros; null si faltan o alguna no vale (AR4-04)
+const sizeOf = c => { const d = c[c.length - 1]; return Array.isArray(d) && d.length === 3 && d.every(v => Number.isFinite(v) && v > 0) ? d : null; };
+const dimsOf = (kind, cls) => { const f = (CATALOG[kind] || []).find(c => c[0] === cls); return f ? sizeOf(f) : null; };
 const WARDROBES = [
   {id: 'partisano', name: 'Partisano de otoño', items: ['M65Jacket_Olive', 'CargoPants_Green', 'MilitaryBoots_Brown', 'Ushanka_Green', 'TaloonBag_Green']},
   {id: 'civil', name: 'Civil de ciudad', items: ['Hoodie_Grey', 'Jeans_Blue', 'AthleticShoes_Brown', 'Bandana_Redpattern']},
@@ -1353,7 +1355,7 @@ function roll() {
   if (S.take.dur < 1) S.take.dur = 6;
   S.take.lag = {}; actors().forEach(a => { S.take.lag[a.id] = Math.round(30 + Math.random() * 28); });
   document.body.classList.add('rolling');
-  const op = newOp({verb: 'take', label: 'Toma ' + pad2(S.take.n), target: c.name, state: 'ejecutando', origin: 'servidor y tu juego', detail: 'Arranca en el mismo tick del servidor: la cámara en tu juego y las órdenes a los actores'});
+  const op = newOp({verb: 'take', label: 'Toma ' + pad2(S.take.n), target: c.name, state: 'ejecutando', origin: 'servidor y tu juego', detail: 'Arranca en el mismo tick del servidor: la cámara en tu juego y las órdenes a los actores', epoch: S.epoch});
   S.take.op = op.id; S.preview = false; S.take.unconfirmed = false;
   renderAll(); loopTake();
 }
@@ -1386,14 +1388,16 @@ function endTake(state, why, from) {
   renderAll();
 }
 // La lectura al volver tarda 700 ms y solo vale si en medio no se cortó ni volvió ninguna conexión y siguen las tres; si no, la parada sigue
-// sin confirmar, con su recuperación a la vista, hasta la siguiente vuelta estable (AR3-02)
+// sin confirmar, con su recuperación a la vista, hasta la siguiente vuelta estable (AR3-02). Va con cada vuelta de una conexión, también
+// la del servidor reiniciado; si la toma era de otro mundo, lo que se lee es que en el nuevo ya no queda nada de ella (AR4-03)
 function reconcileTakes() {
   if (!S.sim.backend || !S.sim.server || !S.sim.director) return;
   const gen = S.linkGen;
   S.queue.filter(o => o.verb === 'take' && o.lost && o.state === 'parcial').forEach(o => setTimeout(() => {
     if (!o.lost || S.linkGen !== gen || !S.sim.backend || !S.sim.server || !S.sim.director) return;
-    setOp(o, {state: 'observado', origin: 'servidor y tu juego · lectura al volver', detail: o.recon + '; la lectura lo confirma.'});
-    if (S.take.unconfirmed) { S.take.unconfirmed = false; toast(`Parada confirmada al leer el juego: ${o.recon}.`, 'ok'); renderAll(); }
+    const gone = o.epoch !== S.epoch;
+    setOp(o, gone ? {state: 'observado', origin: 'servidor y tu juego · mundo nuevo', detail: 'el servidor se reinició: en el mundo nuevo ya no están los actores de la toma, y la cámara de tu juego está parada.'} : {state: 'observado', origin: 'servidor y tu juego · lectura al volver', detail: o.recon + '; la lectura lo confirma.'});
+    if (S.take.unconfirmed) { S.take.unconfirmed = false; toast(gone ? 'Parada confirmada: el servidor se reinició y en el mundo nuevo no queda nada de la toma.' : `Parada confirmada al leer el juego: ${o.recon}.`, 'ok'); renderAll(); }
   }, 700));
 }
 // Parar pide la parada y espera a que el cliente la confirme (B5); sin peers, falla a los 4 s
@@ -2112,8 +2116,10 @@ function groundRow(e) {
   return `<div class="f"><span class="fl">Altura</span><span style="font-size:12px;color:var(--fg-2)">Sobre el suelo. ${fresh ? `Suelo a <span class="mono">${nf(g.y, 2)} m</span>, leído en el servidor hace <span data-since="${g.at}"></span>.` : 'Sin lectura del suelo para esta posición.'}<br><button class="btn sm" data-act="ground" style="margin-top:6px">${ic('pin')} Leer el suelo</button></span></div>`;
 }
 function entProps(e) {
-  // el selector enseña el nombre legible; la clase va a los detalles técnicos (UX-05, UX-08)
-  const opts = (CATALOG[e.kind] || []).map(c => `<option value="${c[0]}" ${c[0] === e.cls ? 'selected' : ''}>${esc(c[1])}</option>`).join('');
+  // el selector enseña el nombre legible; la clase va a los detalles técnicos (UX-05, UX-08). Una clase que no está en el catálogo
+  // se enseña tal cual, elegida y sin poder volver a ella, hasta que se escoja otra del catálogo (AR4-06)
+  const known = (CATALOG[e.kind] || []).some(c => c[0] === e.cls);
+  const opts = (known ? '' : `<option value="${esc(e.cls)}" selected disabled>${esc(e.cls)} · no está en el catálogo</option>`) + (CATALOG[e.kind] || []).map(c => `<option value="${c[0]}" ${c[0] === e.cls ? 'selected' : ''}>${esc(c[1])}</option>`).join('');
   let html = `<div class="ident">${gle(e)}<div style="min-width:0;flex:1"><input id="f-name" value="${esc(e.name)}" aria-label="Nombre"><div class="cn">${KCAP[e.kind]}${S.locked[e.id] ? ' · bloqueado' : ''}</div></div></div>`;
   html += `<div class="sec"><h4>${e.kind === 'actor' ? 'Personaje y sitio' : 'Clase y sitio'} <span class="where">va al juego al aplicar</span></h4>
     <label class="f"><span class="fl">${e.kind === 'actor' ? 'Personaje' : 'Clase'}</span><select class="inp" id="f-cls">${opts}</select></label>
@@ -2223,13 +2229,13 @@ function prevItem() {
 }
 function prevHtml(it) {
   if (!it) return `<div class="pv-none">Pasa el ratón por la lista, o recórrela con <kbd>Tab</kbd>, para ver aquí cada uno con su tamaño${S.lib === 'objeto' ? ' y su planta' : ''}.</div>`;
-  const {kind, c} = it, [l, w, h] = c[c.length - 1];
+  const {kind, c} = it, d = sizeOf(c), [l, w, h] = d || [];
   const big = kind === 'objeto' ? `<svg width="34" height="34" viewBox="-8 -8 16 16" aria-hidden="true"><path d="${OBJ[objTipo(c[0])]}" fill="var(--g-obj)" fill-rule="evenodd"/></svg>` : `<svg width="34" height="34" viewBox="0 0 16 16" aria-hidden="true">${GL[kind]}</svg>`;
-  // de los personajes sirve el alto, y de los animales el largo; de los objetos, la planta
-  const size = (kind === 'objeto' ? [`${nf(l)} × ${nf(w)} m`] : kind === 'animal' ? [`${nf(l)} m de largo`] : []).concat(`${nf(h)} m de alto`).map(t => `<span>${t}</span>`).join('');
+  // de los personajes sirve el alto, y de los animales el largo; de los objetos, la planta. Sin medidas, lo dice y no pinta ninguna (AR4-04)
+  const size = (!d ? ['Sin tamaño en el catálogo'] : (kind === 'objeto' ? [`${nf(l)} × ${nf(w)} m`] : kind === 'animal' ? [`${nf(l)} m de largo`] : []).concat(`${nf(h)} m de alto`)).map(t => `<span>${t}</span>`).join('');
   let plan = '';
   // la planta vista desde arriba, a la mayor escala que cabe, con una barra de escala como la del mapa
-  if (kind === 'objeto') {
+  if (kind === 'objeto' && d) {
     const s = [80, 40, 20, 10, 5, 2].find(v => l * v <= 180 && w * v <= 52) || 1, m = [0.5, 1, 2, 5, 10, 20, 50].find(v => v * s >= 30) || 100;
     plan = `<div class="pv-plan"><i class="pv-fp" style="width:${+(l * s).toFixed(2)}px;height:${+(w * s).toFixed(2)}px"></i><div class="pv-sc"><span>Planta a escala</span><div class="scale"><span>${nf(m, m < 1 ? 1 : 0)} m</span><i style="width:${m * s}px"></i></div></div></div>`;
   }
@@ -2242,7 +2248,8 @@ function showPrev() { const el = $('#libPrev'), it = el && prevItem(); if (!el |
 function addHtml(both) {
   const q = S.libq.trim().toLowerCase(), n = counts(S.doc), lk = !!editBlock(), full = n[S.lib] >= CAPS[S.lib];
   const match = c => !q || c[0].toLowerCase().includes(q) || c[1].toLowerCase().includes(q);
-  let items = CATALOG[S.lib].filter(match).map(c => `<button class="item" data-act="lib-item" data-v="${c[0]}" aria-pressed="${!!(S.placing && S.placing.cls === c[0])}" ${full || lk ? 'disabled' : ''} title="${full ? 'Tope alcanzado' : `${esc(c[0])} · clic y después clic en el mapa; Intro lo pone en el centro`}">${S.lib === 'objeto' ? glo(c[0]) : gl(S.lib)}<span class="nm">${esc(c[1])}</span><span class="side">${S.lib === 'actor' ? 'superviviente' : ''}</span></button>`).join('');
+  // al tope, o con la edición bloqueada, cada fila se sigue recorriendo con el teclado para ver su vista previa, pero no coloca: lo dice armPlacing (AR4-05)
+  let items = CATALOG[S.lib].filter(match).map(c => `<button class="item" data-act="lib-item" data-v="${c[0]}" aria-pressed="${!!(S.placing && S.placing.cls === c[0])}" ${full || lk ? 'aria-disabled="true"' : ''} title="${full ? 'Tope alcanzado' : `${esc(c[0])} · clic y después clic en el mapa; Intro lo pone en el centro`}">${S.lib === 'objeto' ? glo(c[0]) : gl(S.lib)}<span class="nm">${esc(c[1])}</span><span class="side">${S.lib === 'actor' ? 'superviviente' : ''}</span></button>`).join('');
   if (!items) items = `<div class="empty">Nada con «${esc(S.libq.trim())}» en ${KLABEL[S.lib].toLowerCase()}.<br><button class="btn sm" data-act="lib-clear">Limpiar búsqueda</button></div>`;
   if (full) items = `<div class="note warn" style="margin:6px 12px">Tope de ${KLABEL[S.lib].toLowerCase()} alcanzado (${n[S.lib]} de ${CAPS[S.lib]}). Quita uno para añadir otro.</div>` + items;
   if (lk) items = `<div class="note warn" style="margin:6px 12px">${esc(editBlock())}</div>` + items;
@@ -2259,7 +2266,8 @@ function addHtml(both) {
 // A la derecha, Propiedades y Añadir en pestañas, o las dos a la vez desde Herramientas; en Rodaje, Preparación encima (UX-02)
 function renderRight() {
   const el = $('#colR');
-  const pf = document.activeElement && el.contains(document.activeElement) ? document.activeElement.id : null;
+  // el foco vuelve a lo mismo al rehacer el panel: por su id, o por lo que hace, como una fila de Añadir o su pestaña (AR4-05)
+  const a = document.activeElement, pf = a && el.contains(a) ? (a.id || (a.dataset.act && a.dataset.v ? [a.dataset.act, a.dataset.v] : null)) : null;
   // durante la toma o sin backend, las propiedades se ven pero no se editan
   const lockMsg = editBlock(), props = lockMsg ? `<div class="note warn lockmsg">${ic('lock')}<span>${esc(lockMsg)}</span></div><fieldset class="lockf" disabled>${propsHtml()}</fieldset>` : propsHtml();
   const propsPanel = ph => `<div class="panel" data-ref="Object Properties: World Editor de Reforger · Attributes: Eden">${ph}<div class="pb">${props}</div></div>`;
@@ -2275,7 +2283,8 @@ function renderRight() {
     el.className = 'col rod';
     el.innerHTML = `<div class="panel prep" data-ref="Preparar antes de emitir: Studio Mode de OBS">${prepHtml()}</div><div class="hsep"></div>${propsPanel(title)}`;
   }
-  if (pf) { const f = document.getElementById(pf); if (f) f.focus(); }
+  // si ya no está, como la fila tras colocar, a la pestaña elegida; y la vista previa sigue enseñando lo que enseñaba
+  if (pf) { const h = libHover, f = (typeof pf === 'string' ? document.getElementById(pf) : el.querySelector(`[data-act="${pf[0]}"][data-v="${pf[1]}"]`)) || el.querySelector('[data-act="rtab"][aria-selected="true"]'); if (f) { f.focus(); libHover = h; } }
   // al rehacer la lista se pierde el foco de su botón: la vista previa vuelve a mirar (UX-49)
   showPrev();
   tick();
@@ -2807,7 +2816,8 @@ document.addEventListener('click', e => {
     case 'menu-sim': simMenu(b); return;
     case 'sim': {
       S.sim[v] = !S.sim[v];
-      if (['backend', 'server', 'director'].includes(v)) S.linkGen++;
+      const link = ['backend', 'server', 'director'].includes(v);
+      if (link) S.linkGen++;
       if (v === 'backend') {
         if (S.sim.backend) { S.qsnap = null; S.hb.backend = now(); toast('Backend de vuelta: la web se pone al día con las órdenes y el juego.', 'ok'); }
         else { S.qsnap = clone(S.queue); cancelPlacing(true); toast('Backend parado: la web ya no ve el juego ni guarda cambios.', 'fail'); }
@@ -2815,12 +2825,13 @@ document.addEventListener('click', e => {
       if (v === 'server' && S.sim.server) S.hb.server = now();
       if (v === 'director' && S.sim.director) S.hb.client = now();
       if (v === 'expansion') S.validatedAt = now();
-      reconcileTakes();
+      // solo la vuelta de una conexión lee el juego: tocar la DOF o Expansion no confirma ninguna parada (AR4-03)
+      if (link) reconcileTakes();
       simMenu(menuFor || $('#bSim')); renderAll(); return;
     }
     case 'sim-reboot': {
       closeMenu(); S.sim.server = false; S.linkGen++; renderAll(); toast('Reiniciando el servidor…');
-      setTimeout(() => { S.sim.server = true; S.linkGen++; S.hb.server = now(); S.epoch = fnv(String(now())).slice(0, 8); S.epochNew = true; S.world = null; S.obs = {}; S.other = null; S.take.dirty = false; if (['armada', 'preparando'].includes(S.take.state)) { S.take.state = 'idle'; S.take.checks = []; } renderAll(); }, 2200);
+      setTimeout(() => { S.sim.server = true; S.linkGen++; S.hb.server = now(); S.epoch = fnv(String(now())).slice(0, 8); S.epochNew = true; S.world = null; S.obs = {}; S.other = null; S.take.dirty = false; if (['armada', 'preparando'].includes(S.take.state)) { S.take.state = 'idle'; S.take.checks = []; } reconcileTakes(); renderAll(); }, 2200);
       break;
     }
     case 'sim-gamestop': closeMenu(); gameStop(); break;
