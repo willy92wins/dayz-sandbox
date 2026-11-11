@@ -1638,9 +1638,12 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     });
   }, sel);
   const IN_BUTTONS = '.btn kbd, .seg kbd, .mi kbd';
+  // al cambiar de tema, el fondo de los botones se funde en 0,12 s y el color de la tecla cambia de golpe: se lee cuando acaban esas transiciones,
+  // que en una máquina cargada pueden seguir a medias pasados 150 ms (getAnimations aplica antes el cambio de estilo pendiente; como mucho 2 s)
+  const settled = p => p.evaluate(() => Promise.race([Promise.all(document.getAnimations().filter(a => a instanceof CSSTransition).map(a => a.finished.catch(() => {}))), new Promise(r => setTimeout(r, 2000))]));
   // en Escena con algo elegido y con los dos menús abiertos, y en Rodaje con la toma armada; en el tema que toque
   const keyStates = async (p, themes) => {
-    const all = [], take = async st => { for (const th of themes) { if (themes.length > 1) { await p.emulateMedia({ colorScheme: th }); await p.waitForTimeout(150); } (await keysIn(p, IN_BUTTONS)).forEach(k => all.push({ ...k, st, th })); } };
+    const all = [], take = async st => { for (const th of themes) { if (themes.length > 1) { await p.emulateMedia({ colorScheme: th }); await p.waitForTimeout(150); await settled(p); } (await keysIn(p, IN_BUTTONS)).forEach(k => all.push({ ...k, st, th })); } };
     await p.click('#colL [data-act="sel"][data-v="ent:obj-13"]'); await p.waitForTimeout(200); await take('Escena');
     await p.click('#bTools'); await p.waitForTimeout(150); await take('Herramientas'); await p.keyboard.press('Escape'); await p.waitForTimeout(100);
     await p.click('#docBtn'); await p.waitForTimeout(150); await take('menú de la escena'); await p.keyboard.press('Escape'); await p.waitForTimeout(100);
