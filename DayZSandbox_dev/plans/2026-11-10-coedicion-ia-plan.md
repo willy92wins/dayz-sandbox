@@ -42,20 +42,20 @@ Cada cliente pinta lo que llega por SSE, no lo que mandó (sin estado optimista 
 
 - Una operación con `base_rev` atrasada se acepta si ninguna operación posterior tocó el mismo **(entidad, campo)**; si lo tocó, depende del autor:
   - **IA**: se rechaza con `conflict` y el valor actual; la IA relee y decide. Nunca pisa en silencio un cambio humano.
-  - **Persona**: gana la última escritura en ese campo (el patrón de Figma por propiedad [sin verificar] `https://www.figma.com/blog/how-figmas-multiplayer-technology-works/`).
+  - **Persona**: gana la última escritura en ese campo (Figma: el servidor es la autoridad y en el mismo campo gana «the last value that was sent to the server» [V 2026-11-11] `https://www.figma.com/blog/how-figmas-multiplayer-technology-works/`).
 - Entidad borrada entre medias → `entity_gone`.
-- **Bloqueo blando por uso**: mientras la persona arrastra o tiene abierto un campo de una entidad, el backend la marca «en uso por la persona» (latido desde la web) y la IA recibe `busy_human` si la toca. Referente: bloqueo de objetos al editar en Multi-User Editing de Unreal [sin verificar] `https://dev.epicgames.com/documentation/en-us/unreal-engine/multi-user-editing-in-unreal-engine`; Team Create de Roblox Studio [sin verificar] `https://create.roblox.com/docs/studio/collaboration`.
+- **Bloqueo blando por uso**: mientras la persona arrastra o tiene abierto un campo de una entidad, el backend la marca «en uso por la persona» (latido desde la web) y la IA recibe `busy_human` si la toca. Referente: bloqueo de objetos al editar en Multi-User Editing de Unreal [sin verificar] `https://dev.epicgames.com/documentation/en-us/unreal-engine/multi-user-editing-in-unreal-engine`; la página de Roblox Studio no habla de bloqueos [V 2026-11-11, `https://create.roblox.com/docs/studio/collaboration`], así que el bloqueo blando se queda con un solo referente sin verificar y es sobre todo PROPIO (I2).
 - Con la toma armada o rodando no edita nadie (`take_locked`), igual que hoy para la persona (prototipo: «durante la toma no se edita la escena»).
 
 ### 2.3 Presencia y autoría visibles
 
-- La IA tiene un color y una etiqueta propios. Lo que acaba de tocar parpadea una vez en el mapa y en la Jerarquía con «IA · hace 2 s»; lo que tiene «en la mano» lleva su insignia (presencia de Unreal Multi-User y de Figma [sin verificar]).
+- La IA tiene un color y una etiqueta propios. Lo que acaba de tocar parpadea una vez en el mapa y en la Jerarquía con «IA · hace 2 s»; lo que tiene «en la mano» lleva su insignia. Referente: en Team Create de Roblox, lo seleccionado por cada colaborador se resalta con su color propio [V 2026-11-11, `https://create.roblox.com/docs/studio/collaboration`].
 - La Actividad dice quién hizo cada cambio. En la barra de estado, el «MCP apagado» actual pasa a tres estados: apagado, conectado y «IA editando» con botón **Pausar IA** (revoca su credencial al momento; las operaciones en vuelo se rechazan).
 - Las operaciones de la IA van en **tandas** con nombre («IA: dos supervivientes al amanecer»). Cada tanda tiene **Deshacer tanda** en la Actividad.
 
 ### 2.4 Deshacer
 
-- Ctrl+Z deshace solo las operaciones propias (deshacer por autor, como en Figma y Multi-User de Unreal [sin verificar]).
+- Ctrl+Z deshace solo las operaciones propias (deshacer por autor [I]: en Figma el deshacer vive en el cliente que hizo el cambio [V 2026-11-11, mismo artículo], de lo que se infiere que cada uno deshace lo suyo).
 - «Deshacer tanda» revierte una tanda de la IA con sus inversas. Si la persona cambió después un campo de esa tanda, ese campo no se toca y la Actividad lo dice (nunca pérdida silenciosa).
 
 ### 2.5 Transporte y reconexión
@@ -109,8 +109,17 @@ Todos estos se prueban **sin el juego** (backend + web + MCP falso), así que no
 - Que la IA ejecute en el juego sin aprobación.
 - Chat con la IA dentro de la web: la IA entra por su cliente MCP (Claude Code, Claude Desktop…). Se puede añadir después.
 
-## 6. Pendiente
+## 6. Grill Modo B (Guillermo, 2026-11-11 17:03Z: «1. cliente 2. ok 3. ok 4. ok»)
+
+Gate DPF: la fase traza al bloque I del spec (I1-I5) y a H1. Respuestas:
+
+1. La IA se usa desde el cliente MCP de la persona (Claude Code, Claude Desktop…). La web solo enseña lo que hace la IA; el chat dentro de la web queda fuera de M1 (§5).
+2. Mismo campo a la vez: gana la persona; a la IA se le rechaza con `conflict`. Entre ventanas de la persona gana la última escritura (§2.2).
+3. «En uso por la persona» = solo mientras arrastra la entidad o tiene uno de sus campos abiertos; seleccionarla no la bloquea (§2.2, CO-3).
+4. Antes del backend, el prototipo `ui/prototipo/estudio.html` gana una IA simulada que añade y mueve entidades con su color, sus tandas y «Pausar IA», coordinado con el hilo de la interfaz (§4).
+
+## 7. Pendiente
 
 1. ~~Decisión de alcance~~: en M1, con F1 + F1-co + F6 (2026-11-10).
-2. Verificar los referentes marcados [sin verificar].
+2. ~~Verificar referentes~~ (2026-11-11): Figma y Roblox verificados; la página de Multi-User de Unreal no trae el detalle de bloqueos, que sigue [sin verificar].
 3. Grill Modo B y revisión de Sol (R22) del plan; después, brief de implementación y reparto (Grok/Muse/Argon), con Sol en R21.
