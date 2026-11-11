@@ -5,8 +5,11 @@
 // su tercera (AR3-01), copiados de su generador (ui/astra/2026-11-10-ui-revision3-astra.md, §5.1); el halo sin letra y la imagen sin
 // etiqueta van con el punto de la página donde ahora se pintan las etiquetas, al final del fotograma. Los dos siguientes son los de los
 // iconos de los objetos (UX-48); los cuatro siguientes, los de la vista previa de Añadir y la planta del objeto al colocarlo (UX-49), y los
-// cuatro últimos, los de los textos del mapa: los números de la regla encima de los marcadores, y nada debajo de lo que flota encima del
-// mapa ni cortado por su borde (UX-50).
+// cuatro siguientes, los de los textos del mapa: los números de la regla encima de los marcadores, y nada debajo de lo que flota encima del
+// mapa ni cortado por su borde (UX-50). Los cuatro últimos son los que Astra dejó vivos en su cuarta revisión (AR4-01, AR4-02), escritos a
+// partir de lo que describe en su informe (ui/astra/2026-11-11-ui-revision4-astra.md, §2.3): un filtro de CSS en el mapa, la primera cifra
+// de la regla tapada con su misma tinta, un texto pálido que llega por un ImageBitmap a un lienzo con bitmaprenderer, puesto donde no tapa
+// ningún texto de las vistas de AR-03, como hizo ella, y la planta de la vista previa con el ancho al 20 %.
 // Uso: node ui/prototipo/mutantes.js (necesita Playwright con Chromium, como pruebas-mejoras.js).
 const fs = require('fs'), os = require('os'), path = require('path'), { spawnSync } = require('child_process');
 const SRC = fs.readFileSync(path.join(__dirname, 'estudio.html'), 'utf8');
@@ -33,7 +36,11 @@ const MUTANTES = [
   { name: 'los números de la regla vuelven a pintarse debajo de los marcadores', solo: '^UX-50 \\+ regla$', cambios: [["floating(g.canvas); drawScene(g); g.font = '500 12px ' + FONT_MONO; g.textAlign = 'left'; ruler(); drawLabels(g);", "floating(g.canvas); g.font = '500 12px ' + FONT_MONO; g.textAlign = 'left'; ruler(); drawScene(g); drawLabels(g);"]] },
   { name: 'la placa de los números no cuenta como ocupada para las etiquetas', solo: '^UX-50 \\+ regla$', cambios: [['if (!inMap(b)) return; LBL.push(b); ', 'if (!inMap(b)) return; ']] },
   { name: 'las etiquetas vuelven a ir debajo de lo que flota encima del mapa y cortadas por su borde', solo: '^UX-50 \\+ dark$', cambios: [['inMap(at(q)) && ', ''], [' || !inMap(at([0, 0]))', '']] },
-  { name: 'los números de la regla se pintan también debajo de lo que flota encima del mapa y cortados por su borde', solo: '^UX-50 \\+ dark$', cambios: [['if (!inMap(b)) return; LBL.push(b); ', 'LBL.push(b); ']] }
+  { name: 'los números de la regla se pintan también debajo de lo que flota encima del mapa y cortados por su borde', solo: '^UX-50 \\+ dark$', cambios: [['if (!inMap(b)) return; LBL.push(b); ', 'LBL.push(b); ']] },
+  { name: 'el mapa lleva un filtro de CSS que le baja el contraste', solo: '^AR-03 \\+ dark$', cambios: [['.mapstack{position:absolute;', '#map{filter:contrast(0.15)}.mapstack{position:absolute;']] },
+  { name: 'la primera cifra de la regla se tapa con un bloque de su misma tinta', solo: '^AR-03 \\+ dark$', cambios: [['g.fillStyle = P.label; g.fillText(t, x, y); });', 'g.fillStyle = P.label; g.fillText(t, x, y); if (!ruler.k) { ruler.k = 1; const m = g.measureText(t); g.fillRect(x, y - m.actualBoundingBoxAscent, g.measureText(t[0]).width, m.actualBoundingBoxAscent + m.actualBoundingBoxDescent); } });']] },
+  { name: 'un texto pálido llega al mapa por un ImageBitmap, en un lienzo con bitmaprenderer', solo: '^AR-03 \\+ ', cambios: [['ruler(); drawLabels(g);', "ruler(); drawLabels(g); { const o = new OffscreenCanvas(150, 24), q = o.getContext('2d'); q.fillStyle = P.halo; q.fillRect(0, 0, 150, 24); q.font = '12px sans-serif'; q.fillStyle = '#888'; q.fillText('SIN LECTURA', 4, 16); const c = document.createElement('canvas'); c.width = 150; c.height = 24; c.getContext('bitmaprenderer').transferFromImageBitmap(o.transferToImageBitmap()); g.drawImage(c, V.w - 190, V.h / 2); }"]] },
+  { name: 'la planta de la vista previa lleva el ancho al 20 %', solo: '^UX-49 \\+$', cambios: [['height:${+(w * s).toFixed(2)}px', 'height:${+(w * s * 0.2).toFixed(2)}px']] }
 ];
 const run = (file, solo) => {
   const r = spawnSync(process.execPath, [TEST], { env: Object.assign({}, process.env, { ESTUDIO_URL: 'file://' + file, SOLO: solo }), encoding: 'utf8', timeout: 300000 });
