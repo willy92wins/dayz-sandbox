@@ -6,10 +6,14 @@
 // etiqueta van con el punto de la página donde ahora se pintan las etiquetas, al final del fotograma. Los dos siguientes son los de los
 // iconos de los objetos (UX-48); los cuatro siguientes, los de la vista previa de Añadir y la planta del objeto al colocarlo (UX-49), y los
 // cuatro siguientes, los de los textos del mapa: los números de la regla encima de los marcadores, y nada debajo de lo que flota encima del
-// mapa ni cortado por su borde (UX-50). Los cuatro últimos son los que Astra dejó vivos en su cuarta revisión (AR4-01, AR4-02), escritos a
-// partir de lo que describe en su informe (ui/astra/2026-11-11-ui-revision4-astra.md, §2.3): un filtro de CSS en el mapa, la primera cifra
+// mapa ni cortado por su borde (UX-50). Los cuatro siguientes son los que Astra dejó vivos en su cuarta revisión (AR4-01, AR4-02), escritos
+// a partir de lo que describe en su informe (ui/astra/2026-11-11-ui-revision4-astra.md, §2.3): un filtro de CSS en el mapa, la primera cifra
 // de la regla tapada con su misma tinta, un texto pálido que llega por un ImageBitmap a un lienzo con bitmaprenderer, puesto donde no tapa
-// ningún texto de las vistas de AR-03, como hizo ella, y la planta de la vista previa con el ancho al 20 %.
+// ningún texto de las vistas de AR-03, como hizo ella, y la planta de la vista previa con el ancho al 20 %. Los cuatro últimos, los que dejó
+// vivos en la quinta (AR5-01 a AR5-04), escritos a partir de su informe (ui/astra/2026-11-11-ui-revision5-astra.md, §2): la planta
+// estrechada y girada 5° con la misma caja, unas cifras pálidas desde un lienzo con WebGL al que se le cambia el tamaño después de pedir su
+// contexto, un filtro de CSS que dilata lo claro 1 px, a 1366 × 768, donde el mapa tiene alto entero, como su versión redondeada, y un
+// bloque negro de 245 × 20 px que tapa las cifras de la regla de arriba junto a los controles.
 // Uso: node ui/prototipo/mutantes.js (necesita Playwright con Chromium, como pruebas-mejoras.js).
 const fs = require('fs'), os = require('os'), path = require('path'), { spawnSync } = require('child_process');
 const SRC = fs.readFileSync(path.join(__dirname, 'estudio.html'), 'utf8');
@@ -40,7 +44,11 @@ const MUTANTES = [
   { name: 'el mapa lleva un filtro de CSS que le baja el contraste', solo: '^AR-03 \\+ dark$', cambios: [['.mapstack{position:absolute;', '#map{filter:contrast(0.15)}.mapstack{position:absolute;']] },
   { name: 'la primera cifra de la regla se tapa con un bloque de su misma tinta', solo: '^AR-03 \\+ dark$', cambios: [['g.fillStyle = P.label; g.fillText(t, x, y); });', 'g.fillStyle = P.label; g.fillText(t, x, y); if (!ruler.k) { ruler.k = 1; const m = g.measureText(t); g.fillRect(x, y - m.actualBoundingBoxAscent, g.measureText(t[0]).width, m.actualBoundingBoxAscent + m.actualBoundingBoxDescent); } });']] },
   { name: 'un texto pálido llega al mapa por un ImageBitmap, en un lienzo con bitmaprenderer', solo: '^AR-03 \\+ ', cambios: [['ruler(); drawLabels(g);', "ruler(); drawLabels(g); { const o = new OffscreenCanvas(150, 24), q = o.getContext('2d'); q.fillStyle = P.halo; q.fillRect(0, 0, 150, 24); q.font = '12px sans-serif'; q.fillStyle = '#888'; q.fillText('SIN LECTURA', 4, 16); const c = document.createElement('canvas'); c.width = 150; c.height = 24; c.getContext('bitmaprenderer').transferFromImageBitmap(o.transferToImageBitmap()); g.drawImage(c, V.w - 190, V.h / 2); }"]] },
-  { name: 'la planta de la vista previa lleva el ancho al 20 %', solo: '^UX-49 \\+$', cambios: [['height:${+(w * s).toFixed(2)}px', 'height:${+(w * s * 0.2).toFixed(2)}px']] }
+  { name: 'la planta de la vista previa lleva el ancho al 20 %', solo: '^UX-49 \\+$', cambios: [['height:${+(w * s).toFixed(2)}px', 'height:${+(w * s * 0.2).toFixed(2)}px']] },
+  { name: 'la planta de la vista previa, estrechada y girada 5° para que su caja mida lo mismo', solo: '^UX-49 \\+$', cambios: [['style="width:${+(l * s).toFixed(2)}px;height:${+(w * s).toFixed(2)}px"', 'style="width:${+((l * s * Math.cos(Math.PI / 36) - w * s * Math.sin(Math.PI / 36)) / Math.cos(Math.PI / 18)).toFixed(2)}px;height:${+((w * s * Math.cos(Math.PI / 36) - l * s * Math.sin(Math.PI / 36)) / Math.cos(Math.PI / 18)).toFixed(2)}px;transform:rotate(5deg)"']] },
+  { name: 'unas cifras pálidas llegan al mapa desde un lienzo con WebGL al que se le cambia el tamaño después de pedir su contexto', solo: '^AR-03 \\+ ', cambios: [['ruler(); drawLabels(g);', "ruler(); drawLabels(g); { const c = document.createElement('canvas'), q = c.getContext('webgl', { preserveDrawingBuffer: true }); c.width = 150; c.height = 24; q.enable(q.SCISSOR_TEST); q.clearColor(0.78, 0.77, 0.71, 1); q.scissor(0, 0, 150, 24); q.clear(q.COLOR_BUFFER_BIT); q.clearColor(0.53, 0.53, 0.53, 1); for (let i = 0; i < 4; i++) { q.scissor(6 + 10 * i, 6, 6, 12); q.clear(q.COLOR_BUFFER_BIT); } g.drawImage(c, V.w - 190, V.h / 2); }"]] },
+  { name: 'el mapa lleva un filtro de CSS que dilata lo claro 1 px y borra las cifras', solo: '^AR-03 \\+ ', cambios: [['.mapstack{position:absolute;', '#map{filter:url(#mutdil)}.mapstack{position:absolute;'], ['<canvas id="map" tabindex="0"', '<svg width="0" height="0" style="position:absolute"><filter id="mutdil"><feMorphology operator="dilate" radius="1"/></filter></svg><canvas id="map" tabindex="0"']] },
+  { name: 'un bloque negro de 245 × 20 px tapa en pantalla las cifras de la regla junto a los controles de arriba', solo: '^AR4-01 \\+ dark$', cambios: [['.mapstack{position:absolute;', '#mapwrap::after{content:"";position:absolute;top:0;right:0;width:245px;height:20px;background:#000;pointer-events:none;z-index:6}.mapstack{position:absolute;']] }
 ];
 const run = (file, solo) => {
   const r = spawnSync(process.execPath, [TEST], { env: Object.assign({}, process.env, { ESTUDIO_URL: 'file://' + file, SOLO: solo }), encoding: 'utf8', timeout: 300000 });

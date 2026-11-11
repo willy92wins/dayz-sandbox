@@ -1331,6 +1331,7 @@ function loopTake() {
 // hasta leerlo, la parada no está confirmada y Parar se queda como «Parada sin confirmar» (UX-01, UX-12)
 const lostPeer = () => !S.sim.backend ? 'el backend' : !S.sim.server ? 'el servidor' : 'tu juego';
 const lostWhy = when => `Se perdió ${lostPeer()} ${when}. Por seguridad, el mod para solo la cámara y los actores cuando pierde la conexión (hombre muerto), pero falta confirmarlo leyendo el juego. Se comprueba sola al volver la conexión; después, reaplica y prepara la toma siguiente.`;
+const CUT_WHY = 'Por seguridad, el mod para solo la cámara y los actores cuando pierde la conexión (hombre muerto), pero falta confirmarlo leyendo el juego. Se comprueba sola ahora que ha vuelto la conexión; después, reaplica y prepara la toma siguiente.';
 function endTake(state, why, from) {
   const t = S.take.t, n = S.take.n, ctl = S.take.stopReq ? (now() - S.take.stopReq) / 1000 : 0;
   document.body.classList.remove('rolling');
@@ -1344,7 +1345,7 @@ function endTake(state, why, from) {
     else if (state === 'parada') setOp(op, Object.assign({state: 'observado', detail: entry.why}, from === 'juego' ? {origin: 'tu juego · tecla «Parar toma»'} : {}));
     else { op.lost = true; op.recon = `el mod paró la cámara y los actores a los ${nf(t, 1)} s`; setOp(op, {state: 'parcial', detail: why}); }
   }
-  toast(state === 'terminada' ? `Toma ${pad2(n)} terminada en ${nf(entry.dur, 2)} s.` : state === 'parada' ? (from === 'juego' ? `Toma ${pad2(n)} parada desde tu juego a los ${nf(t, 1)} s.` : `Toma ${pad2(n)} parada a los ${nf(t, 1)} s. Control devuelto en ${nf(ctl, 2)} s.`) : `Toma ${pad2(n)}: parada sin confirmar. Se perdió ${lostPeer()}; el mod para solo por seguridad y se confirma al volver la conexión.`, state === 'terminada' ? 'ok' : state === 'parada' ? '' : 'fail');
+  toast(state === 'terminada' ? `Toma ${pad2(n)} terminada en ${nf(entry.dur, 2)} s.` : state === 'parada' ? (from === 'juego' ? `Toma ${pad2(n)} parada desde tu juego a los ${nf(t, 1)} s.` : `Toma ${pad2(n)} parada a los ${nf(t, 1)} s. Control devuelto en ${nf(ctl, 2)} s.`) : (S.sim.backend && S.sim.server && S.sim.director ? `Toma ${pad2(n)}: parada sin confirmar. Se cortó la conexión mientras paraba; el mod para solo por seguridad y se confirma al leer el juego.` : `Toma ${pad2(n)}: parada sin confirmar. Se perdió ${lostPeer()}; el mod para solo por seguridad y se confirma al volver la conexión.`), state === 'terminada' ? 'ok' : state === 'parada' ? '' : 'fail');
   renderAll();
 }
 // La lectura al volver tarda 700 ms y solo vale si en medio no se cortó ni volvió ninguna conexión y siguen las tres; si no, la parada sigue
@@ -1360,14 +1361,17 @@ function reconcileTakes() {
     if (S.take.unconfirmed) { S.take.unconfirmed = false; toast(gone ? 'Parada confirmada: el servidor se reinició y en el mundo nuevo no queda nada de la toma.' : `Parada confirmada al leer el juego: ${o.recon}.`, 'ok'); renderAll(); }
   }, 700));
 }
-// Parar pide la parada y espera a que el cliente la confirme (B5); sin peers, falla a los 4 s
+// Parar pide la parada y espera a que el cliente la confirme (B5); sin peers, falla a los 4 s. La confirmación en camino solo vale si
+// desde Parar no se cortó ni volvió ninguna conexión: si no, como la de una toma cortada, se confirma leyendo el juego, y en su mundo (AR5-05)
 function stopTake() {
   if (S.take.state === 'rodando') {
     S.take.state = 'parando'; S.take.stopReq = now(); renderAll();
+    const gen = S.linkGen;
     const wait = () => {
       if (S.take.state !== 'parando') return;
       const up = S.sim.backend && S.sim.server && S.sim.director, dt = now() - S.take.stopReq;
-      if (up && dt >= 420) return endTake('parada');
+      if (up && S.linkGen === gen && dt >= 420) return endTake('parada');
+      if (up && S.linkGen !== gen) { endTake('fallida', `No llegó la confirmación de parada: se cortó la conexión mientras paraba. ${CUT_WHY}`); return reconcileTakes(); }
       if (!up && dt >= 4000) return endTake('fallida', `No llegó la confirmación de parada. ${lostWhy('mientras paraba')}`);
       setTimeout(wait, 60);
     };
