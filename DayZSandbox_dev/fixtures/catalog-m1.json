@@ -1,0 +1,76 @@
+{
+  "classes": {
+    "objeto": [
+      "Land_Wreck_Ikarus",
+      "Land_Wreck_Volha_Police",
+      "Land_Wreck_Volha_Blue",
+      "Land_Wreck_V3S",
+      "Land_Container_1Bo",
+      "Land_Container_1Aoh",
+      "LargeTent",
+      "MediumTent",
+      "CarTent",
+      "CamoNet",
+      "Fireplace",
+      "Barrel_Red",
+      "Barrel_Blue",
+      "Barrel_Green",
+      "Barrel_Yellow",
+      "WoodenCrate",
+      "SeaChest",
+      "Spotlight",
+      "PowerGenerator"
+    ],
+    "infectado": [
+      "ZmbM_FarmerFat_Brown",
+      "ZmbM_HermitSkinny_Beige",
+      "ZmbF_CitizenANormal_Blue",
+      "ZmbM_CitizenASkinny_Grey",
+      "ZmbM_PatrolNormal_Autumn",
+      "ZmbF_VillagerOld_Green",
+      "ZmbM_Jacket_brown",
+      "ZmbF_JoggerSkinny_Red",
+      "ZmbM_HunterOld_Autumn",
+      "ZmbM_MotobikerFat_Black"
+    ],
+    "animal": [
+      "Animal_CervusElaphus",
+      "Animal_CapreolusCapreolus",
+      "Animal_GallusGallusDomesticus",
+      "Animal_SusScrofa",
+      "Animal_BosTaurus_Brown"
+    ],
+    "actor": [
+      "SurvivorM_Mirek",
+      "SurvivorM_Boris",
+      "SurvivorM_Denis",
+      "SurvivorM_Guo",
+      "SurvivorF_Linda",
+      "SurvivorF_Maria",
+      "SurvivorF_Eva",
+      "SurvivorF_Naomi"
+    ]
+  },
+  "caps": {
+    "objeto": 20,
+    "infectado": 10,
+    "animal": 3,
+    "actor": 2
+  },
+  "wardrobes": [
+    "partisano",
+    "civil",
+    "medica",
+    "cazador"
+  ],
+  "emotes": [
+    "EmoteGreeting",
+    "EmotePoint",
+    "EmoteThumb",
+    "EmoteSurrender",
+    "EmoteSalute",
+    "EmoteFacepalm",
+    "EmoteTaunt",
+    "EmoteHeart"
+  ]
+}
