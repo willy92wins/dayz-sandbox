@@ -68,9 +68,10 @@ const LIB = () => {
 // más que lo que tapa lo que flota encima, sin margen, y en su sombra vale el lienzo oscurecido como mucho lo que da su opacidad; en la
 // captura, además, la letra llega a 4,5:1 y sus huecos siguen sin tinta, y un texto pintado del que no se ve ningún píxel no pasa. Un
 // lienzo con WebGL o WebGPU, o que pinta otro hilo, sigue de procedencia desconocida aunque se le cambie el tamaño.
-// Desde la sexta (AR6-01): lo que flota encima solo se aparta donde se pinta, recortado por lo que lo contiene, y solo si nada cambia lo que
-// pinta dentro de su caja (un recorte, una máscara, un filtro, una opacidad, un giro): si no, se compara; y un texto del que no se ve algún
-// píxel de su letra o de sus huecos no se da por leído, aunque se vea el resto.
+// Desde la sexta (AR6-01), y dicho así desde la séptima (AR7-02): de lo que flota encima se aparta de la comparación su caja, recortada por lo
+// que la contiene, aunque no la pinte entera (un fondo transparente, unas esquinas redondeadas), y solo si nada cambia lo que pinta dentro de
+// ella (un recorte, una máscara, un filtro, una opacidad, un giro): si no, se compara; y un texto con algún píxel de su letra o de sus huecos
+// sin comparar no se da por leído, aunque se compare el resto. Lo que se aparta queda sin comparar, que no es lo mismo que no verse.
 // No sigue un texto copiado a mano, byte a byte, de un ImageData a otro, ni uno hecho con createImageData; no mira si los huecos de un contorno
 // se rellenan después con otro color que también se distinga de los guiones, ni reconoce la letra: mide su contraste, sus huecos y de dónde
 // sale, no que se lea como el carácter que es. Solo graba cuando __cv.on, y se queda con el último fotograma entero del mapa, que empieza
@@ -397,11 +398,11 @@ const PROBE = () => {
     const S = ogid0.call(og, 0, 0, w, h).data, D = gid0.call(c.getContext('2d'), 0, 0, W, H).data, m = c.getBoundingClientRect();
     // una captura que no tiene el tamaño del lienzo no se compara píxel a píxel: no hay comparación
     if (Math.abs(w - W) > 1 || Math.abs(h - H) > 1) return KEEP.map(() => null);
-    // lo que flota encima solo se aparta donde se pinta (AR6-01): su caja, recortada por lo que la contiene si eso recorta lo que se le sale
-    // (overflow), y solo si nada cambia lo que pinta dentro de ella: se ve (visibility), y ni él ni lo que lo contiene van recortados
-    // (clip-path, clip), con máscara, con filtro, fundidos con lo de debajo, transparentes (opacity) ni movidos más que de sitio (transform,
-    // rotate, scale, offset-path). Lo que no cumple eso no se aparta, ni su sombra: sus píxeles se comparan, y si tapa algo de un texto, sale
-    // distinto
+    // de lo que flota encima se aparta, sin compararla, su caja (AR6-01, AR7-02), recortada por lo que la contiene si eso recorta lo que se le
+    // sale (overflow), aunque no la pinte entera, y solo si nada cambia lo que pinta dentro de ella: se ve (visibility), y ni él ni lo que lo
+    // contiene van recortados (clip-path, clip), con máscara, con filtro, fundidos con lo de debajo, transparentes (opacity) ni movidos más que
+    // de sitio (transform, rotate, scale, offset-path). Lo que no cumple eso no se aparta, ni su sombra: sus píxeles se comparan, y si tapa
+    // algo de un texto, sale distinto
     const plain = e => {
       if (getComputedStyle(e).visibility !== 'visible') return false;
       for (let a = e; a; a = a.parentElement) {
@@ -454,7 +455,7 @@ const PROBE = () => {
       if (!k || !KD) return null;
       let n = 0, diff = 0, moved = 0, dark = 0;
       k.forEach(l => l.forEach(([x, y]) => { if (!vis([x, y])) return; n++; const q = 4 * (y * W + x), z = shade(x, y); if (z) dark++; if (dif(D, KD, q) > 2) moved++; else if (!fits(4 * ((y + oy) * w + x + ox), q, z)) diff++; }));
-      // y cuántos píxeles de su letra y de sus huecos no se ven: un texto que se ve en parte no se da por leído (AR6-01)
+      // y cuántos píxeles de su letra y de sus huecos se quedan sin comparar: un texto comparado en parte no se da por leído (AR6-01)
       const [g, r, hs] = k.map(l => l.filter(vis)), f = g.length && r.length ? legible(sc, g, r, hs) : null;
       return { n, diff, moved, dark, g: g.length, cut: k[0].length - g.length + k[2].length - hs.length, low: f ? f.low : g.length, min: f ? f.min : null, filled: f ? f.filled : 0, at: [ox, oy] };
     });
@@ -1060,7 +1061,7 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
   // Desde la cuarta revisión (AR4-01), además: los huecos de cada letra, menos en los pueblos, que van con el mapa y pueden quedar bajo un
   // marcador, siguen sin la tinta de la letra; y en pantalla, cada píxel de cada texto es el del lienzo (sin filtro, opacidad ni nada encima).
   // Y desde la quinta (AR5-01, AR5-02), cada texto pintado se ve en pantalla, y ahí se lee: no vale ninguno del que no se vea ningún píxel,
-  // y desde la sexta (AR6-01), tampoco uno que se vea a medias
+  // y desde la sexta (AR6-01), tampoco uno comparado a medias
   const composite = async p => {
     const b = await p.locator('#map').boundingBox(), png = await p.screenshot({ clip: { x: b.x, y: b.y, width: b.width, height: b.height } });
     return p.evaluate(u => window.__cv.composite(u), 'data:image/png;base64,' + png.toString('base64'));
@@ -1072,7 +1073,7 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const scr = f.texts.filter(t => t.n > 0 && (!t.comp || !t.comp.g || t.comp.diff > 0 || t.comp.moved > 0 || t.comp.low > 0 || t.comp.cut > 0 || (t.comp.filled > 0 && !TOWN.test(t.text))));
     const miss = want ? missing(want, f.texts.filter(t => t.n > 0).map(t => t.text)) : [];
     return { f, why: { miss, low, img, fill, scr }, ok: !!want && want.length > 0 && f.texts.length > 0 && !miss.length && !low.length && !img.length && !fill.length && !scr.length,
-      info: `${f.texts.length} textos, ${want ? want.length : 'sin'} esperados${miss.length ? `, faltan ${miss.slice(0, 4).map(t => '«' + t + '»').join(', ')}` : ''}${low.length ? ', bajos ' + showLow(low) : ''}${img.length ? `, ${img.length} imágenes sin medir${img[0].texts.length ? ' con «' + img[0].texts.slice(0, 2).join('», «') + '»' : ''}${img[0].unknown ? ' de procedencia desconocida' : ''}` : ''}${fill.length ? ', rellenados ' + fill.slice(0, 3).map(t => `«${t.text}» ${t.fin.filled} de ${t.fin.holes} huecos`).join(', ') : ''}${scr.length ? ', distintos en pantalla ' + scr.slice(0, 3).map(t => !t.comp ? `«${t.text}» sin captura comparable` : !t.comp.g ? `«${t.text}» sin ningún píxel de su letra a la vista` : t.comp.moved ? `«${t.text}» repintado antes de la captura (${t.comp.moved} px)` : t.comp.diff ? `«${t.text}» ${t.comp.diff} de ${t.comp.n} px` : t.comp.low ? `«${t.text}» en pantalla ${t.comp.low} de ${t.comp.g} px bajos (${t.comp.min}:1)` : t.comp.cut ? `«${t.text}» visto a medias: ${t.comp.cut} px de su letra o de sus huecos no se ven` : `«${t.text}» en pantalla ${t.comp.filled} huecos con tinta`).join(', ') : ''}` };
+      info: `${f.texts.length} textos, ${want ? want.length : 'sin'} esperados${miss.length ? `, faltan ${miss.slice(0, 4).map(t => '«' + t + '»').join(', ')}` : ''}${low.length ? ', bajos ' + showLow(low) : ''}${img.length ? `, ${img.length} imágenes sin medir${img[0].texts.length ? ' con «' + img[0].texts.slice(0, 2).join('», «') + '»' : ''}${img[0].unknown ? ' de procedencia desconocida' : ''}` : ''}${fill.length ? ', rellenados ' + fill.slice(0, 3).map(t => `«${t.text}» ${t.fin.filled} de ${t.fin.holes} huecos`).join(', ') : ''}${scr.length ? ', sin acreditar en pantalla: ' + scr.slice(0, 3).map(t => !t.comp ? `«${t.text}» sin captura comparable` : !t.comp.g ? `«${t.text}» sin ningún píxel de su letra comparado` : t.comp.moved ? `«${t.text}» repintado antes de la captura (${t.comp.moved} px)` : t.comp.diff ? `«${t.text}» ${t.comp.diff} de ${t.comp.n} px distintos` : t.comp.low ? `«${t.text}» en pantalla ${t.comp.low} de ${t.comp.g} px bajos (${t.comp.min}:1)` : t.comp.cut ? `«${t.text}» comparado a medias, con ${t.comp.cut} px de su letra o de sus huecos sin comparar` : `«${t.text}» en pantalla ${t.comp.filled} huecos con tinta`).join(', ') : ''}` };
   };
   for (const scheme of ['dark', 'light']) {
     await R26(`AR-03 + ${scheme}`, async p => {
@@ -2135,8 +2136,10 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
   // dentro de cada lado, a 1/10, 1/2 y 9/10 de él, da en la planta, y no en algo que la tapa ni en lo que queda fuera de un recorte (AR5-04).
   // Y desde la sexta revisión (AR6-02), lo que se ve de las dos en una captura de su fila de la vista previa, sin fiarse de sus cajas. Tinta
   // es lo que se aparta del fondo (el color que más se repite) al menos la mitad que lo más apartado. De la planta, fuera de lo de la escala:
-  // la caja de su tinta, el tramo más largo de cada lado sin tinta (el discontinuo deja huecos de 2 o 3 px), la tinta que hay dentro, a 3 px
-  // de sus lados o más, y el contraste de su color con el fondo; de la barra, a 2 px de su caja o menos, el largo de su tinta y su contraste
+  // la caja de su tinta, el tramo más largo de cada lado sin tinta (el discontinuo deja huecos de 2 o 3 px), los píxeles de tinta que hay
+  // dentro, a 3 px de sus lados o más, y el contraste con el fondo de su píxel más apartado de él; de la barra, a 2 px de su caja o menos, el
+  // largo de su tinta y el mismo contraste. Desde la séptima (AR7-01), también el contraste de cada tramo de tinta de sus lados, sin
+  // redondear, porque el de un solo píxel no dice nada de los demás lados
   const look = async p => {
     const r = await p.evaluate(() => { const q = s => { const e = document.querySelector('#libPrev ' + s); if (!e) return null; const b = e.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom]; }; return { plan: q('.pv-plan'), sc: q('.pv-sc'), bar: q('.pv-sc .scale i') }; });
     if (!r.plan || !r.sc || !r.bar) return null;
@@ -2149,7 +2152,7 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
       const n = new Map(); for (let i = 0; i < W * H; i++) { const k = D[4 * i] << 16 | D[4 * i + 1] << 8 | D[4 * i + 2]; n.set(k, (n.get(k) || 0) + 1); }
       const k0 = [...n].sort((a, b) => b[1] - a[1])[0][0], bg = [k0 >> 16, k0 >> 8 & 255, k0 & 255], far = q => Math.max(...q.map((v, i) => Math.abs(v - bg[i])));
       const lin = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }, lum = q => 0.2126 * lin(q[0]) + 0.7152 * lin(q[1]) + 0.0722 * lin(q[2]);
-      const cr = q => { const a = lum(q), b = lum(bg); return Math.round((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) * 100) / 100; };
+      const cr = q => { const a = lum(q), b = lum(bg); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
       // la tinta en lo que deja `keep` de la captura: si un píxel lo es, su caja y el contraste del más apartado del fondo
       const ink = keep => {
         let top = 0, c = null; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (keep(x, y)) { const f = far(px(x, y)); if (f > top) { top = f; c = px(x, y); } }
@@ -2161,10 +2164,16 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
       const f = ink((x, y) => !inSc(x, y)), b = ink((x, y) => inSc(x, y) && x + x0 >= r.bar[0] - 2 && x + x0 < r.bar[2] + 2 && y + y0 >= r.bar[1] && y + y0 < r.bar[3] + 2);
       if (!f) return null;
       const gap = (len, at) => { let m = 0, c = 0; for (let i = 0; i < len; i++) { c = at(i) ? 0 : c + 1; m = Math.max(m, c); } return m; };
+      // cada lado, como una franja de 2 px a lo largo de su caja de tinta: su largo y, en cada posición, sus dos píxeles
+      const strips = (k, top) => [[k.r - k.l + 1, i => [[k.l + i, k.b], [k.l + i, k.b - 1]]], [k.b - k.t + 1, i => [[k.l, k.t + i], [k.l + 1, k.t + i]]], [k.b - k.t + 1, i => [[k.r, k.t + i], [k.r - 1, k.t + i]]]].concat(top ? [[k.r - k.l + 1, i => [[k.l + i, k.t], [k.l + i, k.t + 1]]]] : []);
+      // el contraste del tramo más bajo (AR7-01): en cada posición de un lado cuenta su píxel de tinta más contrastado, y un tramo son las
+      // posiciones seguidas con tinta. De cada uno cuentan todas menos la primera y la última, donde el guion se funde con el fondo (su
+      // antialias), y uno de 1 o 2 posiciones, por la más contrastada: así un lado fuerte no salva a uno flojo, ni un tramo a otro
+      const low = (k, top) => { let lo = Infinity; for (const [len, at] of strips(k, top)) { let run = []; const end = () => { if (run.length) lo = Math.min(lo, run.length > 2 ? Math.min(...run.slice(1, -1)) : Math.max(...run)); run = []; }; for (let i = 0; i < len; i++) { const q = at(i).filter(([x, y]) => k.is(x, y)).map(([x, y]) => cr(px(x, y))); if (q.length) run.push(Math.max(...q)); else end(); } end(); } return lo; };
       const w = f.r - f.l + 1, h = f.b - f.t + 1;
-      const sides = [gap(w, i => f.is(f.l + i, f.t) || f.is(f.l + i, f.t + 1)), gap(w, i => f.is(f.l + i, f.b) || f.is(f.l + i, f.b - 1)), gap(h, i => f.is(f.l, f.t + i) || f.is(f.l + 1, f.t + i)), gap(h, i => f.is(f.r, f.t + i) || f.is(f.r - 1, f.t + i))];
+      const sides = strips(f, true).map(([len, at]) => gap(len, i => at(i).some(([x, y]) => f.is(x, y))));
       let inner = 0; for (let y = f.t + 3; y <= f.b - 3; y++) for (let x = f.l + 3; x <= f.r - 3; x++) if (f.is(x, y)) inner++;
-      return { w, h, sides, inner, cr: f.cr, bar: b ? b.r - b.l + 1 : 0, barCr: b ? b.cr : 0 };
+      return { w, h, sides, inner, cr: f.cr, lo: low(f, true), bar: b ? b.r - b.l + 1 : 0, barCr: b ? b.cr : 0, barLo: b ? low(b, false) : 0 };
     }, ['data:image/png;base64,' + png.toString('base64'), r, x0, y0]);
   };
   const preview = async p => { const v = await p.evaluate(() => {
@@ -2181,12 +2190,19 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
   const r1 = x => Math.round(x * 10) / 10;
   const planFits0 = (v, L, Wd) => !!v && !!v.fp && !!v.s && Math.abs(v.fp[0] - L * v.s) <= 1 && Math.abs(v.fp[1] - Wd * v.s) <= 1;
   const planFits5 = (v, L, Wd) => planFits0(v, L, Wd) && !v.bent.length && !v.miss;
-  // y como se ve (AR6-02): su tinta mide eso mismo a ±1 px en cada eje, ningún tramo de un lado se queda sin tinta más de 4 px, no hay tinta
-  // dentro, su color está a 3:1 o más del fondo (lo que pide WCAG 2.1, 1.4.11, a lo que no es texto), y la barra se ve del largo de su caja, a
-  // ±1 px, y también a 3:1
-  const planSeen = (v, L, Wd) => !!v && !!v.seen && !!v.s && Math.abs(v.seen.w - L * v.s) <= 1 && Math.abs(v.seen.h - Wd * v.s) <= 1 && Math.max(...v.seen.sides) <= 4 && !v.seen.inner && v.seen.cr >= 3 && Math.abs(v.seen.bar - v.bw) <= 1 && v.seen.barCr >= 3;
+  // y como se ve (AR6-02): su tinta mide eso mismo a ±1 px en cada eje, ningún tramo de un lado se queda sin tinta más de 4 px, ningún píxel
+  // clasificado como tinta queda dentro, y la barra se ve del largo de su caja, a ±1 px
+  const planGeom = (v, L, Wd) => !!v && !!v.seen && !!v.s && Math.abs(v.seen.w - L * v.s) <= 1 && Math.abs(v.seen.h - Wd * v.s) <= 1 && Math.max(...v.seen.sides) <= 4 && !v.seen.inner && Math.abs(v.seen.bar - v.bw) <= 1;
+  // el criterio de la sexta, solo para decir en los − si lo daba por bueno: además, el píxel más apartado del fondo de la planta y el de la
+  // barra a 3:1 o más, con la razón redondeada a dos decimales
+  const planSeen6 = (v, L, Wd) => planGeom(v, L, Wd) && Math.round(v.seen.cr * 100) / 100 >= 3 && Math.round(v.seen.barCr * 100) / 100 >= 3;
+  // y desde la séptima (AR7-01), cada tramo de tinta de sus cuatro lados y de los tres de la barra a 3:1 o más del fondo (lo que pide WCAG 2.1,
+  // 1.4.11, a lo que no es texto), sin redondear la razón
+  const planSeen = (v, L, Wd) => planGeom(v, L, Wd) && v.seen.lo >= 3 && v.seen.barLo >= 3;
   const planFits = (v, L, Wd) => planFits5(v, L, Wd) && planSeen(v, L, Wd);
-  const showPlan = (v, L, Wd) => !v ? 'sin vista previa' : `planta ${v.fp ? v.fp.map(r1).join(' × ') + ' px' : 'ninguna'}${v.s ? `, a ${r1(v.s)} px/m de su barra${L ? `: ${String(L).replace('.', ',')} × ${String(Wd).replace('.', ',')} m son ${r1(L * v.s)} × ${r1(Wd * v.s)} px` : ''}` : ', sin barra de escala'}${v.bent.length ? ` · su caja no es la planta: ${v.bent.join(', ')}` : ''}${v.miss ? ` · ${v.miss} de los 12 puntos junto a sus lados no ${v.miss === 1 ? 'da' : 'dan'} en ella` : ''}${v.fp ? ` · ${!v.seen ? 'en la captura no se ve' : `en la captura se ve de ${v.seen.w} × ${v.seen.h} px, con ${Math.max(...v.seen.sides)} px seguidos sin tinta en un lado como mucho${v.seen.inner ? `, ${v.seen.inner} px de tinta dentro` : ''}, a ${v.seen.cr}:1, y la barra de ${v.seen.bar} px (su caja, ${r1(v.bw)}), a ${v.seen.barCr}:1`}` : ''}`;
+  // una razón de contraste, para leerla: truncada a dos decimales, que una por debajo de 3 no salga como 3,00
+  const ratio2 = x => (Math.floor(x * 100) / 100).toFixed(2).replace('.', ',');
+  const showPlan = (v, L, Wd) => !v ? 'sin vista previa' : `planta ${v.fp ? v.fp.map(r1).join(' × ') + ' px' : 'ninguna'}${v.s ? `, a ${r1(v.s)} px/m de su barra${L ? `: ${String(L).replace('.', ',')} × ${String(Wd).replace('.', ',')} m son ${r1(L * v.s)} × ${r1(Wd * v.s)} px` : ''}` : ', sin barra de escala'}${v.bent.length ? ` · su caja no es la planta: ${v.bent.join(', ')}` : ''}${v.miss ? ` · ${v.miss} de los 12 puntos junto a sus lados no ${v.miss === 1 ? 'da' : 'dan'} en ella` : ''}${v.fp ? ` · ${!v.seen ? 'en la captura no se ve' : `en la captura se ve de ${v.seen.w} × ${v.seen.h} px, con ${Math.max(...v.seen.sides)} px seguidos sin tinta en un lado como mucho${v.seen.inner ? `, ${v.seen.inner} px de tinta dentro` : ''}, su tramo más bajo a ${ratio2(v.seen.lo)}:1 (su píxel más apartado del fondo, a ${ratio2(v.seen.cr)}:1), y la barra de ${v.seen.bar} px (su caja, ${r1(v.bw)}), su tramo más bajo a ${ratio2(v.seen.barLo)}:1 (${ratio2(v.seen.barCr)}:1)`}` : ''}`;
   // la del autobús: su nombre y su tamaño, 11,4 × 2,5 m, el icono de su fila y su planta a escala en los dos ejes
   const busPrev = (v, d) => {
     if (!v) return { ok: false, info: 'sin vista previa' };
@@ -2762,6 +2778,14 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     if (how === 'contorno') { fp.style.border = '0'; fp.style.outline = '1.5px dashed var(--g-obj)'; fp.style.outlineOffset = '-10px'; }
     if (how === 'muescas') fp.style.clipPath = 'polygon(0 0, 20% 0, 20% 3px, 40% 3px, 40% 0, 100% 0, 100% 20%, calc(100% - 3px) 20%, calc(100% - 3px) 40%, 100% 40%, 100% 100%, 80% 100%, 80% calc(100% - 3px), 60% calc(100% - 3px), 60% 100%, 0 100%, 0 80%, 3px 80%, 3px 60%, 0 60%)';
     if (how === 'barra') el.querySelector('.scale i').style.clipPath = 'inset(0 20% 0 0)';
+    // los de la séptima (AR7-01), con los colores de su ataque en cada tema, flojo y fuerte: en oscuro #666 y #999, en claro #aaa y #666. Los
+    // tres lados flojos y el de arriba fuerte; en un borde sólido, un tramo flojo del 40 al 60 % de los lados de arriba y de abajo; la línea de
+    // abajo de la barra floja y sus lados fuertes; y la planta toda de un gris a 2,999:1 del fondo, que redondeado daba 3,00
+    const dk = (document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) === 'dark', [weak, strong] = dk ? ['#666', '#999'] : ['#aaa', '#666'];
+    if (how === 'lados') { fp.style.borderColor = weak; fp.style.borderTopColor = strong; }
+    if (how === 'tramo') fp.style.borderImage = `linear-gradient(90deg, ${strong} 40%, ${weak} 40% 60%, ${strong} 60%) 1`;
+    if (how === 'barra-baja') { const i = el.querySelector('.scale i'); i.style.borderColor = strong; i.style.borderBottomColor = weak; }
+    if (how === 'redondeo') fp.style.borderColor = dk ? '#68686a' : '#909092';
   }, how);
   const unbend = p => p.evaluate(() => { document.querySelector('#libPrev').innerHTML = window.__pv; });
   await R26('AR5-04 +', async p => {
@@ -2848,18 +2872,18 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
   });
 
   // --- AR6: los arreglos de la sexta revisión de Astra (ui/astra/2026-11-12-ui-revision6-astra.md) ---
-  // AR6-01: lo que flota encima del mapa solo se aparta de la comparación donde se pinta, y un texto visto a medias no se da por leído. Un
-  // aviso recortado con clip-path apartaba su caja entera, también lo que no pinta, y un velo debajo de eso tapaba parte de 6275 sin que se
-  // comparase: con lo que quedaba a la vista, la cifra contaba como leída. El +: a 1600 × 960, en los dos temas, la escena recién abierta, con
-  // la sombra de los controles, se lee, y cada texto pintado se compara entero, sin ningún píxel de su letra ni de sus huecos debajo de lo que
-  // flota encima. El −, en 6275, la cifra de la regla de arriba junto a los controles: un aviso que solo pinta su décima parte de la derecha
+  // AR6-01: lo que flota encima del mapa con un recorte se compara, y un texto comparado a medias no se da por leído (dicho así desde AR7-02).
+  // Un aviso recortado con clip-path apartaba su caja entera, también lo que no pinta, y un velo debajo de eso tapaba parte de 6275 sin que se
+  // comparase: con lo que quedaba comparado, la cifra contaba como leída. El +: a 1600 × 960, en los dos temas, la escena recién abierta, con
+  // la sombra de los controles, se lee, y cada texto pintado se compara entero, sin ningún píxel de su letra ni de sus huecos en la caja de lo
+  // que flota encima. El −, en 6275, la cifra de la regla de arriba junto a los controles: un aviso que solo pinta su décima parte de la derecha
   // (clip-path) encima de sus tres primeras cifras, y debajo, un velo del color de la placa (su ataque); y un aviso entero encima de sus tres
   // primeras cifras, que deja la última a la vista. Que lo tape entera sigue en AR5-02 −
   const whole = r => { const t = r.f.texts.filter(x => x.n > 0); return { n: t.length, ok: t.length > 0 && t.every(x => x.comp && x.comp.g > 0 && !x.comp.cut) }; };
   for (const scheme of ['dark', 'light']) await R26(`AR6-01 + ${scheme}`, async p => {
     const r = await readable(p, ['Mirek', 'Linda']), a = whole(r), q = nearTop(r);
     return [[`AR6-01 + en tema ${scheme === 'dark' ? 'oscuro' : 'claro'}, a 1600 × 960, la escena recién abierta se lee y cada texto pintado se compara entero en pantalla, también las cifras de arriba que caen en la sombra de los controles`, r.ok && a.ok && q.length === 3,
-      `${a.n} textos, ${r.f.texts.filter(x => x.n > 0 && x.comp && !x.comp.cut).length} enteros a la vista · en la sombra: ${q.map(t => t.text).join(', ') || 'ninguna'} · ${r.info}`]];
+      `${a.n} textos, ${r.f.texts.filter(x => x.n > 0 && x.comp && !x.comp.cut).length} comparados enteros · en la sombra: ${q.map(t => t.text).join(', ') || 'ninguna'} · ${r.info}`]];
   }, 1600, 960, scheme);
   await R26('AR6-01 −', async p => {
     const res = [];
@@ -2876,9 +2900,9 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
       }, [how, one]);
       await p.waitForTimeout(150);
       const r = await readable(p, ['Mirek', 'Linda']), x = r.why, only = !x.miss.length && !x.low.length && !x.img.length && !x.fill.length, t = x.scr.find(u => u.text === '6275'), c = t && t.comp;
-      res.push([`AR6-01 − en 6275, la cifra de la regla de arriba junto a los controles, con ${say}, la vista no se lee, y solo porque esa cifra no se ve ${how === 'recortado' ? 'como en el lienzo: lo que el aviso no pinta se compara' : 'entera: lo que queda a la vista no basta'}`,
+      res.push([`AR6-01 − en 6275, la cifra de la regla de arriba junto a los controles, con ${say}, la vista no se lee, y solo porque esa cifra ${how === 'recortado' ? 'no se ve como en el lienzo: lo que el aviso no pinta se compara' : 'se compara a medias: lo que se queda sin comparar no se da por leído'}`,
         !!one && !r.ok && only && !!c && (how === 'recortado' ? c.diff > 0 : c.cut > 0 && c.g > 0 && !c.diff),
-        `${one ? (c ? `6275: ${c.g} px de su letra a la vista, ${c.cut} sin ver, ${c.diff} distintos` : '6275 se da por leída') : 'no está 6275 junto a los controles'} · ${r.info}`]);
+        `${one ? (c ? `6275: ${c.g} px de su letra comparados, ${c.cut} sin comparar, ${c.diff} distintos` : '6275 se da por leída') : 'no está 6275 junto a los controles'} · ${r.info}`]);
     }
     return res;
   });
@@ -2897,7 +2921,7 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     }
     await p.hover(BUS); await p.waitForTimeout(100); await bend(p, 'movida');
     const v = await preview(p), tema = scheme === 'dark' ? 'oscuro' : 'claro'; await unbend(p);
-    return [[`AR6-02 + en tema ${tema}, la planta del autobús y la del generador se ven de su medida a la escala de la barra, a ±1 px, con sus cuatro lados enteros, nada dentro y a 3:1 o más, y la barra se ve del largo de su caja`, ok, out.join(' · ')],
+    return [[`AR6-02 + en tema ${tema}, la planta del autobús y la del generador se ven de su medida a la escala de la barra, a ±1 px, con sus cuatro lados enteros, ningún píxel de tinta dentro y cada tramo de sus lados a 3:1 o más, y la barra se ve del largo de su caja`, ok, out.join(' · ')],
       [`AR6-02 + en tema ${tema}, movida 3 px a un lado y 2 px arriba con un transform, la planta del autobús se ve igual`, planFits(v, 11.4, 2.5), showPlan(v, 11.4, 2.5)]];
   }, 1600, 960, scheme);
   await R26('AR6-02 −', async p => {
@@ -2933,6 +2957,62 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     }
     return res;
   }, 1600, 960, scheme);
+
+  // --- AR7: los arreglos de la séptima revisión de Astra (ui/astra/2026-11-12-ui-revision7-astra.md) ---
+  // AR7-01: el contraste de la planta de la vista previa era el de su píxel más apartado del fondo, y uno solo valía por los cuatro lados. Con
+  // el de arriba fuerte y los otros tres flojos pasaba, a 5,85:1 en oscuro con tres lados a 2,90:1, y a 5,40:1 en claro con tres a 2,19:1; y la
+  // razón se redondeaba antes de compararla con 3. Ahora cuenta cada tramo de tinta de sus lados y de los de la barra, sin redondear. El +: en
+  // los dos temas, la planta del autobús y la del generador, sin tocar y movidas solo de sitio. El −, en los dos temas: su ataque; un tramo
+  // flojo en medio de dos lados; la línea de abajo de la barra floja; y la planta a 2,999:1, que redondeada daba 3,00. Todas cumplen lo demás
+  for (const scheme of ['dark', 'light']) await R26(`AR7-01 + ${scheme}`, async p => {
+    await openObjs(p);
+    const tema = scheme === 'dark' ? 'oscuro' : 'claro', res = [];
+    for (const moved of [false, true]) {
+      const out = []; let ok = true;
+      for (const [cls, name, L, Wd] of PLAN4) {
+        await p.hover(`#colR [data-act="lib-item"][data-v="${cls}"]`); await p.waitForTimeout(100);
+        if (moved) await bend(p, 'movida');
+        const v = await preview(p); if (moved) await unbend(p);
+        ok = ok && !!v && v.text.includes(name) && planFits(v, L, Wd); out.push(`${name}: ${showPlan(v, L, Wd)}`);
+      }
+      res.push([`AR7-01 + en tema ${tema}, ${moved ? 'movidas 3 px a un lado y 2 px arriba con un transform' : 'sin tocar'}, la planta del autobús y la del generador cumplen el criterio, con cada tramo de sus cuatro lados y de los tres de su barra a 3:1 o más, sin redondear`, ok, out.join(' · ')]);
+    }
+    return res;
+  }, 1600, 960, scheme);
+  for (const scheme of ['dark', 'light']) await R26(`AR7-01 − ${scheme}`, async p => {
+    await openObjs(p); await p.hover(BUS); await p.waitForTimeout(100);
+    const dk = scheme === 'dark', res = [];
+    for (const [how, say] of [['lados', `con el lado de arriba ${dk ? '#999' : '#666'} y los otros tres ${dk ? '#666' : '#aaa'}, como en su ataque`], ['tramo', `con un borde sólido ${dk ? '#999' : '#666'} y un tramo ${dk ? '#666' : '#aaa'} del 40 al 60 % de los lados de arriba y de abajo`], ['barra-baja', `con su barra de lados ${dk ? '#999' : '#666'} y la línea de abajo ${dk ? '#666' : '#aaa'}`], ['redondeo', `toda de ${dk ? '#68686a' : '#909092'}, a 2,999:1 del fondo, que redondeado daba 3,00`]]) {
+      await bend(p, how); const v = await preview(p); await unbend(p);
+      res.push([`AR7-01 − en tema ${dk ? 'oscuro' : 'claro'}, la planta del autobús ${say}, ya no cumple el criterio, y solo por su contraste`, !planFits(v, 11.4, 2.5) && planFits5(v, 11.4, 2.5) && planGeom(v, 11.4, 2.5),
+        `${showPlan(v, 11.4, 2.5)} · el criterio de AR6-02 ${planSeen6(v, 11.4, 2.5) ? 'la daba por buena' : 'también la rechazaba'}`]);
+    }
+    return res;
+  }, 1600, 960, scheme);
+
+  // AR7-02: lo que se aparta de la comparación es la caja de lo que flota encima, recortada por lo que la contiene, aunque no la pinte entera,
+  // como un fondo transparente o unas esquinas redondeadas. Eso no lo hace invisible: lo deja sin comparar, y un texto con algo sin comparar
+  // no se da por leído. El +: a 1600 × 960, la escena recién abierta se lee y sus 29 textos se comparan enteros. El −: una caja sin fondo, borde
+  // ni sombra encima de las tres primeras cifras de 6275 no cambia lo que se ve, y la vista no se lee porque esa cifra queda en parte sin
+  // comparar, y así se dice
+  await R26('AR7-02 +', async p => {
+    const r = await readable(p, ['Mirek', 'Linda']), a = whole(r);
+    return [['AR7-02 + a 1600 × 960, la escena recién abierta se lee, y sus 29 textos se comparan enteros, sin ningún píxel de su letra ni de sus huecos sin comparar', r.ok && a.ok && a.n === 29, `${a.n} textos, ${a.ok ? 'todos' : 'no todos'} comparados enteros · ${r.info}`]];
+  }, 1600, 960);
+  await R26('AR7-02 −', async p => {
+    const r0 = await readable(p, ['Mirek', 'Linda']), one = (nearTop(r0).find(t => t.text === '6275') || {}).box || null;
+    if (one) await p.evaluate(one => {
+      // una caja vacía en la pila de avisos, que se mueve con su transform: se pone en 0, 0 y se lleva a su sitio por lo que se ve
+      const m = document.querySelector('#map').getBoundingClientRect(), b = [one[0] - 2, one[1] - 2, one[0] + (one[2] - one[0]) * 0.75, one[3] + 2];
+      const t = document.createElement('div'); t.style.cssText = `position:fixed;left:${m.left + b[0]}px;top:${m.top + b[1]}px;width:${b[2] - b[0]}px;height:${b[3] - b[1]}px;pointer-events:none`;
+      document.querySelector('#toasts').appendChild(t); const r = t.getBoundingClientRect(); t.style.left = 2 * parseFloat(t.style.left) - r.left + 'px'; t.style.top = 2 * parseFloat(t.style.top) - r.top + 'px';
+    }, one);
+    await p.waitForTimeout(150);
+    const r = await readable(p, ['Mirek', 'Linda']), x = r.why, only = !x.miss.length && !x.low.length && !x.img.length && !x.fill.length, t = x.scr.find(u => u.text === '6275'), c = t && t.comp;
+    return [['AR7-02 − una caja sin fondo, borde ni sombra encima de las tres primeras cifras de 6275 no cambia lo que se ve, y la vista no se lee solo porque esa cifra se queda en parte sin comparar, y así se dice: sin comparar, no que no se vea',
+      !!one && !r.ok && only && x.scr.length === 1 && !!c && c.cut > 0 && c.g > 0 && !c.diff && /«6275» comparado a medias, con \d+ px de su letra o de sus huecos sin comparar/.test(r.info) && !/a la vista|no se ven/.test(r.info),
+      `${one ? (c ? `6275: ${c.g} px de su letra comparados, ${c.cut} sin comparar, ${c.diff} distintos` : '6275 se da por leída') : 'no está 6275 junto a los controles'} · ${r.info}`]];
+  }, 1600, 960);
 
   expect(external.length === 0, 'ninguna petición sale de la página: ' + (external.slice(0, 3).join(' ') || 'ninguna'));
   expect(errors.length === 0, 'sin errores de JavaScript en la página');
