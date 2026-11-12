@@ -1523,8 +1523,10 @@ function drawMap() {
   for (let z = Math.ceil(wz0 / sp) * sp; z <= wz1; z += sp) { const [, sy] = w2s(0, z); g.beginPath(); g.moveTo(0, sy + 0.5); g.lineTo(V.w, sy + 0.5); g.stroke(); if (z >= 0 && z <= W0) nums.push([String(z), 3, sy - 3]); }
   // los números, sobre una placa opaca del color del halo de las etiquetas, que también es opaco: se leen encima de edificios y bosque (CU-38, AR-03).
   // Se pintan después de los marcadores, como una regla, y su placa cuenta como ocupada para las etiquetas: un marcador o una etiqueta pintados
-  // encima tapaban parte del número. El que caería debajo de lo que flota encima del mapa, o cortado por su borde, no se pinta (UX-50)
-  const ruler = () => nums.forEach(([t, x, y]) => { const b = [x - 2, y - 11, g.measureText(t).width + 4, 14]; if (!inMap(b)) return; LBL.push(b); g.fillStyle = P.halo; g.fillRect(x - 2, y - 11, g.measureText(t).width + 4, 14); g.fillStyle = P.label; g.fillText(t, x, y); });
+  // encima tapaban parte del número. El que caería debajo de lo que flota encima del mapa, o cortado por su borde, no se pinta (UX-50), ni el
+  // que caería encima de otro número ya pintado: en la esquina de arriba a la izquierda van primero los de X, y el de Z que los pisaría se queda
+  // sin pintar (AR6-03)
+  const ruler = () => nums.forEach(([t, x, y]) => { const b = [x - 2, y - 11, g.measureText(t).width + 4, 14]; if (!inMap(b) || hit(b, LBL)) return; LBL.push(b); g.fillStyle = P.halo; g.fillRect(x - 2, y - 11, g.measureText(t).width + 4, 14); g.fillStyle = P.label; g.fillText(t, x, y); });
   // pueblos, en minúscula normal (UX-09)
   if (V.s < 1.2) { g.textAlign = 'center'; g.font = `600 12px ${FONT_UI}`; TOWNS.forEach(t => { const [x, y] = w2s(t[1], t[2]); if (x < -80 || y < -20 || x > V.w + 80 || y > V.h + 20) return; const label = t[0]; halo(g, label, x, y); g.fillStyle = P.label; g.fillText(label, x, y); }); g.textAlign = 'left'; }
   LBL.length = 0; MK.length = 0; floating(g.canvas); drawScene(g); g.font = '500 12px ' + FONT_MONO; g.textAlign = 'left'; ruler(); drawLabels(g);

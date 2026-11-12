@@ -68,6 +68,9 @@ const LIB = () => {
 // más que lo que tapa lo que flota encima, sin margen, y en su sombra vale el lienzo oscurecido como mucho lo que da su opacidad; en la
 // captura, además, la letra llega a 4,5:1 y sus huecos siguen sin tinta, y un texto pintado del que no se ve ningún píxel no pasa. Un
 // lienzo con WebGL o WebGPU, o que pinta otro hilo, sigue de procedencia desconocida aunque se le cambie el tamaño.
+// Desde la sexta (AR6-01): lo que flota encima solo se aparta donde se pinta, recortado por lo que lo contiene, y solo si nada cambia lo que
+// pinta dentro de su caja (un recorte, una máscara, un filtro, una opacidad, un giro): si no, se compara; y un texto del que no se ve algún
+// píxel de su letra o de sus huecos no se da por leído, aunque se vea el resto.
 // No sigue un texto copiado a mano, byte a byte, de un ImageData a otro, ni uno hecho con createImageData; no mira si los huecos de un contorno
 // se rellenan después con otro color que también se distinga de los guiones, ni reconoce la letra: mide su contraste, sus huecos y de dónde
 // sale, no que se lea como el carácter que es. Solo graba cuando __cv.on, y se queda con el último fotograma entero del mapa, que empieza
@@ -394,9 +397,33 @@ const PROBE = () => {
     const S = ogid0.call(og, 0, 0, w, h).data, D = gid0.call(c.getContext('2d'), 0, 0, W, H).data, m = c.getBoundingClientRect();
     // una captura que no tiene el tamaño del lienzo no se compara píxel a píxel: no hay comparación
     if (Math.abs(w - W) > 1 || Math.abs(h - H) > 1) return KEEP.map(() => null);
-    const els = [...document.querySelectorAll('#mapwrap .ovl, #legend, #hint, #recBadge, #banner, #toasts > *, #menu, #scrim, #guide')].filter(e => e.getClientRects().length > 0);
+    // lo que flota encima solo se aparta donde se pinta (AR6-01): su caja, recortada por lo que la contiene si eso recorta lo que se le sale
+    // (overflow), y solo si nada cambia lo que pinta dentro de ella: se ve (visibility), y ni él ni lo que lo contiene van recortados
+    // (clip-path, clip), con máscara, con filtro, fundidos con lo de debajo, transparentes (opacity) ni movidos más que de sitio (transform,
+    // rotate, scale, offset-path). Lo que no cumple eso no se aparta, ni su sombra: sus píxeles se comparan, y si tapa algo de un texto, sale
+    // distinto
+    const plain = e => {
+      if (getComputedStyle(e).visibility !== 'visible') return false;
+      for (let a = e; a; a = a.parentElement) {
+        const s = getComputedStyle(a);
+        if (s.clipPath !== 'none' || s.clip !== 'auto' || s.maskImage !== 'none' || (s.webkitMaskImage || 'none') !== 'none' || s.filter !== 'none' || s.mixBlendMode !== 'normal' || s.opacity !== '1' ||
+          s.rotate !== 'none' || s.scale !== 'none' || s.offsetPath !== 'none' || !/^(none|matrix\(1, 0, 0, 1, [^,]+, [^)]+\))$/.test(s.transform)) return false;
+      }
+      return true;
+    };
+    const painted = e => {
+      const q = e.getBoundingClientRect(); let [l, t, r, b] = [q.left, q.top, q.right, q.bottom];
+      for (let a = e.parentElement; a && a !== document.body; a = a.parentElement) {
+        const s = getComputedStyle(a);
+        if (s.overflowX === 'visible' && s.overflowY === 'visible' && !/paint|strict|content/.test(s.contain)) continue;
+        const z = a.getBoundingClientRect(), x = z.left + a.clientLeft, y = z.top + a.clientTop;
+        l = Math.max(l, x); t = Math.max(t, y); r = Math.min(r, x + a.clientWidth); b = Math.min(b, y + a.clientHeight);
+      }
+      return { left: l, top: t, right: Math.max(l, r), bottom: Math.max(t, b) };
+    };
+    const els = [...document.querySelectorAll('#mapwrap .ovl, #legend, #hint, #recBadge, #banner, #toasts > *, #menu, #scrim, #guide')].filter(e => e.getClientRects().length > 0 && plain(e));
     const rect = (b, g = 0, u = 0, v = 0) => [(b.left - m.left + u - g) * d, (b.top - m.top + v - g) * d, (b.right - m.left + u + g) * d, (b.bottom - m.top + v + g) * d];
-    const ov = els.map(e => rect(e.getBoundingClientRect()));
+    const ov = els.map(e => rect(painted(e)));
     // la sombra de cada uno (su box-shadow, sin las de dentro): su color, su opacidad y hasta dónde llega, su caja movida y crecida en su
     // extensión y en su desenfoque
     const sh = els.flatMap(e => { const b = e.getBoundingClientRect(); return [...getComputedStyle(e).boxShadow.matchAll(/rgba?\(([^)]*)\)\s+(-?[\d.]+)px\s+(-?[\d.]+)px(?:\s+([\d.]+)px)?(?:\s+(-?[\d.]+)px)?(\s+inset)?/g)].filter(q => !q[6]).map(q => { const k = q[1].split(',').map(Number); return { c: k.slice(0, 3), a: k.length > 3 ? k[3] : 1, r: rect(b, (+q[4] || 0) + (+q[5] || 0), +q[2], +q[3]) }; }); });
@@ -427,8 +454,9 @@ const PROBE = () => {
       if (!k || !KD) return null;
       let n = 0, diff = 0, moved = 0, dark = 0;
       k.forEach(l => l.forEach(([x, y]) => { if (!vis([x, y])) return; n++; const q = 4 * (y * W + x), z = shade(x, y); if (z) dark++; if (dif(D, KD, q) > 2) moved++; else if (!fits(4 * ((y + oy) * w + x + ox), q, z)) diff++; }));
+      // y cuántos píxeles de su letra y de sus huecos no se ven: un texto que se ve en parte no se da por leído (AR6-01)
       const [g, r, hs] = k.map(l => l.filter(vis)), f = g.length && r.length ? legible(sc, g, r, hs) : null;
-      return { n, diff, moved, dark, g: g.length, low: f ? f.low : g.length, min: f ? f.min : null, filled: f ? f.filled : 0, at: [ox, oy] };
+      return { n, diff, moved, dark, g: g.length, cut: k[0].length - g.length + k[2].length - hs.length, low: f ? f.low : g.length, min: f ? f.min : null, filled: f ? f.filled : 0, at: [ox, oy] };
     });
   };
 };
@@ -1031,7 +1059,8 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
   const missing = (want, seen) => { const c = {}; seen.forEach(t => { c[t] = (c[t] || 0) + 1; }); return want.filter(t => c[t] > 0 ? (c[t]--, false) : true); };
   // Desde la cuarta revisión (AR4-01), además: los huecos de cada letra, menos en los pueblos, que van con el mapa y pueden quedar bajo un
   // marcador, siguen sin la tinta de la letra; y en pantalla, cada píxel de cada texto es el del lienzo (sin filtro, opacidad ni nada encima).
-  // Y desde la quinta (AR5-01, AR5-02), cada texto pintado se ve en pantalla, y ahí se lee: no vale ninguno del que no se vea ningún píxel
+  // Y desde la quinta (AR5-01, AR5-02), cada texto pintado se ve en pantalla, y ahí se lee: no vale ninguno del que no se vea ningún píxel,
+  // y desde la sexta (AR6-01), tampoco uno que se vea a medias
   const composite = async p => {
     const b = await p.locator('#map').boundingBox(), png = await p.screenshot({ clip: { x: b.x, y: b.y, width: b.width, height: b.height } });
     return p.evaluate(u => window.__cv.composite(u), 'data:image/png;base64,' + png.toString('base64'));
@@ -1040,10 +1069,10 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const want = await inventory(p, names), f = await frame(p), cmp = await composite(p);
     f.texts.forEach((t, i) => { t.comp = cmp[i] || null; });
     const low = lowTexts(f), img = f.images.filter(unmeasured), fill = f.texts.filter(t => t.fin && t.fin.filled > 0 && !TOWN.test(t.text));
-    const scr = f.texts.filter(t => t.n > 0 && (!t.comp || !t.comp.g || t.comp.diff > 0 || t.comp.moved > 0 || t.comp.low > 0 || (t.comp.filled > 0 && !TOWN.test(t.text))));
+    const scr = f.texts.filter(t => t.n > 0 && (!t.comp || !t.comp.g || t.comp.diff > 0 || t.comp.moved > 0 || t.comp.low > 0 || t.comp.cut > 0 || (t.comp.filled > 0 && !TOWN.test(t.text))));
     const miss = want ? missing(want, f.texts.filter(t => t.n > 0).map(t => t.text)) : [];
     return { f, why: { miss, low, img, fill, scr }, ok: !!want && want.length > 0 && f.texts.length > 0 && !miss.length && !low.length && !img.length && !fill.length && !scr.length,
-      info: `${f.texts.length} textos, ${want ? want.length : 'sin'} esperados${miss.length ? `, faltan ${miss.slice(0, 4).map(t => '«' + t + '»').join(', ')}` : ''}${low.length ? ', bajos ' + showLow(low) : ''}${img.length ? `, ${img.length} imágenes sin medir${img[0].texts.length ? ' con «' + img[0].texts.slice(0, 2).join('», «') + '»' : ''}${img[0].unknown ? ' de procedencia desconocida' : ''}` : ''}${fill.length ? ', rellenados ' + fill.slice(0, 3).map(t => `«${t.text}» ${t.fin.filled} de ${t.fin.holes} huecos`).join(', ') : ''}${scr.length ? ', distintos en pantalla ' + scr.slice(0, 3).map(t => !t.comp ? `«${t.text}» sin captura comparable` : !t.comp.g ? `«${t.text}» sin ningún píxel de su letra a la vista` : t.comp.moved ? `«${t.text}» repintado antes de la captura (${t.comp.moved} px)` : t.comp.diff ? `«${t.text}» ${t.comp.diff} de ${t.comp.n} px` : t.comp.low ? `«${t.text}» en pantalla ${t.comp.low} de ${t.comp.g} px bajos (${t.comp.min}:1)` : `«${t.text}» en pantalla ${t.comp.filled} huecos con tinta`).join(', ') : ''}` };
+      info: `${f.texts.length} textos, ${want ? want.length : 'sin'} esperados${miss.length ? `, faltan ${miss.slice(0, 4).map(t => '«' + t + '»').join(', ')}` : ''}${low.length ? ', bajos ' + showLow(low) : ''}${img.length ? `, ${img.length} imágenes sin medir${img[0].texts.length ? ' con «' + img[0].texts.slice(0, 2).join('», «') + '»' : ''}${img[0].unknown ? ' de procedencia desconocida' : ''}` : ''}${fill.length ? ', rellenados ' + fill.slice(0, 3).map(t => `«${t.text}» ${t.fin.filled} de ${t.fin.holes} huecos`).join(', ') : ''}${scr.length ? ', distintos en pantalla ' + scr.slice(0, 3).map(t => !t.comp ? `«${t.text}» sin captura comparable` : !t.comp.g ? `«${t.text}» sin ningún píxel de su letra a la vista` : t.comp.moved ? `«${t.text}» repintado antes de la captura (${t.comp.moved} px)` : t.comp.diff ? `«${t.text}» ${t.comp.diff} de ${t.comp.n} px` : t.comp.low ? `«${t.text}» en pantalla ${t.comp.low} de ${t.comp.g} px bajos (${t.comp.min}:1)` : t.comp.cut ? `«${t.text}» visto a medias: ${t.comp.cut} px de su letra o de sus huecos no se ven` : `«${t.text}» en pantalla ${t.comp.filled} huecos con tinta`).join(', ') : ''}` };
   };
   for (const scheme of ['dark', 'light']) {
     await R26(`AR-03 + ${scheme}`, async p => {
@@ -2103,22 +2132,61 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
   // lo que enseña la vista previa, como se ve: su texto, el `d` de su icono, el tamaño de su planta y la escala de su barra. La planta y la
   // barra se miden por su caja, y la caja es la planta solo si ni ella ni nada por encima la gira, la inclina, la escala ni la lleva por un
   // trazado (un transform que no sea solo moverla, rotate, scale, offset-path), y si sus lados están donde dice la caja: un punto a 1 px por
-  // dentro de cada lado, a 1/10, 1/2 y 9/10 de él, da en la planta, y no en algo que la tapa ni en lo que queda fuera de un recorte (AR5-04)
-  const preview = p => p.evaluate(() => {
+  // dentro de cada lado, a 1/10, 1/2 y 9/10 de él, da en la planta, y no en algo que la tapa ni en lo que queda fuera de un recorte (AR5-04).
+  // Y desde la sexta revisión (AR6-02), lo que se ve de las dos en una captura de su fila de la vista previa, sin fiarse de sus cajas. Tinta
+  // es lo que se aparta del fondo (el color que más se repite) al menos la mitad que lo más apartado. De la planta, fuera de lo de la escala:
+  // la caja de su tinta, el tramo más largo de cada lado sin tinta (el discontinuo deja huecos de 2 o 3 px), la tinta que hay dentro, a 3 px
+  // de sus lados o más, y el contraste de su color con el fondo; de la barra, a 2 px de su caja o menos, el largo de su tinta y su contraste
+  const look = async p => {
+    const r = await p.evaluate(() => { const q = s => { const e = document.querySelector('#libPrev ' + s); if (!e) return null; const b = e.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom]; }; return { plan: q('.pv-plan'), sc: q('.pv-sc'), bar: q('.pv-sc .scale i') }; });
+    if (!r.plan || !r.sc || !r.bar) return null;
+    const x0 = Math.floor(r.plan[0]), y0 = Math.floor(r.plan[1]);
+    const png = await p.screenshot({ clip: { x: x0, y: y0, width: Math.ceil(r.plan[2]) - x0, height: Math.ceil(r.plan[3]) - y0 } });
+    return p.evaluate(async ([u, r, x0, y0]) => {
+      const im = new Image(); im.src = u; await im.decode();
+      const W = im.naturalWidth, H = im.naturalHeight, o = new OffscreenCanvas(W, H), g = o.getContext('2d'); g.drawImage(im, 0, 0);
+      const D = g.getImageData(0, 0, W, H).data, px = (x, y) => [D[4 * (y * W + x)], D[4 * (y * W + x) + 1], D[4 * (y * W + x) + 2]];
+      const n = new Map(); for (let i = 0; i < W * H; i++) { const k = D[4 * i] << 16 | D[4 * i + 1] << 8 | D[4 * i + 2]; n.set(k, (n.get(k) || 0) + 1); }
+      const k0 = [...n].sort((a, b) => b[1] - a[1])[0][0], bg = [k0 >> 16, k0 >> 8 & 255, k0 & 255], far = q => Math.max(...q.map((v, i) => Math.abs(v - bg[i])));
+      const lin = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }, lum = q => 0.2126 * lin(q[0]) + 0.7152 * lin(q[1]) + 0.0722 * lin(q[2]);
+      const cr = q => { const a = lum(q), b = lum(bg); return Math.round((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) * 100) / 100; };
+      // la tinta en lo que deja `keep` de la captura: si un píxel lo es, su caja y el contraste del más apartado del fondo
+      const ink = keep => {
+        let top = 0, c = null; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (keep(x, y)) { const f = far(px(x, y)); if (f > top) { top = f; c = px(x, y); } }
+        const is = (x, y) => top > 0 && x >= 0 && y >= 0 && x < W && y < H && keep(x, y) && far(px(x, y)) >= top / 2;
+        let l = W, t = H, rr = -1, b = -1; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (is(x, y)) { l = Math.min(l, x); t = Math.min(t, y); rr = Math.max(rr, x); b = Math.max(b, y); }
+        return rr < 0 ? null : { is, l, t, r: rr, b, cr: cr(c) };
+      };
+      const inSc = (x, y) => x + x0 >= r.sc[0] && x + x0 < r.sc[2] && y + y0 >= r.sc[1] && y + y0 < r.sc[3];
+      const f = ink((x, y) => !inSc(x, y)), b = ink((x, y) => inSc(x, y) && x + x0 >= r.bar[0] - 2 && x + x0 < r.bar[2] + 2 && y + y0 >= r.bar[1] && y + y0 < r.bar[3] + 2);
+      if (!f) return null;
+      const gap = (len, at) => { let m = 0, c = 0; for (let i = 0; i < len; i++) { c = at(i) ? 0 : c + 1; m = Math.max(m, c); } return m; };
+      const w = f.r - f.l + 1, h = f.b - f.t + 1;
+      const sides = [gap(w, i => f.is(f.l + i, f.t) || f.is(f.l + i, f.t + 1)), gap(w, i => f.is(f.l + i, f.b) || f.is(f.l + i, f.b - 1)), gap(h, i => f.is(f.l, f.t + i) || f.is(f.l + 1, f.t + i)), gap(h, i => f.is(f.r, f.t + i) || f.is(f.r - 1, f.t + i))];
+      let inner = 0; for (let y = f.t + 3; y <= f.b - 3; y++) for (let x = f.l + 3; x <= f.r - 3; x++) if (f.is(x, y)) inner++;
+      return { w, h, sides, inner, cr: f.cr, bar: b ? b.r - b.l + 1 : 0, barCr: b ? b.cr : 0 };
+    }, ['data:image/png;base64,' + png.toString('base64'), r, x0, y0]);
+  };
+  const preview = async p => { const v = await p.evaluate(() => {
     const el = document.querySelector('#libPrev');
     if (!el || !__r26.shown(el)) return null;
     const ic = el.querySelector('svg path'), fp = el.querySelector('.pv-fp'), bar = el.querySelector('.scale'), bi = bar && bar.querySelector('i'), m = bar ? parseFloat(bar.innerText.replace(',', '.')) : NaN;
     const f = fp && fp.getBoundingClientRect(), bent = new Set();
     for (const x of [fp, bi]) for (let e = x; e; e = e.parentElement) { const c = getComputedStyle(e); for (const k of ['transform', 'rotate', 'scale', 'offsetPath']) if (c[k] !== 'none' && !(k === 'transform' && /^matrix\(1, 0, 0, 1, [^,]+, [^,]+\)$/.test(c[k]))) bent.add(`${k} en ${e.id ? '#' + e.id : e.classList[0] ? '.' + e.classList[0] : e.tagName.toLowerCase()}`); }
     const miss = f ? [0.1, 0.5, 0.9].flatMap(t => [[f.left + t * f.width, f.top + 1], [f.left + t * f.width, f.bottom - 1], [f.left + 1, f.top + t * f.height], [f.right - 1, f.top + t * f.height]]).filter(([x, y]) => document.elementFromPoint(x, y) !== fp).length : 0;
-    return { text: el.innerText.replace(/\s+/g, ' ').trim(), d: ic ? ic.getAttribute('d') : null, fp: f ? [f.width, f.height] : null, s: bi && m > 0 ? bi.getBoundingClientRect().width / m : null, bent: [...bent], miss };
-  });
+    return { text: el.innerText.replace(/\s+/g, ' ').trim(), d: ic ? ic.getAttribute('d') : null, fp: f ? [f.width, f.height] : null, s: bi && m > 0 ? bi.getBoundingClientRect().width / m : null, bw: bi ? bi.getBoundingClientRect().width : null, bent: [...bent], miss };
+  }); if (v && v.fp) v.seen = await look(p); return v; };
   // la planta de la vista previa, a escala en los dos ejes: el largo a lo ancho y el ancho a lo alto, cada uno a ±1 px de su medida a la
   // escala de la barra (AR4-02). Las medidas las pone la prueba, las del catálogo de muestra, y no las lee de la página
   const r1 = x => Math.round(x * 10) / 10;
   const planFits0 = (v, L, Wd) => !!v && !!v.fp && !!v.s && Math.abs(v.fp[0] - L * v.s) <= 1 && Math.abs(v.fp[1] - Wd * v.s) <= 1;
-  const planFits = (v, L, Wd) => planFits0(v, L, Wd) && !v.bent.length && !v.miss;
-  const showPlan = (v, L, Wd) => !v ? 'sin vista previa' : `planta ${v.fp ? v.fp.map(r1).join(' × ') + ' px' : 'ninguna'}${v.s ? `, a ${r1(v.s)} px/m de su barra${L ? `: ${String(L).replace('.', ',')} × ${String(Wd).replace('.', ',')} m son ${r1(L * v.s)} × ${r1(Wd * v.s)} px` : ''}` : ', sin barra de escala'}${v.bent.length ? ` · su caja no es la planta: ${v.bent.join(', ')}` : ''}${v.miss ? ` · ${v.miss} de los 12 puntos junto a sus lados no ${v.miss === 1 ? 'da' : 'dan'} en ella` : ''}`;
+  const planFits5 = (v, L, Wd) => planFits0(v, L, Wd) && !v.bent.length && !v.miss;
+  // y como se ve (AR6-02): su tinta mide eso mismo a ±1 px en cada eje, ningún tramo de un lado se queda sin tinta más de 4 px, no hay tinta
+  // dentro, su color está a 3:1 o más del fondo (lo que pide WCAG 2.1, 1.4.11, a lo que no es texto), y la barra se ve del largo de su caja, a
+  // ±1 px, y también a 3:1
+  const planSeen = (v, L, Wd) => !!v && !!v.seen && !!v.s && Math.abs(v.seen.w - L * v.s) <= 1 && Math.abs(v.seen.h - Wd * v.s) <= 1 && Math.max(...v.seen.sides) <= 4 && !v.seen.inner && v.seen.cr >= 3 && Math.abs(v.seen.bar - v.bw) <= 1 && v.seen.barCr >= 3;
+  const planFits = (v, L, Wd) => planFits5(v, L, Wd) && planSeen(v, L, Wd);
+  const showPlan = (v, L, Wd) => !v ? 'sin vista previa' : `planta ${v.fp ? v.fp.map(r1).join(' × ') + ' px' : 'ninguna'}${v.s ? `, a ${r1(v.s)} px/m de su barra${L ? `: ${String(L).replace('.', ',')} × ${String(Wd).replace('.', ',')} m son ${r1(L * v.s)} × ${r1(Wd * v.s)} px` : ''}` : ', sin barra de escala'}${v.bent.length ? ` · su caja no es la planta: ${v.bent.join(', ')}` : ''}${v.miss ? ` · ${v.miss} de los 12 puntos junto a sus lados no ${v.miss === 1 ? 'da' : 'dan'} en ella` : ''}${v.fp ? ` · ${!v.seen ? 'en la captura no se ve' : `en la captura se ve de ${v.seen.w} × ${v.seen.h} px, con ${Math.max(...v.seen.sides)} px seguidos sin tinta en un lado como mucho${v.seen.inner ? `, ${v.seen.inner} px de tinta dentro` : ''}, a ${v.seen.cr}:1, y la barra de ${v.seen.bar} px (su caja, ${r1(v.bw)}), a ${v.seen.barCr}:1`}` : ''}`;
   // la del autobús: su nombre y su tamaño, 11,4 × 2,5 m, el icono de su fila y su planta a escala en los dos ejes
   const busPrev = (v, d) => {
     if (!v) return { ok: false, info: 'sin vista previa' };
@@ -2591,7 +2659,7 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
   // AR5-01: en la pantalla, cada píxel de cada texto es el suyo del lienzo, y no uno cualquiera entre el más claro y el más oscuro de sus
   // vecinos. El + mira la escena recién abierta a 1600 × 960, con el mapa de 855,6 px de alto en CSS, y a 1366 × 768, de alto entero; el −,
   // un filtro de CSS que dilata lo claro 1 px (feMorphology), su ataque: borra las cifras y deja cada canal entre los de sus vecinos
-  const allSeen = r => { const t = r.f.texts.filter(x => x.n > 0); return { n: t.length, ok: t.length > 0 && t.every(x => x.comp && x.comp.g > 0 && !x.comp.diff), at: [...new Set(t.filter(x => x.comp).map(x => x.comp.at.join(', ')))].join(' y ') || 'ninguno' }; };
+  const allSeen = r => { const t = r.f.texts.filter(x => x.n > 0); return { n: t.length, ok: t.length > 0 && t.every(x => x.comp && x.comp.g > 0 && !x.comp.cut && !x.comp.diff), at: [...new Set(t.filter(x => x.comp).map(x => x.comp.at.join(', ')))].join(' y ') || 'ninguno' }; };
   await R26('AR5-01 +', async p => {
     const res = [];
     for (const [w, h, say] of [[1600, 960, 'a 1600 × 960, con el mapa de 855,6 px de alto en CSS'], [1366, 768, 'a 1366 × 768, con el mapa de alto entero']]) {
@@ -2689,6 +2757,11 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     if (how === 'contenedor') { narrow(); el.querySelector('.pv-plan').style.transform = 'rotate(5deg)'; }
     if (how === 'recorte') fp.style.clipPath = 'inset(0 0 40% 0)';
     if (how === 'movida') fp.style.transform = 'translate(3px, -2px)';
+    // los de la sexta revisión (AR6-02): sin su borde y con un contorno discontinuo 10 px por dentro; una muesca de 3 px de hondo en cada lado,
+    // entre los puntos que se miran; y la barra recortada a un 80 % de su largo
+    if (how === 'contorno') { fp.style.border = '0'; fp.style.outline = '1.5px dashed var(--g-obj)'; fp.style.outlineOffset = '-10px'; }
+    if (how === 'muescas') fp.style.clipPath = 'polygon(0 0, 20% 0, 20% 3px, 40% 3px, 40% 0, 100% 0, 100% 20%, calc(100% - 3px) 20%, calc(100% - 3px) 40%, 100% 40%, 100% 100%, 80% 100%, 80% calc(100% - 3px), 60% calc(100% - 3px), 60% 100%, 0 100%, 0 80%, 3px 80%, 3px 60%, 0 60%)';
+    if (how === 'barra') el.querySelector('.scale i').style.clipPath = 'inset(0 20% 0 0)';
   }, how);
   const unbend = p => p.evaluate(() => { document.querySelector('#libPrev').innerHTML = window.__pv; });
   await R26('AR5-04 +', async p => {
@@ -2773,6 +2846,93 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     return [[what, !early && conf && n === 1 && !!o2 && o2.obs && /lectura al volver/.test(o2.text) && !b2,
       `a los 300 ms de volver: ${early ? `ya Observada o con «Control devuelto» («${o1 ? o1.text.slice(0, 100) : 'no está'}»)` : 'sin confirmar'} · al leer: ${conf ? `confirmada (${n} aviso${n === 1 ? '' : 's'})` : 'sin confirmar'}, fila «${o2 ? o2.text.slice(0, 120) : 'no está'}»${b2 ? ' · «Control devuelto» a la vista' : ''}`]];
   });
+
+  // --- AR6: los arreglos de la sexta revisión de Astra (ui/astra/2026-11-12-ui-revision6-astra.md) ---
+  // AR6-01: lo que flota encima del mapa solo se aparta de la comparación donde se pinta, y un texto visto a medias no se da por leído. Un
+  // aviso recortado con clip-path apartaba su caja entera, también lo que no pinta, y un velo debajo de eso tapaba parte de 6275 sin que se
+  // comparase: con lo que quedaba a la vista, la cifra contaba como leída. El +: a 1600 × 960, en los dos temas, la escena recién abierta, con
+  // la sombra de los controles, se lee, y cada texto pintado se compara entero, sin ningún píxel de su letra ni de sus huecos debajo de lo que
+  // flota encima. El −, en 6275, la cifra de la regla de arriba junto a los controles: un aviso que solo pinta su décima parte de la derecha
+  // (clip-path) encima de sus tres primeras cifras, y debajo, un velo del color de la placa (su ataque); y un aviso entero encima de sus tres
+  // primeras cifras, que deja la última a la vista. Que lo tape entera sigue en AR5-02 −
+  const whole = r => { const t = r.f.texts.filter(x => x.n > 0); return { n: t.length, ok: t.length > 0 && t.every(x => x.comp && x.comp.g > 0 && !x.comp.cut) }; };
+  for (const scheme of ['dark', 'light']) await R26(`AR6-01 + ${scheme}`, async p => {
+    const r = await readable(p, ['Mirek', 'Linda']), a = whole(r), q = nearTop(r);
+    return [[`AR6-01 + en tema ${scheme === 'dark' ? 'oscuro' : 'claro'}, a 1600 × 960, la escena recién abierta se lee y cada texto pintado se compara entero en pantalla, también las cifras de arriba que caen en la sombra de los controles`, r.ok && a.ok && q.length === 3,
+      `${a.n} textos, ${r.f.texts.filter(x => x.n > 0 && x.comp && !x.comp.cut).length} enteros a la vista · en la sombra: ${q.map(t => t.text).join(', ') || 'ninguna'} · ${r.info}`]];
+  }, 1600, 960, scheme);
+  await R26('AR6-01 −', async p => {
+    const res = [];
+    for (const [how, say] of [['recortado', 'un aviso que solo pinta su décima parte de la derecha encima de sus tres primeras cifras, y debajo de lo que no pinta, un velo del color de la placa'], ['tres', 'un aviso entero encima de sus tres primeras cifras, con la última a la vista']]) {
+      if (res.length) { await p.goto(URL); await p.waitForTimeout(900); }
+      const r0 = await readable(p, ['Mirek', 'Linda']), one = (nearTop(r0).find(t => t.text === '6275') || {}).box || null;
+      await p.evaluate(([how, one]) => {
+        const c = document.querySelector('#map'), m = c.getBoundingClientRect(), d = c.width / c.clientWidth, g = c.getContext('2d');
+        const b = [one[0] - 2, one[1] - 2, one[0] + (one[2] - one[0]) * 0.75, one[3] + 2], at = `left:${m.left + b[0]}px;top:${m.top + b[1]}px;width:${b[2] - b[0]}px;height:${b[3] - b[1]}px`;
+        if (how === 'recortado') { const k = g.getImageData(Math.round((one[0] - 1) * d), Math.round((one[1] + 1) * d), 1, 1).data; document.body.insertAdjacentHTML('beforeend', `<div style="position:fixed;${at};background:rgb(${k[0]},${k[1]},${k[2]});pointer-events:none;z-index:50"></div>`); }
+        // el aviso, en la pila de avisos, que se mueve con su transform: se pone en 0, 0 y se lleva a su sitio por lo que se ve
+        const t = document.createElement('div'); t.className = 'toast'; t.textContent = 'Aviso'; t.style.cssText = `position:fixed;${at};padding:0;margin:0;overflow:hidden${how === 'recortado' ? ';clip-path:inset(0 0 0 90%)' : ''}`;
+        document.querySelector('#toasts').appendChild(t); const r = t.getBoundingClientRect(); t.style.left = 2 * parseFloat(t.style.left) - r.left + 'px'; t.style.top = 2 * parseFloat(t.style.top) - r.top + 'px';
+      }, [how, one]);
+      await p.waitForTimeout(150);
+      const r = await readable(p, ['Mirek', 'Linda']), x = r.why, only = !x.miss.length && !x.low.length && !x.img.length && !x.fill.length, t = x.scr.find(u => u.text === '6275'), c = t && t.comp;
+      res.push([`AR6-01 − en 6275, la cifra de la regla de arriba junto a los controles, con ${say}, la vista no se lee, y solo porque esa cifra no se ve ${how === 'recortado' ? 'como en el lienzo: lo que el aviso no pinta se compara' : 'entera: lo que queda a la vista no basta'}`,
+        !!one && !r.ok && only && !!c && (how === 'recortado' ? c.diff > 0 : c.cut > 0 && c.g > 0 && !c.diff),
+        `${one ? (c ? `6275: ${c.g} px de su letra a la vista, ${c.cut} sin ver, ${c.diff} distintos` : '6275 se da por leída') : 'no está 6275 junto a los controles'} · ${r.info}`]);
+    }
+    return res;
+  });
+
+  // AR6-02: la planta de la vista previa se mide por lo que se ve, no por su caja. Sin su borde y con un contorno 10 px por dentro
+  // (outline-offset) quedaban la caja de 114 × 25 px, la barra a 10 px/m, ningún giro y los 12 puntos, con una planta mucho más pequeña a la
+  // vista; y un recorte entre los puntos tampoco se veía. El + mira la planta del autobús y la del generador con su borde, y la del autobús
+  // movida solo de sitio, en los dos temas; el −, el contorno por dentro, las muescas entre los puntos y la barra recortada. El giro con la
+  // planta estrechada, un eje solo y la barra de otro largo siguen en AR4-02 − y AR5-04 −
+  for (const scheme of ['dark', 'light']) await R26(`AR6-02 + ${scheme}`, async p => {
+    await openObjs(p);
+    const out = []; let ok = true;
+    for (const [cls, name, L, Wd] of PLAN4) {
+      await p.hover(`#colR [data-act="lib-item"][data-v="${cls}"]`); await p.waitForTimeout(100);
+      const v = await preview(p); ok = ok && !!v && v.text.includes(name) && planFits(v, L, Wd); out.push(`${name}: ${showPlan(v, L, Wd)}`);
+    }
+    await p.hover(BUS); await p.waitForTimeout(100); await bend(p, 'movida');
+    const v = await preview(p), tema = scheme === 'dark' ? 'oscuro' : 'claro'; await unbend(p);
+    return [[`AR6-02 + en tema ${tema}, la planta del autobús y la del generador se ven de su medida a la escala de la barra, a ±1 px, con sus cuatro lados enteros, nada dentro y a 3:1 o más, y la barra se ve del largo de su caja`, ok, out.join(' · ')],
+      [`AR6-02 + en tema ${tema}, movida 3 px a un lado y 2 px arriba con un transform, la planta del autobús se ve igual`, planFits(v, 11.4, 2.5), showPlan(v, 11.4, 2.5)]];
+  }, 1600, 960, scheme);
+  await R26('AR6-02 −', async p => {
+    await openObjs(p); await p.hover(BUS); await p.waitForTimeout(100);
+    const res = [];
+    for (const [how, say] of [['contorno', 'sin su borde y con un contorno discontinuo 10 px por dentro (outline-offset), con la misma caja de 114 × 25 px'], ['muescas', 'con una muesca de 3 px de hondo en cada lado, entre los puntos que se miran'], ['barra', 'con su barra recortada a un 80 % de su largo con un clip-path, con la misma caja']]) {
+      await bend(p, how); const v = await preview(p); await unbend(p);
+      res.push([`AR6-02 − ${say}, la planta del autobús ya no cumple el criterio`, !planFits(v, 11.4, 2.5), `${showPlan(v, 11.4, 2.5)} · el criterio de AR5-04, sin la captura, ${planFits5(v, 11.4, 2.5) ? 'la daba por buena' : 'también la rechazaba'}`]);
+    }
+    return res;
+  });
+
+  // AR6-03: los números de la regla no se pisan entre sí. Abierta a 1600 × 960 y encogida a 1440 × 900, el mapa conserva su escala y la
+  // placa de Z = 7750 se pintaba encima de X = 6050, en la esquina de arriba a la izquierda. El + mira la escena abierta directamente a
+  // 1600 × 960 y a 1440 × 900, y encogida de 1600 × 960 a cada vista que fallaba en su barrido (1440 × 900, 1440 × 901 y 1280 × 720), en
+  // los dos temas: se lee, y ninguna letra de un número de la regla cae encima de la de otro. Se lee ido ya el aviso de bienvenida: a 1280 ×
+  // 720 tapa entera la etiqueta «Plano general», y que las etiquetas no se aparten de los avisos es un límite declarado de UX-50. El −, en
+  // mutantes.js: volver a pintarlos uno encima de otro, y quitar el de X en vez del de Z, que deja sin pintar un número que se espera
+  const rulerHits = f => {
+    const n = f.texts.filter(t => t.n > 0 && t.box && /^\d+$/.test(t.text)), out = [];
+    n.forEach((a, i) => n.slice(i + 1).forEach(b => { if (a.box[0] < b.box[2] && b.box[0] < a.box[2] && a.box[1] < b.box[3] && b.box[1] < a.box[3]) out.push(`«${a.text}» y «${b.text}»`); }));
+    return out;
+  };
+  for (const scheme of ['dark', 'light']) await R26(`AR6-03 + ${scheme}`, async p => {
+    const res = [];
+    for (const [w, h, from, say] of [[1600, 960, 0, 'abierta a 1600 × 960'], [1440, 900, 1600, 'abierta a 1600 × 960 y encogida a 1440 × 900'], [1440, 900, 0, 'abierta a 1440 × 900'], [1440, 901, 1600, 'abierta a 1600 × 960 y encogida a 1440 × 901'], [1280, 720, 1600, 'abierta a 1600 × 960 y encogida a 1280 × 720']]) {
+      if (res.length) { await p.setViewportSize(from ? { width: 1600, height: 960 } : { width: w, height: h }); await p.goto(URL); await p.waitForTimeout(900); }
+      if (from) { await p.setViewportSize({ width: w, height: h }); await p.waitForTimeout(400); }
+      await W(p, () => !document.querySelector('#toasts .toast'), null, 6000);
+      const r = await readable(p, ['Mirek', 'Linda']), hits = rulerHits(r.f);
+      res.push([`AR6-03 + ${say}, en tema ${scheme === 'dark' ? 'oscuro' : 'claro'}, la escena se lee y ningún número de la regla queda encima de otro`, r.ok && !hits.length,
+        `${hits.length ? 'uno encima de otro: ' + hits.join(', ') : 'ninguno encima de otro'} · ${r.info}`]);
+    }
+    return res;
+  }, 1600, 960, scheme);
 
   expect(external.length === 0, 'ninguna petición sale de la página: ' + (external.slice(0, 3).join(' ') || 'ninguna'));
   expect(errors.length === 0, 'sin errores de JavaScript en la página');
