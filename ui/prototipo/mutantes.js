@@ -13,11 +13,14 @@
 // vivos en la quinta (AR5-01 a AR5-04), escritos a partir de su informe (ui/astra/2026-11-11-ui-revision5-astra.md, §2): la planta
 // estrechada y girada 5° con la misma caja, unas cifras pálidas desde un lienzo con WebGL al que se le cambia el tamaño después de pedir su
 // contexto, un filtro de CSS que dilata lo claro 1 px, a 1366 × 768, donde el mapa tiene alto entero, como su versión redondeada, y un
-// bloque negro de 245 × 20 px que tapa las cifras de la regla de arriba junto a los controles. Los siete últimos son los de la sexta
+// bloque negro de 245 × 20 px que tapa las cifras de la regla de arriba junto a los controles. Los siete siguientes son los de la sexta
 // (ui/astra/2026-11-12-ui-revision6-astra.md): su aviso que solo pinta su décima parte de la derecha, con un velo debajo, encima de las tres
 // primeras cifras de 6275, y uno entero que deja la última a la vista (AR6-01); la planta de la vista previa sin su borde y con un contorno
 // 10 px por dentro, con una muesca en cada lado entre los puntos que se miran, y su barra recortada al 80 % (AR6-02); y los números de la
-// regla otra vez uno encima de otro al encoger la ventana, o con el de Z en vez del de X en la esquina (AR6-03).
+// regla otra vez uno encima de otro al encoger la ventana, o con el de Z en vez del de X en la esquina (AR6-03). Los cuatro últimos son los
+// de la séptima (ui/astra/2026-11-12-ui-revision7-astra.md), con los colores de su ataque en cada tema: la planta de la vista previa con el
+// lado de arriba fuerte y los otros tres flojos, como hizo ella, o con un tramo flojo en medio de dos lados; la línea de abajo de su barra
+// floja; y la planta toda de un gris a 2,999:1 del fondo, que redondeado daba 3,00 (AR7-01). Cada uno se mira en los dos temas.
 // Uso: node ui/prototipo/mutantes.js (necesita Playwright con Chromium, como pruebas-mejoras.js).
 const fs = require('fs'), os = require('os'), path = require('path'), { spawnSync } = require('child_process');
 const SRC = fs.readFileSync(path.join(__dirname, 'estudio.html'), 'utf8');
@@ -59,7 +62,11 @@ const MUTANTES = [
   { name: 'la planta de la vista previa, con una muesca en cada lado entre los puntos que se miran', solo: '^UX-49 \\+$', cambios: [[".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}", ".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj);clip-path:polygon(0 0, 20% 0, 20% 3px, 40% 3px, 40% 0, 100% 0, 100% 20%, calc(100% - 3px) 20%, calc(100% - 3px) 40%, 100% 40%, 100% 100%, 80% 100%, 80% calc(100% - 3px), 60% calc(100% - 3px), 60% 100%, 0 100%, 0 80%, 3px 80%, 3px 60%, 0 60%)}"]] },
   { name: 'la barra de la planta de la vista previa, recortada a un 80 % de su largo', solo: '^UX-49 \\+$', cambios: [[".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}", ".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}.pv-sc .scale i{clip-path:inset(0 20% 0 0)}"]] },
   { name: 'los números de la regla vuelven a pintarse uno encima de otro', solo: '^AR6-03 \\+ dark$', cambios: [['if (!inMap(b) || hit(b, LBL)) return;', 'if (!inMap(b)) return;']] },
-  { name: 'en la esquina de la regla se queda el número de Z y se quita el de X', solo: '^AR6-03 \\+ dark$', cambios: [['const ruler = () => nums.forEach(', 'const ruler = () => nums.slice().reverse().forEach(']] }
+  { name: 'en la esquina de la regla se queda el número de Z y se quita el de X', solo: '^AR6-03 \\+ dark$', cambios: [['const ruler = () => nums.forEach(', 'const ruler = () => nums.slice().reverse().forEach(']] },
+  { name: 'la planta de la vista previa, con el lado de arriba fuerte y los otros tres flojos', solo: '^UX-49 \\+$|^AR6-02 \\+ ', cambios: [[".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}", ".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}.pv-fp{border-color:#666;border-top-color:#999}@media (prefers-color-scheme: light){.pv-fp{border-color:#aaa;border-top-color:#666}}"]] },
+  { name: 'la planta de la vista previa, con un borde sólido y un tramo flojo en medio de los lados de arriba y de abajo', solo: '^UX-49 \\+$|^AR6-02 \\+ ', cambios: [[".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}", ".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}.pv-fp{border-image:linear-gradient(90deg, #999 40%, #666 40% 60%, #999 60%) 1}@media (prefers-color-scheme: light){.pv-fp{border-image:linear-gradient(90deg, #666 40%, #aaa 40% 60%, #666 60%) 1}}"]] },
+  { name: 'la barra de la planta de la vista previa, con la línea de abajo floja', solo: '^UX-49 \\+$|^AR6-02 \\+ ', cambios: [[".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}", ".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}.pv-sc .scale i{border-color:#999;border-bottom-color:#666}@media (prefers-color-scheme: light){.pv-sc .scale i{border-color:#666;border-bottom-color:#aaa}}"]] },
+  { name: 'la planta de la vista previa, toda de un gris a 2,999:1 del fondo', solo: '^UX-49 \\+$|^AR6-02 \\+ ', cambios: [[".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}", ".pv-fp{display:block;flex:none;border:1.5px dashed var(--g-obj)}.pv-fp{border-color:#68686a}@media (prefers-color-scheme: light){.pv-fp{border-color:#909092}}"]] }
 ];
 const run = (file, solo) => {
   const r = spawnSync(process.execPath, [TEST], { env: Object.assign({}, process.env, { ESTUDIO_URL: 'file://' + file, SOLO: solo }), encoding: 'utf8', timeout: 300000 });
