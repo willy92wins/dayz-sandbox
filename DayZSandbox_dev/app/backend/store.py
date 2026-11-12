@@ -61,6 +61,7 @@ class Store:
         self.lock = threading.RLock()
         self.on_commit = None
         self.gate = None
+        self.busy = None  # busy(author, [[target, field], ...]) -> code | None (F1-co §1)
         if validator is None:
             from app.backend.validate import validate as validator
         self._validate = validator
@@ -288,43 +289,65 @@ class Store:
             )
         return None
 
+    def check(self, author, doc_id, base_rev, ops) -> dict:
+        """El commit en seco (F1-co §2): pasos 2 a 7 sin dedup ni publicar nada."""
+        with self.lock:
+            err, draft, _before, _fp, _created = self._prepare(author, doc_id, base_rev, ops)
+            if err:
+                return err
+            return {"ok": True, "rev_if_applied": self._rev + 1, "hash_if_applied": _hash_doc(draft)}
+
+    def records_since(self, rev):
+        """Registros con revisión > rev, o None si rev cae antes del horizonte (F1-co §2)."""
+        with self.lock:
+            if not isinstance(rev, int) or isinstance(rev, bool) or rev > self._rev:
+                return None
+            if self._rev - rev > len(self._hist):
+                return None
+            return [copy.deepcopy(rec) for rec in self._hist if rec["rev"] > rev]
+
+    def _prepare(self, author, doc_id, base_rev, ops):
+        err = self._doc_gate(author, doc_id)
+        if err:
+            return err, None, None, None, None
+        err = self._check_base(base_rev)
+        if err:
+            return err, None, None, None, None
+        before = copy.deepcopy(self._doc)
+        draft = copy.deepcopy(before)
+        err, fp, created = _apply(draft, ops)
+        if err:
+            return err, None, None, None, None
+        busy = self.busy
+        if busy is not None:
+            for op_i in sorted({i for i, _t, _f in fp}):
+                pairs = [[t, f] for i, t, f in fp if i == op_i]
+                code = busy(author, pairs)
+                if code:
+                    current = {}
+                    for t, f in pairs:
+                        current.setdefault(t, {})[f] = _value(self._doc, t, f)
+                    return _fail(code, "/ops/" + str(op_i), str(code), current=current), None, None, None, None
+        crossed = self._conflict(fp, base_rev)
+        if crossed is not None and isinstance(author, dict) and author.get("role") == "ai":
+            pointer, current = crossed
+            return _fail("conflict", pointer, "conflicto con una tanda posterior", current=current), None, None, None, None
+        errors = self._validate(draft, self.catalog) or []
+        if errors:
+            first = errors[0]
+            return _fail(
+                "invalid", first.get("pointer", ""), first.get("msg", "invalido"), errors=errors
+            ), None, None, None, None
+        return None, draft, before, fp, created
+
     def _commit_locked(self, author, request_id, doc_id, base_rev, label, ops):
         canon = self._canon("commit", author, doc_id, base_rev, label, ops)
         hit = self._dedup(request_id, canon)
         if hit is not None:
             return hit
-        err = self._doc_gate(author, doc_id)
+        err, draft, before, fp, created = self._prepare(author, doc_id, base_rev, ops)
         if err:
             return self._remember(request_id, canon, err)
-        err = self._check_base(base_rev)
-        if err:
-            return self._remember(request_id, canon, err)
-        before = copy.deepcopy(self._doc)
-        draft = copy.deepcopy(before)
-        err, fp, created = _apply(draft, ops)
-        if err:
-            return self._remember(request_id, canon, err)
-        crossed = self._conflict(fp, base_rev)
-        if crossed is not None and isinstance(author, dict) and author.get("role") == "ai":
-            pointer, current = crossed
-            return self._remember(
-                request_id,
-                canon,
-                _fail("conflict", pointer, "conflicto con una tanda posterior", current=current),
-            )
-        errors = self._validate(draft, self.catalog) or []
-        if errors:
-            first = errors[0]
-            return self._remember(
-                request_id,
-                canon,
-                _fail(
-                    "invalid",
-                    first.get("pointer", ""),
-                    first.get("msg", "invalido"),
-                    errors=errors,
-                ),
-            )
         changes = _changes_for(before, draft, fp)
         public_fp = [[target, field] for _i, target, field in _collapse(fp)]
         key = _author_key(author)

@@ -14,15 +14,18 @@ import threading
 import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from app.backend.store import Store  # noqa: E402
+from app.backend.lease import Leases  # noqa: E402
 
 MAX_BODY = 1024 * 1024
 CLIENT_QUEUE = 1000
 PING_S = 15
 TAKE_LOCKED = ("armada", "rodando")
+WAIT_MAX = 30
 HUMAN = {"role": "human", "id": "web"}
 AI = {"role": "ai", "id": "mcp"}
 
@@ -30,7 +33,7 @@ STATUS = {
     "conflict": 409, "stale_base": 409, "stale_apply": 409, "doc_changed": 409,
     "request_conflict": 409, "take_locked": 409, "ai_paused": 409,
     "already_reverted": 409, "nothing_to_undo": 409, "nothing_to_redo": 409,
-    "entity_gone": 409,
+    "entity_gone": 409, "busy_human": 409, "lease_expired": 409,
     "bad_op": 422, "invalid": 422, "bad_base": 422,
     "unauthorized": 401, "forbidden": 403, "author_mismatch": 403,
     "bad_request": 400, "not_found": 404, "internal": 500,
@@ -48,7 +51,7 @@ def fail(code, msg, pointer=""):
 class Backend:
     """Une el almacén con HTTP: credenciales, gate (pausa y toma), cola de órdenes y SSE."""
 
-    def __init__(self, store, human_key, ai_key, port=0, horizon=1000, log=None):
+    def __init__(self, store, human_key, ai_key, port=0, horizon=1000, log=None, clock=time.monotonic):
         self.store = store
         self._keys = ((human_key, HUMAN), (ai_key, AI))
         self.horizon = horizon
@@ -61,7 +64,10 @@ class Backend:
         self.ops = {}  # op_id -> {op_id, state, rev, hash, at_ms}
         self._op_n = 0
         store.gate = self._gate
-        store.on_commit = lambda record: self._emit("scene.commit", record)
+        store.on_commit = self._on_commit
+        self.leases = Leases(clock=clock)
+        self.changed = threading.Condition(store.lock)  # despierta a /api/scene/changes
+        store.busy = self._busy
         self.httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         self.httpd.daemon_threads = True
         self.httpd.block_on_close = False
@@ -88,6 +94,73 @@ class Backend:
         if author["role"] == "ai" and self.paused:
             return "ai_paused"
         return None
+
+    def _on_commit(self, record):
+        self._emit("scene.commit", record)
+        self.changed.notify_all()
+
+    def _busy(self, author, fp):
+        self.expire_leases()
+        if author["role"] == "ai" and self.leases.busy(fp):
+            return "busy_human"
+        return None
+
+    def expire_leases(self):
+        with self.store.lock:
+            for l in self.leases.expire():
+                self._emit("lease.state", {"lease_id": l["lease_id"], "target": l["target"],
+                                           "field": l["field"], "state": "caducada"})
+
+    def lease_take(self, target, field):
+        with self.store.lock:
+            doc = self.store.snapshot()["doc"]
+            ids = {e["id"] for e in doc["entities"]} | {c["id"] for c in doc["cameras"]} | {"ambiente"}
+            if target not in ids:
+                return fail("entity_gone", "No existe " + target, "/target")
+            self.expire_leases()
+            l = self.leases.take(target, field)
+            self._emit("lease.state", {"lease_id": l["lease_id"], "target": target, "field": field, "state": "viva"})
+            return {"ok": True, "lease_id": l["lease_id"], "expires_in": self.leases.ttl}
+
+    def lease_renew(self, lease_id):
+        with self.store.lock:
+            self.expire_leases()
+            if self.leases.renew(lease_id) is None:
+                return fail("lease_expired", "El préstamo caducó o no existe")
+            return {"ok": True, "expires_in": self.leases.ttl}
+
+    def lease_release(self, lease_id):
+        with self.store.lock:
+            self.expire_leases()
+            l = self.leases.release(lease_id)
+            if l is not None:
+                self._emit("lease.state", {"lease_id": lease_id, "target": l["target"],
+                                           "field": l["field"], "state": "soltada"})
+            return {"ok": True}
+
+    def changes(self, since_rev, timeout_s):
+        with self.store.lock:
+            rev = self.store.snapshot()["rev"]
+            if since_rev > rev:
+                return fail("bad_base", "since_rev futura", "/since_rev")
+            recs = self.store.records_since(since_rev)
+            if recs is None:
+                r = fail("stale_base", "since_rev fuera del horizonte", "/since_rev")
+                r["current"] = self.store.snapshot()
+                return r
+            if not recs and timeout_s > 0:
+                self.changed.wait_for(lambda: self.store.records_since(since_rev) != [], timeout_s)
+                recs = self.store.records_since(since_rev) or []
+            snap = self.store.snapshot()
+            return {"ok": True, "rev": snap["rev"], "hash": snap["hash"], "batches": recs}
+
+    def apply_request(self, author, doc_id, rev, hash_):
+        with self.store.lock:
+            frozen = self.store.freeze(doc_id, rev, hash_)
+            if not frozen.get("ok"):
+                return frozen
+            self._emit("apply.request", {"rev": rev, "hash": hash_, "author": author, "at_ms": now_ms()})
+            return {"ok": True}
 
     def _emit(self, kind, data):
         self.seq += 1
@@ -236,8 +309,18 @@ class Handler(BaseHTTPRequestHandler):
         author = self.check_request()
         if author is None:
             return
+        url = urlsplit(self.path)
         if self.path == "/api/scene":
             self.send_json(200, self.backend.store.snapshot())
+        elif url.path == "/api/scene/changes":
+            q = parse_qs(url.query)
+            try:
+                since = int(q["since_rev"][0])
+                wait = min(max(float(q.get("timeout_s", ["0"])[0]), 0.0), WAIT_MAX)
+            except (KeyError, ValueError):
+                self.send_json(400, fail("bad_request", "since_rev o timeout_s no válidos"))
+                return
+            self.send_result(self.backend.changes(since, wait))
         elif self.path == "/api/events":
             self.stream_events()
         else:
@@ -285,6 +368,31 @@ class Handler(BaseHTTPRequestHandler):
             v = self.fields(body, [("paused", (bool,))])
             if v is not None:
                 self.send_json(200, self.backend.set_paused(v[0]))
+        elif path == "/api/scene/validate":
+            v = self.fields(body, [("doc_id", (str,)), ("base_rev", (int,)), ("ops", (list,))])
+            if v is not None:
+                self.send_result(store.check(author, *v))
+        elif path == "/api/apply/request":
+            v = self.fields(body, [("doc_id", (str,)), ("rev", (int,)), ("hash", (str,))])
+            if v is not None:
+                self.send_result(self.backend.apply_request(author, *v))
+        elif path == "/api/lease" or path.startswith("/api/lease/"):
+            if not human:
+                self.send_json(403, fail("forbidden", "Solo la persona pide préstamos"))
+                return
+            parts = path.split("/")  # ['', 'api', 'lease', <id>, <acción>]
+            if path == "/api/lease":
+                target, field = body.get("target"), body.get("field")
+                if not isinstance(target, str) or not isinstance(field, (str, type(None))):
+                    self.send_json(400, fail("bad_request", "target o field no válidos", "/target"))
+                    return
+                self.send_result(self.backend.lease_take(target, field))
+            elif len(parts) == 5 and parts[4] == "renew":
+                self.send_result(self.backend.lease_renew(parts[3]))
+            elif len(parts) == 5 and parts[4] == "release":
+                self.send_result(self.backend.lease_release(parts[3]))
+            else:
+                self.send_json(404, fail("not_found", "Ruta desconocida"))
         elif path == "/api/apply":
             if not human:
                 self.send_json(403, fail("forbidden", "Solo la persona aplica"))
@@ -312,6 +420,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     ev = q.get(timeout=PING_S)
                 except queue.Empty:
+                    self.backend.expire_leases()
                     self.wfile.write(b": ping\n\n")
                     self.wfile.flush()
                     continue
