@@ -256,6 +256,20 @@ class FachadaMcp(Base):
         res, _ = mcp.call("scene_validate", base_rev=res["result"]["rev"], ops=[fog(0.3)])
         self.assertEqual(res["changes_since_last_call"], [])  # ni se repite lo humano ni sale lo de la IA
 
+    def test_fachada_nueva_usa_la_base_de_la_ia(self):
+        # Claude Code puede arrancar una fachada nueva en cada turno (claude -p --resume): lo
+        # humano posterior a la base que manda la IA tiene que llegar igual.
+        mcp = self.start_mcp()
+        res, _ = mcp.call("scene_get")
+        base = res["result"]["rev"]
+        mcp.close()
+        _, h = self.env.ops([move("obj-01", 6190.0, 7627.0)], label="persona mueve")
+        self.mcp = self.start_mcp()
+        res, err = self.mcp.call("scene_ops", base_rev=base, label="ia gira",
+                                 ops=[{"name": "entity.set", "target": "obj-03", "args": {"yaw": 260}}])
+        self.assertFalse(err, res)
+        self.assertEqual([c["label"] for c in res["changes_since_last_call"]], ["persona mueve"])
+
     def test_rechazo_del_backend_es_iserror(self):
         mcp = self.start_mcp()
         res, _ = mcp.call("scene_get")

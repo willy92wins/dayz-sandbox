@@ -83,8 +83,6 @@ class Facade:
         if self.doc_id is None:
             snap = self.b.call("GET", "/api/scene")
             self.doc_id = snap.get("doc_id")
-            if self.seen_rev is None:
-                self.seen_rev = snap.get("rev")
 
     def tool(self, name, args):
         if name == "scene_get":
@@ -98,6 +96,10 @@ class Facade:
             return {"rev": snap.get("rev"), "hash": snap.get("hash"), "doc_id": snap.get("doc_id"),
                     "doc": snap.get("doc"), "recent": recent[-RECENT:]}, changes
         self._ensure_doc()
+        if self.seen_rev is None:  # fachada recién arrancada: la base es la que trae la IA
+            base = args.get("base_rev", args.get("since_rev", args.get("rev")))
+            self.seen_rev = base if isinstance(base, int) and not isinstance(base, bool) else \
+                self.b.call("GET", "/api/scene").get("rev")
         if name == "scene_ops":
             body = {"doc_id": self.doc_id, "request_id": str(uuid.uuid4()), "base_rev": args.get("base_rev"),
                     "label": args.get("label"), "ops": args.get("ops")}
