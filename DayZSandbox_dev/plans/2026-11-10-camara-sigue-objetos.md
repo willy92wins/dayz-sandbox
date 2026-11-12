@@ -291,3 +291,5 @@ Corrida del 2026-11-10/12 en el PC de Guillermo, según el [brief](2026-11-10-s-
 2. Una plantilla marcada a mano en una captura, independiente de las lecturas, para cerrar el hueco del sesgo constante.
 3. Más cobertura en `look_at`, `follow`, `mount03` y H-c.
 4. Las negativas, que tienen que salir FALLA para que S-track cierre.
+
+Brief de S-track·2: [2026-11-12-s-track-2-brief.md](2026-11-12-s-track-2-brief.md). Deja T-red, el coche, el actor de IA, el borrado del objetivo y los criterios K para S-track·3, que necesita red y servidor.
