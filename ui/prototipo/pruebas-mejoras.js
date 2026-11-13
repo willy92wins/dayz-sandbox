@@ -2352,6 +2352,102 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     ];
   });
 
+  // Co-edición con la IA, simulada (DayZSandbox_dev/plans/2026-11-10-coedicion-ia-plan.md §2.2-2.6 y §6; criterios CO-1 a CO-8 del
+  // plan e I1-I5 del spec). La IA de ejemplo lee la escena al conectarse, a los 2,5 s mueve la Aldeana (zmb-06) y el Hombre con
+  // chaqueta (zmb-07) junto al autobús, sube la niebla a 0,20 y gira el Camión V3S, un cambio cada 1,2 s; termina antes de 7 s.
+  const AIW = 7500;
+  const aiOn = async p => { await p.click('#bSim'); await p.waitForTimeout(120); await p.click('#menu [data-act="ai-sim"]'); await p.waitForTimeout(150); };
+  const iaTab = async p => { await dock(p); await p.click('#dock [data-act="dtab"][data-v="ia"]'); await p.waitForTimeout(150); };
+  const posOf = async (p, id) => { await p.click(`#colL [data-act="sel"][data-v="ent:${id}"]`); await p.waitForTimeout(100); const x = +(await p.inputValue('#f-x')), z = +(await p.inputValue('#f-z')); await p.focus('#map'); await p.waitForTimeout(50); return [x, z]; };
+  const setX = async (p, id, x) => { await p.click(`#colL [data-act="sel"][data-v="ent:${id}"]`); await p.waitForTimeout(100); await p.fill('#f-x', String(x)); await p.keyboard.press('Tab'); await p.waitForTimeout(100); await p.focus('#map'); await p.waitForTimeout(100); };
+  const at = (a, x, z) => Math.abs(a[0] - x) < 0.05 && Math.abs(a[1] - z) < 0.05;
+  const ALD0 = [6200, 7582], HOM0 = [6170, 7576], ALDIA = [6191, 7622], HOMIA = [6185, 7621];
+
+  await R26('CO-01 +', async p => {
+    await aiOn(p); await p.waitForTimeout(AIW);
+    const a = await posOf(p, 'zmb-06'), h = await posOf(p, 'zmb-07'), badges = await p.locator('#colL .ai-b').count(), st = await T(p, '#stInfo');
+    await iaTab(p); const ia = await T(p, '#dock');
+    return [
+      ['CO-01 + con la IA conectada, sus cambios llegan al documento y a la Jerarquía mientras la persona tiene la escena abierta: la Aldeana y el Hombre con chaqueta junto al autobús', at(a, ...ALDIA) && at(h, ...HOMIA), `Aldeana ${a.join(' · ')} · Hombre con chaqueta ${h.join(' · ')}`],
+      ['CO-01 + lo que acaba de tocar la IA lleva «IA · hace…» en la Jerarquía, la barra de estado dice que la IA está conectada y la pestaña IA lista sus tres tandas con nombre', badges === 3 && /IA (editando|conectada)/.test(st) && (ia.match(/Deshacer tanda/g) || []).length === 3 && /IA: dos infectados junto al autobús/.test(ia), `${badges} filas con IA · estado «${st.match(/IA \S+/) || 'sin IA'}» · ${(ia.match(/Deshacer tanda/g) || []).length} tandas`]
+    ];
+  });
+  await R26('CO-01 −', async p => {
+    const st = await T(p, '#stInfo'), tab = await p.locator('#dock [data-v="ia"]').count();
+    const ok1 = /MCP apagado/.test(st) && !tab;
+    if (!await apply(p) || !await arm(p)) return [['CO-01 − con la toma armada, la IA no cambia nada y se le dice por qué', false, 'no llegó a armar']];
+    // la IA se desconecta antes de desarmar, para leer la Aldeana sin que la IA siga; al volver a conectarla se ve lo que le pasó
+    await aiOn(p); await p.waitForTimeout(4500); await aiOn(p);
+    await p.keyboard.press('Escape'); await p.waitForTimeout(300); await p.keyboard.press('1'); await p.waitForTimeout(300);
+    const a = await posOf(p, 'zmb-06'); await aiOn(p); await iaTab(p); const ia = await T(p, '#dock');
+    return [
+      ['CO-01 − sin la IA, la barra de estado sigue diciendo «MCP apagado» y no hay pestaña IA', ok1, st],
+      ['CO-01 − con la toma armada, la IA no cambia nada y se le dice por qué', at(a, ...ALD0) && /durante la toma nadie edita la escena/.test(ia), `Aldeana ${a.join(' · ')} · ${/durante la toma/.test(ia) ? 'rechazo a la vista' : 'sin rechazo'}`]
+    ];
+  });
+  await R26('CO-02', async p => {
+    await aiOn(p); await setX(p, 'zmb-06', 6150); await p.waitForTimeout(AIW);
+    const a = await posOf(p, 'zmb-06'), h = await posOf(p, 'zmb-07'); await iaTab(p); const ia = await T(p, '#dock');
+    return [
+      ['CO-02 − la persona cambió la posición de la Aldeana después de que la IA la leyera: a la IA se le rechaza y se queda el valor humano', Math.abs(a[0] - 6150) < 0.05 && /Se queda tu valor/.test(ia), `Aldeana ${a.join(' · ')} · ${/Se queda tu valor/.test(ia) ? 'conflicto a la vista' : 'sin conflicto'}`],
+      ['CO-02 + lo que nadie tocó, el Hombre con chaqueta, sí lo cambia la IA', at(h, ...HOMIA), `Hombre con chaqueta ${h.join(' · ')}`]
+    ];
+  });
+  await R26('CO-03', async p => {
+    await aiOn(p); await p.click('#colL [data-act="sel"][data-v="ent:zmb-06"]'); await p.waitForTimeout(100); await p.focus('#f-x'); await p.waitForTimeout(4200);
+    const x1 = +(await p.inputValue('#f-x')); await p.focus('#map'); await iaTab(p); const ia = await T(p, '#dock');
+    await p.waitForTimeout(AIW); const a = await posOf(p, 'zmb-06');
+    return [
+      ['CO-03 − con un campo de la Aldeana abierto, la IA espera y lo dice', Math.abs(x1 - ALD0[0]) < 0.05 && /En espera: estás moviendo o editando Aldeana/.test(ia), `x mientras está abierto ${x1} · ${/En espera/.test(ia) ? 'espera a la vista' : 'sin espera'}`],
+      ['CO-03 + al soltar el campo, con la Aldeana solo seleccionada, la IA la mueve', at(a, ...ALDIA), `Aldeana ${a.join(' · ')}`]
+    ];
+  });
+  await R26('CO-04 +', async p => {
+    const l0 = await posOf(p, 'act-linda'); await setX(p, 'act-linda', +(l0[0] + 5).toFixed(1));
+    await aiOn(p); await p.waitForTimeout(AIW); const lm = await posOf(p, 'act-linda');
+    await p.focus('#map'); await p.keyboard.press('Control+z'); await p.waitForTimeout(200);
+    const l1 = await posOf(p, 'act-linda'), a1 = await posOf(p, 'zmb-06');
+    await iaTab(p); await p.locator('#dock .ai-row', { hasText: 'dos infectados' }).locator('[data-act="ai-undo"]').click(); await p.waitForTimeout(200);
+    const a2 = await posOf(p, 'zmb-06'), h2 = await posOf(p, 'zmb-07');
+    return [
+      ['CO-04 + Ctrl+Z deshace solo lo de la persona: Linda vuelve y la Aldeana sigue donde la puso la IA', Math.abs(lm[0] - l0[0] - 5) < 0.05 && Math.abs(l1[0] - l0[0]) < 0.05 && at(a1, ...ALDIA), `Linda ${l0[0]} → ${lm[0]} → ${l1[0]} · Aldeana ${a1.join(' · ')}`],
+      ['CO-04 + «Deshacer tanda» devuelve los dos infectados a su sitio de antes', at(a2, ...ALD0) && at(h2, ...HOM0), `Aldeana ${a2.join(' · ')} · Hombre con chaqueta ${h2.join(' · ')}`]
+    ];
+  });
+  await R26('CO-04 −', async p => {
+    await aiOn(p); await p.waitForTimeout(AIW); await setX(p, 'zmb-06', 6170);
+    await iaTab(p); await p.locator('#dock .ai-row', { hasText: 'dos infectados' }).locator('[data-act="ai-undo"]').click(); await p.waitForTimeout(200);
+    const ia = await T(p, '#dock'), a = await posOf(p, 'zmb-06'), h = await posOf(p, 'zmb-07');
+    return [['CO-04 − deshacer la tanda conserva lo que la persona cambió después en la Aldeana, lo dice, y deshace el resto', Math.abs(a[0] - 6170) < 0.05 && at(h, ...HOM0) && /se conserva lo tuyo en Aldeana/.test(ia), `Aldeana ${a.join(' · ')} · Hombre con chaqueta ${h.join(' · ')} · ${/se conserva lo tuyo/.test(ia) ? 'aviso a la vista' : 'sin aviso'}`]];
+  });
+  await R26('CO-05', async p => {
+    await aiOn(p); await iaTab(p); await p.click('#dock [data-act="ai-pause"]'); await p.waitForTimeout(4500);
+    const a = await posOf(p, 'zmb-06'), st = await T(p, '#stInfo'), ia = await T(p, '#dock');
+    await p.click('#dock [data-act="ai-resume"]'); await p.waitForTimeout(AIW); const b = await posOf(p, 'zmb-06');
+    return [
+      ['CO-05 − con la IA en pausa no cambia nada, la barra de estado lo dice y el rechazo está a la vista', at(a, ...ALD0) && /IA en pausa/.test(st) && /la IA está en pausa/.test(ia), `Aldeana ${a.join(' · ')} · «${st.match(/IA en \S+|IA \S+/) || ''}»`],
+      ['CO-05 + al reanudarla, la IA sigue con sus cambios', at(b, ...ALDIA), `Aldeana ${b.join(' · ')}`]
+    ];
+  });
+  await R26('CO-06', async p => {
+    await dock(p); const q0 = await p.locator('#dock .qrow').count();
+    await aiOn(p); await p.waitForTimeout(AIW); await dock(p); await p.click('#dock [data-act="dtab"][data-v="actividad"]'); await p.waitForTimeout(150);
+    const q1 = await p.locator('#dock .qrow').count(), top1 = await T(p, '#top');
+    await iaTab(p); const prop = /La IA propone aplicar la escena/.test(await T(p, '#dock'));
+    await setX(p, 'act-linda', 6200); await iaTab(p); await p.click('#dock [data-act="ai-apply"]'); await p.waitForTimeout(300);
+    await p.click('#dock [data-act="dtab"][data-v="actividad"]'); await p.waitForTimeout(150); const q2 = await p.locator('#dock .qrow').count();
+    return [
+      ['CO-06 − la IA termina y propone aplicar, pero no manda nada al juego: Actividad tiene las mismas órdenes y siguen los cambios sin aplicar', prop && q1 === q0 && /sin aplicar/.test(top1), `propuesta ${prop ? 'a la vista' : 'no está'} · órdenes ${q0} → ${q1}`],
+      ['CO-06 − si la persona cambia la escena después de la propuesta, aplicarla desde la IA no manda nada', q2 === q0, `órdenes ${q0} → ${q2}`]
+    ];
+  });
+  await R26('CO-06 +', async p => {
+    await dock(p); const q0 = await p.locator('#dock .qrow').count();
+    await aiOn(p); await p.waitForTimeout(AIW); await iaTab(p); await p.click('#dock [data-act="ai-apply"]'); const ok = await free(p);
+    await p.click('#dock [data-act="dtab"][data-v="actividad"]'); await p.waitForTimeout(150); const q1 = await p.locator('#dock .qrow').count();
+    return [['CO-06 + con la escena igual a la propuesta, «Aplicar escena» de la tarjeta aplica, porque lo pulsa la persona', ok && q1 > q0, `órdenes ${q0} → ${q1}`]];
+  });
+
   // --- AR4: los arreglos de la cuarta revisión de Astra (ui/astra/2026-11-11-ui-revision4-astra.md) ---
   // AR4-01: lo que se le escapaba a la sonda del mapa. El +: con la sonda nueva, las vistas de la página se leen en los dos temas, y la
   // comparación con la pantalla no es vacía: mira los píxeles de todos los textos (desde AR5-02; antes, de 8 de cada 10 o más)
