@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
-"""Comprobador de negativas de S-track-1 (criterio 4 del brief).
+"""Comprobador de negativas de S-track (criterios 4/5 y CONTRACT SS3/SS14).
 
-Lee un informe.json (CONTRACT.md SS3) y comprueba que las negativas
-esperadas salieron FALLA:
+Lee un informe.json y comprueba que las negativas esperadas salieron
+FALLA (``got == "FALLA"``):
 
-- delay1 en mount0, por cada hook evaluado en mount0.
-- delay1 en lookat, por cada hook evaluado en lookat.
-- roll en mount0 con Ha.
-
-"Hook evaluado" se deriva de ``results``: hooks con entradas de
-``inject == "none"`` (o sin inject) para ese caso. Si ``results`` no
-aporta hooks para un caso, se exige al menos Ha como minimo.
+- Schema 2 (CONTRACT SS14, S-track-2): las nueve corridas fijas
+  ``mount0_Ha_delay1``, ``mount0_Hb_delay1``, ``mount0_Hc_delay1``,
+  ``lookat_Ha_delay1``, ``lookat_Hb_delay1``, ``mount0_Hb_roll``,
+  ``suave60_Hb_smooth03``, ``suave60_Hb_quatlerp`` y
+  ``suave60_Hb_longarc``, todas con ``expected == "FALLA"``.
+  Se identifican por el nombre completo de ``run``. Cualquier
+  ``got`` distinto de FALLA (PASA, INCONCLUSO u otro), una
+  negativa ausente, un ``expected`` ausente, ``null`` o distinto
+  de ``"FALLA"``, un ``inject`` ausente, ``null``, ``""`` o que
+  no casa con el sufijo de ``run``, o una corrida duplicada
+  devuelve exit 1 con el motivo.
+- Schema 1 (CONTRACT SS3, S-track-1): se sigue aceptando para no
+  romper la evidencia de S-track-1, con su logica historica:
+  delay1 en mount0/lookat por hook evaluado y roll en mount0 con Ha.
+  "Hook evaluado" se deriva de ``results`` (``inject == "none"``);
+  si no hay hooks para un caso se exige al menos Ha.
 
 Uso:
     python check_negatives.py [informe.json]
@@ -19,10 +28,11 @@ Sin argumento busca ``informe.json`` en el directorio actual.
 
 Codigos de salida:
     0  se cumple (todas las esperadas presentes y con got == "FALLA")
-    1  alguna corrida esperada esta presente pero got != "FALLA"
-       (PASA, INCONCLUSO u otro valor)
-    2  falta alguna corrida esperada, el fichero no existe o el JSON
-       no es valido / no tiene la estructura minima
+    1  alguna negativa no salio FALLA; en schema 2 tambien si falta
+       alguna de las nueve
+    2  falta alguna corrida esperada (solo schema 1), el fichero no
+       existe, el JSON no es valido / no tiene la estructura minima
+       o el schema no es 1 ni 2
 
 Solo stdlib.
 """
@@ -35,6 +45,19 @@ from pathlib import Path
 
 KNOWN_CASES = ("calib", "mount0", "mount03", "lookat", "follow")
 KNOWN_HOOKS = ("Ha", "Hb", "Hc")
+
+# CONTRACT SS14: las nueve negativas de schema 2, en este orden.
+SCHEMA2_NEGATIVE_RUNS = (
+    "mount0_Ha_delay1",
+    "mount0_Hb_delay1",
+    "mount0_Hc_delay1",
+    "lookat_Ha_delay1",
+    "lookat_Hb_delay1",
+    "mount0_Hb_roll",
+    "suave60_Hb_smooth03",
+    "suave60_Hb_quatlerp",
+    "suave60_Hb_longarc",
+)
 
 
 def parse_run(run):
@@ -77,7 +100,23 @@ def _evaluated_hooks(informe, caso):
     return hooks
 
 
+def expected_requirements_schema2():
+    """Las nueve (caso, hook, inject) de CONTRACT SS14, en orden."""
+    return [parse_run(run) for run in SCHEMA2_NEGATIVE_RUNS]
+
+
 def expected_requirements(informe):
+    """Requisitos segun el schema del informe.
+
+    Schema 2: las nueve fijas de SS14. Schema 1 (o sin schema, como
+    la evidencia historica): la lista del criterio 4 de S-track-1.
+    """
+    if isinstance(informe, dict) and informe.get("schema") == 2:
+        return expected_requirements_schema2()
+    return _expected_requirements_schema1(informe)
+
+
+def _expected_requirements_schema1(informe):
     """Lista ordenada de (caso, hook, inject) exigidos por el criterio 4."""
     mount0_hooks = _evaluated_hooks(informe, "mount0") or {"Ha"}
     lookat_hooks = _evaluated_hooks(informe, "lookat") or {"Ha"}
@@ -121,15 +160,120 @@ def _negatives_index(informe):
     return index
 
 
+def _check_schema2(informe):
+    """Schema 2: nueve por ``run`` completo (CONTRACT SS14).
+
+    ``expected`` debe ser exactamente ``"FALLA"``, ``inject``
+    debe casar con el sufijo de ``run`` y ninguna de las nueve
+    puede venir duplicada; todos son exit 1 con motivo en la
+    fila (``detail``).
+    """
+    negativas = informe.get("negativas") or []
+    by_run = {}
+    if isinstance(negativas, list):
+        for entry in negativas:
+            if not isinstance(entry, dict):
+                continue
+            run = entry.get("run")
+            if not isinstance(run, str) or not run:
+                continue
+            by_run.setdefault(run, []).append(entry)
+    rows = []
+    has_error = False
+    for run_name in SCHEMA2_NEGATIVE_RUNS:
+        caso, hook, inject = parse_run(run_name)
+        entries = by_run.get(run_name, [])
+        if not entries:
+            has_error = True
+            rows.append({
+                "caso": caso, "hook": hook, "inject": inject,
+                "run": run_name, "got": "-", "status": "FALTA",
+                "detail": f"falta la negativa {run_name} (esperada FALLA)",
+            })
+            continue
+        if len(entries) > 1:
+            has_error = True
+            rows.append({
+                "caso": caso, "hook": hook, "inject": inject,
+                "run": run_name,
+                "got": str(entries[0].get("got", "")),
+                "status": "DUPLICADA",
+                "detail": (
+                    f"corrida duplicada {run_name}: "
+                    f"{len(entries)} entradas"
+                ),
+            })
+            continue
+        entry = entries[0]
+        got = str(entry.get("got", ""))
+        # Vuelta 4: expected debe existir y ser exactamente "FALLA";
+        # ausente, null o distinto -> EXPECTED_NO_CASA, exit 1.
+        has_expected = "expected" in entry
+        actual_expected = entry.get("expected")
+        if not has_expected or actual_expected != "FALLA":
+            has_error = True
+            rows.append({
+                "caso": caso, "hook": hook, "inject": inject,
+                "run": run_name, "got": got, "status": "EXPECTED_NO_CASA",
+                "detail": (
+                    f"{run_name} tiene expected={actual_expected!r} "
+                    f"y se esperaba 'FALLA'"
+                ),
+            })
+            continue
+        # Vuelta 3: inject debe existir y ser exactamente el sufijo
+        # de run; ausente, null, "" u otro valor -> INJECT_NO_CASA.
+        has_inject = "inject" in entry
+        actual_inject = entry.get("inject")
+        if not has_inject or actual_inject != inject:
+            has_error = True
+            rows.append({
+                "caso": caso, "hook": hook, "inject": inject,
+                "run": run_name, "got": got, "status": "INJECT_NO_CASA",
+                "detail": (
+                    f"{run_name} tiene inject={actual_inject!r} "
+                    f"y el sufijo de run exige {inject!r}"
+                ),
+            })
+        elif got != "FALLA":
+            has_error = True
+            rows.append({
+                "caso": caso, "hook": hook, "inject": inject,
+                "run": run_name, "got": got, "status": "MAL_VEREDICTO",
+                "detail": f"{run_name} salio {got} y se esperaba FALLA",
+            })
+        else:
+            rows.append({
+                "caso": caso, "hook": hook, "inject": inject,
+                "run": run_name, "got": "FALLA", "status": "OK",
+                "detail": "",
+            })
+    return (1 if has_error else 0), rows
+
+
 def check_informe(informe):
-    """Comprueba el criterio 4 sobre un dict ya parseado.
+    """Comprueba las negativas sobre un dict ya parseado.
 
     Devuelve (exit_code, rows) donde cada row es un dict con
     caso, hook, inject, run, got y status
-    (``OK`` / ``MAL_VEREDICTO`` / ``FALTA``).
+    (``OK`` / ``MAL_VEREDICTO`` / ``FALTA`` / ``DUPLICADA`` /
+    ``INJECT_NO_CASA`` / ``EXPECTED_NO_CASA``).
+
+    Schema 2: identificacion por ``run`` completo; cualquier
+    PASA/INCONCLUSO u otro ``got``, una ausente, un ``expected``
+    ausente, ``null`` o distinto de ``"FALLA"``, un ``inject``
+    que no casa con el sufijo de ``run`` o una duplicada da
+    exit 1. Schema 1: ausente da exit 2 y veredicto distinto de
+    FALLA da exit 1 (comportamiento historico).
+    Schema distinto de 1/2 da exit 2 sin filas.
     """
     if not isinstance(informe, dict):
         return 2, []
+    schema = informe.get("schema", 1)
+    if schema not in (1, 2):
+        return 2, []
+    if schema == 2:
+        return _check_schema2(informe)
     requirements = expected_requirements(informe)
     index = _negatives_index(informe)
     rows = []
@@ -211,14 +355,35 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 2
+    schema = informe.get("schema", 1)
+    if schema not in (1, 2):
+        print(
+            f"ERROR: schema no soportado en {path}: {schema!r} "
+            "(se aceptan 1 y 2)",
+            file=sys.stderr,
+        )
+        return 2
+    label = "CRITERIO 5 (schema 2)" if schema == 2 else "CRITERIO 4 (schema 1)"
     code, rows = check_informe(informe)
     print(format_table(rows))
+    for row in rows:
+        if row["status"] == "FALTA":
+            print(f"MOTIVO: falta la negativa {row['run']} (esperada FALLA)")
+        elif row["status"] == "MAL_VEREDICTO":
+            print(
+                f"MOTIVO: {row['run']} salio {row['got']} "
+                "y se esperaba FALLA"
+            )
+        elif row["status"] in (
+            "DUPLICADA", "INJECT_NO_CASA", "EXPECTED_NO_CASA"
+        ):
+            print(f"MOTIVO: {row.get('detail') or row['status']}")
     if code == 0:
-        print("CRITERIO 4: OK (todas las negativas esperadas salieron FALLA)")
+        print(f"{label}: OK (todas las negativas esperadas salieron FALLA)")
     elif code == 1:
-        print("CRITERIO 4: NO CUMPLE (alguna negativa no salio FALLA)")
+        print(f"{label}: NO CUMPLE (alguna negativa no salio FALLA o falta)")
     else:
-        print("CRITERIO 4: NO CUMPLE (falta alguna corrida esperada)")
+        print(f"{label}: NO CUMPLE (falta alguna corrida esperada)")
     return code
 
 

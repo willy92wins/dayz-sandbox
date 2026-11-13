@@ -72,7 +72,7 @@ class STrackEvalTests(unittest.TestCase):
         return proc.returncode, report
 
     def _assert_schema(self, report):
-        self.assertEqual(report.get("schema"), 1)
+        self.assertEqual(report.get("schema"), 2)
         for key in ("calib", "detector", "results", "decisions", "negativas", "exit_code"):
             self.assertIn(key, report)
         self.assertIsInstance(report["calib"], dict)
@@ -107,11 +107,11 @@ class STrackEvalTests(unittest.TestCase):
             ):
                 self.assertIn(rk, r)
             self.assertEqual(r["inject"], "none")
-            self.assertIn(r["measure"], ("T-lect", "T-hook"))
+            self.assertIn(r["measure"], ("T-lect", "T-hook", "T-marca", "T-ropa", "T-suave"))
             self.assertIn(r["verdict"], ("PASA", "FALLA", "INCONCLUSO"))
 
         dec = report["decisions"]
-        for dk in ("lectura", "hook_por_modo", "k"):
+        for dk in ("lectura", "hook_por_modo", "k", "ropa", "suave"):
             self.assertIn(dk, dec)
         for mode in ("mount0", "mount03", "lookat", "follow"):
             self.assertIn(mode, dec["hook_por_modo"])
@@ -132,8 +132,26 @@ class STrackEvalTests(unittest.TestCase):
             "STIMULUS_FACTOR",
             "DETECTOR_MAX_PX",
             "DETECTOR_MAX_DEG",
+            "TEMPLATE_PX",
+            "CORR_MIN",
+            "MIN_SHOTS_WINDOW",
+            "MASK_STD_MAX",
+            "MASK_MIN_SHOTS",
+            "MARK_AGREE_PX",
+            "TEMPLATE_SOURCE",
+            "USE_MASK",
+            "ROPA_MAX_M",
+            "ROPA_MAX_DEG",
+            "JUMP_MIN_M",
+            "THRESH_SUAVE_FRAC",
+            "QUAT_NORM_TOL",
+            "SUAVE_FPS_AGREE_DEG",
+            "FPS_REGIME_TOL",
         ):
             self.assertTrue(hasattr(mod, name), f"Missing constant {name}")
+        self.assertEqual(mod.TEMPLATE_PX, 48)
+        self.assertEqual(mod.TEMPLATE_SOURCE, "marca")
+        self.assertTrue(mod.USE_MASK)
 
     def test_pasa_fixture_cli_and_decisions(self):
         out_dir = self.tmp_root / "out_pasa"

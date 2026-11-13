@@ -100,8 +100,14 @@ class DetectorAndWindowsTests(unittest.TestCase):
         img = self.fx._slice_background(0.0).copy()
         self.fx._stamp_motif(img, 960.0 - 136.8, 540.0, kind="usti")
         self.fx._stamp_motif(img, 960.0 + 136.8, 540.0, kind="konec")
-        res = self.ev.calibrate_detector([_fake_run(d, np.clip(img, 0, 255).astype(np.uint8))], {"Ha": 0}, {"Ha": 684.0})
+        # Vuelta 2 (hallazgos 1-3): mascaras locales por detalle y fondos distintos.
+        yy, xx = np.mgrid[0:48, 0:48]
+        disc = ((xx - 23.5) ** 2 + (yy - 23.5) ** 2) <= (16.0 ** 2)
+        masks = {"usti hlavne": disc, "konec hlavne": disc}
+        bgs = [self.fx._slice_background(300.0), self.fx._slice_background(700.0)]
+        res = self.ev.calibrate_detector([_fake_run(d, np.clip(img, 0, 255).astype(np.uint8))], {"Ha": 0}, {"Ha": 684.0}, template_mask=masks, background_images=bgs)
         self.assertEqual(res["verdict"], "PASA", res)
+        self.assertLessEqual(res["p95_bg_px"], self.ev.DETECTOR_MAX_PX, res)
 
     def test_windows_three_real_turns_with_noise(self):
         segs = [(3.0, 5.0), (1.75, 180.0), (3.0, -4.0), (3.0, 3.0), (1.75, -180.0), (3.0, 2.0),

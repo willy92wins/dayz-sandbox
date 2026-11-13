@@ -15,6 +15,49 @@ modded class PlayerBase
 			STRACK_Session.PostFrame();
 		}
 	}
+
+	override void OnRPC(PlayerIdentity sender, int rpc_type, ParamsReadContext ctx)
+	{
+		int netLow;
+		int netHigh;
+		int ackTramo;
+		int ackFin;
+		super.OnRPC(sender, rpc_type, ctx);
+		if (rpc_type == STRACK_RPC_POT_ACK)
+		{
+			ackTramo = 0;
+			ackFin = 0;
+			if (!ctx.Read(ackTramo))
+			{
+				Print("[STRACK] suave parada ACK lectura incompleta");
+				return;
+			}
+			if (!ctx.Read(ackFin))
+			{
+				Print("[STRACK] suave parada ACK lectura incompleta");
+				return;
+			}
+			STRACK_Move.NoteFrozenAck(ackTramo, ackFin);
+			return;
+		}
+		if (rpc_type != STRACK_RPC_POT)
+		{
+			return;
+		}
+		netLow = 0;
+		netHigh = 0;
+		if (!ctx.Read(netLow))
+		{
+			Print("[STRACK] suave lata RPC lectura incompleta");
+			return;
+		}
+		if (!ctx.Read(netHigh))
+		{
+			Print("[STRACK] suave lata RPC lectura incompleta");
+			return;
+		}
+		STRACK_Session.SetPotId(netLow, netHigh);
+	}
 };
 
 class STRACK_Session
@@ -68,6 +111,51 @@ class STRACK_Session
 	protected float m_ArmWait;
 	protected Camera m_Cam;
 	protected EntityAI m_Parent;
+	protected int m_FpsCap;
+	protected bool m_PfStarted;
+	protected bool m_PfDone;
+	protected float m_PfT0;
+	protected float m_PfP50;
+	protected float m_PfP95;
+	protected ref array<float> m_PfDts;
+	protected int m_CaseTick;
+	protected int m_Tramo;
+	protected float m_SmoothS;
+	protected int m_GiroSuave;
+	protected int m_PrevGiroSuave;
+	protected bool m_LataOk;
+	protected vector m_LataPos;
+	protected vector m_CamRaw[4];
+	protected float m_RawQ[4];
+	protected float m_WrittenQ[4];
+	protected bool m_QuatDotPending;
+	protected float m_QuatDot;
+	protected float m_SuaveBaseRot;
+	protected bool m_SuaveBaseDone;
+	protected EntityAI m_Lata;
+	protected int m_ScanTick;
+	protected ref array<Object> m_ScanObj;
+	protected ref array<CargoBase> m_ScanCargo;
+	protected int m_SpineBone;
+	protected bool m_SpineChecked;
+	protected bool m_RelMiraOk;
+	protected vector m_RelMira[4];
+	protected string m_MiraPoint;
+	protected bool m_MiraPointLogged;
+	protected bool m_MiraOk;
+	protected bool m_LataReady;
+	protected bool m_LataWaiting;
+	protected float m_LataWaitT0;
+	protected bool m_Tramo4Req;
+	protected bool m_Tramo4Ack;
+	protected float m_Tramo4ReqT0;
+	protected float m_Tramo4T0;
+	protected string m_FrozenRopa;
+	protected int m_FrozenGiro;
+	protected int m_FrozenSeg;
+	protected static int s_PotLow;
+	protected static int s_PotHigh;
+	protected static bool s_PotIdOk;
 	protected ref array<int> m_Ok;
 	protected ref array<float> m_Px;
 	protected ref array<float> m_Py;
@@ -90,6 +178,14 @@ class STRACK_Session
 		}
 	}
 
+	static void SetPotId(int netLow, int netHigh)
+	{
+		s_PotLow = netLow;
+		s_PotHigh = netHigh;
+		s_PotIdOk = true;
+		Print("[STRACK] suave lata netid=" + netHigh.ToString() + ":" + netLow.ToString());
+	}
+
 	void STRACK_Session()
 	{
 		int i;
@@ -97,8 +193,11 @@ class STRACK_Session
 		m_Px = new array<float>();
 		m_Py = new array<float>();
 		m_Pz = new array<float>();
+		m_PfDts = new array<float>();
+		m_ScanObj = new array<Object>();
+		m_ScanCargo = new array<CargoBase>();
 		i = 0;
-		while (i < 12)
+		while (i < 18)
 		{
 			m_Ok.Insert(0);
 			m_Px.Insert(0);
@@ -107,6 +206,7 @@ class STRACK_Session
 			i = i + 1;
 		}
 		m_Fov = 1.0471976;
+		m_FrozenRopa = "";
 		m_Frame = -1;
 		m_Inject = "none";
 		m_Hook = "";
@@ -116,6 +216,10 @@ class STRACK_Session
 		m_HbFrame = -1;
 		m_HandsSince = -1.0;
 		m_ArmWait = 60.0;
+		m_FpsCap = 60;
+		m_Tramo = 1;
+		m_SpineBone = -1;
+		m_MiraPoint = "";
 	}
 
 	static bool Running()
@@ -127,9 +231,32 @@ class STRACK_Session
 		return s_Me.m_RunOn && !s_Me.m_Done;
 	}
 
+	protected bool IsSuave()
+	{
+		if (m_Caso == "suave30" || m_Caso == "suave60" || m_Caso == "suave144")
+		{
+			return true;
+		}
+		return false;
+	}
+
+	protected int CurrentGiro()
+	{
+		if (IsSuave())
+		{
+			return m_GiroSuave;
+		}
+		if (m_Self)
+		{
+			return STRACK_Move.Giro();
+		}
+		return 0;
+	}
+
 	protected void Tick(float dt)
 	{
 		PlayerBase player;
+		int tramoSend;
 		if (m_Done)
 		{
 			return;
@@ -156,9 +283,24 @@ class STRACK_Session
 		{
 			return;
 		}
+		STRACK_Move.FlushPending();
+		m_CaseTick = m_CaseTick + 1;
+		if ((m_CaseTick % 60) == 1 && !STRACK_Move.HasPending())
+		{
+			tramoSend = 0;
+			if (IsSuave())
+			{
+				tramoSend = m_Tramo;
+				if (m_Tramo4Req)
+				{
+					tramoSend = 4;
+				}
+			}
+			STRACK_Move.SendCaseState(m_Caso, tramoSend, false);
+		}
 		if (!m_Armed)
 		{
-			if (!TryArm())
+			if (!TryArm(dt))
 			{
 				return;
 			}
@@ -167,6 +309,10 @@ class STRACK_Session
 		if (ShouldStop())
 		{
 			Finish("stop");
+			return;
+		}
+		if (IsSuave() && !SuaveTramo4Gate())
+		{
 			return;
 		}
 		m_Dt = dt;
@@ -179,6 +325,10 @@ class STRACK_Session
 		if (m_Caso == "calib" && m_Shots >= 200)
 		{
 			Finish("calib");
+		}
+		if (IsSuave() && m_Armed && m_Tramo4Ack && (GetGame().GetTickTime() - m_Tramo4T0) >= 8.5)
+		{
+			Finish("suave");
 		}
 	}
 
@@ -237,6 +387,10 @@ class STRACK_Session
 			if (GetCLIParam("strack_wait", v))
 			{
 				m_ArmWait = v.ToFloat();
+			}
+			if (GetCLIParam("strack_fps_cap", v))
+			{
+				m_FpsCap = v.ToInt();
 			}
 			Print("[STRACK] args CLI caso=" + m_Caso + " hook=" + m_Hook + " inject=" + m_Inject);
 		}
@@ -308,6 +462,10 @@ class STRACK_Session
 				{
 					m_ArmWait = val.ToFloat();
 				}
+				if (key == "strack_fps_cap")
+				{
+					m_FpsCap = val.ToInt();
+				}
 			}
 		}
 		CloseFile(file);
@@ -326,8 +484,13 @@ class STRACK_Session
 	{
 		bool casoOk;
 		bool hookOk;
+		bool suave;
 		casoOk = false;
 		if (m_Caso == "calib" || m_Caso == "mount0" || m_Caso == "mount03" || m_Caso == "lookat" || m_Caso == "follow")
+		{
+			casoOk = true;
+		}
+		if (m_Caso == "ropa" || m_Caso == "suave30" || m_Caso == "suave60" || m_Caso == "suave144")
 		{
 			casoOk = true;
 		}
@@ -346,40 +509,280 @@ class STRACK_Session
 			Print("[STRACK] hook no valido: " + m_Hook);
 			return false;
 		}
+		suave = IsSuave();
+		if (suave)
+		{
+			if (m_Hook != "Hb")
+			{
+				Print("[STRACK] suave solo vale con Hb");
+				return false;
+			}
+			if (m_Inject != "none" && m_Inject != "smooth03" && m_Inject != "quatlerp" && m_Inject != "longarc")
+			{
+				Print("[STRACK] inject no valido en suave: " + m_Inject);
+				return false;
+			}
+			return true;
+		}
 		if (m_Inject != "none" && m_Inject != "delay1" && m_Inject != "roll")
 		{
 			Print("[STRACK] inject no valido: " + m_Inject);
 			return false;
 		}
-		if (m_Hook == "Hc" && m_Caso != "mount0")
+		if (m_Hook == "Hc" && m_Caso != "mount0" && m_Caso != "ropa")
 		{
-			Print("[STRACK] H-c solo vale para mount0");
-			return false;
-		}
-		if (m_Caso == "calib" && m_Hook == "Hc")
-		{
-			return false;
-		}
-		if (m_Caso == "mount03" && m_Hook == "Hc")
-		{
-			return false;
-		}
-		if (m_Caso == "lookat" && m_Hook == "Hc")
-		{
-			return false;
-		}
-		if (m_Caso == "follow" && m_Hook == "Hc")
-		{
+			Print("[STRACK] H-c solo vale para mount0 y ropa");
 			return false;
 		}
 		return true;
 	}
 
-	protected bool TryArm()
+	protected float Percentile(array<float> vals, float frac)
+	{
+		int n;
+		int idx;
+		n = vals.Count();
+		if (n == 0)
+		{
+			return 0.0;
+		}
+		idx = (int)(frac * (n - 1));
+		if (idx < 0)
+		{
+			idx = 0;
+		}
+		if (idx >= n)
+		{
+			idx = n - 1;
+		}
+		return vals.Get(idx);
+	}
+
+	protected void SortFloats(array<float> vals)
+	{
+		int i;
+		int j;
+		float tmp;
+		i = 1;
+		while (i < vals.Count())
+		{
+			j = i;
+			while (j > 0 && vals.Get(j) < vals.Get(j - 1))
+			{
+				tmp = vals.Get(j);
+				vals.Set(j, vals.Get(j - 1));
+				vals.Set(j - 1, tmp);
+				j = j - 1;
+			}
+			i = i + 1;
+		}
+	}
+
+	protected void ResetPreflight()
+	{
+		if (!m_PfStarted || m_PfDone)
+		{
+			return;
+		}
+		m_PfStarted = false;
+		m_PfT0 = 0.0;
+		m_PfDts.Clear();
+		Print("[STRACK] preflight reiniciado");
+	}
+
+	protected bool Preflight(float dt)
+	{
+		float now;
+		float umbral;
+		float capMs;
+		FileHandle pf;
+		FileHandle df;
+		string body;
+		now = GetGame().GetTickTime();
+		if (!m_PfStarted)
+		{
+			m_PfStarted = true;
+			m_PfT0 = now;
+			m_PfDts.Clear();
+			Print("[STRACK] preflight fps: midiendo 10 s");
+			return false;
+		}
+		if (dt > 0.0)
+		{
+			m_PfDts.Insert(dt * 1000.0);
+		}
+		if ((now - m_PfT0) < 10.0)
+		{
+			return false;
+		}
+		SortFloats(m_PfDts);
+		m_PfP50 = Percentile(m_PfDts, 0.5);
+		m_PfP95 = Percentile(m_PfDts, 0.95);
+		capMs = 18.0;
+		if (m_FpsCap > 0)
+		{
+			capMs = 1.08 * 1000.0 / m_FpsCap;
+		}
+		umbral = capMs;
+		if (umbral < 18.0)
+		{
+			umbral = 18.0;
+		}
+		if (m_PfP50 > umbral)
+		{
+			Print("[STRACK] preflight fps p50=" + STRACK_Math.N(m_PfP50) + " umbral=" + STRACK_Math.N(umbral) + " ok=0");
+			if (!MakeDirectory("$profile:strack"))
+			{
+				Print("[STRACK] MakeDirectory strack fallo (puede existir)");
+			}
+			if (!MakeDirectory("$profile:strack/" + m_Run))
+			{
+				Print("[STRACK] MakeDirectory run fallo (puede existir)");
+			}
+			body = "{\"run\":\"" + m_Run + "\",\"ok\":false,\"causa\":\"fps\",\"dt_p50_ms\":" + STRACK_Math.N(m_PfP50) + ",\"umbral_ms\":" + STRACK_Math.N(umbral) + ",\"n\":" + m_PfDts.Count().ToString() + "}";
+			df = OpenFile("$profile:strack/" + m_Run + "/done.json", FileMode.WRITE);
+			if (df != 0)
+			{
+				FPrintln(df, body);
+				CloseFile(df);
+			}
+			m_RunOn = false;
+			m_Done = true;
+			return false;
+		}
+		Print("[STRACK] preflight fps p50=" + STRACK_Math.N(m_PfP50) + " umbral=" + STRACK_Math.N(umbral) + " ok=1");
+		if (!MakeDirectory("$profile:strack"))
+		{
+			Print("[STRACK] MakeDirectory strack fallo (puede existir)");
+		}
+		if (!MakeDirectory("$profile:strack/" + m_Run))
+		{
+			Print("[STRACK] MakeDirectory run fallo (puede existir)");
+		}
+		body = "{\"dt_p50_ms\":" + STRACK_Math.N(m_PfP50) + ",\"dt_p95_ms\":" + STRACK_Math.N(m_PfP95) + ",\"n\":" + m_PfDts.Count().ToString() + ",\"umbral_ms\":" + STRACK_Math.N(umbral) + "}";
+		pf = OpenFile("$profile:strack/" + m_Run + "/preflight.json", FileMode.WRITE);
+		if (pf != 0)
+		{
+			FPrintln(pf, body);
+			CloseFile(pf);
+		}
+		m_PfDone = true;
+		return true;
+	}
+
+	protected bool PotStopConfirmed()
+	{
+		if (!GetGame() || !GetGame().IsMultiplayer())
+		{
+			return STRACK_Move.ServerPotFrozen();
+		}
+		if (GetGame().IsServer())
+		{
+			// Listen-server / same process: the local statics already froze it.
+			if (STRACK_Move.ServerPotFrozen())
+			{
+				return true;
+			}
+		}
+		return STRACK_Move.FrozenAckReceived();
+	}
+
+	protected bool SuaveTramo4Gate()
+	{
+		float now;
+		now = GetGame().GetTickTime();
+		if (m_Tramo4Ack)
+		{
+			return true;
+		}
+		if (!m_Tramo4Req)
+		{
+			if ((now - m_T0) < 30.0)
+			{
+				return true;
+			}
+			m_Tramo4Req = true;
+			m_Tramo4ReqT0 = now;
+			STRACK_Move.ClearFrozenAck();
+			STRACK_Move.SendCaseState(m_Caso, 4, false);
+			Print("[STRACK] suave parada pedida; esperando confirmacion del servidor");
+			return true;
+		}
+		STRACK_Move.FlushPending();
+		if (PotStopConfirmed())
+		{
+			m_Tramo4Ack = true;
+			m_Tramo4T0 = now;
+			m_Tramo = 4;
+			Print("[STRACK] suave tramo4 reloj arranca tras confirmacion");
+			return true;
+		}
+		if ((now - m_Tramo4ReqT0) >= 3.0)
+		{
+			Print("[STRACK] suave parada no confirmada en 3 s");
+			WriteFailDone("lata_no_para");
+			return false;
+		}
+		return true;
+	}
+
+	protected void WriteFailDone(string causa)
+	{
+		string done;
+		FileHandle doneFile;
+		if (m_Done)
+		{
+			return;
+		}
+		m_Done = true;
+		if (IsSuave())
+		{
+			STRACK_Move.SendCaseState(m_Caso, m_Tramo, true);
+		}
+		FlushHb();
+		if (m_Attached && m_Parent && m_Cam)
+		{
+			m_Parent.RemoveChild(m_Cam, true);
+		}
+		if (m_Cam)
+		{
+			m_Cam.SetActive(false);
+		}
+		if (m_FileOpen)
+		{
+			CloseFile(m_File);
+			m_FileOpen = false;
+		}
+		if (!MakeDirectory("$profile:strack"))
+		{
+			Print("[STRACK] MakeDirectory strack fallo (puede existir)");
+		}
+		if (!MakeDirectory("$profile:strack/" + m_Run))
+		{
+			Print("[STRACK] MakeDirectory run fallo (puede existir)");
+		}
+		done = "{\"run\":\"" + m_Run + "\",\"frames\":" + m_Samples.ToString() + ",\"shots\":" + m_Shots.ToString() + ",\"ok\":false,\"causa\":\"" + causa + "\"}";
+		doneFile = OpenFile("$profile:strack/" + m_Run + "/done.json", FileMode.WRITE);
+		if (doneFile != 0)
+		{
+			FPrintln(doneFile, done);
+			CloseFile(doneFile);
+		}
+		else
+		{
+			Print("[STRACK] no se abre done.json");
+		}
+		m_RunOn = false;
+		STRACK_Move.Stop();
+		Print("[STRACK] fin fallo causa=" + causa);
+	}
+
+	protected bool TryArm(float dt)
 	{
 		PlayerBase player;
 		HumanInventory inv;
 		EntityAI weapon;
+		EntityAI lata;
 		Object created;
 		vector pos;
 		vector fwd;
@@ -388,17 +791,20 @@ class STRACK_Session
 		player = PlayerBase.Cast(GetGame().GetPlayer());
 		if (!player)
 		{
+			ResetPreflight();
 			return false;
 		}
 		inv = player.GetHumanInventory();
 		if (!inv)
 		{
+			ResetPreflight();
 			return false;
 		}
 		weapon = inv.GetEntityInHands();
 		if (!weapon)
 		{
 			m_HandsSince = -1.0;
+			ResetPreflight();
 			return false;
 		}
 		if (m_HandsSince < 0.0)
@@ -410,6 +816,43 @@ class STRACK_Session
 		if (GetGame().GetTickTime() - m_HandsSince < m_ArmWait)
 		{
 			return false;
+		}
+		if (!m_PfDone)
+		{
+			if (!Preflight(dt))
+			{
+				return false;
+			}
+		}
+		if (IsSuave() && !m_LataReady)
+		{
+			// Resolve/validate the pot (network-id matched in FindLata) before
+			// fixing m_T0, opening samples.jsonl or capturing (§16 / MAY).
+			lata = FindLata(player);
+			if (lata)
+			{
+				m_Lata = lata;
+				m_LataOk = true;
+				m_LataPos = lata.GetWorldPosition();
+				m_LataReady = true;
+				m_LataWaiting = false;
+				Print("[STRACK] suave lata lista antes de armar pos=" + STRACK_Math.V(m_LataPos));
+			}
+			else
+			{
+				if (!m_LataWaiting)
+				{
+					m_LataWaiting = true;
+					m_LataWaitT0 = GetGame().GetTickTime();
+					Print("[STRACK] suave esperando lata (tope 10 s)");
+				}
+				if ((GetGame().GetTickTime() - m_LataWaitT0) >= 10.0)
+				{
+					Print("[STRACK] suave sin lata en 10 s");
+					WriteFailDone("sin_lata");
+				}
+				return false;
+			}
 		}
 		if (!MakeDirectory("$profile:strack"))
 		{
@@ -461,9 +904,13 @@ class STRACK_Session
 		m_Origin = Vector(Math.Round(pos[0]), Math.Round(pos[1]), Math.Round(pos[2]));
 		m_T0 = GetGame().GetTickTime();
 		m_Armed = true;
-		if (m_Self)
+		if (m_Self && !IsSuave())
 		{
 			STRACK_Move.Begin(m_Caso == "lookat");
+		}
+		if (IsSuave())
+		{
+			STRACK_Move.SendCaseState(m_Caso, 1, false);
 		}
 		Print("[STRACK] armado arma=" + weapon.GetType() + " fov=" + m_Fov.ToString());
 		return true;
@@ -503,9 +950,25 @@ class STRACK_Session
 		{
 			weapon = player.GetHumanInventory().GetEntityInHands();
 		}
-		if (weapon && player)
+		if (IsSuave() && player)
+		{
+			if (weapon)
+			{
+				FillReadings(player, weapon);
+			}
+			else
+			{
+				ClearAllReadings();
+			}
+			wrote = BuildPoseSuave(player, weapon, pose);
+		}
+		else if (weapon && player)
 		{
 			FillReadings(player, weapon);
+			if (m_Caso == "ropa")
+			{
+				FillMiraReadings(player, weapon);
+			}
 			wrote = BuildPose(weapon, pose);
 		}
 		else
@@ -522,6 +985,12 @@ class STRACK_Session
 		{
 			STRACK_Math.Copy4(m_Written, pose);
 		}
+		m_FrozenGiro = CurrentGiro();
+		m_FrozenSeg = STRACK_Move.Seg();
+		if (m_Caso == "ropa")
+		{
+			m_FrozenRopa = RopaJson(player, weapon);
+		}
 		ApplyShot();
 		if (writeNow)
 		{
@@ -532,8 +1001,9 @@ class STRACK_Session
 	protected void ClearAllReadings()
 	{
 		int i;
+		m_MiraOk = false;
 		i = 0;
-		while (i < 12)
+		while (i < 18)
 		{
 			m_Ok.Set(i, 0);
 			i = i + 1;
@@ -637,6 +1107,168 @@ class STRACK_Session
 		SetRead(slot, STRACK_Math.MulPoint(posed, mp));
 	}
 
+	protected EntityAI FindByType(EntityAI parent, string typeName)
+	{
+		GameInventory inv;
+		EntityAI att;
+		int i;
+		int count;
+		if (!parent)
+		{
+			return null;
+		}
+		inv = parent.GetInventory();
+		if (!inv)
+		{
+			return null;
+		}
+		count = inv.AttachmentCount();
+		i = 0;
+		while (i < count)
+		{
+			att = inv.GetAttachmentFromIndex(i);
+			if (att && att.IsKindOf(typeName))
+			{
+				return att;
+			}
+			i = i + 1;
+		}
+		return null;
+	}
+
+	protected void FillMiraReadings(PlayerBase player, EntityAI weapon)
+	{
+		EntityAI mira;
+		vector mp;
+		vector rt[4];
+		vector tm[4];
+		bool hasMp;
+		int base;
+		base = 12;
+		m_MiraOk = false;
+		mira = FindByType(weapon, "ACOGOptic");
+		if (!mira)
+		{
+			m_Ok.Set(base, 0);
+			m_Ok.Set(base + 1, 0);
+			m_Ok.Set(base + 2, 0);
+			m_Ok.Set(base + 3, 0);
+			m_Ok.Set(base + 4, 0);
+			m_Ok.Set(base + 5, 0);
+			return;
+		}
+		if (!m_MiraPointLogged)
+		{
+			m_MiraPoint = "";
+			if (mira.MemoryPointExists("eyeScope"))
+			{
+				m_MiraPoint = "eyeScope";
+			}
+			else if (mira.MemoryPointExists("eyeIronsights"))
+			{
+				m_MiraPoint = "eyeIronsights";
+			}
+			else if (mira.MemoryPointExists("cameraDir"))
+			{
+				m_MiraPoint = "cameraDir";
+			}
+			else if (mira.MemoryPointExists("cameraDirIronsights"))
+			{
+				m_MiraPoint = "cameraDirIronsights";
+			}
+			if (m_MiraPoint == "")
+			{
+				Print("[STRACK] ropa punto mira=ninguno");
+			}
+			else
+			{
+				Print("[STRACK] ropa punto mira=" + m_MiraPoint);
+			}
+			m_MiraPointLogged = true;
+		}
+		if (m_MiraPoint == "")
+		{
+			m_Ok.Set(base, 0);
+			m_Ok.Set(base + 1, 0);
+			m_Ok.Set(base + 2, 0);
+			m_Ok.Set(base + 3, 0);
+			m_Ok.Set(base + 4, 0);
+			m_Ok.Set(base + 5, 0);
+			return;
+		}
+		hasMp = mira.MemoryPointExists(m_MiraPoint);
+		mp = Vector(0, 0, 0);
+		if (hasMp)
+		{
+			mp = mira.GetMemoryPointPos(m_MiraPoint);
+			m_MiraOk = true;
+		}
+		if (hasMp)
+		{
+			SetRead(base, mira.ModelToWorld(mp));
+		}
+		else
+		{
+			m_Ok.Set(base, 0);
+		}
+		SetRead(base + 1, mira.GetSelectionPositionWS(m_MiraPoint));
+		SetRead(base + 2, player.ModelToWorld(mira.GetSelectionPositionMS(m_MiraPoint)));
+		FillBoneMira(player, mira, mp, hasMp, base + 3);
+		mira.GetRenderTransform(rt);
+		if (hasMp)
+		{
+			SetRead(base + 4, STRACK_Math.MulPoint(rt, mp));
+		}
+		else
+		{
+			m_Ok.Set(base + 4, 0);
+		}
+		mira.GetTransform(tm);
+		tm[3] = mira.GetWorldPosition();
+		if (hasMp)
+		{
+			SetRead(base + 5, STRACK_Math.MulPoint(tm, mp));
+		}
+		else
+		{
+			m_Ok.Set(base + 5, 0);
+		}
+	}
+
+	protected void FillBoneMira(PlayerBase player, EntityAI mira, vector mp, bool hasMp, int slot)
+	{
+		vector bone[4];
+		vector wtm[4];
+		vector inv[4];
+		vector posed[4];
+		if (!m_BoneChecked)
+		{
+			m_Bone = player.GetBoneIndexByName("RightHand_Dummy");
+			m_BoneChecked = true;
+			if (m_Bone == -1)
+			{
+				Print("[STRACK] RightHand_Dummy ausente (-1)");
+			}
+		}
+		if (m_Bone == -1 || !hasMp)
+		{
+			m_Ok.Set(slot, 0);
+			return;
+		}
+		if (!m_RelMiraOk)
+		{
+			player.GetBoneTransformWS(m_Bone, bone);
+			mira.GetTransform(wtm);
+			STRACK_Math.Copy4(bone, inv);
+			Math3D.MatrixInverse4(inv);
+			Math3D.MatrixMultiply4(inv, wtm, m_RelMira);
+			m_RelMiraOk = true;
+		}
+		player.GetBoneTransformWS(m_Bone, bone);
+		Math3D.MatrixMultiply4(bone, m_RelMira, posed);
+		SetRead(slot, STRACK_Math.MulPoint(posed, mp));
+	}
+
 	protected bool Anchor(EntityAI weapon, string name, out vector pos, out vector axes[4])
 	{
 		vector mp;
@@ -736,6 +1368,248 @@ class STRACK_Session
 		m_HasRaw = true;
 		STRACK_Math.Copy4(used, m_Written);
 		STRACK_Math.Copy4(used, written);
+		STRACK_Math.MatQuat(m_Written, m_WrittenQ);
+		STRACK_Math.Copy4(raw, m_CamRaw);
+		STRACK_Math.MatQuat(m_CamRaw, m_RawQ);
+		WriteCamera(weapon, used);
+		return true;
+	}
+
+	protected EntityAI FindLata(PlayerBase player)
+	{
+		int i;
+		Object obj;
+		EntityAI ent;
+		int candLow;
+		int candHigh;
+		candLow = 0;
+		candHigh = 0;
+		if (!s_PotIdOk)
+		{
+			return null;
+		}
+		if (m_Lata && m_Lata.IsKindOf("Pot"))
+		{
+			m_Lata.GetNetworkID(candLow, candHigh);
+			if (candLow == s_PotLow && candHigh == s_PotHigh)
+			{
+				return m_Lata;
+			}
+			m_Lata = null;
+		}
+		m_ScanObj.Clear();
+		m_ScanCargo.Clear();
+		GetGame().GetObjectsAtPosition(player.GetPosition(), 15.0, m_ScanObj, m_ScanCargo);
+		i = 0;
+		while (i < m_ScanObj.Count())
+		{
+			obj = m_ScanObj.Get(i);
+			ent = EntityAI.Cast(obj);
+			if (ent && ent.IsKindOf("Pot") && !ent.GetHierarchyParent())
+			{
+				candLow = 0;
+				candHigh = 0;
+				ent.GetNetworkID(candLow, candHigh);
+				if (candLow == s_PotLow && candHigh == s_PotHigh)
+				{
+					m_Lata = ent;
+					return m_Lata;
+				}
+			}
+			i = i + 1;
+		}
+		return null;
+	}
+
+	protected bool BuildPoseSuave(PlayerBase player, EntityAI weapon, out vector written[4])
+	{
+		EntityAI lata;
+		vector lataTm[4];
+		vector axesRot[4];
+		vector raw[4];
+		vector rawYaw[4];
+		vector used[4];
+		vector filtered[4];
+		float elapsed;
+		float t4;
+		float yawOff;
+		float alpha;
+		int mode;
+		float qa[4];
+		float qb[4];
+		float cand[8];
+		int ci;
+		float bestDot;
+		float dTry;
+		vector tryMat[4];
+		vector tryAxes[4];
+		int prevTramo;
+		lata = null;
+		m_ScanTick = m_ScanTick + 1;
+		if (!m_Lata || (m_ScanTick % 30) == 0)
+		{
+			lata = FindLata(player);
+		}
+		else
+		{
+			lata = m_Lata;
+		}
+		if (!lata)
+		{
+			m_LataOk = false;
+			return false;
+		}
+		m_LataOk = true;
+		m_LataPos = lata.GetWorldPosition();
+		lata.GetTransform(lataTm);
+		prevTramo = m_Tramo;
+		elapsed = m_Now - m_T0;
+		if (elapsed < 10.0)
+		{
+			m_Tramo = 1;
+			m_SmoothS = 0.0;
+		}
+		else if (elapsed < 20.0)
+		{
+			m_Tramo = 2;
+			m_SmoothS = 0.3;
+		}
+		else if (elapsed < 30.0)
+		{
+			m_Tramo = 3;
+			m_SmoothS = 0.8;
+		}
+		else if (m_Tramo4Ack)
+		{
+			m_Tramo = 4;
+			m_SmoothS = 0.3;
+		}
+		else
+		{
+			// Tramo 4 requested but not yet confirmed by the server: hold
+			// tramo 3 so no tramo-4 line is emitted while the pot may move.
+			m_Tramo = 3;
+			m_SmoothS = 0.8;
+		}
+		if (m_Inject == "smooth03")
+		{
+			m_SmoothS = 0.3;
+		}
+		if (prevTramo != m_Tramo && m_Tramo != 4)
+		{
+			STRACK_Move.SendCaseState(m_Caso, m_Tramo, false);
+		}
+		if (!m_SuaveBaseDone)
+		{
+			STRACK_Math.Copy4(lataTm, tryAxes);
+			tryAxes[3] = m_LataPos;
+			BuildFollow(m_LataPos, tryAxes, tryMat);
+			STRACK_Math.MatQuat(tryMat, qa);
+			cand[0] = 0.0;
+			cand[1] = 45.0;
+			cand[2] = -45.0;
+			cand[3] = 90.0;
+			cand[4] = -90.0;
+			cand[5] = 135.0;
+			cand[6] = -135.0;
+			cand[7] = 180.0;
+			m_SuaveBaseRot = 0.0;
+			bestDot = 2.0;
+			ci = 0;
+			while (ci < 8)
+			{
+				STRACK_Math.YawWorld(tryMat, cand[ci], rawYaw);
+				STRACK_Math.MatQuat(rawYaw, qa);
+				STRACK_Math.YawWorld(tryMat, cand[ci] + 170.0, rawYaw);
+				STRACK_Math.MatQuat(rawYaw, qb);
+				dTry = STRACK_Math.QuatDot(qa, qb);
+				if (dTry < bestDot)
+				{
+					bestDot = dTry;
+					m_SuaveBaseRot = cand[ci];
+				}
+				ci = ci + 1;
+			}
+			if (bestDot >= 0.0)
+			{
+				m_SuaveBaseRot = 0.0;
+			}
+			m_SuaveBaseDone = true;
+			Print("[STRACK] suave base_rot=" + STRACK_Math.N(m_SuaveBaseRot) + " dot_previsto=" + STRACK_Math.N(bestDot));
+		}
+		STRACK_Math.YawWorld(lataTm, m_SuaveBaseRot, axesRot);
+		axesRot[3] = m_LataPos;
+		BuildFollow(m_LataPos, axesRot, raw);
+		m_GiroSuave = 0;
+		yawOff = 0.0;
+		if (m_Tramo == 4 && m_Tramo4Ack)
+		{
+			t4 = m_Now - m_Tramo4T0;
+			if (t4 >= 0.5 && t4 < 4.5)
+			{
+				m_GiroSuave = 1;
+				yawOff = 170.0;
+			}
+			else if (t4 >= 4.5 && t4 < 8.5)
+			{
+				m_GiroSuave = 2;
+				yawOff = 0.0;
+			}
+		}
+		if (yawOff != 0.0)
+		{
+			STRACK_Math.YawWorld(raw, yawOff, rawYaw);
+			STRACK_Math.Copy4(rawYaw, raw);
+		}
+		STRACK_Math.Copy4(raw, used);
+		mode = 0;
+		if (m_Inject == "quatlerp")
+		{
+			mode = 1;
+		}
+		if (m_Inject == "longarc")
+		{
+			mode = 2;
+		}
+		alpha = 1.0;
+		if (m_SmoothS > 0.0 && m_FiltOn && m_Dt > 0.0)
+		{
+			alpha = 1.0 - STRACK_Math.Exp(-m_Dt / m_SmoothS);
+		}
+		if (m_GiroSuave != 0 && m_GiroSuave != m_PrevGiroSuave)
+		{
+			if (m_FiltOn)
+			{
+				STRACK_Math.MatQuat(m_Filt, qa);
+			}
+			else
+			{
+				STRACK_Math.MatQuat(used, qa);
+			}
+			STRACK_Math.MatQuat(raw, qb);
+			m_QuatDot = STRACK_Math.QuatDot(qa, qb);
+			m_QuatDotPending = true;
+		}
+		if (!m_FiltOn)
+		{
+			STRACK_Math.Copy4(used, m_Filt);
+			m_FiltOn = true;
+		}
+		else
+		{
+			STRACK_Math.SlerpMode(m_Filt, used, alpha, mode, filtered);
+			filtered[3] = m_Filt[3] + (used[3] - m_Filt[3]) * alpha;
+			STRACK_Math.Copy4(filtered, m_Filt);
+		}
+		STRACK_Math.Copy4(m_Filt, used);
+		m_PrevGiroSuave = m_GiroSuave;
+		STRACK_Math.Copy4(raw, m_Prev);
+		m_HasRaw = true;
+		STRACK_Math.Copy4(used, m_Written);
+		STRACK_Math.Copy4(used, written);
+		STRACK_Math.MatQuat(m_Written, m_WrittenQ);
+		STRACK_Math.Copy4(raw, m_CamRaw);
+		STRACK_Math.MatQuat(m_CamRaw, m_RawQ);
 		WriteCamera(weapon, used);
 		return true;
 	}
@@ -815,7 +1689,14 @@ class STRACK_Session
 		string path;
 		want = false;
 		m_Shot = "";
-		if ((m_Frame % 10) == 0)
+		if (CurrentGiro() > 0)
+		{
+			if ((m_Frame % 2) == 0)
+			{
+				want = true;
+			}
+		}
+		else if ((m_Frame % 10) == 0)
 		{
 			want = true;
 		}
@@ -854,6 +1735,92 @@ class STRACK_Session
 		return s;
 	}
 
+	protected string PoseJson(vector tm[4], vector pos)
+	{
+		string s;
+		s = "{\"pos\":" + STRACK_Math.V(pos - m_Origin);
+		s = s + ",\"x\":" + STRACK_Math.V(tm[0]);
+		s = s + ",\"y\":" + STRACK_Math.V(tm[1]);
+		s = s + ",\"z\":" + STRACK_Math.V(tm[2]) + "}";
+		return s;
+	}
+
+	protected string EntityPoseJson(EntityAI ent)
+	{
+		vector tm[4];
+		vector fm[4];
+		string s;
+		if (!ent)
+		{
+			return "null";
+		}
+		ent.GetTransform(tm);
+		ent.GetTransform(fm);
+		s = "{\"a\":" + PoseJson(tm, tm[3]);
+		s = s + ",\"f\":" + PoseJson(fm, ent.GetWorldPosition()) + "}";
+		return s;
+	}
+
+	protected string SpinePoseJson(PlayerBase player)
+	{
+		vector ws[4];
+		vector ms[4];
+		vector pm[4];
+		vector prod[4];
+		string s;
+		if (!player)
+		{
+			return "null";
+		}
+		if (!m_SpineChecked)
+		{
+			m_SpineBone = player.GetBoneIndexByName("Spine3");
+			m_SpineChecked = true;
+			if (m_SpineBone == -1)
+			{
+				Print("[STRACK] Spine3 ausente (-1)");
+			}
+		}
+		if (m_SpineBone == -1)
+		{
+			return "null";
+		}
+		player.GetBoneTransformWS(m_SpineBone, ws);
+		player.GetBoneTransformMS(m_SpineBone, ms);
+		player.GetTransform(pm);
+		pm[3] = player.GetWorldPosition();
+		Math3D.MatrixMultiply4(pm, ms, prod);
+		s = "{\"a\":" + PoseJson(ws, ws[3]);
+		s = s + ",\"f\":" + PoseJson(prod, prod[3]) + "}";
+		return s;
+	}
+
+	protected string RopaJson(PlayerBase player, EntityAI weapon)
+	{
+		EntityAI mochila;
+		EntityAI mira;
+		EntityAI sil;
+		string s;
+		mochila = null;
+		mira = null;
+		sil = null;
+		if (player)
+		{
+			mochila = FindByType(player, "AliceBag_Green");
+		}
+		if (weapon)
+		{
+			mira = FindByType(weapon, "ACOGOptic");
+			sil = FindByType(weapon, "M4_Suppressor");
+		}
+		s = "{\"mochila\":" + EntityPoseJson(mochila);
+		s = s + ",\"mira\":" + EntityPoseJson(mira);
+		s = s + ",\"silenciador\":" + EntityPoseJson(sil);
+		s = s + ",\"spine3\":" + SpinePoseJson(player);
+		s = s + ",\"arma\":" + EntityPoseJson(weapon) + "}";
+		return s;
+	}
+
 	protected void WriteLine(int invocations)
 	{
 		string line;
@@ -871,16 +1838,63 @@ class STRACK_Session
 		line = line + ",\"caso\":\"" + m_Caso + "\"";
 		line = line + ",\"inject\":\"" + m_Inject + "\"";
 		line = line + ",\"run\":\"" + m_Run + "\"";
+		line = line + ",\"giro\":" + m_FrozenGiro.ToString();
+		line = line + ",\"seg\":" + m_FrozenSeg.ToString();
 		line = line + ",\"lecturas\":{\"usti hlavne\":" + PointJson(0);
-		line = line + ",\"konec hlavne\":" + PointJson(1) + "}";
+		line = line + ",\"konec hlavne\":" + PointJson(1);
+		if (m_Caso == "ropa")
+		{
+			if (m_MiraOk)
+			{
+				line = line + ",\"mira\":" + PointJson(2);
+			}
+			else
+			{
+				line = line + ",\"mira\":null";
+			}
+		}
+		line = line + "}";
 		line = line + ",\"origin\":" + STRACK_Math.V(m_Origin);
 		line = line + ",\"cam\":{\"pos\":" + STRACK_Math.V(m_Written[3] - m_Origin);
 		line = line + ",\"x\":" + STRACK_Math.V(m_Written[0]);
 		line = line + ",\"y\":" + STRACK_Math.V(m_Written[1]);
-		line = line + ",\"z\":" + STRACK_Math.V(m_Written[2]) + "}";
+		line = line + ",\"z\":" + STRACK_Math.V(m_Written[2]);
+		if (IsSuave())
+		{
+			line = line + ",\"q\":" + STRACK_Math.Q(m_WrittenQ);
+		}
+		line = line + "}";
 		line = line + ",\"fov_rad\":1.0471976";
 		line = line + ",\"fov_motor\":" + STRACK_Math.N(Camera.GetCurrentFOV());
 		line = line + ",\"calib_yaw_deg\":" + STRACK_Math.N(m_Yaw);
+		if (m_Caso == "ropa")
+		{
+			line = line + ",\"ropa\":" + m_FrozenRopa;
+		}
+		if (IsSuave())
+		{
+			line = line + ",\"tramo\":" + m_Tramo.ToString();
+			line = line + ",\"smooth_s\":" + STRACK_Math.N(m_SmoothS);
+			line = line + ",\"fps_cap\":" + m_FpsCap.ToString();
+			if (m_LataOk)
+			{
+				line = line + ",\"lata\":{\"a\":" + STRACK_Math.V(m_LataPos - m_Origin) + "}";
+			}
+			else
+			{
+				line = line + ",\"lata\":{\"a\":null}";
+			}
+			line = line + ",\"cam_raw\":{\"pos\":" + STRACK_Math.V(m_CamRaw[3] - m_Origin);
+			line = line + ",\"x\":" + STRACK_Math.V(m_CamRaw[0]);
+			line = line + ",\"y\":" + STRACK_Math.V(m_CamRaw[1]);
+			line = line + ",\"z\":" + STRACK_Math.V(m_CamRaw[2]);
+			line = line + ",\"q\":" + STRACK_Math.Q(m_RawQ) + "}";
+			if (m_QuatDotPending)
+			{
+				line = line + ",\"quat_dot_inicio\":" + STRACK_Math.N(m_QuatDot);
+				m_QuatDotPending = false;
+			}
+		}
 		line = line + ",\"shot\":\"" + m_Shot + "\"}";
 		FPrintln(m_File, line);
 		m_Samples = m_Samples + 1;
@@ -905,6 +1919,10 @@ class STRACK_Session
 			return;
 		}
 		m_Done = true;
+		if (IsSuave())
+		{
+			STRACK_Move.SendCaseState(m_Caso, m_Tramo, true);
+		}
 		FlushHb();
 		if (m_Attached && m_Parent && m_Cam)
 		{
@@ -920,7 +1938,7 @@ class STRACK_Session
 			CloseFile(m_File);
 			m_FileOpen = false;
 		}
-		done = "{\"run\":\"" + m_Run + "\",\"frames\":" + m_Samples.ToString() + ",\"shots\":" + m_Shots.ToString() + ",\"ok\":true}";
+		done = "{\"run\":\"" + m_Run + "\",\"frames\":" + m_Samples.ToString() + ",\"shots\":" + m_Shots.ToString() + ",\"ok\":true,\"preflight_dt_p50_ms\":" + STRACK_Math.N(m_PfP50) + "}";
 		doneFile = OpenFile("$profile:strack/" + m_Run + "/done.json", FileMode.WRITE);
 		if (doneFile != 0)
 		{

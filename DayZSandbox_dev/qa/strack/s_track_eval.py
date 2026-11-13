@@ -8,6 +8,7 @@ Lee carpetas de corridas con samples.jsonl y capturas f######.bmp, ejecuta:
 """
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -24,12 +25,30 @@ K_CANDIDATES = (-2, -1, 0, 1, 2)
 STIMULUS_FACTOR = 3.0
 DETECTOR_MAX_PX = 0.5
 DETECTOR_MAX_DEG = 0.1
+TEMPLATE_PX = 48
+CORR_MIN = 0.8
+MIN_SHOTS_WINDOW = 20
+MASK_STD_MAX = 8.0
+MASK_MIN_SHOTS = 50
+MARK_AGREE_PX = 1.5
+TEMPLATE_SOURCE = "marca"
+USE_MASK = True
+ROPA_MAX_M = 0.01
+ROPA_MAX_DEG = 0.5
+JUMP_MIN_M = 0.5
+THRESH_SUAVE_FRAC = 0.02
+QUAT_NORM_TOL = 1e-4
+SUAVE_FPS_AGREE_DEG = 0.5
+FPS_REGIME_TOL = 0.10
+# Vuelta 4 (hallazgo 4): tolerancia del estimulo de giro. El objetivo se
+# escribe como una rotacion exacta de 170 deg; extraerlo con atan2/acos en
+# doble precision introduce errores muy por debajo de 0.01 deg, asi que
+# 1.0 deg deja dos ordenes de margen sobre el ruido numerico y sigue siendo
+# diez veces menor que la desviacion de un objetivo de 160 deg.
+GIRO_TARGET_TOL_DEG = 1.0
 
 IMAGE_W = 1920
 IMAGE_H = 1080
-# Orquestador 2026-11-11: 32 px (el brief decia 48). Con el banco de giro/escala, 32 px dio p95 0,29-0,37 px
-# y 0,063-0,074 deg sobre capturas reales con textura (mount0_Hc, mount0_Hb); 48 px quedaba mas justo en angulo.
-TEMPLATE_SIZE = 32
 # Banco de plantillas giradas y escaladas: el detector busca la mejor de todas (NCC) y da su posicion.
 # 15 plantillas: con 77 (paso 0,5 deg y 0,02) la precision era la misma y el tiempo 4 veces mayor.
 BANK_ANGLES_DEG = (-2.0, -1.0, 0.0, 1.0, 2.0)
@@ -135,6 +154,303 @@ def _load_gray(bmp_path):
     with Image.open(bmp_path) as img:
         gray = img.convert("L")
         return np.asarray(gray, dtype=np.float32)
+
+
+def _sha256_file(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _resolve_marcas_dir(runs_dir, marcas_dir=None):
+    if marcas_dir is not None:
+        return Path(marcas_dir)
+    runs_path = Path(runs_dir)
+    if (runs_path / "marcas").is_dir():
+        return runs_path / "marcas"
+    return Path(__file__).resolve().parent / "marcas"
+
+
+def load_marcas(marcas_dir, run_name, run_dir):
+    """Carga y valida las marcas de una corrida (contrato §12). Devuelve (validas, descartadas)."""
+    path = Path(marcas_dir) / f"{run_name}.json"
+    if not path.is_file():
+        return [], [{"shot": "", "cause": "missing_marcas_file"}]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [], [{"shot": "", "cause": "invalid_marcas_json"}]
+    valid = []
+    discarded = []
+    for entry in data.get("marcas") or []:
+        shot = str(entry.get("shot") or "")
+        try:
+            diff = float(entry.get("diff_max_px"))
+        except (TypeError, ValueError):
+            diff = float("inf")
+        if diff > MARK_AGREE_PX:
+            discarded.append({"shot": shot, "cause": "diff_max_px_exceeded", "diff_max_px": diff})
+            continue
+        expected = str(entry.get("sha256") or "").lower()
+        png_name = entry.get("png")
+        png_path = Path(run_dir) / str(png_name) if png_name else None
+        # Vuelta 4 (hallazgo 6): se resuelve primero la imagen que consume el
+        # detector (_shot_path: BMP o PNG homonima) y se vincula siempre su
+        # contenido con la PNG validada, tambien cuando solo hay PNG.
+        consumed_path = _shot_path(run_dir, shot) if shot else None
+        if png_path is not None and png_path.is_file():
+            if not expected or _sha256_file(png_path).lower() != expected:
+                discarded.append({"shot": shot, "cause": "sha256_mismatch"})
+                continue
+            if consumed_path is None or not consumed_path.is_file():
+                discarded.append({"shot": shot, "cause": "imagen_ilegible"})
+                continue
+            if consumed_path.resolve() != png_path.resolve():
+                try:
+                    px_png = np.asarray(Image.open(png_path).convert("L"))
+                    px_consumed = np.asarray(Image.open(consumed_path).convert("L"))
+                except OSError:
+                    discarded.append({"shot": shot, "cause": "imagen_ilegible"})
+                    continue
+                if px_png.shape != px_consumed.shape or not np.array_equal(px_png, px_consumed):
+                    discarded.append({"shot": shot, "cause": "imagen_distinta_png_bmp"})
+                    continue
+        else:
+            if consumed_path is None or not consumed_path.is_file() or not expected or _sha256_file(consumed_path).lower() != expected:
+                discarded.append({"shot": shot, "cause": "sha256_mismatch"})
+                continue
+        puntos = {}
+        for name, xy in (entry.get("puntos") or {}).items():
+            if isinstance(xy, (list, tuple)) and len(xy) == 2:
+                try:
+                    puntos[str(name)] = (float(xy[0]), float(xy[1]))
+                except (TypeError, ValueError):
+                    pass
+        valid.append({"shot": shot, "puntos": puntos, "momento": str(entry.get("momento") or ""), "diff_max_px": diff})
+    return valid, discarded
+
+
+def windows_from_giro(samples):
+    """Ventanas por el campo `giro` (contrato §9): giro1..giroN y resto."""
+    windows = {}
+    resto = []
+    for row in samples:
+        frame = int(row["frame"])
+        try:
+            giro = int(row.get("giro") or 0)
+        except (TypeError, ValueError):
+            giro = 0
+        if giro > 0:
+            windows.setdefault(f"giro{giro}", []).append(frame)
+        else:
+            resto.append(frame)
+    windows["resto"] = resto
+    return windows
+
+
+def _windows_for_run(run):
+    samples = run["samples"]
+    if any("giro" in row for row in samples):
+        return windows_from_giro(samples), True
+    return detect_windows(samples), False
+
+
+EXPECTED_WINDOWS = ("giro1", "giro2", "giro3", "resto")
+
+
+def _require_expected_windows(windows, has_giro):
+    """Vuelta 3 (hallazgo 10): con campo giro, cada ventana prevista ausente
+    queda presente como vacia para que se juzgue INCONCLUSO por repeticion."""
+    if not has_giro:
+        return windows
+    out = dict(windows)
+    for name in EXPECTED_WINDOWS:
+        out.setdefault(name, [])
+    return out
+
+
+def _shift_mask(mask, du, dv):
+    if mask is None:
+        return None
+    out = np.zeros_like(mask, dtype=bool)
+    h, w = mask.shape
+    dx = int(round(float(du)))
+    dy = int(round(float(dv)))
+    x0_src = max(0, -dx)
+    x1_src = min(w, w - dx)
+    y0_src = max(0, -dy)
+    y1_src = min(h, h - dy)
+    if x1_src <= x0_src or y1_src <= y0_src:
+        return out
+    out[y0_src + dy:y1_src + dy, x0_src + dx:x1_src + dx] = mask[y0_src:y1_src, x0_src:x1_src]
+    return out
+
+
+def _connected_to_center(low):
+    h, w = low.shape
+    cy, cx = h // 2, w // 2
+    if not low[cy, cx]:
+        # Semilla: el píxel bajo más cercano al centro.
+        ys, xs = np.nonzero(low)
+        if len(ys) == 0:
+            return np.zeros_like(low)
+        idx = int(np.argmin((ys - cy) ** 2 + (xs - cx) ** 2))
+        cy, cx = int(ys[idx]), int(xs[idx])
+    seen = np.zeros_like(low)
+    stack = [(cy, cx)]
+    seen[cy, cx] = True
+    while stack:
+        y, x = stack.pop()
+        for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+            if 0 <= ny < h and 0 <= nx < w and low[ny, nx] and not seen[ny, nx]:
+                seen[ny, nx] = True
+                stack.append((ny, nx))
+    return seen
+
+
+def _mask_valid(mask):
+    return (
+        mask is not None
+        and isinstance(mask, np.ndarray)
+        and mask.shape == (TEMPLATE_PX, TEMPLATE_PX)
+        and int(np.asarray(mask, dtype=bool).sum()) >= 4
+    )
+
+
+def _mask_empty(mask):
+    return not _mask_valid(mask)
+
+
+def _masks_by_point(template_mask):
+    """Normaliza: dict punto->mascara local, o mascara unica (solo vale como boca)."""
+    if template_mask is None:
+        return {}
+    if isinstance(template_mask, dict):
+        return {str(p): m for p, m in template_mask.items()}
+    return {"usti hlavne": template_mask}
+
+
+MASK_DETAIL_FILES = {"usti hlavne": "boca", "konec hlavne": "recamara", "mira": "mira"}
+
+
+def _bilinear_sample_points(img, xs, ys):
+    h, w = img.shape
+    x = np.clip(np.asarray(xs, dtype=np.float64), 0.0, float(w - 1) - 1e-6)
+    y = np.clip(np.asarray(ys, dtype=np.float64), 0.0, float(h - 1) - 1e-6)
+    x0 = np.floor(x).astype(np.int32)
+    y0 = np.floor(y).astype(np.int32)
+    x1 = np.minimum(x0 + 1, w - 1)
+    y1 = np.minimum(y0 + 1, h - 1)
+    wx = x - x0
+    wy = y - y0
+    ia = img[y0, x0].astype(np.float64, copy=False)
+    ib = img[y0, x1].astype(np.float64, copy=False)
+    ic = img[y1, x0].astype(np.float64, copy=False)
+    id_ = img[y1, x1].astype(np.float64, copy=False)
+    return (1.0 - wy) * ((1.0 - wx) * ia + wx * ib) + wy * ((1.0 - wx) * ic + wx * id_)
+
+
+def _paste_masked_patch_subpixel(synth, source_img, src_center, tgt_center, mask):
+    """Pega el parche enmascarado con centro subpixel coherente con extract_template (offset -23.5)."""
+    su, sv = float(src_center[0]), float(src_center[1])
+    tu, tv = float(tgt_center[0]), float(tgt_center[1])
+    half = TEMPLATE_PX // 2
+    x_lo = max(0, int(math.floor(tu)) - half - 1)
+    x_hi = min(synth.shape[1], int(math.ceil(tu)) + half + 2)
+    y_lo = max(0, int(math.floor(tv)) - half - 1)
+    y_hi = min(synth.shape[0], int(math.ceil(tv)) + half + 2)
+    if x_hi <= x_lo or y_hi <= y_lo:
+        return
+    xs, ys = np.meshgrid(
+        np.arange(x_lo, x_hi, dtype=np.float64), np.arange(y_lo, y_hi, dtype=np.float64)
+    )
+    m = _bilinear_sample_points(np.asarray(mask, dtype=np.float64), xs - tu + 0.5 * (TEMPLATE_PX - 1), ys - tv + 0.5 * (TEMPLATE_PX - 1))
+    sampled = _bilinear_sample_points(source_img, xs - (tu - su), ys - (tv - sv))
+    region = synth[y_lo:y_hi, x_lo:x_hi]
+    take = m > 0.5
+    region[take] = sampled[take]
+    synth[y_lo:y_hi, x_lo:x_hi] = region
+
+
+def build_masks_from_run(run, marcas, k, fov_conv):
+    """Una mascara por detalle (boca, recamara y mira en ropa), en coordenadas locales de su plantilla.
+
+    Por detalle: cultivos centrados en su marca, alineados por la proyeccion de su
+    lectura (a) en cada captura de giro, con std temporal < MASK_STD_MAX sobre
+    >= MASK_MIN_SHOTS capturas y componente conexa al centro.
+    """
+    masks = {}
+    if not marcas:
+        return masks
+    by_frame = run["by_frame"]
+    giro_frames = set()
+    for row in run["samples"]:
+        try:
+            if int(row.get("giro") or 0) > 0:
+                giro_frames.add(int(row["frame"]))
+        except (TypeError, ValueError):
+            pass
+    if not giro_frames:
+        wins, _has = _windows_for_run(run)
+        for name, frames in wins.items():
+            if name.startswith("giro"):
+                giro_frames.update(frames)
+    point_names = []
+    for mark in marcas:
+        for name in mark["puntos"]:
+            if name not in point_names:
+                point_names.append(name)
+    half = TEMPLATE_PX // 2
+    # Ancla por detalle: marca y desplazamiento marca-proyeccion en su captura.
+    anchors = {}
+    for point in point_names:
+        first = None
+        for mark in marcas:
+            if point in mark["puntos"]:
+                first = mark
+                break
+        if first is None:
+            continue
+        cu, cv = first["puntos"][point]
+        anchors[point] = (cu, cv, (0.0, 0.0))
+    # Una sola carga por captura para todos los detalles.
+    # Vuelta 3 (hallazgo 12): en mount0 el montaje es rigido y el arma queda
+    # quieta en imagen; los cultivos se anclan a la marca, nunca a la
+    # proyeccion de una lectura candidata (p. ej. (a)), que es lo que se juzga.
+    crops_by_point = {p: [] for p in anchors}
+    for row in run["samples"]:
+        if int(row["frame"]) not in giro_frames or not row.get("shot"):
+            continue
+        path = _shot_path(run["dir"], row["shot"])
+        if not path.is_file():
+            continue
+        img = None
+        for point, (cu, cv, anchor_delta) in anchors.items():
+            center_u, center_v = cu, cv
+            if img is None:
+                img = _load_gray(path)
+            x0 = int(round(center_u)) - half
+            y0 = int(round(center_v)) - half
+            if x0 < 0 or y0 < 0 or x0 + TEMPLATE_PX > img.shape[1] or y0 + TEMPLATE_PX > img.shape[0]:
+                continue
+            crop = img[y0:y0 + TEMPLATE_PX, x0:x0 + TEMPLATE_PX].astype(np.float64)
+            # Un cultivo plano (oclusión, carga o fundido) no define el arma: fuera de la mascara.
+            if float(crop.std()) < TEXTURE_MIN_STD:
+                continue
+            crops_by_point[point].append(crop)
+    for point in point_names:
+        crops = crops_by_point.get(point, [])
+        if len(crops) < MASK_MIN_SHOTS:
+            masks[point] = None
+            continue
+        stack = np.stack(crops, axis=0)
+        std = stack.std(axis=0)
+        low = std < MASK_STD_MAX
+        masks[point] = _connected_to_center(low)
+    return masks
+
+
+def build_mask_from_run(run, marcas, k, fov_conv):
+    """Compatibilidad: la mascara de la boca de build_masks_from_run."""
+    return build_masks_from_run(run, marcas, k, fov_conv).get("usti hlavne")
 
 
 def _read_run(run_dir):
@@ -454,7 +770,7 @@ def _bilinear_sample_grid(img, x_coords, y_coords):
     return (1.0 - wy) * ((1.0 - wx) * ia + wx * ib) + wy * ((1.0 - wx) * ic + wx * id_)
 
 
-def _crop_std(img, u, v_px, size=TEMPLATE_SIZE):
+def _crop_std(img, u, v_px, size=TEMPLATE_PX):
     """Desviacion tipica del recorte size x size centrado en (u, v_px); 0 si cae fuera de la imagen."""
     h, w = img.shape
     half = size // 2
@@ -472,12 +788,23 @@ def _textured(img, points):
     return all(p is not None and _crop_std(img, p[0], p[1]) >= TEXTURE_MIN_STD for p in points)
 
 
-def extract_template(img, u, v_px, size=TEMPLATE_SIZE):
+def extract_template(img, u, v_px, size=TEMPLATE_PX, mask=None):
     """Extrae una plantilla centrada en (u, v_px) con interpolacion bilineal exacta."""
     half = 0.5 * float(size - 1)
     xs = float(u) + (np.arange(size, dtype=np.float64) - half)
     ys = float(v_px) + (np.arange(size, dtype=np.float64) - half)
     patch = _bilinear_sample_grid(img, xs, ys)
+    use_mask = mask if (USE_MASK and mask is not None) else None
+    if use_mask is not None:
+        m = np.asarray(use_mask, dtype=bool)
+        # Hallazgo 1: mascara vacia o invalida nunca cae en silencio a "sin mascara":
+        # plantilla sin norma (sin deteccion posible), marcada como vacia.
+        if m.shape != patch.shape or int(m.sum()) < 4:
+            return {"patch": patch, "zm": np.zeros_like(patch), "norm": 0.0, "size": size, "mask": None, "mask_empty": True}
+        mean = float(patch[m].mean())
+        zm = (patch - mean) * m
+        norm = float(np.linalg.norm(zm))
+        return {"patch": patch, "zm": zm, "norm": norm, "size": size, "mask": m}
     mean = float(patch.mean())
     zm = patch - mean
     norm = float(np.linalg.norm(zm))
@@ -486,6 +813,7 @@ def extract_template(img, u, v_px, size=TEMPLATE_SIZE):
         "zm": zm,
         "norm": norm,
         "size": size,
+        "mask": None,
     }
 
 
@@ -497,7 +825,11 @@ def _box_sum(arr, size):
 
 def _ncc_at(crop_f64, tmpl, u_c, v_c, grid_idx):
     patch = _bilinear_sample_grid(crop_f64, u_c + grid_idx, v_c + grid_idx)
-    zm = patch - float(patch.mean())
+    mask = tmpl.get("mask") if USE_MASK else None
+    if mask is not None:
+        zm = (patch - float(patch[mask].mean())) * mask
+    else:
+        zm = patch - float(patch.mean())
     n = float(np.linalg.norm(zm))
     if n <= 1e-6:
         return -1.0
@@ -530,15 +862,34 @@ def detect_template(img, tmpl, u_pred, v_pred, search_radius=SEARCH_RADIUS):
 
     fh = 1 << (ch - 1).bit_length()
     fw = 1 << (cw - 1).bit_length()
-    dots = np.fft.irfft2(
-        np.fft.rfft2(crop0, s=(fh, fw)) * np.conj(np.fft.rfft2(tmpl["zm"], s=(fh, fw))),
-        s=(fh, fw),
-    )[:out_h, :out_w]
+    mask = tmpl.get("mask") if USE_MASK else None
+    if mask is not None:
+        mf = np.asarray(mask, dtype=np.float64)
+        count = float(mf.sum())
+        dots = np.fft.irfft2(
+            np.fft.rfft2(crop, s=(fh, fw)) * np.conj(np.fft.rfft2(tmpl["zm"], s=(fh, fw))),
+            s=(fh, fw),
+        )[:out_h, :out_w]
+        sum_m = np.fft.irfft2(
+            np.fft.rfft2(crop, s=(fh, fw)) * np.conj(np.fft.rfft2(mf, s=(fh, fw))),
+            s=(fh, fw),
+        )[:out_h, :out_w]
+        sum_m2 = np.fft.irfft2(
+            np.fft.rfft2(crop * crop, s=(fh, fw)) * np.conj(np.fft.rfft2(mf, s=(fh, fw))),
+            s=(fh, fw),
+        )[:out_h, :out_w]
+        w_var = sum_m2 - (sum_m * sum_m) / max(count, 1.0)
+        w_norm = np.sqrt(np.maximum(w_var, 0.0))
+    else:
+        dots = np.fft.irfft2(
+            np.fft.rfft2(crop0, s=(fh, fw)) * np.conj(np.fft.rfft2(tmpl["zm"], s=(fh, fw))),
+            s=(fh, fw),
+        )[:out_h, :out_w]
 
-    box_s = _box_sum(crop0, size)
-    box_sq = _box_sum(crop0 * crop0, size)
-    w_var = box_sq - (box_s * box_s) / float(size * size)
-    w_norm = np.sqrt(np.maximum(w_var, 0.0))
+        box_s = _box_sum(crop0, size)
+        box_sq = _box_sum(crop0 * crop0, size)
+        w_var = box_sq - (box_s * box_s) / float(size * size)
+        w_norm = np.sqrt(np.maximum(w_var, 0.0))
 
     denom = w_norm * tmpl["norm"]
     valid = denom > 1e-4
@@ -591,14 +942,33 @@ def detect_template(img, tmpl, u_pred, v_pred, search_radius=SEARCH_RADIUS):
     return (float(u_est), float(v_est), peak_score)
 
 
-def make_template_bank(img, u, v_px, size=None):
+def make_template_bank(img, u, v_px, size=None, mask=None):
     """Plantillas del entorno de (u, v_px) giradas BANK_ANGLES_DEG y escaladas BANK_SCALES alrededor del punto."""
-    size = TEMPLATE_SIZE if size is None else size
+    size = TEMPLATE_PX if size is None else size
+    use_mask = mask if USE_MASK else None
     bank = []
+    mask_img = None
+    if use_mask is not None:
+        mask_img = np.zeros(img.shape, dtype=np.float64)
+        half = size // 2
+        x0 = int(round(float(u))) - half
+        y0 = int(round(float(v_px))) - half
+        mh, mw = np.asarray(use_mask).shape
+        xa, xb = max(0, x0), min(img.shape[1], x0 + mw)
+        ya, yb = max(0, y0), min(img.shape[0], y0 + mh)
+        if xb > xa and yb > ya:
+            mask_img[ya:yb, xa:xb] = np.asarray(use_mask, dtype=np.float64)[ya - y0:yb - y0, xa - x0:xb - x0]
     for ang in BANK_ANGLES_DEG:
         for scl in BANK_SCALES:
             warped = img if (ang == 0.0 and scl == 1.0) else _warp_image_around(img, u, v_px, 0.0, 0.0, float(ang), float(scl))
-            tmpl = extract_template(warped, u, v_px, size)
+            warped_mask = None
+            if mask_img is not None:
+                if ang == 0.0 and scl == 1.0:
+                    warped_mask = np.asarray(use_mask, dtype=bool)
+                else:
+                    warped_m_img = _warp_image_around(mask_img, u, v_px, 0.0, 0.0, float(ang), float(scl))
+                    warped_mask = extract_template(warped_m_img, u, v_px, size)["patch"] > 0.5
+            tmpl = extract_template(warped, u, v_px, size, mask=warped_mask)
             if tmpl is not None and tmpl["norm"] > 1e-5:
                 bank.append(tmpl)
     return bank
@@ -655,13 +1025,16 @@ def _warp_image_around(img, center_u, center_v, shift_u, shift_v, angle_deg, sca
     return out
 
 
-def calibrate_detector(runs, k_by_hook, fov_by_hook):
+def _calibrate_detector_once(runs, k_by_hook, fov_by_hook, template_mask=None, background_images=None):
     """Calibra el detector sobre un BMP real con desplazamientos subpixel, giros +-2 deg y escalas +-5 %."""
     source_img = None
     p_usti = None
     p_konec = None
 
-    for run in runs:
+    # La mascara se construye desde mount0: la fuente de calibracion se busca
+    # primero en mount0 (misma procedencia) y solo despues en los demas casos.
+    source_runs = sorted(runs, key=lambda r: 0 if r["caso"] == "mount0" else 1)
+    for run in source_runs:
         if run["caso"] == "calib" or run["inject"] != "none":
             continue
         k = k_by_hook.get(run["hook"], 0)
@@ -702,10 +1075,16 @@ def calibrate_detector(runs, k_by_hook, fov_by_hook):
             break
 
     if source_img is None or p_usti is None or p_konec is None:
-        return {"p95_px": float("inf"), "p95_deg": float("inf"), "verdict": "INCONCLUSO"}
+        return {"p95_px": float("inf"), "p95_deg": float("inf"), "verdict": "INCONCLUSO", "cause": "sin_fuente_detector"}
 
-    tmpl_u = make_template_bank(source_img, p_usti[0], p_usti[1])
-    tmpl_k = make_template_bank(source_img, p_konec[0], p_konec[1])
+    # Una mascara por detalle, en sus coordenadas locales (hallazgo 1): sin trasladar la de la boca.
+    masks = _masks_by_point(template_mask)
+    mask_u = masks.get("usti hlavne")
+    mask_k = masks.get("konec hlavne")
+    if USE_MASK and template_mask is not None and (_mask_empty(mask_u) or _mask_empty(mask_k)):
+        return {"p95_px": 999.0, "p95_deg": 999.0, "verdict": "INCONCLUSO", "cause": "mascara_vacia"}
+    tmpl_u = make_template_bank(source_img, p_usti[0], p_usti[1], mask=mask_u)
+    tmpl_k = make_template_bank(source_img, p_konec[0], p_konec[1], mask=mask_k)
     mid_u = 0.5 * (p_usti[0] + p_konec[0])
     mid_v = 0.5 * (p_usti[1] + p_konec[1])
 
@@ -753,19 +1132,119 @@ def calibrate_detector(runs, k_by_hook, fov_by_hook):
         meas_ang = _segment_angle_deg(det_u, det_k)
         deg_errors.append(_angle_diff_deg(meas_ang, true_ang))
 
+    # Fondo cambiante: pegar el arma enmascarada sobre fondos de otras capturas,
+    # con coordenadas subpixel coherentes con la extraccion (hallazgo 2).
+    # Vuelta 3 (hallazgo 13): se repite con los dos detalles y se comprueba
+    # tambien el angulo del segmento boca-recamara.
+    bg_px_errors = []
+    bg_deg_errors = []
+    bgs = list(background_images or [])
+    if USE_MASK and _mask_valid(mask_u) and _mask_valid(mask_k):
+        if not bgs:
+            for run in runs:
+                for row in run["samples"]:
+                    if not row.get("shot"):
+                        continue
+                    bp = _shot_path(run["dir"], row["shot"])
+                    if bp.is_file():
+                        cand = _load_gray(bp)
+                        if cand.shape == source_img.shape and float(np.abs(cand - source_img).mean()) > 1.0:
+                            bgs.append(cand)
+                    if len(bgs) >= 3:
+                        break
+                if len(bgs) >= 3:
+                    break
+        for bg in bgs[:3]:
+            for du, dv in ((12.0, -7.0), (-9.0, 11.0)):
+                synth = np.array(bg, dtype=np.float64, copy=True)
+                tgt_u = (p_usti[0] + du, p_usti[1] + dv)
+                tgt_k = (p_konec[0] + du, p_konec[1] + dv)
+                _paste_masked_patch_subpixel(synth, source_img, p_usti, tgt_u, np.asarray(mask_u, dtype=bool))
+                _paste_masked_patch_subpixel(synth, source_img, p_konec, tgt_k, np.asarray(mask_k, dtype=bool))
+                synth32 = synth.astype(np.float32)
+                det_u = detect_template_bank(synth32, tmpl_u, tgt_u[0], tgt_u[1], search_radius=24)
+                det_k = detect_template_bank(synth32, tmpl_k, tgt_k[0], tgt_k[1], search_radius=24)
+                if det_u is None or det_u[2] < CORR_MIN:
+                    bg_px_errors.append(float("inf"))
+                else:
+                    bg_px_errors.append(math.hypot(det_u[0] - tgt_u[0], det_u[1] - tgt_u[1]))
+                if det_k is None or det_k[2] < CORR_MIN:
+                    bg_px_errors.append(float("inf"))
+                else:
+                    bg_px_errors.append(math.hypot(det_k[0] - tgt_k[0], det_k[1] - tgt_k[1]))
+                if det_u is None or det_k is None:
+                    bg_deg_errors.append(float("inf"))
+                else:
+                    true_ang = _segment_angle_deg(tgt_u, tgt_k)
+                    meas_ang = _segment_angle_deg(det_u, det_k)
+                    bg_deg_errors.append(_angle_diff_deg(meas_ang, true_ang))
+    p95_bg_px = round(_p95(bg_px_errors), 4) if bg_px_errors and all(math.isfinite(x) for x in bg_px_errors) else (999.0 if bg_px_errors else None)
+    p95_bg_deg = round(_p95(bg_deg_errors), 4) if bg_deg_errors and all(math.isfinite(x) for x in bg_deg_errors) else (999.0 if bg_deg_errors else None)
+
     p95_px = round(_p95(px_errors), 4) if all(math.isfinite(x) for x in px_errors) else float("inf")
     p95_deg = round(_p95(deg_errors), 4) if all(math.isfinite(x) for x in deg_errors) else float("inf")
+    # Hallazgo 3: con USE_MASK, sin calibracion de fondo cambiante no hay PASA con la calibracion vieja.
+    bg_missing = USE_MASK and not bg_px_errors
     ok = (
         math.isfinite(p95_px)
         and math.isfinite(p95_deg)
         and p95_px <= DETECTOR_MAX_PX
         and p95_deg <= DETECTOR_MAX_DEG
+        and not bg_missing
+        and (p95_bg_px is None or (math.isfinite(p95_bg_px) and p95_bg_px <= DETECTOR_MAX_PX))
+        and (p95_bg_deg is None or (math.isfinite(p95_bg_deg) and p95_bg_deg <= DETECTOR_MAX_DEG))
     )
-    return {
+    if bg_missing:
+        cause = "sin_calibracion_fondo"
+    elif not ok:
+        cause = "detector_fuera_de_umbral"
+    else:
+        cause = ""
+    out = {
         "p95_px": p95_px if math.isfinite(p95_px) else 999.0,
         "p95_deg": p95_deg if math.isfinite(p95_deg) else 999.0,
         "verdict": "PASA" if ok else "INCONCLUSO",
+        "cause": cause,
     }
+    if p95_bg_px is not None:
+        out["p95_bg_px"] = p95_bg_px
+    if p95_bg_deg is not None:
+        out["p95_bg_deg"] = p95_bg_deg
+    return out
+
+
+def calibrate_detector(runs, k_by_hook, fov_by_hook, template_mask=None, background_images=None, mask_by_hook=None):
+    """Vuelta 4 (hallazgo 5): cada pareja de mascaras conserva su procedencia.
+
+    Con mask_by_hook, cada pareja valida se calibra solo con capturas de su
+    hook (su fuente y sus centros); si esa calibracion no pasa, se prueba la
+    siguiente pareja valida. Sin mask_by_hook se conserva el camino previo.
+    """
+    if not mask_by_hook:
+        return _calibrate_detector_once(runs, k_by_hook, fov_by_hook, template_mask=template_mask, background_images=background_images)
+    ordered = [h for h in HOOKS_ORDER if h in mask_by_hook] + [h for h in mask_by_hook if h not in HOOKS_ORDER]
+    first_failure = None
+    any_valid = False
+    for hook in ordered:
+        masks = mask_by_hook[hook]
+        by_point = _masks_by_point(masks)
+        if USE_MASK and (_mask_empty(by_point.get("usti hlavne")) or _mask_empty(by_point.get("konec hlavne"))):
+            continue
+        any_valid = True
+        scoped = [r for r in runs if r.get("hook") == hook]
+        if not scoped:
+            continue
+        res = _calibrate_detector_once(scoped, k_by_hook, fov_by_hook, template_mask=masks, background_images=background_images)
+        res = dict(res, mask_hook=hook)
+        if res["verdict"] == "PASA":
+            return res
+        if first_failure is None:
+            first_failure = res
+    if first_failure is not None:
+        return first_failure
+    if not any_valid:
+        return {"p95_px": 999.0, "p95_deg": 999.0, "verdict": "INCONCLUSO", "cause": "mascara_vacia"}
+    return {"p95_px": float("inf"), "p95_deg": float("inf"), "verdict": "INCONCLUSO", "cause": "sin_fuente_detector"}
 
 
 # Orquestador 2026-11-11: un giro es un tramo continuo en que el rumbo cambia mas de TURN_MIN_DEG de forma
@@ -1081,66 +1560,84 @@ def check_turn_stimulus(run, window_frames, reading, fov_conv):
     return _p95(steps_px) > (STIMULUS_FACTOR * THRESH_PX)
 
 
-def _detect_run_shots(run, k, fov_conv, ref_reading="a"):
-    """Extrae la plantilla del primer BMP del caso y detecta los dos puntos en todos los BMP de la corrida."""
+def _detect_run_shots(run, k, fov_conv, ref_reading="a", marcas=None, mask=None):
+    """Extrae la plantilla (en la marca si TEMPLATE_SOURCE='marca') y detecta los dos puntos."""
     by_frame = run["by_frame"]
     run_dir = run["dir"]
     shot_rows = [s for s in run["samples"] if s.get("shot")]
     if not shot_rows:
         return {}
 
-    # Plantilla de la primera captura con fichero y con frame objetivo n+k existente
-    # (con k=-1 la captura del frame 0 no tiene objetivo).
-    # y con escena estable y textura en los dos recortes (orquestador 2026-11-11).
-    first_row = None
-    first_bmp = None
-    target0 = None
-    img0 = None
-    for cand in shot_rows:
-        cand_path = _shot_path(run_dir, cand["shot"])
-        cand_target = by_frame.get(int(cand["frame"]) + int(k))
-        if not cand_path.is_file() or cand_target is None:
-            continue
-        c_lect = cand_target.get("lecturas") or {}
-        c_cam = cand_target.get("cam") or {}
-        c_fov = float(cand_target.get("fov_rad", 1.0471976))
-        cu = (c_lect.get("usti hlavne") or {}).get(ref_reading)
-        ck = (c_lect.get("konec hlavne") or {}).get(ref_reading)
-        if cu is None or ck is None:
-            continue
-        c_img = _load_gray(cand_path)
-        if _textured(c_img, (project_point(cu, c_cam, c_fov, fov_conv), project_point(ck, c_cam, c_fov, fov_conv))):
-            first_row, first_bmp, target0, img0 = cand, cand_path, cand_target, c_img
-            break
-    if first_row is None:
-        return {}
-
-    lect0 = target0.get("lecturas") or {}
-    cam0 = target0.get("cam") or {}
-    fov0 = float(target0.get("fov_rad", 1.0471976))
-
     chosen_r = ref_reading
-    u0_w = (lect0.get("usti hlavne") or {}).get(chosen_r)
-    k0_w = (lect0.get("konec hlavne") or {}).get(chosen_r)
-    if u0_w is None or k0_w is None:
-        for r in READINGS_ORDER:
-            u0_w = (lect0.get("usti hlavne") or {}).get(r)
-            k0_w = (lect0.get("konec hlavne") or {}).get(r)
-            if u0_w is not None and k0_w is not None:
-                chosen_r = r
+    pu0 = pk0 = None
+    img0 = None
+    if TEMPLATE_SOURCE == "marca":
+        if not marcas:
+            return {}
+        for mark in marcas:
+            if "usti hlavne" not in mark["puntos"] or "konec hlavne" not in mark["puntos"]:
+                continue
+            cand_path = _shot_path(run_dir, mark["shot"])
+            if not cand_path.is_file():
+                continue
+            img0 = _load_gray(cand_path)
+            pu0 = mark["puntos"]["usti hlavne"]
+            pk0 = mark["puntos"]["konec hlavne"]
+            break
+        if img0 is None or pu0 is None or pk0 is None:
+            return {}
+    else:
+        first_row = None
+        target0 = None
+        for cand in shot_rows:
+            cand_path = _shot_path(run_dir, cand["shot"])
+            cand_target = by_frame.get(int(cand["frame"]) + int(k))
+            if not cand_path.is_file() or cand_target is None:
+                continue
+            c_lect = cand_target.get("lecturas") or {}
+            c_cam = cand_target.get("cam") or {}
+            c_fov = float(cand_target.get("fov_rad", 1.0471976))
+            cu = (c_lect.get("usti hlavne") or {}).get(ref_reading)
+            ck = (c_lect.get("konec hlavne") or {}).get(ref_reading)
+            if cu is None or ck is None:
+                continue
+            c_img = _load_gray(cand_path)
+            if _textured(c_img, (project_point(cu, c_cam, c_fov, fov_conv), project_point(ck, c_cam, c_fov, fov_conv))):
+                first_row, target0, img0 = cand, cand_target, c_img
                 break
-    if u0_w is None or k0_w is None:
-        return {}
+        if first_row is None or target0 is None:
+            return {}
+        lect0 = target0.get("lecturas") or {}
+        cam0 = target0.get("cam") or {}
+        fov0 = float(target0.get("fov_rad", 1.0471976))
+        u0_w = (lect0.get("usti hlavne") or {}).get(chosen_r)
+        k0_w = (lect0.get("konec hlavne") or {}).get(chosen_r)
+        if u0_w is None or k0_w is None:
+            for r in READINGS_ORDER:
+                u0_w = (lect0.get("usti hlavne") or {}).get(r)
+                k0_w = (lect0.get("konec hlavne") or {}).get(r)
+                if u0_w is not None and k0_w is not None:
+                    chosen_r = r
+                    break
+        if u0_w is None or k0_w is None:
+            return {}
+        pu0 = project_point(u0_w, cam0, fov0, fov_conv)
+        pk0 = project_point(k0_w, cam0, fov0, fov_conv)
+        if pu0 is None or pk0 is None:
+            return {}
 
-    pu0 = project_point(u0_w, cam0, fov0, fov_conv)
-    pk0 = project_point(k0_w, cam0, fov0, fov_conv)
-    if pu0 is None or pk0 is None:
+    # Una mascara por detalle en sus coordenadas locales (hallazgo 1); una vacia
+    # invalida la deteccion en vez de caer a "sin mascara".
+    _masks = _masks_by_point(mask)
+    _mask_u = _masks.get("usti hlavne") if _masks else None
+    _mask_k = _masks.get("konec hlavne") if _masks else None
+    if USE_MASK and _masks and (_mask_empty(_mask_u) or _mask_empty(_mask_k)):
         return {}
-
-    tmpl_u = make_template_bank(img0, pu0[0], pu0[1])
-    tmpl_k = make_template_bank(img0, pk0[0], pk0[1])
+    tmpl_u = make_template_bank(img0, pu0[0], pu0[1], mask=_mask_u)
+    tmpl_k = make_template_bank(img0, pk0[0], pk0[1], mask=_mask_k)
 
     detections = {}
+    prev_det = None
     for row in shot_rows:
         f_num = int(row["frame"])
         bmp_path = _shot_path(run_dir, row["shot"])
@@ -1154,25 +1651,49 @@ def _detect_run_shots(run, k, fov_conv, ref_reading="a"):
         fov = float(target.get("fov_rad", 1.0471976))
         uw = (lect.get("usti hlavne") or {}).get(chosen_r)
         kw = (lect.get("konec hlavne") or {}).get(chosen_r)
-        pu = project_point(uw, cam, fov, fov_conv) if uw is not None else pu0
-        pk = project_point(kw, cam, fov, fov_conv) if kw is not None else pk0
-        if pu is None or pk is None or not _textured(img, (pu, pk)):
+        pu = project_point(uw, cam, fov, fov_conv) if uw is not None else None
+        pk = project_point(kw, cam, fov, fov_conv) if kw is not None else None
+        # Vuelta 4 (hallazgo 7): la proyeccion de "a" ya no descarta la
+        # captura. Centros de busqueda, en orden: proyeccion de "a",
+        # deteccion previa y marca (pu0/pk0). La textura se comprueba en
+        # el candidato detectado, no en la proyeccion de "a".
+        if float(img.mean()) >= SCENE_MAX_MEAN:
             detections[f_num] = None
             continue
-        du = detect_template_bank(img, tmpl_u, pu[0], pu[1], search_radius=SEARCH_RADIUS)
-        dk = detect_template_bank(img, tmpl_k, pk[0], pk[1], search_radius=SEARCH_RADIUS)
+        attempts = []
+        for cand in ((pu, pk), prev_det, (pu0, pk0)):
+            if cand is None or cand[0] is None or cand[1] is None:
+                continue
+            if any(math.hypot(cand[0][0] - a[0][0], cand[0][1] - a[0][1]) < 1.0 and math.hypot(cand[1][0] - a[1][0], cand[1][1] - a[1][1]) < 1.0 for a in attempts):
+                continue
+            attempts.append(cand)
+        du = dk = None
+        for cand_u, cand_k in attempts:
+            du = detect_template_bank(img, tmpl_u, cand_u[0], cand_u[1], search_radius=SEARCH_RADIUS)
+            dk = detect_template_bank(img, tmpl_k, cand_k[0], cand_k[1], search_radius=SEARCH_RADIUS)
+            if du is not None and dk is not None:
+                break
+            du = dk = None
         if du is None or dk is None:
             detections[f_num] = None
-        else:
-            detections[f_num] = {"usti hlavne": (du[0], du[1]), "konec hlavne": (dk[0], dk[1])}
+            continue
+        if _crop_std(img, du[0], du[1]) < TEXTURE_MIN_STD or _crop_std(img, dk[0], dk[1]) < TEXTURE_MIN_STD:
+            detections[f_num] = None
+            continue
+        detections[f_num] = {"usti hlavne": (du[0], du[1]), "konec hlavne": (dk[0], dk[1]), "corr": min(float(du[2]), float(dk[2]))}
+        prev_det = ((du[0], du[1]), (dk[0], dk[1]))
     return detections
 
 
-def _eval_window_metrics(run, window_frames, detections, k, fov_conv, reading, cam_override=None, check_stim=False, base_PreCheck=""):
+def _eval_window_metrics(run, window_frames, detections, k, fov_conv, reading, cam_override=None, check_stim=False, base_PreCheck="", apply_min_shots=True):
     by_frame = run["by_frame"]
     shot_frames = [f for f in window_frames if by_frame.get(f, {}).get("shot")]
+    n_shots = len(shot_frames)
     if not shot_frames:
-        return 0.0, 0.0, 0.0, "INCONCLUSO", base_PreCheck or "no_shots_in_window"
+        return 0.0, 0.0, 0.0, "INCONCLUSO", base_PreCheck or "no_shots_in_window", n_shots
+    # Hallazgo 4: el minimo se aplica siempre, tambien a ventanas inferidas sin campo `giro`.
+    if n_shots < MIN_SHOTS_WINDOW:
+        return 999.0, 999.0, 0.0, "INCONCLUSO", "insufficient_sampling", n_shots
 
     observed = 0
     px_errs = []
@@ -1191,7 +1712,7 @@ def _eval_window_metrics(run, window_frames, detections, k, fov_conv, reading, c
         if uw is None or kw is None:
             missing_reading = True
             continue
-        if det is None:
+        if det is None or float(det.get("corr", 1.0)) < CORR_MIN:
             continue
         cam = cam_override.get(target_f) if cam_override is not None else target.get("cam")
         if cam is None:
@@ -1216,25 +1737,674 @@ def _eval_window_metrics(run, window_frames, detections, k, fov_conv, reading, c
     roll_deg = round(_p95(roll_errs), 4) if roll_errs else 999.0
 
     if base_PreCheck and base_PreCheck != "t_lect_inconcluso":
-        return p95_px, roll_deg, coverage, "INCONCLUSO", base_PreCheck
+        return p95_px, roll_deg, coverage, "INCONCLUSO", base_PreCheck, n_shots
     if run["has_gaps"]:
-        return p95_px, roll_deg, coverage, "INCONCLUSO", "frame_gaps"
+        return p95_px, roll_deg, coverage, "INCONCLUSO", "frame_gaps", n_shots
     if missing_reading and observed == 0:
-        return p95_px, roll_deg, coverage, "INCONCLUSO", "reading_unavailable"
+        return p95_px, roll_deg, coverage, "INCONCLUSO", "reading_unavailable", n_shots
     if check_stim and not check_turn_stimulus(run, window_frames, reading, fov_conv):
-        return p95_px, roll_deg, coverage, "INCONCLUSO", "insufficient_stimulus"
+        return p95_px, roll_deg, coverage, "INCONCLUSO", "insufficient_stimulus", n_shots
     if coverage < COVERAGE_MIN:
-        return p95_px, roll_deg, coverage, "INCONCLUSO", "low_coverage"
+        return p95_px, roll_deg, coverage, "INCONCLUSO", "low_coverage", n_shots
     if base_PreCheck:
-        return p95_px, roll_deg, coverage, "INCONCLUSO", base_PreCheck
+        return p95_px, roll_deg, coverage, "INCONCLUSO", base_PreCheck, n_shots
     if p95_px > THRESH_PX:
-        return p95_px, roll_deg, coverage, "FALLA", "p95_px_exceeded"
+        return p95_px, roll_deg, coverage, "FALLA", "p95_px_exceeded", n_shots
     if roll_deg > THRESH_ROLL_DEG:
-        return p95_px, roll_deg, coverage, "FALLA", "roll_deg_exceeded"
-    return p95_px, roll_deg, coverage, "PASA", ""
+        return p95_px, roll_deg, coverage, "FALLA", "roll_deg_exceeded", n_shots
+    return p95_px, roll_deg, coverage, "PASA", "", n_shots
 
 
-def evaluate(runs_dir, out_dir=None):
+def _eval_tmarca_rows(run, marcas, k, fov_conv):
+    """Distancia proyección↔marca por lectura (medida T-marca, umbral THRESH_PX)."""
+    rows = []
+    by_frame = run["by_frame"]
+    # Puntos habituales del arma y, en ropa, el punto mira.
+    point_names = []
+    for mark in marcas or []:
+        for name in mark["puntos"]:
+            if name not in point_names:
+                point_names.append(name)
+    readings = list(READINGS_ORDER)
+    # Vuelta 3 (hallazgo 14): las marcas deben cubrir las fases del brief §4
+    # (estable, mitad de cada giro y del resto); sin esa evidencia no hay PASA.
+    required_momentos = {"estable", "giro1", "giro2", "giro3", "resto"}
+    for reading in readings:
+        dists = []
+        roll_dists = []
+        used = 0
+        momentos_used = set()
+        for mark in marcas or []:
+            # Localizar el frame de la captura marcada.
+            shot_frame = None
+            for row in run["samples"]:
+                if row.get("shot") == mark["shot"]:
+                    shot_frame = int(row["frame"])
+                    break
+            if shot_frame is None:
+                continue
+            target = by_frame.get(shot_frame + int(k))
+            if target is None:
+                continue
+            lect = target.get("lecturas") or {}
+            cam = target.get("cam") or {}
+            fov = float(target.get("fov_rad", 1.0471976))
+            per_mark = []
+            for pname in point_names:
+                if pname not in mark["puntos"]:
+                    continue
+                world = (lect.get(pname) or {}).get(reading)
+                if world is None:
+                    continue
+                proj = project_point(world, cam, fov, fov_conv)
+                if proj is None:
+                    continue
+                per_mark.append((pname, math.hypot(proj[0] - mark["puntos"][pname][0], proj[1] - mark["puntos"][pname][1]), proj, mark["puntos"][pname]))
+            if not per_mark:
+                continue
+            used += 1
+            if mark.get("momento"):
+                momentos_used.add(str(mark["momento"]))
+            dists.extend(d for _n, d, _p, _m in per_mark)
+            if len(per_mark) >= 2:
+                proj_seg = _segment_angle_deg(per_mark[0][2], per_mark[1][2])
+                mark_seg = _segment_angle_deg(per_mark[0][3], per_mark[1][3])
+                roll_dists.append(_angle_diff_deg(proj_seg, mark_seg))
+        if not marcas:
+            verdict, cause = "INCONCLUSO", "sin_marcas"
+            p95_px, roll_deg, cov = 999.0, 999.0, 0.0
+        elif used == 0:
+            verdict, cause = "INCONCLUSO", "sin_marcas"
+            p95_px, roll_deg, cov = 999.0, 999.0, 0.0
+        else:
+            p95_px = round(_p95(dists), 4) if dists else 999.0
+            roll_deg = round(_p95(roll_dists), 4) if roll_dists else 0.0
+            cov = round(float(used) / float(len(marcas)), 4)
+            if not required_momentos.issubset(momentos_used):
+                verdict, cause = "INCONCLUSO", "marcas_fases_ausentes"
+            elif p95_px > THRESH_PX:
+                verdict, cause = "FALLA", "p95_px_exceeded"
+            elif roll_deg > THRESH_ROLL_DEG:
+                verdict, cause = "FALLA", "roll_deg_exceeded"
+            else:
+                verdict, cause = "PASA", ""
+        rows.append({
+            "run": run["run"], "caso": run["caso"], "hook": run["hook"], "inject": run["inject"],
+            "measure": "T-marca", "reading": reading, "window": "marcas",
+            "p95_px": p95_px, "roll_deg": roll_deg, "coverage": cov,
+            "verdict": verdict, "cause": cause, "n_shots": used,
+        })
+    return rows
+
+
+def _pose_arrays(pose):
+    if not isinstance(pose, dict):
+        return None
+    pos = _vec3(pose.get("pos"))
+    x = _vec3(pose.get("x"))
+    y = _vec3(pose.get("y"))
+    z = _vec3(pose.get("z"))
+    if pos is None or x is None or y is None or z is None:
+        return None
+    return pos, np.column_stack((x, y, z))
+
+
+def _mira_mark_distances(run, marcas, k, fov_conv, reading):
+    dists = []
+    by_frame = run["by_frame"]
+    for mark in marcas or []:
+        if "mira" not in mark["puntos"]:
+            continue
+        shot_frame = None
+        for row in run["samples"]:
+            if row.get("shot") == mark["shot"]:
+                shot_frame = int(row["frame"])
+                break
+        if shot_frame is None:
+            continue
+        target = by_frame.get(shot_frame + int(k))
+        if target is None:
+            continue
+        world = ((target.get("lecturas") or {}).get("mira") or {}).get(reading)
+        if world is None:
+            continue
+        proj = project_point(world, target.get("cam") or {}, float(target.get("fov_rad", 1.0471976)), fov_conv)
+        if proj is None:
+            continue
+        dists.append(math.hypot(proj[0] - mark["puntos"]["mira"][0], proj[1] - mark["puntos"]["mira"][1]))
+    return dists
+
+
+def evaluate_ropa_run(run, marcas, k, fov_conv, calib_ok=True):
+    """T-ropa: variación de la pose relativa por categoría, con (a) y con (f).
+
+    Sin calibracion valida (calib_ok=False) el contraste visual de la mira es
+    INCONCLUSO y la parte numerica queda como informacion (hallazgos 9 y 10).
+    """
+    rows = []
+    decisions = {}
+    mapping = {"mochila": "spine3", "mira": "arma", "silenciador": "arma"}
+    mira_ok_by_reading = {}
+    mira_dists_by_reading = {}
+    # Vuelta 4 (hallazgo 8): T-ropa exige cobertura manual completa de la
+    # mira (las cinco fases), no una sola marca.
+    mira_momentos = {str(m.get("momento") or "") for m in (marcas or []) if "mira" in m.get("puntos", {})}
+    mira_marks_total = sum(1 for m in (marcas or []) if "mira" in m.get("puntos", {}))
+    mira_coverage_ok = {"estable", "giro1", "giro2", "giro3", "resto"}.issubset(mira_momentos)
+    for reading in ("a", "f"):
+        if calib_ok:
+            dists = _mira_mark_distances(run, marcas, k, fov_conv, reading)
+        else:
+            dists = []
+        mira_dists_by_reading[reading] = dists
+        mira_ok_by_reading[reading] = bool(
+            dists and len(dists) >= mira_marks_total and mira_coverage_ok and _p95(dists) <= THRESH_PX
+        )
+    for category, ref_name in mapping.items():
+        cat_verdicts = []
+        for reading in ("a", "f"):
+            rel_series = []
+            total = 0
+            valid_giro = 0
+            valid_fuera = 0
+            for row in run["samples"]:
+                ropa = row.get("ropa") or {}
+                cat_pose = _pose_arrays((ropa.get(category) or {}).get(reading) if isinstance(ropa.get(category), dict) else None)
+                ref_pose = _pose_arrays((ropa.get(ref_name) or {}).get(reading) if isinstance(ropa.get(ref_name), dict) else None)
+                total += 1
+                if cat_pose is None or ref_pose is None:
+                    continue
+                rel_pos = ref_pose[1].T @ (cat_pose[0] - ref_pose[0])
+                rel_rot = ref_pose[1].T @ cat_pose[1]
+                rel_series.append((rel_pos, rel_rot))
+                try:
+                    en_giro = int(row.get("giro") or 0) > 0
+                except (TypeError, ValueError):
+                    en_giro = False
+                if en_giro:
+                    valid_giro += 1
+                else:
+                    valid_fuera += 1
+            if not rel_series:
+                p95_m, p95_deg, cov = 999.0, 999.0, 0.0
+                verdict, cause = "INCONCLUSO", "categoria_ausente"
+            else:
+                ref_pos, ref_rot = rel_series[0]
+                pos_devs = [float(np.linalg.norm(p - ref_pos)) for p, _r in rel_series]
+                ang_devs = []
+                for _p, rot in rel_series:
+                    rel = rot @ ref_rot.T
+                    tr = float(np.trace(rel))
+                    ang = math.degrees(math.acos(max(-1.0, min(1.0, 0.5 * (tr - 1.0)))))
+                    ang_devs.append(ang)
+                p95_m = round(_p95(pos_devs), 6)
+                p95_deg = round(_p95(ang_devs), 4)
+                # Vuelta 3 (hallazgo 11): cobertura sobre el intervalo esperado
+                # (span de frames), no sobre las filas presentes; los huecos cuentan.
+                frames_present = [int(r.get("frame") or 0) for r in run["samples"]]
+                expected_span = (max(frames_present) - min(frames_present) + 1) if frames_present else max(total, 1)
+                cov = round(float(len(rel_series)) / float(max(expected_span, 1)), 4)
+                # Hallazgo 9: cobertura >= COVERAGE_MIN y presencia en giro y fuera de giro.
+                if run.get("has_gaps") or cov < COVERAGE_MIN or valid_giro == 0 or valid_fuera == 0:
+                    verdict, cause = "INCONCLUSO", "ropa_cobertura_insuficiente"
+                elif not calib_ok:
+                    # Hallazgo 10: sin calibracion valida no se sustituye por k=0/focal vertical.
+                    verdict, cause = "INCONCLUSO", "calib_inconcluso"
+                elif not mira_ok_by_reading.get(reading, False):
+                    if mira_dists_by_reading.get(reading) and _p95(mira_dists_by_reading[reading]) > THRESH_PX:
+                        verdict, cause = "FALLA", "mira_marca_exceeded"
+                    elif mira_dists_by_reading.get(reading):
+                        verdict, cause = "INCONCLUSO", "mira_marca_incompleta"
+                    else:
+                        verdict, cause = "INCONCLUSO", "mira_sin_marca_valida"
+                elif p95_m >= ROPA_MAX_M or p95_deg >= ROPA_MAX_DEG:
+                    verdict, cause = "FALLA", "ropa_pose_exceeded"
+                else:
+                    verdict, cause = "PASA", ""
+            cat_verdicts.append(verdict)
+            rows.append({
+                "run": run["run"], "caso": run["caso"], "hook": run["hook"], "inject": run["inject"],
+                "measure": "T-ropa", "reading": reading, "window": "completa",
+                "p95_px": 999.0, "roll_deg": p95_deg, "coverage": cov,
+                "verdict": verdict, "cause": cause,
+                "category": category, "p95_m": p95_m, "p95_deg": p95_deg,
+            })
+        if cat_verdicts and all(v == "PASA" for v in cat_verdicts):
+            decisions[category] = "sigue"
+        elif any(v == "FALLA" for v in cat_verdicts):
+            decisions[category] = "no_sigue"
+        else:
+            decisions[category] = None
+    return rows, decisions
+
+
+def _quat_xyzw(v):
+    if not isinstance(v, (list, tuple)) or len(v) != 4:
+        return None
+    try:
+        x, y, z, w = (float(v[0]), float(v[1]), float(v[2]), float(v[3]))
+    except (TypeError, ValueError):
+        return None
+    q = np.array([w, x, y, z], dtype=np.float64)
+    n = float(np.linalg.norm(q))
+    if n <= 1e-12 or not np.all(np.isfinite(q)):
+        return None
+    return q
+
+
+def _quat_raw_xyzw(v):
+    if not isinstance(v, (list, tuple)) or len(v) != 4:
+        return None
+    try:
+        return np.array([float(v[3]), float(v[0]), float(v[1]), float(v[2])], dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+
+
+def _quat_angle_deg(q1, q2):
+    if q1 is None or q2 is None:
+        return 999.0
+    n1 = float(np.linalg.norm(q1))
+    n2 = float(np.linalg.norm(q2))
+    if n1 <= 1e-12 or n2 <= 1e-12:
+        return 999.0
+    dot = abs(float(np.dot(q1 / n1, q2 / n2)))
+    return math.degrees(2.0 * math.acos(max(-1.0, min(1.0, dot))))
+
+
+def _cam_q_wxyz(cam):
+    if not isinstance(cam, dict):
+        return None
+    if cam.get("q") is not None:
+        return _quat_xyzw(cam.get("q"))
+    x = _vec3(cam.get("x"))
+    y = _vec3(cam.get("y"))
+    z = _vec3(cam.get("z"))
+    if x is None or y is None or z is None:
+        return None
+    return _rot_to_quat(x, y, z)
+
+
+SUAVE_TRAMO_LABEL = {1: "s0", 2: "s03", 3: "s08"}
+SUAVE_TRAMO_SMOOTH = {1: 0.0, 2: 0.3, 3: 0.8, 4: 0.3}
+
+
+def evaluate_suave_run(run):
+    """T-suave numérica sobre samples.jsonl. Devuelve (filas, info) con info para el acuerdo entre regímenes."""
+    samples = run["samples"]
+    caso = str(run.get("caso") or "")
+    regime = "".join(ch for ch in caso if ch.isdigit()) or "60"
+    rows = []
+    orient_at = {}
+    if not samples:
+        return rows, {"regime": regime, "orient_at": orient_at, "fps_measured": 0.0}
+    dts = [float(s.get("dt") or 0.0) for s in samples if float(s.get("dt") or 0.0) > 0]
+    # Vuelta 3 (hallazgos 6 y 7): la cadencia se mide con frames y tiempo
+    # transcurrido (t_ms es el final de cada intervalo, §16); la mediana de
+    # dt se informa aparte y no certifica el regimen.
+    fps_median = round(1.0 / float(np.median(dts)), 3) if dts else 0.0
+    # Cadencia = frames / tiempo transcurrido de sus intervalos dt (cuyo
+    # final fecha t_ms, §16); en datos coherentes coincide con (n-1)/(t_n-t_1).
+    fps_measured = round(len(dts) / sum(dts), 3) if dts else fps_median
+    fps_cap = None
+    for s in samples:
+        if s.get("fps_cap") is not None:
+            try:
+                fps_cap = float(s["fps_cap"])
+            except (TypeError, ValueError):
+                pass
+            break
+    try:
+        regime_fps = float(regime)
+    except ValueError:
+        regime_fps = None
+    if fps_cap is None:
+        fps_cap = regime_fps
+    # Coherencia caso/regimen/tope: fps_cap debe ser el regimen del caso y
+    # los FPS se miden contra el regimen que se pretende certificar.
+    fps_incoherent = (
+        fps_cap is not None and regime_fps is not None and abs(fps_cap - regime_fps) > 1e-9
+    )
+    fps_bad = regime_fps is not None and regime_fps > 0 and abs(fps_measured - regime_fps) / regime_fps > FPS_REGIME_TOL
+    continuity_bad = bool(run.get("has_gaps"))
+
+    # Saltos de la lata por tramo: primer frame en que lata.a cambia > JUMP_MIN_M.
+    jumps = []  # (indice, magnitud)
+    prev_lata = None
+    for idx, s in enumerate(samples):
+        lata = _vec3(((s.get("lata") or {}).get("a")))
+        if lata is not None and prev_lata is not None:
+            mag = float(np.linalg.norm(lata - prev_lata))
+            if mag > JUMP_MIN_M:
+                jumps.append((idx, mag))
+        if lata is not None:
+            prev_lata = lata
+
+    # Objetivo de posicion atado a lata.a (contrato §16): cam_raw debe seguirla
+    # en el mismo frame con el desplazamiento constante de follow.
+    follow_offset = None
+    for s in samples:
+        lata0 = _vec3(((s.get("lata") or {}).get("a")))
+        raw0 = _vec3(((s.get("cam_raw") or {}).get("pos")))
+        if lata0 is not None and raw0 is not None:
+            follow_offset = raw0 - lata0
+            break
+    desfasada_idx = set()
+    for idx, s in enumerate(samples):
+        lata_i = _vec3(((s.get("lata") or {}).get("a")))
+        raw_i = _vec3(((s.get("cam_raw") or {}).get("pos")))
+        if lata_i is not None and raw_i is not None and follow_offset is not None:
+            if float(np.linalg.norm(raw_i - (lata_i + follow_offset))) > 0.01:
+                desfasada_idx.add(idx)
+
+    # Simulación del filtro con el smooth_s del guion (no el escrito). El estado
+    # se conserva entre tramos y el primer frame de cada tramo tambien se
+    # comprueba (hallazgo 7); dt es el intervalo que acaba en ese frame (§16).
+    sim_pos = {}
+    sim_q = {}
+    err_pos_frac = {}
+    err_deg = {}
+    state_pos = None
+    state_q = None
+    last_jump_mag = 1.0
+    jump_idx_set = {i for i, _m in jumps}
+    jump_mag_at = {i: m for i, m in jumps}
+    for idx, s in enumerate(samples):
+        try:
+            tramo = int(s.get("tramo") or 1)
+        except (TypeError, ValueError):
+            tramo = 1
+        if idx in jump_idx_set:
+            last_jump_mag = jump_mag_at[idx]
+        raw = s.get("cam_raw") or {}
+        raw_pos = _vec3(raw.get("pos"))
+        raw_q = _cam_q_wxyz(raw)
+        lata = _vec3(((s.get("lata") or {}).get("a")))
+        # Vuelta 4 (hallazgo 1): sin lata.a no se sustituye el objetivo por
+        # cam_raw; ese frame no aporta objetivo de posicion (y el grupo que
+        # lo juzga quedara INCONCLUSO por lata_ausente).
+        target_pos = lata + follow_offset if (lata is not None and follow_offset is not None) else None
+        cam = s.get("cam") or {}
+        cam_pos = _vec3(cam.get("pos"))
+        cam_q = _cam_q_wxyz(cam)
+        dt = float(s.get("dt") or (1.0 / 60.0))
+        smooth = SUAVE_TRAMO_SMOOTH.get(tramo, 0.3)
+        # Con inject=smooth03 el guion escrito es 0,3 en todos los tramos: el esperado sigue siendo el del tramo.
+        alpha = 1.0 if smooth == 0.0 else 1.0 - math.exp(-max(dt, 0.0) / smooth)
+        if state_pos is None:
+            if target_pos is not None:
+                state_pos = target_pos.copy()
+            if raw_q is not None:
+                state_q = raw_q / np.linalg.norm(raw_q)
+        elif target_pos is not None:
+            state_pos = state_pos + alpha * (target_pos - state_pos)
+            if raw_q is not None:
+                if state_q is None:
+                    state_q = raw_q / np.linalg.norm(raw_q)
+                else:
+                    state_q = _slerp(state_q, raw_q / np.linalg.norm(raw_q), alpha)
+        sim_pos[idx] = None if state_pos is None else state_pos.copy()
+        sim_q[idx] = None if state_q is None else state_q.copy()
+        if cam_pos is not None and state_pos is not None:
+            err_pos_frac[idx] = float(np.linalg.norm(cam_pos - state_pos)) / max(last_jump_mag, 1e-9)
+        if cam_q is not None and state_q is not None:
+            err_deg[idx] = _quat_angle_deg(cam_q, state_q)
+
+    # Agrupar índices por etiqueta de tramo/giro.
+    groups = {}
+    for idx, s in enumerate(samples):
+        try:
+            tramo = int(s.get("tramo") or 1)
+        except (TypeError, ValueError):
+            tramo = 1
+        try:
+            giro = int(s.get("giro") or 0)
+        except (TypeError, ValueError):
+            giro = 0
+        if tramo == 4 and giro == 1:
+            label = "giro+170"
+        elif tramo == 4 and giro == 2:
+            label = "giro-170"
+        elif tramo == 4:
+            # Intervalo previo al primer giro (tramo=4, giro=0): no es un grupo
+            # propio, pero su posicion se comprueba dentro de giro+170 (hall. 5).
+            groups.setdefault("pre_giro", []).append(idx)
+            continue
+        else:
+            label = SUAVE_TRAMO_LABEL.get(tramo, f"s{tramo}")
+        groups.setdefault(label, []).append(idx)
+    pre_giro_idxs = groups.pop("pre_giro", [])
+
+    # Hallazgo 8: hacen falta estimulo y los cinco grupos; sin ellos INCONCLUSO, nunca PASA.
+    required_labels = ("s0", "s03", "s08", "giro+170", "giro-170")
+    ordered_labels = [l for l in required_labels if l in groups] + [l for l in groups if l not in required_labels]
+    ordered_labels += [l for l in required_labels if l not in groups]
+    for label in ordered_labels:
+        idxs = groups.get(label, [])
+        is_giro = label.startswith("giro")
+        # Error máximo tras los saltos del grupo.
+        fracs = [err_pos_frac[i] for i in idxs if i in err_pos_frac]
+        degs = [err_deg[i] for i in idxs if i in err_deg]
+        err_max_frac = round(max(fracs), 6) if fracs else 999.0
+        # Vuelta 3 (hallazgo 1): cada frame evaluado exige cam.pos y el
+        # cuaternion escrito cam.q; su ausencia es INCONCLUSO, nunca PASA.
+        eval_idxs = list(idxs) + (list(pre_giro_idxs) if label == "giro+170" else [])
+        missing_obs = any(
+            _vec3((samples[i].get("cam") or {}).get("pos")) is None
+            or _quat_raw_xyzw((samples[i].get("cam") or {}).get("q")) is None
+            for i in eval_idxs
+        ) if eval_idxs else False
+        if not is_giro and idxs and len(fracs) != len(idxs):
+            missing_obs = True
+        if is_giro and idxs and (len(degs) != len(idxs) or any(i not in err_pos_frac for i in eval_idxs)):
+            missing_obs = True
+        pos_fracs_giro = [err_pos_frac[i] for i in eval_idxs if i in err_pos_frac]
+        coverage = round(float(len(fracs if not is_giro else degs)) / float(len(idxs)), 4) if idxs else 0.0
+        # Norma del cuaternión escrito.
+        norm_dev = 0.0
+        path_deg = 0.0
+        prev_q = None
+        prev_t = None
+        orient_1_6 = None
+        # Origen explicito del salto: instante del frame previo al grupo.
+        # t_ms ya fecha el final del intervalo (§16): no se suma dt.
+        t_start = None
+        if idxs:
+            for j in range(idxs[0] - 1, -1, -1):
+                if samples[j].get("t_ms") is not None:
+                    t_start = float(samples[j].get("t_ms") or 0.0) / 1000.0
+                    prev_q = _cam_q_wxyz(samples[j].get("cam") or {})
+                    prev_t = t_start
+                    break
+            if t_start is None:
+                t_start = float(samples[idxs[0]].get("t_ms") or 0.0) / 1000.0 - float(samples[idxs[0]].get("dt") or 0.0)
+        for i in idxs:
+            s = samples[i]
+            raw_q = _quat_raw_xyzw((s.get("cam") or {}).get("q"))
+            if raw_q is not None:
+                norm_dev = max(norm_dev, abs(float(np.linalg.norm(raw_q)) - 1.0))
+            q = _cam_q_wxyz(s.get("cam") or {})
+            if q is not None and prev_q is not None:
+                path_deg += _quat_angle_deg(prev_q, q)
+            t_now = float(s.get("t_ms") or 0.0) / 1000.0
+            t_eff = t_now
+            if orient_1_6 is None and t_start is not None and t_eff >= (t_start + 1.0 / 6.0) and q is not None:
+                if prev_q is not None and prev_t is not None and t_eff > prev_t:
+                    # Vuelta 4 (hallazgo 3): interpolacion compatible con la
+                    # respuesta exponencial y los dt reales. El angulo que
+                    # falta hasta el objetivo (constante en el giro) decae
+                    # como exp(-t/smooth_s): su logaritmo se interpola
+                    # linealmente entre los dos frames que abrazan t=1/6 s.
+                    t_target = t_start + 1.0 / 6.0
+                    frac_t = max(0.0, min(1.0, (t_target - prev_t) / (t_eff - prev_t)))
+                    target_q = _cam_q_wxyz(s.get("cam_raw") or {})
+                    orient_1_6 = None
+                    if target_q is not None:
+                        tq = target_q / np.linalg.norm(target_q)
+                        qp = prev_q / np.linalg.norm(prev_q)
+                        qc = q / np.linalg.norm(q)
+                        th_prev = _quat_angle_deg(qp, tq)
+                        th_curr = _quat_angle_deg(qc, tq)
+                        if th_prev > 1e-6 and 1e-9 < th_curr < th_prev:
+                            th_star = math.exp(math.log(th_prev) + frac_t * (math.log(th_curr) - math.log(th_prev)))
+                            alpha_star = max(0.0, min(1.0, (th_prev - th_star) / th_prev))
+                            orient_1_6 = _slerp(qp, tq, alpha_star)
+                    if orient_1_6 is None:
+                        orient_1_6 = _slerp(prev_q, q / np.linalg.norm(q), frac_t)
+                else:
+                    orient_1_6 = q
+            if q is not None:
+                prev_q = q
+                prev_t = t_eff
+        if orient_1_6 is not None:
+            orient_at[label] = orient_1_6
+        # Arco: corto si va en el sentido del salto de ±170°; largo si va al contrario o supera 180°.
+        signed_yaw = 0.0
+        prev_yaw = None
+        for i in idxs:
+            zax = _vec3((samples[i].get("cam") or {}).get("z"))
+            if zax is None:
+                continue
+            yaw = math.degrees(math.atan2(float(zax[0]), float(zax[2])))
+            if prev_yaw is not None:
+                signed_yaw += (yaw - prev_yaw + 180.0) % 360.0 - 180.0
+            prev_yaw = yaw
+        expected_sign = 1.0 if label == "giro+170" else (-1.0 if label == "giro-170" else 0.0)
+        arc = "largo" if (path_deg > 180.0 or (expected_sign != 0.0 and signed_yaw * expected_sign < -10.0)) else "corto"
+        orient_1_6_deg = None
+        if idxs and orient_1_6 is not None:
+            # Hallazgo 16: referencia = orientacion anterior al salto, no la primera ya filtrada.
+            q0 = None
+            for j in range(idxs[0] - 1, -1, -1):
+                q0 = _cam_q_wxyz(samples[j].get("cam") or {})
+                if q0 is not None:
+                    break
+            if q0 is None:
+                q0 = _cam_q_wxyz(samples[idxs[0]].get("cam") or {})
+            orient_1_6_deg = round(_quat_angle_deg(q0, orient_1_6), 4)
+        # Estimulo de orientacion observable en el grupo (cam_raw).
+        raw_qs = []
+        for i in idxs:
+            rq = _cam_q_wxyz(samples[i].get("cam_raw") or {})
+            if rq is not None:
+                raw_qs.append(rq)
+        base_raw_q = None
+        if idxs:
+            for j in range(idxs[0] - 1, -1, -1):
+                base_raw_q = _cam_q_wxyz(samples[j].get("cam_raw") or {})
+                if base_raw_q is not None:
+                    break
+        ref_raw_q = base_raw_q if base_raw_q is not None else (raw_qs[0] if raw_qs else None)
+        giro_stimulus = bool(raw_qs) and ref_raw_q is not None and max((_quat_angle_deg(ref_raw_q, q) for q in raw_qs), default=0.0) > 10.0
+        # Vuelta 3 (hallazgo 4): el guion exige +-170 deg; amplitud, sentido y
+        # objetivo se validan antes de juzgar (un giro de 20 deg no certifica).
+        stim_amplitude = _quat_angle_deg(ref_raw_q, raw_qs[-1]) if (raw_qs and ref_raw_q is not None) else 0.0
+        stim_signed = 0.0
+        _prev_yaw = None
+        _yaw_seq = []
+        if ref_raw_q is not None:
+            _yaw_seq.append(ref_raw_q)
+        _yaw_seq.extend(raw_qs)
+        for _q in _yaw_seq:
+            _axes = _quat_to_axes(_q / np.linalg.norm(_q))
+            _yaw = math.degrees(math.atan2(float(_axes[2][0]), float(_axes[2][2])))
+            if _prev_yaw is not None:
+                stim_signed += (_yaw - _prev_yaw + 180.0) % 360.0 - 180.0
+            _prev_yaw = _yaw
+        expected_sign_pre = 1.0 if label == "giro+170" else (-1.0 if label == "giro-170" else 0.0)
+        # Vuelta 4 (hallazgo 4): el objetivo debe ser +-170 deg dentro de
+        # GIRO_TARGET_TOL_DEG y constante durante todo el giro.
+        target_const_deg = 0.0
+        if raw_qs:
+            target_const_deg = max(_quat_angle_deg(raw_qs[-1], q) for q in raw_qs)
+        stimulus_ok = bool(
+            giro_stimulus
+            and expected_sign_pre != 0.0
+            and abs(stim_amplitude - 170.0) <= GIRO_TARGET_TOL_DEG
+            and abs(stim_signed * expected_sign_pre - 170.0) <= GIRO_TARGET_TOL_DEG
+            and target_const_deg <= GIRO_TARGET_TOL_DEG
+        )
+        # Vuelta 4 (hallazgos 1 y 2): lata.a valida en los frames juzgados y,
+        # en los giros, observacion/referencia a 1/6 s y guion terminado
+        # (el grupo dura al menos 1 s: el contrato lo mantiene 4 s y la
+        # fixture 2 s; 4 frames a 60 FPS son 0.07 s).
+        lata_missing = any(_vec3(((samples[i].get("lata") or {}).get("a"))) is None for i in eval_idxs) if eval_idxs else False
+        giro_incomplete = False
+        if is_giro:
+            t_last = float(samples[idxs[-1]].get("t_ms") or 0.0) / 1000.0 if idxs else 0.0
+            giro_incomplete = bool(
+                orient_1_6 is None or orient_1_6_deg is None or t_start is None or (t_last - t_start) < 1.0
+            )
+        if fps_incoherent:
+            verdict, cause = "INCONCLUSO", "fps_cap_incoherente"
+        elif continuity_bad:
+            verdict, cause = "INCONCLUSO", "continuidad_frames"
+        elif fps_bad:
+            verdict, cause = "INCONCLUSO", "fps_regime"
+        elif not idxs:
+            verdict, cause = "INCONCLUSO", "grupo_ausente"
+        elif missing_obs:
+            verdict, cause = "INCONCLUSO", "sin_observaciones_validas"
+        elif lata_missing:
+            verdict, cause = "INCONCLUSO", "lata_ausente"
+        elif giro_incomplete:
+            verdict, cause = "INCONCLUSO", "giro_incompleto"
+        elif any(i in desfasada_idx for i in idxs):
+            # Hallazgo 6 / §16: cam_raw no sigue a lata.a en el mismo frame.
+            verdict, cause = "FALLA", "entrada_desfasada"
+        elif is_giro:
+            if not degs or not giro_stimulus:
+                verdict, cause = "INCONCLUSO", "sin_observaciones_validas" if not degs else "sin_estimulo"
+            elif not stimulus_ok:
+                verdict, cause = "INCONCLUSO", "estimulo_giro_invalido"
+            elif norm_dev > QUAT_NORM_TOL:
+                verdict, cause = "FALLA", "quat_norm_exceeded"
+            elif arc == "largo":
+                verdict, cause = "FALLA", "long_arc"
+            elif pos_fracs_giro and max(pos_fracs_giro) > THRESH_SUAVE_FRAC:
+                # Hallazgo 5: tambien la posicion durante el giro (y su previo).
+                verdict, cause = "FALLA", "suave_frac_exceeded"
+            elif max(degs) / 170.0 > THRESH_SUAVE_FRAC:
+                verdict, cause = "FALLA", "suave_orient_exceeded"
+            else:
+                verdict, cause = "PASA", ""
+            err_max_frac = round(max([d / 170.0 for d in degs] + list(pos_fracs_giro), default=999.0), 6) if degs else 999.0
+        else:
+            tramo_jumps = [i for i, _m in jumps if i in idxs]
+            if not tramo_jumps:
+                # Sin salto observado en el tramo no se puede juzgar la respuesta.
+                verdict, cause = "INCONCLUSO", "sin_salto"
+            elif not fracs:
+                verdict, cause = "INCONCLUSO", "sin_observaciones_validas"
+            elif err_max_frac <= THRESH_SUAVE_FRAC:
+                verdict, cause = "PASA", ""
+            else:
+                verdict, cause = "FALLA", "suave_frac_exceeded"
+        rows.append({
+            "run": run["run"], "caso": run["caso"], "hook": run["hook"], "inject": run["inject"],
+            "measure": "T-suave", "reading": None, "window": label,
+            "p95_px": 999.0, "roll_deg": 999.0, "coverage": coverage,
+            "verdict": verdict, "cause": cause,
+            "regime": regime, "tramo": label, "err_max_frac": err_max_frac,
+            "quat_norm_dev": round(float(norm_dev), 8), "arc": arc,
+            "fps_measured": fps_measured, "fps_median": fps_median, "orient_1_6_deg": orient_1_6_deg,
+            "n_shots": len(idxs),
+        })
+    return rows, {"regime": regime, "orient_at": orient_at, "fps_measured": fps_measured, "fps_median": fps_median, "fps_bad": fps_bad or fps_incoherent or continuity_bad}
+
+
+def _finite_report(obj):
+    """Copia con todos los float finitos (hallazgo 15): Infinity/NaN -> 999.0."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else 999.0
+    if isinstance(obj, dict):
+        return {k: _finite_report(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_finite_report(v) for v in obj]
+    return obj
+
+
+def evaluate(runs_dir, out_dir=None, marcas_dir=None):
     """Evalua todas las corridas en runs_dir y opcionalmente escribe informe.json e informe.md en out_dir."""
     runs = _discover_runs(runs_dir)
     calib_block = {}
@@ -1253,18 +2423,71 @@ def evaluate(runs_dir, out_dir=None):
         k_by_hook["Hc"] = k_by_hook["Ha"]
         fov_by_hook["Hc"] = fov_by_hook.get("Ha", "vertical")
 
-    detector_block = calibrate_detector(runs, k_by_hook, fov_by_hook)
+    marcas_path = _resolve_marcas_dir(runs_dir, marcas_dir)
+    marcas_by_run = {}
+    marcas_info = {}
+    for run in runs:
+        valid, discarded = load_marcas(marcas_path, run["run"], run["dir"])
+        marcas_by_run[run["run"]] = valid
+        marcas_info[run["run"]] = {"valid": len(valid), "discarded": discarded}
+
+    # Mascaras desde mount0 por hook: una por detalle, en coordenadas locales (hallazgo 1).
+    mask_by_hook = {}
+    if USE_MASK:
+        for run in runs:
+            if run["caso"] != "mount0" or run["inject"] != "none":
+                continue
+            hook_m = run["hook"]
+            if hook_m in mask_by_hook:
+                continue
+            k_m = k_by_hook.get(hook_m)
+            masks = build_masks_from_run(run, marcas_by_run.get(run["run"], []), int(k_m) if k_m is not None else 0, fov_by_hook.get(hook_m, "vertical"))
+            if masks:
+                mask_by_hook[hook_m] = masks
+                try:
+                    marcas_path.mkdir(parents=True, exist_ok=True)
+                    for point, mask in masks.items():
+                        if not _mask_valid(mask):
+                            continue
+                        detail = MASK_DETAIL_FILES.get(point, str(point).replace(" ", "_"))
+                        suffix = "" if point == "usti hlavne" else f"_{detail}"
+                        Image.fromarray((np.asarray(mask, dtype=bool).astype(np.uint8) * 255), mode="L").save(marcas_path / f"mascara_{run['run']}{suffix}.png")
+                except OSError:
+                    pass
+    # Vuelta 3 (hallazgo 8): la calibracion usa la primera pareja valida de
+    # mascaras; un hook descartado (mascaras vacias) no bloquea a los demas.
+    first_mask = next(
+        (m for m in mask_by_hook.values() if not _mask_empty(m.get("usti hlavne")) and not _mask_empty(m.get("konec hlavne"))),
+        next(iter(mask_by_hook.values()), None),
+    )
+
+    def _mask_cause(run):
+        if not USE_MASK:
+            return ""
+        masks = mask_by_hook.get(run["hook"])
+        if not masks:
+            return "mascara_ausente"
+        if _mask_empty(masks.get("usti hlavne")) or _mask_empty(masks.get("konec hlavne")):
+            return "mascara_vacia"
+        return ""
+
+    detector_block = calibrate_detector(runs, k_by_hook, fov_by_hook, template_mask=first_mask, mask_by_hook=mask_by_hook if mask_by_hook else None)
     det_ok = detector_block["verdict"] == "PASA"
 
     positive_runs = [r for r in runs if r["caso"] != "calib" and r["inject"] == "none"]
     negative_runs = [r for r in runs if r["caso"] != "calib" and r["inject"] != "none"]
+    image_positive = [r for r in positive_runs if r["caso"] not in ("ropa",) and not str(r["caso"]).startswith("suave")]
+    ropa_positive = [r for r in positive_runs if r["caso"] == "ropa"]
+    suave_positive = [r for r in positive_runs if str(r["caso"]).startswith("suave")]
 
     results = []
     detections_cache = {}
 
-    # 1. Evaluar T-lect sobre las corridas positivas
-    tlect_runs = [r for r in positive_runs if r["caso"] == "mount0"] or positive_runs
+    # 1. Evaluar T-lect/T-marca sobre TODAS las corridas positivas de imagen (hallazgo 5).
+    tlect_runs = image_positive
     reading_verdicts = {r: [] for r in READINGS_ORDER}
+    tmarca_verdicts = {r: [] for r in READINGS_ORDER}
+    tmarca_by_run = {}
 
     for run in tlect_runs:
         hook = run["hook"]
@@ -1274,21 +2497,36 @@ def evaluate(runs_dir, out_dir=None):
         k_val = k_by_hook.get(hook)
         k_use = int(k_val) if k_val is not None else 0
         fov_conv = fov_by_hook.get(hook, "vertical")
+        run_marcas = marcas_by_run.get(run["run"], [])
+        mask_cause = _mask_cause(run)
         pre_cause = ""
-        if not calib_ok:
+        if TEMPLATE_SOURCE == "marca" and not run_marcas:
+            pre_cause = "sin_marcas"
+        elif mask_cause:
+            pre_cause = mask_cause
+        elif not calib_ok:
             pre_cause = "calib_inconcluso"
         elif not det_ok:
             pre_cause = "detector_inconcluso"
 
-        detections = _detect_run_shots(run, k_use, fov_conv, ref_reading="a")
+        detections = _detect_run_shots(run, k_use, fov_conv, ref_reading="a", marcas=run_marcas, mask=mask_by_hook.get(hook))
         detections_cache[run["run"]] = detections
-        windows = detect_windows(run["samples"])
+        windows, has_giro = _windows_for_run(run)
+        windows = _require_expected_windows(windows, has_giro)
         turn_names = [w for w in windows if w.startswith("giro")]
         no_turns_cause = "no_turn_windows" if not turn_names and not pre_cause else pre_cause
 
+        for trow in _eval_tmarca_rows(run, run_marcas, k_use, fov_conv):
+            # T-marca solo gatea si hay calibración/detector; sin ellos queda como medida informativa INCONCLUSA por esa causa.
+            if pre_cause and pre_cause != "sin_marcas" and trow["verdict"] == "PASA":
+                trow = dict(trow, verdict="INCONCLUSO", cause=pre_cause)
+            results.append(trow)
+            tmarca_verdicts[trow["reading"]].append(trow["verdict"])
+            tmarca_by_run.setdefault(run["run"], []).append(trow)
+
         for r in READINGS_ORDER:
             for w_name, w_frames in windows.items():
-                p95_px, roll_deg, cov, verdict, cause = _eval_window_metrics(
+                p95_px, roll_deg, cov, verdict, cause, n_shots = _eval_window_metrics(
                     run,
                     w_frames,
                     detections,
@@ -1298,6 +2536,7 @@ def evaluate(runs_dir, out_dir=None):
                     cam_override=None,
                     check_stim=False,
                     base_PreCheck=no_turns_cause,
+                    apply_min_shots=has_giro,
                 )
                 results.append(
                     {
@@ -1313,6 +2552,7 @@ def evaluate(runs_dir, out_dir=None):
                         "coverage": cov,
                         "verdict": verdict,
                         "cause": cause,
+                        "n_shots": n_shots,
                     }
                 )
                 reading_verdicts[r].append((hook, verdict))
@@ -1322,15 +2562,20 @@ def evaluate(runs_dir, out_dir=None):
         by_h = {}
         for h, v in reading_verdicts[r]:
             by_h.setdefault(h, []).append(v)
-        if any(vs and all(v == "PASA" for v in vs) for vs in by_h.values()):
+        # Vuelta 4 (hallazgo 8): la lectura certificada exige T-marca PASA
+        # (no basta con que no sea FALLA); un INCONCLUSO la bloquea y llega
+        # al codigo de salida via winning_reading=None.
+        _tm = tmarca_verdicts.get(r, [])
+        marca_ok = bool(_tm) and all(v == "PASA" for v in _tm)
+        if marca_ok and any(vs and all(v == "PASA" for v in vs) for vs in by_h.values()):
             winning_reading = r
             break
 
     eval_reading = winning_reading if winning_reading is not None else "a"
 
-    # 2. Evaluar T-hook sobre todas las corridas positivas
+    # 2. Evaluar T-hook sobre todas las corridas positivas de imagen
     thook_by_mode_hook = {}
-    for run in positive_runs:
+    for run in image_positive:
         hook = run["hook"]
         calib_ok = (hook in calib_block and calib_block[hook]["verdict"] == "PASA") or (
             hook == "Hc" and calib_block.get("Ha", {}).get("verdict") == "PASA"
@@ -1338,8 +2583,14 @@ def evaluate(runs_dir, out_dir=None):
         k_val = k_by_hook.get(hook)
         k_use = int(k_val) if k_val is not None else 0
         fov_conv = fov_by_hook.get(hook, "vertical")
+        run_marcas = marcas_by_run.get(run["run"], [])
+        mask_cause = _mask_cause(run)
         pre_cause = ""
-        if not calib_ok:
+        if TEMPLATE_SOURCE == "marca" and not run_marcas:
+            pre_cause = "sin_marcas"
+        elif mask_cause:
+            pre_cause = mask_cause
+        elif not calib_ok:
             pre_cause = "calib_inconcluso"
         elif not det_ok:
             pre_cause = "detector_inconcluso"
@@ -1347,17 +2598,18 @@ def evaluate(runs_dir, out_dir=None):
             pre_cause = "t_lect_inconcluso"
 
         if run["run"] not in detections_cache:
-            detections_cache[run["run"]] = _detect_run_shots(run, k_use, fov_conv, ref_reading=eval_reading)
+            detections_cache[run["run"]] = _detect_run_shots(run, k_use, fov_conv, ref_reading=eval_reading, marcas=run_marcas, mask=mask_by_hook.get(hook))
         detections = detections_cache[run["run"]]
 
-        windows = detect_windows(run["samples"])
+        windows, has_giro = _windows_for_run(run)
+        windows = _require_expected_windows(windows, has_giro)
         turn_names = [w for w in windows if w.startswith("giro")]
         no_turns_cause = "no_turn_windows" if not turn_names and not pre_cause else pre_cause
         ideal_cams = build_ideal_mode_cameras(run["samples"], eval_reading)
 
         w_verdicts = []
         for w_name, w_frames in windows.items():
-            p95_px, roll_deg, cov, verdict, cause = _eval_window_metrics(
+            p95_px, roll_deg, cov, verdict, cause, n_shots = _eval_window_metrics(
                 run,
                 w_frames,
                 detections,
@@ -1367,6 +2619,7 @@ def evaluate(runs_dir, out_dir=None):
                 cam_override=ideal_cams,
                 check_stim=w_name.startswith("giro"),
                 base_PreCheck=no_turns_cause,
+                apply_min_shots=has_giro,
             )
             results.append(
                 {
@@ -1382,6 +2635,7 @@ def evaluate(runs_dir, out_dir=None):
                     "coverage": cov,
                     "verdict": verdict,
                     "cause": cause,
+                    "n_shots": n_shots,
                 }
             )
             w_verdicts.append(verdict)
@@ -1392,10 +2646,90 @@ def evaluate(runs_dir, out_dir=None):
         winner = None
         for h in HOOKS_ORDER:
             vs = thook_by_mode_hook.get((mode, h))
-            if vs and all(v == "PASA" for v in vs):
-                winner = h
-                break
+            if not (vs and all(v == "PASA" for v in vs)):
+                continue
+            # Hallazgo 5: el caso con marcas se comprueba contra sus marcas y eso
+            # condiciona la decision de hook (T-marca de la lectura evaluada).
+            run_name = next((r["run"] for r in image_positive if r["caso"] == mode and r["hook"] == h), None)
+            marca_rows = [t for t in tmarca_by_run.get(run_name, []) if t["reading"] == eval_reading]
+            if marca_rows and not all(t["verdict"] == "PASA" for t in marca_rows):
+                continue
+            winner = h
+            break
         hook_por_modo[mode] = winner
+
+    # 2b. T-ropa
+    ropa_decisions = {"mochila": None, "mira": None, "silenciador": None}
+    for run in ropa_positive:
+        hook_r = run["hook"]
+        # Hallazgo 10: sin calibracion valida no se sustituye por k=0 ni focal vertical.
+        calib_r = calib_block.get(hook_r) or (calib_block.get("Ha") if hook_r == "Hc" else None)
+        calib_ok_r = bool(calib_r and calib_r.get("verdict") == "PASA" and calib_r.get("k") is not None and calib_r.get("f_px"))
+        k_val = k_by_hook.get(hook_r)
+        k_use = int(k_val) if (calib_ok_r and k_val is not None) else 0
+        fov_conv = fov_by_hook.get(hook_r, "vertical") if calib_ok_r else "vertical"
+        rrows, rdec = evaluate_ropa_run(run, marcas_by_run.get(run["run"], []), k_use, fov_conv, calib_ok=calib_ok_r)
+        results.extend(rrows)
+        ropa_decisions.update(rdec)
+        # La proyección del punto mira también va como T-marca de esa corrida.
+        tmarca_ropa = _eval_tmarca_rows(run, marcas_by_run.get(run["run"], []), k_use, fov_conv)
+        if not calib_ok_r:
+            tmarca_ropa = [dict(t, verdict="INCONCLUSO", cause="calib_inconcluso") for t in tmarca_ropa]
+        results.extend(tmarca_ropa)
+
+    # 2c. T-suave positiva y acuerdo entre regímenes en t=1/6 s.
+    # Hallazgo 15: regimen ausente -> "INCONCLUSO" con causa, nunca null fuera del enum.
+    suave_decisions = {"30": "INCONCLUSO", "60": "INCONCLUSO", "144": "INCONCLUSO"}
+    suave_causas = {"30": "regimen_ausente", "60": "regimen_ausente", "144": "regimen_ausente"}
+    suave_infos = []
+    suave_rows_by_run = {}
+    for run in suave_positive:
+        srows, sinfo = evaluate_suave_run(run)
+        suave_rows_by_run[run["run"]] = srows
+        suave_infos.append((run, sinfo))
+    # Acuerdo entre regímenes: orientación en t=1/6 s por etiqueta de giro.
+    # Hallazgo 14: solo regimenes validos (los INCONCLUSO por fps_regime no entran).
+    by_label = {}
+    for run, sinfo in suave_infos:
+        srows = suave_rows_by_run[run["run"]]
+        if sinfo.get("fps_bad") or any(r["cause"] == "fps_regime" for r in srows):
+            continue
+        # Vuelta 3 (hallazgo 3): al acuerdo solo entran giros con estimulo,
+        # observaciones y referencia temporal validos (fila no INCONCLUSA).
+        row_by_label = {r["tramo"]: r for r in srows}
+        for label, q in sinfo["orient_at"].items():
+            if not str(label).startswith("giro"):
+                continue
+            srow = row_by_label.get(label)
+            if srow is None or srow["verdict"] == "INCONCLUSO" or srow.get("orient_1_6_deg") is None:
+                continue
+            by_label.setdefault(label, []).append((run, sinfo["regime"], q))
+    disagree_runs = set()
+    for label, entries in by_label.items():
+        for i in range(len(entries)):
+            for j in range(i + 1, len(entries)):
+                if _quat_angle_deg(entries[i][2], entries[j][2]) > SUAVE_FPS_AGREE_DEG:
+                    disagree_runs.add(entries[i][0]["run"])
+                    disagree_runs.add(entries[j][0]["run"])
+    for run, sinfo in suave_infos:
+        srows = suave_rows_by_run[run["run"]]
+        if run["run"] in disagree_runs:
+            for row in srows:
+                if str(row.get("tramo", "")).startswith("giro") and row["verdict"] == "PASA":
+                    row["verdict"] = "FALLA"
+                    row["cause"] = "suave_fps_agree_exceeded"
+        results.extend(srows)
+        verdicts = [r["verdict"] for r in srows]
+        regime = sinfo["regime"]
+        if verdicts and all(v == "PASA" for v in verdicts):
+            suave_decisions[regime] = "PASA"
+            suave_causas[regime] = ""
+        elif any(v == "FALLA" for v in verdicts):
+            suave_decisions[regime] = "FALLA"
+            suave_causas[regime] = next((r["cause"] for r in srows if r["verdict"] == "FALLA"), "")
+        elif verdicts:
+            suave_decisions[regime] = "INCONCLUSO"
+            suave_causas[regime] = next((r["cause"] for r in srows if r["verdict"] == "INCONCLUSO"), "inconcluso")
 
     # 3. Evaluar corridas negativas (inject != none): van solo a `negativas`
     negativas = []
@@ -1404,23 +2738,28 @@ def evaluate(runs_dir, out_dir=None):
         k_val = k_by_hook.get(hook)
         k_use = int(k_val) if k_val is not None else 0
         fov_conv = fov_by_hook.get(hook, "vertical")
-        detections = _detect_run_shots(run, k_use, fov_conv, ref_reading=eval_reading)
-        windows = detect_windows(run["samples"])
-        ideal_cams = build_ideal_mode_cameras(run["samples"], eval_reading)
-        neg_verdicts = []
-        for w_name, w_frames in windows.items():
-            _, _, _, verdict, _ = _eval_window_metrics(
-                run,
-                w_frames,
-                detections,
-                k_use,
-                fov_conv,
-                eval_reading,
-                cam_override=ideal_cams,
-                check_stim=w_name.startswith("giro"),
-                base_PreCheck="",
-            )
-            neg_verdicts.append(verdict)
+        if str(run["caso"]).startswith("suave"):
+            srows, _sinfo = evaluate_suave_run(run)
+            neg_verdicts = [r["verdict"] for r in srows]
+        else:
+            detections = _detect_run_shots(run, k_use, fov_conv, ref_reading=eval_reading, marcas=marcas_by_run.get(run["run"], []), mask=mask_by_hook.get(hook))
+            windows, has_giro = _windows_for_run(run)
+            ideal_cams = build_ideal_mode_cameras(run["samples"], eval_reading)
+            neg_verdicts = []
+            for w_name, w_frames in windows.items():
+                _, _, _, verdict, _, _n = _eval_window_metrics(
+                    run,
+                    w_frames,
+                    detections,
+                    k_use,
+                    fov_conv,
+                    eval_reading,
+                    cam_override=ideal_cams,
+                    check_stim=w_name.startswith("giro"),
+                    base_PreCheck="",
+                    apply_min_shots=has_giro,
+                )
+                neg_verdicts.append(verdict)
         if "FALLA" in neg_verdicts:
             got = "FALLA"
         elif "INCONCLUSO" in neg_verdicts or not neg_verdicts:
@@ -1439,9 +2778,11 @@ def evaluate(runs_dir, out_dir=None):
 
     # 4. Codigo de salida (solo cuentan las corridas con inject == none)
     thook_rows = [r for r in results if r["measure"] == "T-hook"]
-    if any(r["verdict"] == "FALLA" for r in thook_rows):
+    suave_rows_all = [r for r in results if r["measure"] == "T-suave"]
+    ropa_rows_all = [r for r in results if r["measure"] == "T-ropa"]
+    if any(r["verdict"] == "FALLA" for r in thook_rows + suave_rows_all + ropa_rows_all):
         exit_code = 1
-    elif (
+    elif image_positive and (
         not calib_block
         or any(c["verdict"] != "PASA" for c in calib_block.values())
         or not det_ok
@@ -1450,11 +2791,15 @@ def evaluate(runs_dir, out_dir=None):
         or any(r["verdict"] == "INCONCLUSO" for r in thook_rows)
     ):
         exit_code = 2
+    elif any(r["verdict"] == "INCONCLUSO" for r in suave_rows_all + ropa_rows_all):
+        exit_code = 2
+    elif not results:
+        exit_code = 2
     else:
         exit_code = 0
 
     report = {
-        "schema": 1,
+        "schema": 2,
         "calib": calib_block,
         "detector": detector_block,
         "results": results,
@@ -1462,16 +2807,22 @@ def evaluate(runs_dir, out_dir=None):
             "lectura": winning_reading,
             "hook_por_modo": hook_por_modo,
             "k": {h: calib_block[h]["k"] for h in calib_block},
+            "ropa": ropa_decisions,
+            "suave": suave_decisions,
+            "suave_causas": suave_causas,
         },
         "negativas": negativas,
+        "marcas": marcas_info,
         "exit_code": exit_code,
     }
+    # Hallazgo 15: valores finitos siempre; la serializacion no admite NaN/Infinity.
+    report = _finite_report(report)
 
     if out_dir is not None:
         out_path = Path(out_dir)
         out_path.mkdir(parents=True, exist_ok=True)
         (out_path / "informe.json").write_text(
-            json.dumps(report, indent=2, ensure_ascii=False) + "\n",
+            json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
             encoding="utf-8",
         )
         (out_path / "informe.md").write_text(_render_markdown(report), encoding="utf-8")
@@ -1482,7 +2833,7 @@ def evaluate(runs_dir, out_dir=None):
 def _render_markdown(report):
     verdict_str = {0: "PASA", 1: "FALLA", 2: "INCONCLUSO"}.get(report["exit_code"], "INCONCLUSO")
     lines = [
-        f"# Informe S-track·1 — {verdict_str} (exit_code={report['exit_code']})",
+        f"# Informe S-track·2 — {verdict_str} (exit_code={report['exit_code']})",
         "",
         "## 1. Calibración de imagen (`calib`)",
         "",
@@ -1508,6 +2859,8 @@ def _render_markdown(report):
             f"- **Lectura ganadora (T-lect):** `{report['decisions']['lectura']}`",
             f"- **Desfase k por hook:** `{json.dumps(report['decisions']['k'])}`",
             f"- **Hook por modo (T-hook):** `{json.dumps(report['decisions']['hook_por_modo'])}`",
+            f"- **T-ropa:** `{json.dumps(report['decisions'].get('ropa'))}`",
+            f"- **T-suave:** `{json.dumps(report['decisions'].get('suave'))}`",
             "",
             "## 4. Resultados por ventana",
             "",
@@ -1538,11 +2891,12 @@ def _render_markdown(report):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Evaluador de la sonda S-track·1")
+    parser = argparse.ArgumentParser(description="Evaluador de la sonda S-track·2")
     parser.add_argument("runs_dir", help="Carpeta con las subcarpetas de corridas")
     parser.add_argument("--out", required=True, help="Carpeta de salida para informe.json e informe.md")
+    parser.add_argument("--marcas", default=None, help="Carpeta de marcas (por defecto, <carpeta del script>/marcas o <runs>/marcas)")
     args = parser.parse_args(argv)
-    report = evaluate(args.runs_dir, args.out)
+    report = evaluate(args.runs_dir, args.out, marcas_dir=args.marcas)
     return int(report["exit_code"])
 
 

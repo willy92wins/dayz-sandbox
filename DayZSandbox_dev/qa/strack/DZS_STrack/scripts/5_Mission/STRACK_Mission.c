@@ -74,7 +74,14 @@ modded class MissionServer
 	{
 		super.InvokeOnConnect(player, identity);
 		Print("[STRACK] jugador conectado");
+		STRACK_Move.ServerMarkNewRun();
 		STRACK_Boot.ArmPlayer(player);
+	}
+
+	override void OnUpdate(float timeslice)
+	{
+		super.OnUpdate(timeslice);
+		STRACK_Server.TickSrv(timeslice);
 	}
 };
 
