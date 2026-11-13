@@ -2144,11 +2144,16 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
     const r = await p.evaluate(() => { const q = s => { const e = document.querySelector('#libPrev ' + s); if (!e) return null; const b = e.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom]; }; return { plan: q('.pv-plan'), sc: q('.pv-sc'), bar: q('.pv-sc .scale i') }; });
     if (!r.plan || !r.sc || !r.bar) return null;
     const x0 = Math.floor(r.plan[0]), y0 = Math.floor(r.plan[1]);
-    const png = await p.screenshot({ clip: { x: x0, y: y0, width: Math.ceil(r.plan[2]) - x0, height: Math.ceil(r.plan[3]) - y0 } });
-    return p.evaluate(async ([u, r, x0, y0]) => {
-      const im = new Image(); im.src = u; await im.decode();
-      const W = im.naturalWidth, H = im.naturalHeight, o = new OffscreenCanvas(W, H), g = o.getContext('2d'); g.drawImage(im, 0, 0);
-      const D = g.getImageData(0, 0, W, H).data, px = (x, y) => [D[4 * (y * W + x)], D[4 * (y * W + x) + 1], D[4 * (y * W + x) + 2]];
+    const shot = () => p.screenshot({ clip: { x: x0, y: y0, width: Math.ceil(r.plan[2]) - x0, height: Math.ceil(r.plan[3]) - y0 } });
+    // la cobertura de cada píxel (AR8-01): lo de dentro de la fila de la planta se pinta otra vez todo en negro y todo en blanco, con
+    // el mismo fondo, y la diferencia entre las dos capturas es cuánto de cada píxel cubre lo pintado (255 = entero), sea cual sea su color
+    const paint = c => p.evaluate(c => { let s = document.getElementById('__r26cov'); if (!c) { if (s) s.remove(); return; } if (!s) { s = document.createElement('style'); s.id = '__r26cov'; document.head.appendChild(s); } s.textContent = `#libPrev .pv-plan *, #libPrev .pv-plan *::before, #libPrev .pv-plan *::after { filter: ${c} !important; transition: none !important; animation: none !important; }`; }, c);
+    const png = await shot(); await paint('brightness(0)'); const pk = await shot(); await paint('brightness(0) invert(1)'); const pw = await shot(); await paint(null);
+    return p.evaluate(async ([u, uk, uw, r, x0, y0]) => {
+      const data = async s => { const im = new Image(); im.src = s; await im.decode(); const o = new OffscreenCanvas(im.naturalWidth, im.naturalHeight), g = o.getContext('2d'); g.drawImage(im, 0, 0); return [im.naturalWidth, im.naturalHeight, g.getImageData(0, 0, im.naturalWidth, im.naturalHeight).data]; };
+      const [W, H, D] = await data(u), K = (await data(uk))[2], Wh = (await data(uw))[2], px = (x, y) => [D[4 * (y * W + x)], D[4 * (y * W + x) + 1], D[4 * (y * W + x) + 2]];
+      // cobertura de 0 a 1: la menor de las tres diferencias blanco − negro; entero, desde COVER_FULL
+      const cov = (x, y) => { const i = 4 * (y * W + x); return Math.min(Wh[i] - K[i], Wh[i + 1] - K[i + 1], Wh[i + 2] - K[i + 2]) / 255; }, COVER_FULL = 0.95;
       const n = new Map(); for (let i = 0; i < W * H; i++) { const k = D[4 * i] << 16 | D[4 * i + 1] << 8 | D[4 * i + 2]; n.set(k, (n.get(k) || 0) + 1); }
       const k0 = [...n].sort((a, b) => b[1] - a[1])[0][0], bg = [k0 >> 16, k0 >> 8 & 255, k0 & 255], far = q => Math.max(...q.map((v, i) => Math.abs(v - bg[i])));
       const lin = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }, lum = q => 0.2126 * lin(q[0]) + 0.7152 * lin(q[1]) + 0.0722 * lin(q[2]);
@@ -2158,23 +2163,28 @@ const TOWN = /^(Chernogorsk|Elektrozavodsk|Berezino|Solnichniy|Kamyshovo|Zelenog
         let top = 0, c = null; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (keep(x, y)) { const f = far(px(x, y)); if (f > top) { top = f; c = px(x, y); } }
         const is = (x, y) => top > 0 && x >= 0 && y >= 0 && x < W && y < H && keep(x, y) && far(px(x, y)) >= top / 2;
         let l = W, t = H, rr = -1, b = -1; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (is(x, y)) { l = Math.min(l, x); t = Math.min(t, y); rr = Math.max(rr, x); b = Math.max(b, y); }
-        return rr < 0 ? null : { is, l, t, r: rr, b, cr: cr(c) };
+        return rr < 0 ? null : { is, keep, l, t, r: rr, b, cr: cr(c) };
       };
       const inSc = (x, y) => x + x0 >= r.sc[0] && x + x0 < r.sc[2] && y + y0 >= r.sc[1] && y + y0 < r.sc[3];
-      const f = ink((x, y) => !inSc(x, y)), b = ink((x, y) => inSc(x, y) && x + x0 >= r.bar[0] - 2 && x + x0 < r.bar[2] + 2 && y + y0 >= r.bar[1] && y + y0 < r.bar[3] + 2);
+      const f = ink((x, y) => !inSc(x, y)), b = ink((x, y) => inSc(x, y) && x + x0 >= r.bar[0] - 2 && x + x0 < r.bar[2] + 2 && y + y0 >= Math.floor(r.bar[1]) && y + y0 < r.bar[3] + 2);
       if (!f) return null;
       const gap = (len, at) => { let m = 0, c = 0; for (let i = 0; i < len; i++) { c = at(i) ? 0 : c + 1; m = Math.max(m, c); } return m; };
       // cada lado, como una franja de 2 px a lo largo de su caja de tinta: su largo y, en cada posición, sus dos píxeles
       const strips = (k, top) => [[k.r - k.l + 1, i => [[k.l + i, k.b], [k.l + i, k.b - 1]]], [k.b - k.t + 1, i => [[k.l, k.t + i], [k.l + 1, k.t + i]]], [k.b - k.t + 1, i => [[k.r, k.t + i], [k.r - 1, k.t + i]]]].concat(top ? [[k.r - k.l + 1, i => [[k.l + i, k.t], [k.l + i, k.t + 1]]]] : []);
-      // el contraste del tramo más bajo (AR7-01): en cada posición de un lado cuenta su píxel de tinta más contrastado, y un tramo son las
-      // posiciones seguidas con tinta. De cada uno cuentan todas menos la primera y la última, donde el guion se funde con el fondo (su
-      // antialias), y uno de 1 o 2 posiciones, por la más contrastada: así un lado fuerte no salva a uno flojo, ni un tramo a otro
-      const low = (k, top) => { let lo = Infinity; for (const [len, at] of strips(k, top)) { let run = []; const end = () => { if (run.length) lo = Math.min(lo, run.length > 2 ? Math.min(...run.slice(1, -1)) : Math.max(...run)); run = []; }; for (let i = 0; i < len; i++) { const q = at(i).filter(([x, y]) => k.is(x, y)).map(([x, y]) => cr(px(x, y))); if (q.length) run.push(Math.max(...q)); else end(); } end(); } return lo; };
+      // el contraste del tramo más bajo (AR7-01): un tramo son las posiciones seguidas de un lado con tinta. Desde la octava (AR8-01) no se
+      // aparta ningún píxel por estar en el extremo del tramo: cuentan todos los píxeles de tinta cubiertos enteros (los que la captura en
+      // negro y en blanco da por cubiertos del todo), cada uno por su contraste, y uno cubierto solo en parte es antialias y no cuenta. Un
+      // tramo sin ningún píxel cubierto entero no se acredita (cuenta como 0). Así un color débil opaco no se salva por su sitio, ni por
+      // tener al lado, en la misma posición, un píxel fuerte de otro lado (una esquina). Y en la franja cuenta también todo píxel que lo
+      // pintado cubre entero aunque se aparte del fondo menos de la mitad que lo más apartado: si no, un extremo débil y opaco no sería
+      // tinta, y quedaría como un hueco de 1 px dentro del ±1 px del largo
+      const on = (k, x, y) => x >= 0 && y >= 0 && x < W && y < H && k.keep(x, y) && (k.is(x, y) || cov(x, y) >= COVER_FULL);
+      const low = (k, top) => { let lo = Infinity; for (const [len, at] of strips(k, top)) { let run = []; const end = () => { if (run.length) { const full = run.filter(v => v !== null); lo = Math.min(lo, full.length ? Math.min(...full) : 0); } run = []; }; for (let i = 0; i < len; i++) { const q = at(i).filter(([x, y]) => on(k, x, y)); if (!q.length) { end(); continue; } const f = q.filter(([x, y]) => cov(x, y) >= COVER_FULL).map(([x, y]) => cr(px(x, y))); run.push(f.length ? Math.min(...f) : null); } end(); } return lo; };
       const w = f.r - f.l + 1, h = f.b - f.t + 1;
       const sides = strips(f, true).map(([len, at]) => gap(len, i => at(i).some(([x, y]) => f.is(x, y))));
       let inner = 0; for (let y = f.t + 3; y <= f.b - 3; y++) for (let x = f.l + 3; x <= f.r - 3; x++) if (f.is(x, y)) inner++;
       return { w, h, sides, inner, cr: f.cr, lo: low(f, true), bar: b ? b.r - b.l + 1 : 0, barCr: b ? b.cr : 0, barLo: b ? low(b, false) : 0 };
-    }, ['data:image/png;base64,' + png.toString('base64'), r, x0, y0]);
+    }, [png, pk, pw].map(b => 'data:image/png;base64,' + b.toString('base64')).concat([r, x0, y0]));
   };
   const preview = async p => { const v = await p.evaluate(() => {
     const el = document.querySelector('#libPrev');

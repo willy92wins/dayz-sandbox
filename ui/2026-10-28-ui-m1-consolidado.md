@@ -6,7 +6,7 @@
 
 El diseño navegable es [prototipo/estudio.html](prototipo/estudio.html): una sola página con datos de ejemplo, sin backend, con un simulador de fallos del juego. Sus pruebas están en [prototipo/pruebas.js](prototipo/pruebas.js), y los criterios de las mejoras de noviembre en [prototipo/pruebas-mejoras.js](prototipo/pruebas-mejoras.js). La Guía del prototipo (botón «Guía») enseña la misma tabla de referentes que la sección 9.
 
-**Estado:** consolidado, mejorado en noviembre y probado en el navegador. Astra lo ha revisado siete veces, y las siete veces lo dio por NO APTO: con 8 hallazgos el 4 de noviembre, con 7 el 5, con 5 el 10, con 6 el 11, con 5 otra vez el 11, con 3 el 12 y con 2 otra vez el 12. Cada ronda miró los arreglos de la anterior, y lo que encontró a medias pasó a ser un hallazgo nuevo. La cuarta miró también los iconos y la vista previa del 10 de noviembre y el arreglo de tres textos del mapa que quedaban tapados o cortados. Los dos hallazgos de la séptima están arreglados y probados, pero Astra aún no los ha revisado, así que no se dan por cerrados (sección 11). Nada de esto toca el código de F0 ni el bridge.
+**Estado:** consolidado, mejorado en noviembre y probado en el navegador. Astra lo ha revisado ocho veces, y las ocho veces lo dio por NO APTO: con 8 hallazgos el 4 de noviembre, con 7 el 5, con 5 el 10, con 6 el 11, con 5 otra vez el 11, con 3 el 12, con 2 otra vez el 12 y con 1 el 13. Cada ronda miró los arreglos de la anterior, y lo que encontró a medias pasó a ser un hallazgo nuevo. La cuarta miró también los iconos y la vista previa del 10 de noviembre y el arreglo de tres textos del mapa que quedaban tapados o cortados. La octava, declarada la última, dio AR7-02 por arreglado y AR7-01 a medias, con un hallazgo de la prueba (AR8-01) que está arreglado y probado con sus propios HTML como mutantes; Guillermo pidió arreglarlo y mergear sin otra ronda (sección 11). Nada de esto toca el código de F0 ni el bridge.
 
 ## 1. Cómo se consolidó
 
@@ -374,7 +374,11 @@ Retira su disenso sobre «Parando…» y mantiene Fallida para la toma cortada. 
 - AR7-01: el contraste de la planta de la vista previa era el de su píxel más apartado del fondo, y un lado fuerte valía por tres flojos, a 2,90:1 en oscuro y a 2,19:1 en claro. Ahora cuenta cada tramo de sus lados y de los de su barra, sin redondear (CU-40).
 - AR7-02: la prueba decía que lo que flota solo se aparta donde se pinta, y aparta su caja, también la de uno transparente. Ahora lo dice así: lo apartado queda sin comparar, que no es invisible, y un texto con algo sin comparar no pasa (CU-38).
 
-Retira su negativa a cerrar CU-38 por AR6-01 y AR6-03, dentro de las vistas y la escala medidas, y los ataques geométricos de la sexta sobre CU-40; mantiene la de CU-40, ahora por AR7-01. Llegó literal a Guillermo. Mantiene su juicio favorable del diseño y la retirada de su disenso sobre «Parando…». Estos arreglos no los ha revisado aún.
+Retira su negativa a cerrar CU-38 por AR6-01 y AR6-03, dentro de las vistas y la escala medidas, y los ataques geométricos de la sexta sobre CU-40; mantiene la de CU-40, ahora por AR7-01. Llegó literal a Guillermo. Mantiene su juicio favorable del diseño y la retirada de su disenso sobre «Parando…».
+
+**Octava revisión**, el 2026-11-13, sobre `dde1345`: solo los arreglos de AR7-01 y AR7-02, y declarada la última. [Informe de Astra](astra/2026-11-13-ui-revision8-astra.md). Da AR7-02 por arreglado y AR7-01 a medias: su ataque y los cuatro mutantes caen, pero la prueba apartaba por su sitio el primer y el último píxel de cada tramo, y cinco guiones opacos débil-fuerte-débil, o un píxel débil en el extremo de la barra, pasaban. NO APTO con ese único hallazgo, AR8-01, de la prueba y no de la página. Retira su objeción a CU-38, mantiene la de CU-40 solo por AR8-01 y sigue viendo la interfaz moderna, profesional e intuitiva. Llegó literal a Guillermo, que pidió arreglarlo y mergear. Arreglado y probado en la §18 de la lista de noviembre:
+
+- AR8-01: la prueba ya no aparta nada por su sitio. Mide cuánto cubre cada píxel lo pintado (dos capturas más, con lo de la fila de la planta en negro y en blanco) y exige 3:1 a todo píxel cubierto entero; los cubiertos en parte son antialias. Se cerraron además la esquina (valía el píxel más contrastado de la posición) y la primera fila de la barra, que no se miraba (CU-40). Los cuatro HTML de Astra son ahora mutantes oficiales y fallan.
 
 ## 12. Verificación y cambios
 
@@ -468,6 +472,12 @@ Retira su negativa a cerrar CU-38 por AR6-01 y AR6-03, dentro de las vistas y la
 
 - `node ui/prototipo/pruebas-mejoras.js`: 260 de 260, código de salida 0. Los 14 casos AR7 prueban la sonda y el criterio de la prueba, no la página, que es la misma que en `fc28527`, byte a byte. El detalle está en la §17 de la lista de noviembre.
 - `node ui/prototipo/mutantes.js`: el control da 39 de 39 y los cuarenta y un mutantes hacen fallar su caso, también los cuatro de la séptima revisión: su ataque y los tres negativos que pide, con los colores de su ataque en cada tema. Con las pruebas de `fc28527`, los cuatro sobreviven.
+- `node ui/prototipo/pruebas.js`: 64 de 64, código de salida 0.
+
+**Octava revisión de Astra (AR8-01)**, en el PC de Guillermo (Windows, escala 1):
+
+- `node ui/prototipo/pruebas-mejoras.js`: 260 de 260, código de salida 0. La página no cambia.
+- `node ui/prototipo/mutantes.js`: el control da 43 de 43 y los cuarenta y cinco mutantes hacen fallar su caso, código de salida 0; los cuatro nuevos son los HTML de Astra de AR8-01. Con la prueba de `dde1345`, el de los guiones y el de la barra daban 13 de 13.
 - `node ui/prototipo/pruebas.js`: 64 de 64, código de salida 0.
 
 Cambios del prototipo al consolidar: paleta y letra del DayZ Editor; los atajos de la sección 5; los gestos de Eden en el mapa y las rejillas; «Leer el suelo» al colocar; Parcial tras un corte después de entregar y su reconciliación; las tres luces y el backend caído; «Parando…», control devuelto, hombre muerto, bloqueo de edición durante la toma y la insignia de OBS; el total del presupuesto; «Probar ambiente» y «Leer el juego ahora»; la Guía con 54 referentes y su procedencia.
