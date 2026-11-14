@@ -1,4 +1,4 @@
-"""CLI del arnes M1 (brief F0.1 §3). Sale 0 PASA, 1 FALLA, 2 INCONCLUSO."""
+"""CLI del arnes M1 (brief F0.1 §3, F0.3-0 §5.1-§5.2). Sale 0 PASA, 1 FALLA, 2 INCONCLUSO."""
 
 import argparse
 import importlib
@@ -7,7 +7,6 @@ import traceback
 from pathlib import Path
 
 import gate_core
-from s_puente_eval import evaluate
 
 
 def build_parser():
@@ -20,6 +19,8 @@ def build_parser():
     spike.add_argument("--evaluate-only", action="store_true")
     spike.add_argument("--server-profile")
     spike.add_argument("--client-profile")
+    spike.add_argument("--pbo", default=None)
+    spike.add_argument("--part", default="all")
     spike.add_argument("--peer-timeout", type=float, default=None)
     spike.add_argument("--hold-ms", type=int, default=gate_core.DEFAULT_HOLD_MS)
     spike.add_argument("--lease-ms", type=int, default=gate_core.DEFAULT_LEASE_MS)
@@ -55,8 +56,23 @@ def _profiles(parser):
     parser.add_argument("--client-profile")
 
 
+def _valid_parts_for_spike(spike_id: str) -> set[str]:
+    if spike_id not in gate_core.SPIKE_REGISTRY:
+        return {"all"}
+    _run_mod, _eval_mod, mut_mod_name = gate_core.SPIKE_REGISTRY[spike_id]
+    if not mut_mod_name:
+        return {"all"}
+    mut_mod = importlib.import_module(mut_mod_name)
+    parts = {"all", "run"}
+    for mname in getattr(mut_mod, "EXPECTED_MUTANTS", {}):
+        parts.add(f"mut-{mname}")
+    for hname in getattr(mut_mod, "EXPECTED_HARNESS_TESTS", {}):
+        parts.add(str(hname))
+    return parts
+
+
 def validate(parser, args):
-    if args.cmd == "spike" and args.id not in gate_core.SPIKES:
+    if args.cmd == "spike" and args.id not in gate_core.known_spikes():
         parser.error(f"unknown spike {args.id}")
     if args.cmd == "criterion" and args.id not in gate_core.CRITERIA:
         parser.error(f"unknown criterion {args.id}")
@@ -67,15 +83,42 @@ def validate(parser, args):
         parser.error("--fault requires --build offline")
     if hasattr(args, "hold_ms") and args.hold_ms >= args.lease_ms:
         parser.error("--hold-ms must be < --lease-ms")
-    if args.build in ("retail", "diag"):
+    if args.cmd == "spike":
+        part = getattr(args, "part", "all") or "all"
+        if part != "all":
+            if args.id == "S-puente":
+                parser.error("--part is not supported for S-puente")
+            valid_parts = _valid_parts_for_spike(args.id)
+            if part not in valid_parts:
+                parser.error(f"unknown --part {part} for spike {args.id}")
+    if args.build in ("retail", "diag") and not getattr(args, "evaluate_only", False):
         server = getattr(args, "server_profile", None)
         client = getattr(args, "client_profile", None)
         if not server or not client:
             parser.error("retail/diag require --server-profile and --client-profile")
         if not Path(server).is_dir() or not Path(client).is_dir():
             parser.error("profile folders must exist")
+        if args.cmd == "spike" and args.id != "S-puente":
+            pbo = getattr(args, "pbo", None)
+            if not pbo:
+                parser.error("retail/diag F0.3 spikes require --pbo")
+            pbo_path = Path(pbo)
+            if not pbo_path.is_file() or pbo_path.suffix.lower() != ".pbo":
+                parser.error("--pbo must point to an existing .pbo file")
     if hasattr(args, "peer_timeout"):
         args.peer_timeout = gate_core.peer_timeout_s(args.build, args.peer_timeout)
+
+
+def _has_valid_f03_parts(evidence: Path, part: str) -> bool:
+    if not evidence.is_dir():
+        return False
+    if part != "all":
+        pdir = evidence / part
+        return pdir.is_dir() and (pdir / "manifest.json").is_file() and (pdir / "samples").is_dir()
+    for child in evidence.iterdir():
+        if child.is_dir() and (child / "manifest.json").is_file() and (child / "samples").is_dir():
+            return True
+    return False
 
 
 def main(argv=None):
@@ -89,19 +132,33 @@ def main(argv=None):
         return int(exc.code) if exc.code is not None else 0
 
     evidence = Path(args.evidence)
+    part = getattr(args, "part", "all") or "all"
+    is_f03_spike = args.cmd == "spike" and args.id != "S-puente"
     accepted = False
     try:
         if getattr(args, "evaluate_only", False):
-            manifest = evidence / "manifest.json"
-            samples = evidence / "samples"
-            if not (evidence.is_dir() and manifest.is_file() and samples.is_dir()):
-                return 2
-        else:
-            if evidence.exists():
-                if not evidence.is_dir() or any(evidence.iterdir()):
+            if is_f03_spike:
+                if not _has_valid_f03_parts(evidence, part):
                     return 2
             else:
-                evidence.mkdir(parents=True)
+                manifest = evidence / "manifest.json"
+                samples = evidence / "samples"
+                if not (evidence.is_dir() and manifest.is_file() and samples.is_dir()):
+                    return 2
+        else:
+            if is_f03_spike and part != "all":
+                part_dir = evidence / part
+                if part_dir.exists():
+                    if not part_dir.is_dir() or any(part_dir.iterdir()):
+                        return 2
+                else:
+                    evidence.mkdir(parents=True, exist_ok=True)
+            else:
+                if evidence.exists():
+                    if not evidence.is_dir() or any(evidence.iterdir()):
+                        return 2
+                else:
+                    evidence.mkdir(parents=True)
         accepted = True
         return execute(args, evidence, argv)
     except Exception as exc:
@@ -137,14 +194,44 @@ def _spike(args, evidence, argv):
     if args.id == "S-puente" and not args.both:
         _write_run(evidence, "spike", args.id, args, argv, 2, ["requires_both"])
         return 2
-    if args.id not in gate_core.IMPLEMENTED_SPIKES:
+    if args.id == "F0.3-0" and not args.both and not args.evaluate_only:
+        _write_run(evidence, "spike", args.id, args, argv, 2, ["requires_both"])
+        return 2
+    if args.id not in gate_core.SPIKE_REGISTRY or args.id not in gate_core.IMPLEMENTED_SPIKES:
+        if args.id in gate_core.SPIKE_REGISTRY and not args.evaluate_only:
+            run_mod_name, _eval_mod_name, _mut_mod_name = gate_core.SPIKE_REGISTRY[args.id]
+            run_fn = importlib.import_module(run_mod_name).run
+            return int(run_fn(args, evidence, argv))
         return _not_implemented(args, evidence, argv, "spike", args.id)
+
+    run_mod_name, eval_mod_name, _mut_mod_name = gate_core.SPIKE_REGISTRY[args.id]
+    if args.id == "S-puente":
+        if args.evaluate_only:
+            eval_fn = importlib.import_module(eval_mod_name).evaluate
+            verdict = eval_fn(evidence)
+            gate_core.write_json(evidence / "verdict.json", verdict)
+            return int(verdict["exit_code"])
+        run_fn = importlib.import_module(run_mod_name).run
+        return int(run_fn(args, evidence, argv))
+
     if args.evaluate_only:
-        verdict = evaluate(evidence)
-        gate_core.write_json(evidence / "verdict.json", verdict)
-        return int(verdict["exit_code"])
-    run_s_puente = importlib.import_module("s_puente_run").run
-    return int(run_s_puente(args, evidence, argv))
+        eval_fn = importlib.import_module(eval_mod_name).evaluate
+        f03_common = importlib.import_module("f03_common")
+        part = getattr(args, "part", "all") or "all"
+        if part != "all":
+            pdir = evidence / part
+            pv = eval_fn(pdir)
+            gate_core.write_json(pdir / "verdict.json", pv)
+        else:
+            for child in sorted(evidence.iterdir()):
+                if child.is_dir() and (child / "manifest.json").is_file() and (child / "samples").is_dir():
+                    pv = eval_fn(child)
+                    gate_core.write_json(child / "verdict.json", pv)
+        agg = f03_common.aggregate_spike(evidence, args.id)
+        return int(agg["exit_code"])
+
+    run_fn = importlib.import_module(run_mod_name).run
+    return int(run_fn(args, evidence, argv))
 
 
 def _not_implemented(args, evidence, argv, kind, ident):

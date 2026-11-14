@@ -1,9 +1,10 @@
-"""Evidencia sintetica de S-puente para las pruebas de §10.1. Solo carpetas que pase el llamador."""
+"""Evidencia sintetica de S-puente para las pruebas de §10.1 y F0.3-0 §14. Solo carpetas que pase el llamador."""
 
 import json
 from pathlib import Path
 
 import gate_core
+import wire
 
 PEERS = ("server", "client")
 
@@ -62,6 +63,7 @@ def _manifest():
             "lease_ms": 3000,
             "port": 9,
             "retry_ms": 2000,
+            "run_id": "a1b2c3d4",
             "seed": 20261026,
             "ttl_ms": 5000,
         },
@@ -94,6 +96,7 @@ def _build():
             "hello",
             peer=peer,
             http=200,
+            ok=True,
             args={"build": "offline", "inst": inst, "peer": peer, "probe_ver": "fake-qa0", "proto": "qa0"},
         )
 
@@ -143,6 +146,10 @@ def _build():
     s("step_start", step="N6", peer="client")
     _n6(b, s, state["refs"])
     s("step_end", step="N6", peer="client")
+    state["t"] += 200
+    s("step_start", step="N6", peer="server")
+    _n6_server(b, s, state["refs"])
+    s("step_end", step="N6", peer="server")
     return bridge, scenario
 
 
@@ -169,6 +176,7 @@ def _negatives(peer, b, s, refs):
                 "hello",
                 peer=peer,
                 http=200,
+                ok=True,
                 args={"build": "offline", "inst": "ef" * 16, "peer": peer, "probe_ver": "fake-qa0", "proto": "qa0"},
             )
         else:
@@ -236,6 +244,11 @@ def _replica(peer, step, source_role, pair, verb, read_verb, b, s, refs):
 
 
 def _n6(b, s, refs):
+    b("enq", op_id="N6.pre_log", verb="rpc_log_read", peer="client", args={})
+    pre_body = _done("rpc_log_read", {}, 1, rpc_log=[])
+    pre_body["done_ms"] = 500.0
+    b("result", op_id="N6.pre_log", peer="client", result=pre_body)
+
     burst_args = {
         "pos": [7200, 360, 7200],
         "ypr": [90, 0, 0],
@@ -274,10 +287,82 @@ def _n6(b, s, refs):
         "expect",
         step="N6",
         peer="client",
-        roles={"burst": "N6.burst", "log": "N6.log", "read": "N6.read"},
+        roles={"pre_log": "N6.pre_log", "burst": "N6.burst", "log": "N6.log", "read": "N6.read"},
     )
     refs["n6_log"] = log_res["result"]["read"]["rpc_log"]
     refs["n6_pose"] = pose_res["result"]["read"]
+
+
+def _n6_server(b, s, refs):
+    srv_burst_args = {
+        "pos": [7250, 360, 7250],
+        "ypr": [90, 0, 0],
+        "count": 40,
+        "interval_ms": 300,
+        "seq0": 2000,
+        "client_inst": "cd" * 16,
+    }
+    b("enq", op_id="N6.srv.burst", verb="rpc_burst", peer="server", args=srv_burst_args)
+    b("deliver", op_id="N6.srv.burst", peer="server")
+    b("cut_start", peer="server")
+    b("cut_end", peer="server")
+    b("poll", peer="server", http=200, n_ops=0, held_ms=10, frame=9200)
+    b("result", op_id="N6.srv.burst", peer="server", result=_error_res("lease_expired"))
+
+    emit_rows = []
+    for idx in range(5):
+        emit_rows.append(
+            {
+                "idx_n": idx,
+                "lease_age_ms": 200.0 + idx * 300.0,
+                "op_id": "N6.srv.burst",
+                "outcome": "sent",
+                "seq_n": 2000 + idx,
+                "tick_ms": 1000.0 + idx * 300.0,
+            }
+        )
+    emit_rows.append(
+        {
+            "idx_n": 5,
+            "lease_age_ms": 3400.0,
+            "op_id": "N6.srv.burst",
+            "outcome": "blocked_lease",
+            "seq_n": 2005,
+            "tick_ms": 2500.0,
+        }
+    )
+    emit_payload = _pack_emitlog_page(emit_rows, page_n=0)
+    b(
+        "enq",
+        op_id="N6.srv.emit0",
+        verb="qa_emitlog_page",
+        peer="server",
+        args=wire.pack_payload(scalars_num={"page_n": 0}),
+    )
+    emit_res = b(
+        "result",
+        op_id="N6.srv.emit0",
+        peer="server",
+        result=_payload_done(emit_payload),
+    )
+    s(
+        "expect",
+        step="N6",
+        peer="server",
+        roles={"burst": "N6.srv.burst", "emit_pages": ["N6.srv.emit0"]},
+    )
+    refs["n6_srv_emit"] = emit_res
+
+
+def _pack_emitlog_page(rows, page_n=0):
+    total = len(rows)
+    pages_n = 0 if total == 0 else (total + 39) // 40
+    return wire.pack_payload(
+        scalars_num={"page_n": page_n, "pages_n": pages_n, "rows_total_n": total},
+        num_cols=["seq_n", "tick_ms", "lease_age_ms", "idx_n"],
+        str_cols=["op_id", "outcome"],
+        row_dicts=rows,
+    )
 
 
 def _drop_event(ev):
@@ -348,6 +433,62 @@ def _apply(defect, bridge, scenario):
     elif defect == "n6_pose":
         _log, pose = _n6_parts(bridge)
         pose["pos"] = [pose["pos"][0] + 10, pose["pos"][1], pose["pos"][2]]
+    elif defect == "all_done_dup_true":
+        for ev in bridge:
+            if ev["ev"] == "result" and ev["result"].get("status") == "done":
+                ev["result"]["dup"] = True
+    elif defect == "n6_stale_before_boundary":
+        pre = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == "N6.pre_log")
+        pre["result"]["done_ms"] = 2000.0
+    elif defect == "n6_stale_old_seq":
+        log, _pose = _n6_parts(bridge)
+        for idx, entry in enumerate(log):
+            entry["seq"] = 100 + idx
+            entry["recv_ms"] = 100.0 + idx
+    elif defect == "n6_srv_foreign_op_id":
+        _replace_srv_emit(
+            bridge,
+            [
+                {
+                    "idx_n": 0,
+                    "lease_age_ms": 200.0,
+                    "op_id": "previous-burst",
+                    "outcome": "sent",
+                    "seq_n": 1000,
+                    "tick_ms": 100.0,
+                },
+                {
+                    "idx_n": 1,
+                    "lease_age_ms": 3500.0,
+                    "op_id": "previous-burst",
+                    "outcome": "blocked_lease",
+                    "seq_n": 1001,
+                    "tick_ms": 400.0,
+                },
+            ],
+        )
+    elif defect == "n6_srv_empty_own_after_valid_history":
+        _replace_srv_emit(
+            bridge,
+            [
+                {
+                    "idx_n": 0,
+                    "lease_age_ms": 150.0,
+                    "op_id": "old-valid-burst",
+                    "outcome": "sent",
+                    "seq_n": 1000,
+                    "tick_ms": 100.0,
+                },
+                {
+                    "idx_n": 1,
+                    "lease_age_ms": 3200.0,
+                    "op_id": "old-valid-burst",
+                    "outcome": "blocked_lease",
+                    "seq_n": 1001,
+                    "tick_ms": 400.0,
+                },
+            ],
+        )
     elif defect.startswith("n1_delivered_"):
         peer = defect.rsplit("_", 1)[1]
         bridge.append({"ev": "deliver", "op_id": f"N1.{peer}.S", "peer": peer, "t_ms": 1})
@@ -463,7 +604,11 @@ def _apply(defect, bridge, scenario):
         late["result"]["reason"] = ""
         bridge.append(late)
     elif defect == "sol04_n6_reads_after_end":
-        end = next(e for e in scenario if e["ev"] == "step_end" and e.get("step") == "N6")
+        end = next(
+            e
+            for e in scenario
+            if e["ev"] == "step_end" and e.get("step") == "N6" and e.get("peer") == "client"
+        )
         for op_id in ("N6.log", "N6.read"):
             res = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == op_id)
             res["t_ms"] = end["t_ms"] + 1
@@ -481,6 +626,11 @@ def _apply(defect, bridge, scenario):
                 break
     else:
         raise ValueError(defect)
+
+
+def _replace_srv_emit(bridge, rows):
+    res = next(e for e in bridge if e["ev"] == "result" and e.get("op_id") == "N6.srv.emit0")
+    res["result"] = _payload_done(_pack_emitlog_page(rows, page_n=0))
 
 
 def _insert_rejected_repeat(bridge, step, peer, role):
@@ -631,6 +781,54 @@ def _done(verb, args, frame, dup=False, rpc_log=None):
         "reason": "",
         "recv_ms": 0.0,
         "status": "done",
+    }
+
+
+def _payload_done(payload, dup=False):
+    read = {
+        "fog": 0.0,
+        "frame": 0,
+        "has": ["payload"],
+        "pos": [0, 0, 0],
+        "rpc_log": [],
+        "tick_s": 0.0,
+        "y": 0.0,
+        "ypr": [0, 0, 0],
+    }
+    read.update(payload)
+    return {
+        "done_ms": 1.0,
+        "dup": dup,
+        "frame_done": 1,
+        "frame_recv": 0,
+        "op_id": "synth",
+        "read": read,
+        "reason": "",
+        "recv_ms": 0.0,
+        "status": "done",
+    }
+
+
+def _error_res(reason):
+    return {
+        "done_ms": 1.0,
+        "dup": False,
+        "frame_done": 0,
+        "frame_recv": 0,
+        "op_id": "synth",
+        "read": {
+            "fog": 0.0,
+            "frame": 0,
+            "has": [],
+            "pos": [0, 0, 0],
+            "rpc_log": [],
+            "tick_s": 0.0,
+            "y": 0.0,
+            "ypr": [0, 0, 0],
+        },
+        "reason": reason,
+        "recv_ms": 0.0,
+        "status": "error",
     }
 
 

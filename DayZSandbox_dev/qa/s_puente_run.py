@@ -1,4 +1,4 @@
-"""Escenario de S-puente (brief F0.1 §8). Offline lanza peers falsos; retail/diag no arranca DayZ."""
+"""Escenario de S-puente (brief F0.1 §8 y F0.3-0 §14 F02-H1/F02-H3). Offline lanza peers falsos; retail/diag no arranca DayZ."""
 
 import json
 import math
@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 import gate_core
+import wire
 from bridge_qa import QABridge
 from s_puente_eval import evaluate
 
@@ -49,6 +50,7 @@ def run(args, evidence, argv=None):
     retry = args.retry_ms
     seed = args.seed
     fault = args.fault
+    clock_offset_ms = float(getattr(args, "clock_offset_ms", 0.0) or 0.0)
     op_timeout = ttl + 1000
     interval = max(10, lease // 10)
     bridge_port_box = {}
@@ -136,6 +138,8 @@ def run(args, evidence, argv=None):
                 ]
                 if fault:
                     cmd.extend(["--fault", fault])
+                if clock_offset_ms != 0.0:
+                    cmd.extend(["--clock-offset-ms", str(clock_offset_ms)])
                 procs.append(
                     subprocess.Popen(cmd, cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT)
                 )
@@ -148,7 +152,7 @@ def run(args, evidence, argv=None):
                 _write_cfg(cfg_path[role], bridge.port, key, retry)
 
         scen("step_start", step="S0")
-        if args.build == "offline":
+        if args.build == "offline" and not (args.server_profile and args.client_profile):
             launch_offline()
         else:
             prepare_live()
@@ -168,6 +172,7 @@ def run(args, evidence, argv=None):
                     e.get("ev") == "hello"
                     and e.get("peer") == role
                     and e.get("http") == 200
+                    and e.get("ok", True) is True
                     and isinstance(t_ms, (int, float))
                     and not isinstance(t_ms, bool)
                     and math.isfinite(t_ms)
@@ -188,19 +193,22 @@ def run(args, evidence, argv=None):
                     skipped.add(role)
                     scen("resume_timeout", peer=role)
             if "server" not in skipped and "client" not in skipped:
-                _n6(bridge, scen, issue, lease, ttl, interval, op_timeout)
+                seq0 = _n6(bridge, scen, issue, lease, ttl, interval, op_timeout)
+                _n6_server(bridge, scen, issue, lease, ttl, interval, op_timeout, seq0)
             scen("step_start", step="S10")
             scen("step_end", step="S10")
         _raise_if_bridge_failed(bridge)
         ready = True
     finally:
-        if bridge is not None:
-            bridge.stop()
-        _stop_peers(procs)
-        for handle in files:
-            handle.close()
-        for folder in profiles:
-            shutil.rmtree(folder, ignore_errors=True)
+        try:
+            if bridge is not None:
+                bridge.stop()
+        finally:
+            _stop_peers(procs)
+            for handle in files:
+                handle.close()
+            for folder in profiles:
+                shutil.rmtree(folder, ignore_errors=True)
     if bridge is not None and bridge.failure is not None:
         _raise_if_bridge_failed(bridge)
     if ready:
@@ -216,7 +224,16 @@ def _raise_if_bridge_failed(bridge):
 def _finish(args, evidence, argv, started, bridge, port, fault):
     gate_core.write_json(
         Path(evidence) / "manifest.json",
-        gate_core.make_manifest("spike", "S-puente", args, argv or [], started, gate_core.utc_now(), port=port),
+        gate_core.make_manifest(
+            "spike",
+            "S-puente",
+            args,
+            argv or [],
+            started,
+            gate_core.utc_now(),
+            port=port,
+            run_id=bridge.run_id,
+        ),
     )
     verdict = evaluate(evidence)
     gate_core.write_json(Path(evidence) / "verdict.json", verdict)
@@ -305,6 +322,7 @@ def _n1(role, bridge, scen, issue, hold, ttl, retry, op_timeout, cfg_path):
         lambda e, role=role, mark=mark: e.get("ev") == "hello"
         and e.get("peer") == role
         and e.get("http") == 200
+        and e.get("ok", True) is True
         and e["t_ms"] >= mark,
         3 * retry + 2000,
     )
@@ -379,7 +397,7 @@ def _n4(role, bridge, scen, issue, retry, op_timeout):
 def _n5(role, bridge, scen, issue, op_timeout):
     set_v, read_v = _verb(role)
     scen("step_start", step="N5", peer=role)
-    c_id = f"n5-{role}-c"
+    c_id = f"n5-{bridge.run_id}-{role}-c"
     bridge.drop_results(c_id, True)
     issue(role, set_v, _args_for(role, "N5", "a"), op_id=c_id, wait_ms=None)
     time.sleep(max(op_timeout, 2500) / 1000.0)
@@ -396,6 +414,21 @@ def _n5(role, bridge, scen, issue, op_timeout):
 def _n6(bridge, scen, issue, lease, ttl, interval, op_timeout):
     scen("step_start", step="N6", peer="client")
     issue("client", "cam_pose_set", {"pos": [7300, 370, 7300], "ypr": [0, 0, 0]}, wait_ms=op_timeout)
+    pre_id, pre_res = issue("client", "rpc_log_read", {}, wait_ms=op_timeout)
+    seq0 = 1000
+    if isinstance(pre_res, dict):
+        pre_read = pre_res.get("read")
+        if isinstance(pre_read, dict) and isinstance(pre_read.get("rpc_log"), list):
+            seqs = [
+                int(entry["seq"])
+                for entry in pre_read["rpc_log"]
+                if isinstance(entry, dict)
+                and isinstance(entry.get("seq"), (int, float))
+                and not isinstance(entry.get("seq"), bool)
+                and math.isfinite(entry["seq"])
+            ]
+            if seqs:
+                seq0 = max(seqs) + 1000
     span = 40 * interval + lease + 1000
     cut_mark = bridge.now_ms()
     bridge.cut("client", span)
@@ -408,7 +441,7 @@ def _n6(bridge, scen, issue, lease, ttl, interval, op_timeout):
             "count": 40,
             "interval_ms": interval,
             "pos": [7200, 360, 7200],
-            "seq0": 1000,
+            "seq0": seq0,
             "ypr": [90, 0, 0],
         },
         wait_ms=ttl + 40 * interval + 1000,
@@ -429,8 +462,96 @@ def _n6(bridge, scen, issue, lease, ttl, interval, op_timeout):
     )
     log_id, _res = issue("client", "rpc_log_read", {}, wait_ms=op_timeout)
     read_id, _res = issue("client", "cam_pose_read", {}, wait_ms=op_timeout)
-    scen("expect", step="N6", peer="client", roles={"burst": burst_id, "log": log_id, "read": read_id})
+    scen(
+        "expect",
+        step="N6",
+        peer="client",
+        roles={"pre_log": pre_id, "burst": burst_id, "log": log_id, "read": read_id},
+    )
     scen("step_end", step="N6", peer="client")
+    return seq0
+
+
+def _n6_server(bridge, scen, issue, lease, ttl, interval, op_timeout, seq0):
+    scen("step_start", step="N6", peer="server")
+    client = bridge.registered("client")
+    seq0_srv = seq0 + 1000
+    after_enq = bridge.now_ms()
+    burst_id, _ = issue(
+        "server",
+        "rpc_burst",
+        {
+            "client_inst": client,
+            "count": 40,
+            "interval_ms": interval,
+            "pos": [7250, 360, 7250],
+            "seq0": seq0_srv,
+            "ypr": [90, 0, 0],
+        },
+        ttl_ms=ttl + 40 * interval + 5000,
+        wait_ms=None,
+    )
+    bridge.wait_event(
+        lambda e, oid=burst_id: e.get("ev") == "deliver" and e.get("op_id") == oid,
+        op_timeout,
+    )
+    time.sleep(min(0.10, max(0.03, interval / 1000.0)))
+    span = lease + interval + 400
+    cut_mark = bridge.now_ms()
+    bridge.cut("server", span)
+    ended = bridge.wait_event(
+        lambda e, cut_mark=cut_mark: e.get("ev") == "cut_end"
+        and e.get("peer") == "server"
+        and e["t_ms"] >= cut_mark,
+        span + 2000,
+    )
+    bridge.wait_result(burst_id, after_enq, ttl + 40 * interval + 3000)
+    after_cut = ended["t_ms"] if ended else bridge.now_ms()
+    bridge.wait_event(
+        lambda e, after_cut=after_cut: e.get("ev") == "poll"
+        and e.get("peer") == "server"
+        and e.get("http") == 200
+        and e["t_ms"] > after_cut,
+        span + 3000,
+    )
+    emit_pages = []
+    p0_id, p0_res = issue(
+        "server",
+        "qa_emitlog_page",
+        wire.pack_payload(
+            scalars_str={"qa_fault": wire.QA_FAULT_NONE},
+            scalars_num={"page_n": 0},
+        ),
+        wait_ms=op_timeout,
+    )
+    emit_pages.append(p0_id)
+    pages_n = 1
+    if isinstance(p0_res, dict) and p0_res.get("status") == "done":
+        read0 = p0_res.get("read")
+        if isinstance(read0, dict) and "payload" in (read0.get("has") or []):
+            try:
+                unpacked0 = wire.unpack_payload(read0)
+                pages_n = int(unpacked0["num"].get("pages_n", 0))
+            except ValueError:
+                pages_n = 1
+    for page_idx in range(1, pages_n):
+        pid, _pres = issue(
+            "server",
+            "qa_emitlog_page",
+            wire.pack_payload(
+                scalars_str={"qa_fault": wire.QA_FAULT_NONE},
+                scalars_num={"page_n": page_idx},
+            ),
+            wait_ms=op_timeout,
+        )
+        emit_pages.append(pid)
+    scen(
+        "expect",
+        step="N6",
+        peer="server",
+        roles={"burst": burst_id, "emit_pages": emit_pages},
+    )
+    scen("step_end", step="N6", peer="server")
 
 
 def _write_cfg(path, port, key, retry):
@@ -458,5 +579,3 @@ def _stop_peers(procs):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
-
-
