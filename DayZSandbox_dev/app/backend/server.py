@@ -21,6 +21,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from app.backend.store import Store  # noqa: E402
 from app.backend.lease import Leases  # noqa: E402
+from app.backend.profile import Profile  # noqa: E402
 from app.backend.bridge import Bridge  # noqa: E402
 
 MAX_BODY = 1024 * 1024
@@ -56,13 +57,15 @@ class Backend:
     """Une el almacén con HTTP: credenciales, gate (pausa y toma), cola de órdenes y SSE."""
 
     def __init__(self, store, human_key, ai_key, port=0, horizon=1000, log=None, clock=time.monotonic,
-                 web_root=None, bridge_port=None, peer_key=None, bridge_kwargs=None):
+                 web_root=None, bridge_port=None, peer_key=None, bridge_kwargs=None,
+                 profile_path=None, schema_path=None):
         if not human_key or not ai_key or human_key == ai_key:
             raise ValueError("human_key y ai_key deben ser distintas y no vacías")
         if peer_key is not None and (not peer_key or peer_key == human_key or peer_key == ai_key):
             raise ValueError("human_key, ai_key y peer_key deben ser distintas y no vacías")
         if bridge_port is not None and not peer_key:
             raise ValueError("human_key, ai_key y peer_key deben ser distintas y no vacías")
+        self.profile = Profile(store, profile_path=profile_path, schema_path=schema_path)
         self.store = store
         self.clock = clock
         self.web_root = web_root
@@ -515,6 +518,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/scene":
             self.send_json(200, self.backend.store.snapshot())
+        elif self.path == "/api/schema":
+            self.send_json(*self.backend.profile.get_schema())
+        elif self.path == "/api/catalog":
+            self.send_json(200, self.backend.profile.get_catalog())
+        elif self.path == "/api/profile":
+            if author["role"] != "human":
+                self.send_json(403, fail("forbidden", "Solo la persona lee el perfil"))
+            else:
+                self.send_json(200, self.backend.profile.get_profile())
         elif url.path == "/api/scene/changes":
             q = parse_qs(url.query)
             try:
@@ -644,6 +656,12 @@ class Handler(BaseHTTPRequestHandler):
             v = self.fields(body, [("doc_id", (str,)), ("rev", (int,)), ("hash", (str,))])
             if v is not None:
                 self.send_result(self.backend.apply(*v))
+        elif path == "/api/profile":
+            if not human:
+                self.send_json(403, fail("forbidden", "Solo la persona guarda el perfil"))
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            self.send_json(*self.backend.profile.save_profile(body, length))
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 
