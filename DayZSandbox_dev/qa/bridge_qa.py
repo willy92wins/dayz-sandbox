@@ -312,8 +312,23 @@ class QABridge(QABridge):
         if raw:
             try:
                 body = json.loads(raw.decode("utf-8"))
-            except (UnicodeError, json.JSONDecodeError):
-                self._send(handler, 400, {"error": "bad_json"})
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                if isinstance(exc, json.JSONDecodeError):
+                    err = f"{exc.msg} at {exc.pos}"
+                else:
+                    err = f"{exc.reason} at {exc.start}"
+                with self.cv:
+                    self._emit(
+                        {
+                            "ev": "bad_body",
+                            "http": 400,
+                            "peer": query.get("peer") or "",
+                            "path": parts.path,
+                            "len": len(raw),
+                            "err": err,
+                        }
+                    )
+                    self._send(handler, 400, {"error": "bad_json"})
                 return
         path = parts.path
         key = query.get("key", "")

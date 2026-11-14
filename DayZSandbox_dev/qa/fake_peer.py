@@ -1,4 +1,4 @@
-"""Peer falso del protocolo QA v0 (brief F0.1 §5 y §7).
+"""Peer falso del protocolo QA v0 (brief F0.1 §5 y §7; ajuste F0.2 §3 y §5).
 
 El bucle de frames corre en el hilo principal. Las peticiones HTTP viven en otro
 hilo y dejan el lote en una cola que ese bucle consume. En el cliente, un hilo
@@ -24,6 +24,37 @@ def _excepthook(exc_type, exc, tb):
     sys.stderr.write(exc_type.__name__ + "\n")
 
 
+def _reject_nonfinite(_token):
+    raise ValueError("non-finite JSON constant")
+
+
+def _valid_hello_resp(code, payload):
+    if code != 200 or not isinstance(payload, dict):
+        return False
+    if "ok" in payload and payload["ok"] is not True:
+        return False
+    lease = payload.get("lease_ms")
+    if isinstance(lease, bool) or not isinstance(lease, (int, float)) or not math.isfinite(lease):
+        return False
+    return lease > 0
+
+
+def _valid_poll_resp(code, payload):
+    if code != 200 or not isinstance(payload, dict):
+        return False
+    now_ms = payload.get("now_ms")
+    if isinstance(now_ms, bool) or not isinstance(now_ms, (int, float)) or not math.isfinite(now_ms):
+        return False
+    ops = payload.get("ops")
+    if not isinstance(ops, list):
+        return False
+    return all(isinstance(op, dict) and isinstance(op.get("op_id"), str) for op in ops)
+
+
+def _valid_result_resp(code, payload):
+    return code == 200 and isinstance(payload, dict) and payload.get("ok") is True
+
+
 class Peer:
     def __init__(self, config, role, rpc_port, frame_hz, fault):
         self.config = config
@@ -43,7 +74,7 @@ class Peer:
         self.hello_ok = False
         self.lease_ms = 3000
         self.last_ok = None
-        self.backoff = 0.25
+        self.failures = 0
         self.cfg = None
         self.alive = True
         self.t0 = time.monotonic()
@@ -108,20 +139,23 @@ class Peer:
             if self.jobs:
                 time.sleep(1.0 / self.frame_hz)
                 continue
-            cfg = self._cfg()
-            if cfg is None:
-                time.sleep(2.0)
-                continue
+            if self.cfg is None:
+                fresh = self._read_config()
+                if fresh is None:
+                    time.sleep(self._p2_retry_s())
+                    continue
+                self.cfg = fresh
+            cfg = self.cfg
             if not self.hello_ok:
                 self._hello(cfg)
                 continue
             code, payload = self._request(cfg, "GET", "/poll", self._poll_query(), None)
-            if code == 200:
+            if _valid_poll_resp(code, payload):
                 self.last_ok = time.monotonic()
-                self.backoff = 0.25
+                self.failures = 0
                 bucket = []
-                ops = list(payload.get("ops") or [])
-                now_ms = payload.get("now_ms", 0)
+                ops = list(payload["ops"])
+                now_ms = payload["now_ms"]
                 batch_recv = time.monotonic()
                 while self.alive and (ops or self.jobs or self.burst is not None):
                     if self._take_one(ops, now_ms, bucket, batch_recv):
@@ -131,7 +165,7 @@ class Peer:
                         self._drain_rpc()
                 self._send_results(cfg, bucket)
             else:
-                self._on_http_error(cfg, code)
+                self._on_http_error()
 
     def _pump(self):
         if self._batch is None:
@@ -431,22 +465,25 @@ class Peer:
 
     def _http_loop(self):
         while self.alive:
-            cfg = self._cfg()
-            if cfg is None:
-                time.sleep(2.0)
-                continue
+            if self.cfg is None:
+                fresh = self._read_config()
+                if fresh is None:
+                    time.sleep(self._p2_retry_s())
+                    continue
+                self.cfg = fresh
+            cfg = self.cfg
             if not self.hello_ok:
                 self._hello(cfg)
                 continue
             code, payload = self._request(cfg, "GET", "/poll", self._poll_query(), None)
-            if code != 200:
-                self._on_http_error(cfg, code)
+            if not _valid_poll_resp(code, payload):
+                self._on_http_error()
                 continue
             self.last_ok = time.monotonic()
-            self.backoff = 0.25
+            self.failures = 0
             bucket = []
             done = threading.Event()
-            self.inbox.put((payload.get("ops") or [], payload.get("now_ms", 0), bucket, done))
+            self.inbox.put((payload["ops"], payload["now_ms"], bucket, done))
             while self.alive and not done.wait(timeout=0.2):
                 pass
             self._send_results(cfg, bucket)
@@ -460,26 +497,22 @@ class Peer:
             "proto": "qa0",
         }
         code, payload = self._request(cfg, "POST", "/hello", {}, body)
-        if code == 200:
-            self.lease_ms = int(payload.get("lease_ms") or self.lease_ms)
+        if _valid_hello_resp(code, payload):
+            self.lease_ms = int(payload["lease_ms"])
             self.hello_ok = True
-            self.backoff = 0.25
+            self.failures = 0
             return
-        self._on_http_error(cfg, code)
+        self._on_http_error()
 
-    def _on_http_error(self, cfg, code):
+    def _on_http_error(self):
         self.hello_ok = False
-        retry = (cfg.get("retry_ms") or 2000) / 1000.0
-        if code == 401:
-            if self.fault != "no_key_reload":
-                self.cfg = self._read_config()
-            time.sleep(retry)
-            return
-        if code == 409:
-            time.sleep(min(0.05, retry))
-            return
-        time.sleep(self.backoff)
-        self.backoff = min(retry, self.backoff * 2)
+        self.failures += 1
+        retry_ms = self.cfg["retry_ms"] if self.cfg is not None else 2000
+        shift = min(self.failures - 1, 30)
+        wait_ms = min(250 * (1 << shift), retry_ms)
+        time.sleep(wait_ms / 1000.0)
+        if self.fault != "no_key_reload":
+            self.cfg = self._read_config()
 
     def _send_results(self, cfg, bucket):
         gaps = (0.0, 0.25, 0.5, 1.0)
@@ -488,14 +521,13 @@ class Peer:
             if slow:
                 time.sleep(1.2)
             for gap in gaps:
+                if not self.alive:
+                    return
                 if gap:
                     time.sleep(gap)
-                code, _payload = self._request(cfg, "POST", "/result", {"peer": self.role, "inst": self.inst}, body)
-                if code == 200:
+                code, payload = self._request(cfg, "POST", "/result", {"peer": self.role, "inst": self.inst}, body)
+                if _valid_result_resp(code, payload):
                     break
-                if code == 401:
-                    self.hello_ok = False
-                    return
 
     def _poll_query(self):
         return {
@@ -505,29 +537,48 @@ class Peer:
             "tick_s": str(self.frame / self.frame_hz),
         }
 
-    def _cfg(self):
-        fresh = self._read_config()
-        if self.fault == "no_key_reload" and self.cfg is not None:
-            return self.cfg
-        if fresh is not None:
-            self.cfg = fresh
-        return fresh
+    def _p2_retry_s(self):
+        try:
+            data = json.loads(Path(self.config).read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return 2.0
+        if not isinstance(data, dict):
+            return 2.0
+        try:
+            retry = int(data.get("retry_ms") or 2000)
+        except (TypeError, ValueError):
+            retry = 2000
+        if retry <= 0:
+            retry = 2000
+        return retry / 1000.0
 
     def _read_config(self):
         try:
             data = json.loads(Path(self.config).read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
             return None
-        url = str(data.get("url") or "")
-        host = urllib.parse.urlparse(url).hostname
-        if host != "127.0.0.1":
+        if not isinstance(data, dict):
+            return None
+        url = data.get("url")
+        if not isinstance(url, str) or not url:
+            return None
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1":
+            return None
+        try:
+            port = parsed.port
+        except ValueError:
+            return None
+        if port is None or not (1 <= port <= 65535):
             return None
         key = data.get("key")
-        if not isinstance(key, str):
+        if not isinstance(key, str) or not key:
             return None
         try:
             retry = int(data.get("retry_ms") or 2000)
         except (TypeError, ValueError):
+            retry = 2000
+        if retry <= 0:
             retry = 2000
         return {"key": key, "retry_ms": retry, "url": url}
 
@@ -552,11 +603,13 @@ class Peer:
             except Exception:
                 raw = b""
         except Exception:
-            return 0, {}
+            return 0, None
+        if not raw:
+            return code, None
         try:
-            payload = json.loads(raw.decode("utf-8")) if raw else {}
-        except (UnicodeError, json.JSONDecodeError):
-            payload = {}
+            payload = json.loads(raw.decode("utf-8"), parse_constant=_reject_nonfinite)
+        except (UnicodeError, ValueError):
+            return code, None
         return code, payload
 
 
