@@ -1,6 +1,6 @@
 # F1b-bridge sin juego: protocolo `dsbx1`, lado del backend y mod falso
 
-2026-11-14 · tarea **F1b-bridge** (subfase offline de F1b), rama `claude/f1b-bridge` (apilada sobre `claude/f1b-web`, que lleva los arreglos de la revisión del código del PR #7) · spec de implementación (R25) de lo que queda de F1b tras F1b-web: [plan v2](2026-10-26-m1-cine-v2.md) F1 (líneas 88, 89 y 91), decisiones #2, #3, #8, #9, #10, #22, #23 y #24 · contrato: `DayZSandbox_dev/product-spec.md`, D2 (línea 88), E1 (99) y E3 (101) · v1.2, tras la ronda 2 de Sol (§12).
+2026-11-14 · tarea **F1b-bridge** (subfase offline de F1b), rama `claude/f1b-bridge` (apilada sobre `claude/f1b-web`, que lleva los arreglos de la revisión del código del PR #7) · spec de implementación (R25) de lo que queda de F1b tras F1b-web: [plan v2](2026-10-26-m1-cine-v2.md) F1 (líneas 88, 89 y 91), decisiones #2, #3, #8, #9, #10, #22, #23 y #24 · contrato: `DayZSandbox_dev/product-spec.md`, D2 (línea 88), E1 (99) y E3 (101) · v1.3, tras la ronda 3 de Sol (§12).
 
 **Por qué ahora.** S-puente pasó en retail (PR #6, `origin/claude/f0.2-sonda` `9103b5b`). En `evidence/m1/S-puente/retail-20261114T151150Z/verdict.json` (líneas 84-98): `PASA` 16/16, `p50_ms` 200,8, `p95_ms` 603,1, `max_ms` 8679 (un caso suelto) y 0 timeouts; con `lease_ms` = 3000, la ventana acepta hasta 2756 ms y rechaza desde 3037 ms. Guillermo aprobó F1b-bridge el 2026-11-14 en la sesión principal («Sí, arráncalo»).
 
@@ -96,11 +96,13 @@ Es el contrato del mod falso ahora y del mod real después.
    - `now_ms` es el de la respuesta de ese mismo poll.
 
    El backend genera la respuesta después de que el peer manda la petición, así que el instante local de `now_ms` es ≥ `t_envío`. Por eso `t_envío` + lo que queda es ≤ el plazo real, haya el tránsito o la espera que haya. Los 100 ms cubren la duración de un efecto ya empezado.
+
+   **El plazo para recordar es otro** (corrige B3-01). `plazo_local` sirve para dejar de actuar, y es temprano a propósito. Para guardar el resultado hace falta lo contrario, una cota **superior** de la ventana en que el backend aún puede reentregar: `retención_hasta = t_recepción + (ttl_ms − (now_ms − issued_ms)) + 1 s`, donde `t_recepción` es el instante local en que llegó la respuesta. La respuesta llega después de generarse, así que esa suma es ≥ el plazo real del backend. El segundo extra cubre la diferencia de ritmo entre los relojes.
 4. **Primero, la deduplicación** (corrige H1, H2, B-03 y B-04). La caché, indexada por `(session, op_id)`, guarda tanto las órdenes **en curso** como los resultados (`done`, `rejected` y `error`).
    - Una orden repetida que ya está en curso se ignora: no se ejecuta otra vez y el resultado lo dará la primera.
    - Una repetida ya terminada devuelve el resultado guardado con `dup: true`, sin efecto.
    - Las dos reglas van **antes de cualquier otra comprobación**. Si no, una orden ya ejecutada que se reentrega tarde volvería como `expired` y la web daría por fallido algo hecho (D2).
-   - **Retención.** Una entrada no se expulsa mientras su orden pueda reentregarse, es decir, hasta su `plazo_local` + 1 s. Pasado eso, se expulsa en orden FIFO (en Enforce, `RemoveOrdered(0)` y nunca `Remove(0)`: F0.3-0 v4.5, línea 595).
+   - **Retención.** Una entrada no se expulsa mientras su orden pueda reentregarse, es decir, hasta su `retención_hasta` (punto 3), nunca hasta su `plazo_local`. Pasado eso, se expulsa en orden FIFO (en Enforce, `RemoveOrdered(0)` y nunca `Remove(0)`: F0.3-0 v4.5, línea 595).
    - **Capacidad.** Hay sitio para 1024 entradas. Con la caché llena de entradas vivas, el peer no pide órdenes nuevas (solo `deliver=0`) hasta que caduque alguna: es contrapresión, no expulsión.
    - La caché no se vacía al presentarse otra vez: las entradas de otras sesiones simplemente envejecen.
 5. **Comprobaciones de una orden nueva**, en este orden, cada una con su `rejected/<motivo>` y sin efecto:
@@ -141,7 +143,7 @@ Es el contrato del mod falso ahora y del mod real después.
 
 ### 2.6 Constantes
 
-`WIRE_CAP` 3500 · `lease_ms` 3000 · `hold_ms` 2000 · mantenimiento cada 500 ms · margen del plazo local 100 ms · retención extra de la caché 1 s · `retry_ms` 2000 · `ttl_ms` 10000 · `queue_max` 32 · caché 1024 · barrido cada 250 ms · reintento de la lectura del mundo 1, 2, 4 y 8 s (y después cada 8 s). Todas, salvo `WIRE_CAP`, son parámetros de `Bridge(...)` y del mod falso, para que las pruebas las acorten.
+`WIRE_CAP` 3500 · `lease_ms` 3000 · `hold_ms` 2000 · mantenimiento cada 500 ms · margen del plazo local 100 ms · margen de `retención_hasta` 1 s · `retry_ms` 2000 · `ttl_ms` 10000 · `queue_max` 32 · caché 1024 · barrido cada 250 ms · reintento de la lectura del mundo 1, 2, 4 y 8 s (y después cada 8 s). Todas, salvo `WIRE_CAP`, son parámetros de `Bridge(...)` y del mod falso, para que las pruebas las acorten.
 
 ### 2.7 Validez de un resultado
 
@@ -267,7 +269,7 @@ Gate: el de F1b-web §7, con las pruebas nuevas dentro de la suite y el arnés E
 | BR5 resultado perdido | El mod ejecuta y pierde todos los envíos del resultado → reentrega a la misma `inst` → `dup: true` → `observado`, con efectos = 1; también si la reentrega llega con el plazo ya vencido en el peer | Acuse perdido → el resultado repetido no crea un segundo evento |
 | BR6 peer recreado, mundo conservado | Con los dos pasos ya hechos y antes de mandar el resultado, `restart_peer("server")` → `conn` sube → `parcial/conexion_perdida` enseguida, sin esperar al TTL; la lectura válida muestra la generación → `observado/reconciliada`; efectos = 1 | Sin reentrega a la `inst` nueva: con ella habría 2 efectos (X3 e). Recreado **entre** los dos pasos, la generación no es la suya y se queda `parcial` |
 | BR7 H1 | Backend reiniciado con el mod falso vivo: la orden `(S2, op-1)` se ejecuta, `dup: false`, y los efectos de `op-1` suben aunque la caché tenga `(S1, op-1)` | Con la caché indexada por `op_id` solo, devuelve el resultado viejo (X3 a) |
-| BR8 caché | Tras 1025 órdenes con el plazo vencido, la caché tiene exactamente las últimas 1024 en orden | Con el reloj controlado, una caché llena de entradas vivas no pide órdenes (solo `deliver=0`), y la reentrega de la más vieja sigue siendo `dup` y no repite el efecto (X3 b y p) |
+| BR8 caché | Tras 1025 órdenes con su retención vencida, la caché tiene exactamente las últimas 1024 en orden | Con el reloj controlado, una caché llena de entradas vivas no pide órdenes (solo `deliver=0`), y la reentrega de la más vieja sigue siendo `dup` y no repite el efecto (X3 b y p). Además, con capacidad 1, TTL de 10 s y un poll retenido 1,9 s antes de traer la orden A: se pierden todos los resultados de A, la contrapresión dura hasta que caduca la entrada y, al liberarse, la reentrega de A sigue siendo `dup` (retirar = 1, anotar = 1; X3 x, corrige B3-01) |
 | BR9 H3 | Un trabajo de 5 s con polls de mantenimiento termina `done`; los dos peers renuevan el lease con `deliver=0` | Polls cortados más de `lease_ms` **antes** del primer paso → `rejected/lease_expired`, efectos = 0 y `fallido`; el peer cliente también deja de dar su lease por bueno |
 | BR10 H5 | — | El mod falso no da por buenos un hello con `ok` ausente o `false`, con `lease_ms` 0 o con `session` mal formada, ni un poll sin `now_ms`, ni un acuse sin `ok`: no renueva el lease y reintenta |
 | BR11 plazo al llegar | — | Orden con el plazo ya vencido al llegar → `rejected/expired`, efectos = 0 y `fallido` |
@@ -310,7 +312,8 @@ Las mutaciones de X3:
 - (t) ignorar el primer resultado tardío de una `parcial`;
 - (u) anclar el plazo local a la recepción de la respuesta en vez de al envío del poll;
 - (v) reconciliar comparando solo `(session, op_id)` y `epoch`, sin `rev` ni `hash`;
-- (w) aceptar un poll con una `conn` anterior.
+- (w) aceptar un poll con una `conn` anterior;
+- (x) retener una entrada solo hasta `plazo_local` (o anclar `retención_hasta` al envío del poll).
 
 P1-P9b y las 114 pruebas actuales tienen que seguir pasando sin cambios. El arnés arranca el bridge en todas las corridas, pero con un TTL largo hasta P9b, para que ninguna orden de esos pasos caduque, y solo arranca el mod falso en P10.
 
@@ -354,6 +357,7 @@ Push y PR, solo con el visto bueno de Guillermo. Después, Sol revisa el código
 - **Perder la conexión falla las órdenes que esperan**: el usuario las vuelve a pedir. Es lo seguro, porque reconectar nunca ejecuta la cola vieja (E1).
 - **La cola sigue en memoria** (F1a): reiniciar el backend la pierde, y la reconciliación (§4) solo recupera lo que el mundo diga.
 - **Un solo proceso** sirve la API y el bridge; un long-poll ocupa un hilo por peer (2 en total).
+- **Los dos plazos del peer suponen que su reloj local avanza en tiempo real, al ritmo del monotónico del backend.** En el mod real, `GetTickTime()` da segundos desde el arranque, pero no está medido si se para durante una pausa o un tirón del servidor. Si se parase, `plazo_local` caería tarde en tiempo real. Lo mide F1b-peers (§11) y, si hace falta, usa otra fuente (nota de Sol, ronda 3).
 
 ## 11. Continuación: F1b-peers (los peers reales)
 
@@ -367,7 +371,8 @@ La parte de F1b que esta subfase no cierra (corrige B-09). La asigna la sesión 
 - **Gate**:
   - el linter offline de Enforce (`dayz-script-validator`) antes de declarar nada;
   - después, en partida y con el visto bueno de Guillermo para lanzar DayZ, E1 en retail (plan §4, línea 174) y la viabilidad del transporte de E2 con la mezcla de la sonda (plan F1, línea 93), con el bridge de esta subfase y el mismo contrato;
-  - la ventana del hombre muerto medida en cada peer (H3).
+  - la ventana del hombre muerto medida en cada peer (H3);
+  - el ritmo del reloj local de cada peer frente al del backend, también durante una pausa o un tirón, y la cota de 100 ms para un efecto ya empezado (§10).
 - **Cierre de F1**: F1 se cierra con los entregables del plan (líneas 86-91) y su gate (línea 80), no con esta subfase sola.
 
 ## 12. Cambios por la revisión
@@ -397,3 +402,9 @@ La parte de F1b que esta subfase no cierra (corrige B-09). La asigna la sesión 
 | B2-04 · importante · el sustituto `error/result_too_large`, con `read` vacío, chocaba con §2.7 | `rejected` y `error` pueden llevar `read` vacío (§2.7); BR15 exige acuse inmediato y `parcial` enseguida |
 | B2-05 · menor · la regla «`parcial` → `fallido` solo por `rejected`» no casaba con la tabla | Regla reescrita: solo el resultado del peer o una lectura llevan una `parcial` a `fallido`, nunca un plazo (§3.1) |
 | B2-06 · menor · BR19 decía «un solo efecto» con dos pasos por ejecución | Contadores por paso: retirar = 1, anotar = 1 |
+
+**Ronda 3 de Sol** (misma sesión, sobre `b6df2ad`; veredicto UNSOUND con un bloqueante nuevo). Sol da por cerrados B-01 y B2-01 a B2-06. El hallazgo nuevo se aplica:
+
+| Hallazgo | Qué cambia |
+|---|---|
+| B3-01 · bloqueante · el plazo conservador para ejecutar, anclado al envío del poll, se reutilizaba como límite para recordar: con un poll retenido cerca de `hold_ms`, la entrada se expulsaba antes de que el backend dejara de poder reentregar, y la orden se ejecutaba dos veces | Dos plazos distintos: `plazo_local` (anclado al envío, cota inferior) para dejar de actuar, y `retención_hasta` (anclado a la recepción + 1 s, cota superior) para recordar (§2.4.3 y §2.4.4). BR8 con poll retenido, capacidad 1 y resultados perdidos, y X3 (x). El supuesto de que los relojes avanzan al mismo ritmo pasa a §10 y al gate de F1b-peers (§11), como pidió Sol |
