@@ -33,6 +33,14 @@ class StdlibOnlyTests(unittest.TestCase):
                     top = module.split(".", 1)[0]
                     if top in sys.stdlib_module_names or _local(module):
                         continue
+                    # Excepcion brief S-track·1 §3 (2026-11-10-s-track-1-brief.md §3):
+                    # en qa/strack/ estan permitidos numpy y Pillow (con su propio requirements.txt).
+                    if path.is_relative_to(QA / "strack") and (
+                        top in ("numpy", "PIL")
+                        or (QA / "strack" / f"{top}.py").is_file()
+                        or (QA / "strack" / top).is_dir()
+                    ):
+                        continue
                     offenders.append(f"{path.relative_to(QA)}:{node.lineno} {module}")
                 del level
         self.assertEqual(offenders, [])
