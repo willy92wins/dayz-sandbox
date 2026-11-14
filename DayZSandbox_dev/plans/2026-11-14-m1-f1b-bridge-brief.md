@@ -421,3 +421,19 @@ La parte de F1b que esta subfase no cierra (corrige B-09). La asigna la sesión 
 | B4-01 · bloqueante · BR8 exigía que A se reentregara «al liberarse» la caché, a los 12,9 s; pero A vence a los 11,9 s, y un backend conforme ya no la reentrega, así que la prueba rechazaría una implementación correcta | BR8 exige contrapresión hasta los 12,9 s, A en `parcial` y luego `observado` por la lectura del mundo, y contadores 1 y 1. La mutación X3 (x) se caza por la liberación prematura y el doble efecto dentro del TTL |
 
 **Trazabilidad de los commits.** Las rondas 1 a 4 se hicieron sobre `86736e2`, `95bec2c`, `b6df2ad` y `c0e5240`, apilados sobre `08809dc`. Después, la rama se rebasó sobre `5efac44`, que añade C-06 de F1b-web. Ese rebase no tocó este fichero: las versiones v1.0 a v1.3 son `82f2343`, `27fd91c`, `7556670` y `5b7ef9f`, con el mismo contenido del brief.
+
+### Revisión del código
+
+Sol (`gpt-6.1-sol`, esfuerzo máximo, solo lectura, en una sesión distinta de la del brief) revisó el código en dos rondas, con un tope de 2 fijado antes de la primera (Guillermo, 2026-11-14: «Máximo 2 rondas de Sol»). Este bloque no cambia el contrato; solo recoge la revisión.
+
+**Ronda 1**, sobre `a0fa14c` (F1bb-1 y F1bb-2): UNSOUND. Los arreglos están en `73411ae` (F1bb-3). Los escribió Gemini 4 Argon por `agy`, porque Muse estaba al 99 % de su cupo; el orquestador corrió el gate y las mutaciones.
+
+| Hallazgo | Qué cambia |
+|---|---|
+| H1 · bloqueante · un poll tardío renovaba el lease antes de que el barrido declarase la pérdida, y ejecutaba cola vieja (§2.5.3, BR21) | La pérdida se comprueba también en cada poll del servidor, antes de la guarda y de renovar el lease, con `deliver=0` incluido |
+| H2 · bloqueante · una lectura sin la clave `generation` reconciliaba (§4) | `valid_world_read` exige la clave; su valor puede ser `null` |
+| H3 · importante · en el mod falso, esperar un acuse cortaba los polls de mantenimiento (§2.4.2) | Los resultados salen por su propio hilo; el de poll sigue con `deliver=0` cada `maintenance_ms` |
+| H4 · importante · un cuerpo aceptado que no llegaba colgaba el hilo, también tras `shutdown()` | Lectura del cuerpo con plazo total (`body_s`) y `shutdown()` corta las conexiones vivas |
+| H5 · menor · BR6 muestreaba el estado transitorio `parcial` | BR6 comprueba la secuencia de eventos |
+
+**Ronda 2**, sobre `73411ae`: SOUND-CON-FIXES. H1, H2, H3 y H5 quedan cerrados. H4 sigue abierto en parte: un handler ya aceptado que se registraba después de que `shutdown()` tomara su copia de conexiones quedaba vivo esperando las cabeceras. Con el tope alcanzado, el orquestador arbitra y aplica el arreglo que propone Sol: el cierre y el registro van bajo el mismo candado, y un alta tardía corta su propia conexión. Una prueba fuerza ese intercalado parando el handler justo antes de registrarse, y la mutación que quita la comprobación la hace fallar.

@@ -871,6 +871,34 @@ class IntegracionOrquestador(BridgeBase):
         self.assertTrue(cerrada, "shutdown no cerro la conexion colgada")
         self.assertLess(elapsed, 2.0)
 
+    def test_conexion_que_se_registra_tras_el_cierre_se_corta(self):
+        # H4, ronda 2 de Sol: el handler de una conexion ya aceptada se para justo antes de
+        # registrarse; shutdown() toma su copia sin ella y, al registrarse despues, la conexion
+        # tiene que cortarse sola en vez de quedarse esperando las cabeceras.
+        from app.backend import bridge as bridge_mod
+        env = self.make_env()
+        original = bridge_mod._BridgeHandler.setup
+        entra, sigue = threading.Event(), threading.Event()
+
+        def setup_tardio(handler):
+            entra.set()
+            sigue.wait(5)
+            original(handler)
+
+        bridge_mod._BridgeHandler.setup = setup_tardio
+        self.addCleanup(setattr, bridge_mod._BridgeHandler, "setup", original)
+        s = socket.create_connection(("127.0.0.1", env.bport))
+        self.addCleanup(s.close)
+        s.settimeout(3.0)
+        s.sendall(b"GET /poll HTTP/1.1\r\n")  # cabeceras sin terminar
+        self.assertTrue(entra.wait(2), "el handler no llego a setup")
+        env.backend.shutdown()
+        sigue.set()
+        _, cerrada = self._read_until_closed(s)
+        self.assertTrue(cerrada, "una conexion registrada despues del cierre siguio abierta")
+        with env.bridge._conns_lock:
+            self.assertEqual(env.bridge._conns, set())
+
 
 class ArranqueConBridge(unittest.TestCase):
     """`server.py --config` con bridge: guarda peer_key y con --port 0 no usa el puerto fijo."""

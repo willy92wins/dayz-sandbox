@@ -124,14 +124,17 @@ class Bridge:
         return self.httpd.server_address[1]
 
     def shutdown(self):
-        if self._closed:
-            return
-        self._closed = True
+        # `_closed` cambia bajo el mismo candado que el registro de conexiones: una conexion
+        # aceptada que se registre despues ya ve el cierre y se corta sola (setup), y una que
+        # se registro antes esta en la copia (H4, ronda 2 de Sol).
+        with self._conns_lock:
+            if self._closed:
+                return
+            self._closed = True
+            conns = list(self._conns)
         self._stop.set()
         with self.cond:
             self.cond.notify_all()
-        with self._conns_lock:
-            conns = list(self._conns)
         for conn in conns:
             try:
                 conn.shutdown(socket.SHUT_RDWR)
@@ -730,7 +733,14 @@ class _BridgeHandler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
         with self.bridge._conns_lock:
-            self.bridge._conns.add(self.connection)
+            tarde = self.bridge._closed
+            if not tarde:
+                self.bridge._conns.add(self.connection)
+        if tarde:  # aceptada antes del cierre y registrada despues: se corta aqui
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def finish(self):
         with self.bridge._conns_lock:
