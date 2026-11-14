@@ -1,0 +1,133 @@
+{"ev": "step_start", "step": "S0", "t_ms": 7.697}
+{"ev": "step_end", "step": "S0", "t_ms": 9.033}
+{"ev": "step_start", "step": "S1", "t_ms": 9.078}
+{"ev": "step_end", "step": "S1", "t_ms": 101769.232}
+{"ev": "step_start", "step": "S2", "t_ms": 101769.348}
+{"ev": "step_end", "step": "S2", "t_ms": 107769.862}
+{"ev": "step_start", "step": "S3", "t_ms": 107769.956}
+{"ev": "mix_op", "op_id": "op-1", "t_ms": 107866.75, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2", "t_ms": 108066.713, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-3", "t_ms": 108266.782, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-4", "t_ms": 108365.945, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-5", "t_ms": 108466.856, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-6", "t_ms": 108667.178, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-7", "t_ms": 108762.31, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-8", "t_ms": 108867.16, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-9", "t_ms": 109066.781, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-10", "t_ms": 109268.091, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-11", "t_ms": 109466.234, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-12", "t_ms": 109666.369, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-13", "t_ms": 109866.354, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-14", "t_ms": 110066.867, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-15", "t_ms": 110266.427, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-16", "t_ms": 116282.769, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-17", "t_ms": 122292.157, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-18", "t_ms": 122376.658, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-19", "t_ms": 122582.045, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-20", "t_ms": 122776.674, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-21", "t_ms": 122976.677, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-22", "t_ms": 123176.857, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-23", "t_ms": 123376.787, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-24", "t_ms": 123576.882, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-25", "t_ms": 123777.325, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-26", "t_ms": 123994.049, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-27", "t_ms": 130000.731, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-28", "t_ms": 130084.248, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-29", "t_ms": 130284.164, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-30", "t_ms": 130483.596, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-31", "t_ms": 136491.439, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-32", "t_ms": 142492.93, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-33", "t_ms": 142503.589, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-34", "t_ms": 142704.56, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-35", "t_ms": 142911.728, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-36", "t_ms": 148925.956, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-37", "t_ms": 149005.503, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-38", "t_ms": 149229.128, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-39", "t_ms": 155242.14, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-40", "t_ms": 155337.285, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-41", "t_ms": 155536.557, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-42", "t_ms": 161550.765, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-43", "t_ms": 161637.138, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-44", "t_ms": 161837.266, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-45", "t_ms": 167838.103, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-46", "t_ms": 167847.184, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-47", "t_ms": 168047.264, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-48", "t_ms": 174052.884, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-49", "t_ms": 174078.951, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-50", "t_ms": 180089.266, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-51", "t_ms": 180121.557, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-52", "t_ms": 180323.276, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-53", "t_ms": 180520.928, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-54", "t_ms": 180721.539, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-55", "t_ms": 180921.27, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-56", "t_ms": 186930.798, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-57", "t_ms": 187021.286, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-58", "t_ms": 187220.642, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-59", "t_ms": 187421.144, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-60", "t_ms": 193426.638, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-61", "t_ms": 199432.719, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-62", "t_ms": 199530.556, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-63", "t_ms": 199727.815, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-64", "t_ms": 199927.503, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-65", "t_ms": 200131.534, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-66", "t_ms": 206140.497, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-67", "t_ms": 212149.152, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-68", "t_ms": 218163.187, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-69", "t_ms": 218231.169, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-70", "t_ms": 218429.843, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-71", "t_ms": 224446.073, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-72", "t_ms": 224542.956, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-73", "t_ms": 224735.093, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-74", "t_ms": 224934.494, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-75", "t_ms": 225132.799, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-76", "t_ms": 225339.169, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-77", "t_ms": 225535.788, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-78", "t_ms": 225734.372, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-79", "t_ms": 225932.329, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-80", "t_ms": 226140.897, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-81", "t_ms": 226347.19, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-82", "t_ms": 232366.821, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-83", "t_ms": 232459.564, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-84", "t_ms": 232642.086, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-85", "t_ms": 232840.073, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-86", "t_ms": 233047.203, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-87", "t_ms": 233248.912, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-88", "t_ms": 233454.978, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-89", "t_ms": 233661.249, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-90", "t_ms": 239671.408, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-91", "t_ms": 239759.217, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-92", "t_ms": 239958.934, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-93", "t_ms": 240152.145, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-94", "t_ms": 246152.504, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-95", "t_ms": 252164.419, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-96", "t_ms": 258176.478, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-97", "t_ms": 258180.084, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-98", "t_ms": 258380.392, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-99", "t_ms": 258581.13, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-100", "t_ms": 258780.836, "verb": "srv_read"}
+{"ev": "step_end", "step": "S3", "t_ms": 258780.876}
+{"ev": "step_start", "peer": "server", "step": "N1", "t_ms": 258780.947}
+{"ev": "key_rotated", "peer": "server", "t_ms": 258979.952}
+{"ev": "config_restored", "peer": "server", "t_ms": 264581.232}
+{"ev": "expect", "peer": "server", "roles": {"B": "op-101", "S": "op-102", "read": "op-103"}, "step": "N1", "t_ms": 265480.09}
+{"ev": "step_end", "peer": "server", "step": "N1", "t_ms": 265480.136}
+{"ev": "step_start", "peer": "server", "step": "N2", "t_ms": 265480.19}
+{"ev": "expect", "peer": "server", "roles": {"B": "op-104", "S": "op-105", "read": "op-106"}, "step": "N2", "t_ms": 266080.243}
+{"ev": "step_end", "peer": "server", "step": "N2", "t_ms": 266080.287}
+{"ev": "step_start", "peer": "server", "step": "N3", "t_ms": 266080.337}
+{"ev": "expect", "peer": "server", "roles": {"B": "op-107", "S": "op-108", "read": "op-109"}, "step": "N3", "t_ms": 266679.674}
+{"ev": "step_end", "peer": "server", "step": "N3", "t_ms": 266679.738}
+{"ev": "step_start", "peer": "server", "step": "N4", "t_ms": 266679.767}
+{"ev": "expect", "peer": "server", "roles": {"a": "op-110", "b": "op-111", "read": "op-112", "repeat": "op-110"}, "step": "N4", "t_ms": 271584.065}
+{"ev": "step_end", "peer": "server", "step": "N4", "t_ms": 271584.188}
+{"ev": "step_start", "peer": "server", "step": "N5", "t_ms": 271584.221}
+{"ev": "expect", "peer": "server", "roles": {"c": "n5-server-c", "d": "op-113", "read": "op-114", "repeat": "n5-server-c"}, "step": "N5", "t_ms": 278099.5}
+{"ev": "step_end", "peer": "server", "step": "N5", "t_ms": 278099.551}
+{"ev": "step_start", "peer": "client", "step": "N1", "t_ms": 278099.578}
+{"ev": "key_rotated", "peer": "client", "t_ms": 284102.824}
+{"ev": "config_restored", "peer": "client", "t_ms": 297615.56}
+{"ev": "expect", "peer": "client", "roles": {"B": "op-115", "S": "op-116", "read": "op-117"}, "step": "N1", "t_ms": 311628.385}
+{"ev": "step_end", "peer": "client", "step": "N1", "t_ms": 311628.457}
+{"ev": "resume_timeout", "peer": "client", "t_ms": 311628.48}
+{"ev": "step_start", "step": "S10", "t_ms": 311628.494}
+{"ev": "step_end", "step": "S10", "t_ms": 311628.506}
