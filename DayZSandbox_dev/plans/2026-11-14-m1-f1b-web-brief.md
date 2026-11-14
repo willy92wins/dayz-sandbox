@@ -261,6 +261,7 @@ Las dos tandas van en serie sobre el worktree del orquestador, así que no hay c
 - **F1b-bridge**: peers, handshake, mod falso, catálogo real, cola acotada, TTL por orden, transiciones reales de estado y reconciliación con el registro del mod al reconectar (#10), después del veredicto de S-puente.
 - **F6**: el resto de la web (#29). Hasta entonces el prototipo sigue siendo la referencia de la interfaz.
 - **Riesgo aceptado: lectura con una cookie capturada.** Las cookies no distinguen puertos: otro servicio en 127.0.0.1, aunque no pueda leer `backend.json` (otro usuario de Windows o un contenedor con el puerto publicado), recibe la cookie si el navegador le pide algo. Con ella puede **leer** la escena y el flujo (`GET /api/scene`, `/api/scene/changes` y `/api/events`), pero no mutar, porque el `csrf` no viaja con la cookie (P6, `replay_stolen`). Leer no ejecuta órdenes (E1), #22 pide CSRF en lo que muta y la escena no lleva secretos. Cerrar también las lecturas obligaría a autenticar el SSE con algo distinto de la cookie, que es justo lo que la cookie resuelve, y queda fuera de F1b-web.
+- **Riesgo aceptado: dos entradas casi a la vez en dos pestañas** (C-01 de la revisión del código, §11). La cookie se fija al llegar las cabeceras de la respuesta y el `csrf` al leer su cuerpo. Si en ese intervalo, de milisegundos, otra pestaña completa su propia entrada, pueden quedar la cookie de una sesión y el `csrf` de la otra. El fallo es seguro: «Aplicar» da 403 `csrf_failed` y la web pide la clave otra vez. Serializar las entradas entre pestañas (Web Locks) no tiene prueba determinista en Chromium, así que no entra en F1b-web.
 - **Reiniciar el backend pide entrar otra vez**, porque las sesiones viven en memoria. Es el negativo «sesión vieja» de E1; F6 puede suavizarlo.
 - **La edad.** En un `snapshot` la da el backend con su reloj monotónico (`age_ms`), así que abrir o recargar la página no depende del reloj de pared, y dentro de una página la edad de un dato sin cambios nunca baja (P2b). Solo un `op.state` sin ancla previa usa el reloj de pared, al recibirlo: en uso normal llega en el instante del cambio, así que da casi 0 con cualquier reloj; si el reloj del PC retrocedió más de 2 s desde el dato, enseña «Edad desconocida». Queda un caso residual: un `op.state` repetido tras una reconexión corta, con el reloj retrasado menos de 2 s en ese intervalo, subestima la edad como mucho en lo que retrocedió el reloj.
 - **La cola se pierde al reiniciar el backend** (F1a): el `snapshot` del backend nuevo la vacía en la vista. Reconciliar con el mundo es de F1b-bridge (#10).
@@ -326,5 +327,15 @@ Las dos tandas van en serie sobre el worktree del orquestador, así que no hay c
   | (j) | P3 |
 
   La (a) que añade la fila sin mirar si ya existe duplica `op-1` y cae antes, en P3.
+
+**Revisión del código por Sol** (sesión nueva de `gpt-6.1-sol`, esfuerzo máximo y solo lectura, sobre `de5e565`): veredicto SOUND-CON-FIXES, 0 bloqueantes. El orquestador comprobó los cinco hallazgos y reprodujo C-02 y C-03 contra el servidor real. Guillermo decidió arreglar de C-02 a C-05 y aceptar C-01:
+
+| Hallazgo | Qué cambia |
+|---|---|
+| C-01 · importante · dos entradas casi simultáneas pueden dejar la cookie de una sesión y el `csrf` de otra | Riesgo aceptado y documentado en §10. El fallo es seguro (403 y volver a entrar) |
+| C-02 · importante · `discard_body` esperaba sin plazo un cuerpo anunciado que no llega: un POST rechazado retenía su hilo indefinidamente | Drenaje con plazo total (`Backend.drain_s`, 2 s) y cierre de la conexión. Prueba por socket de los tres rechazos (Host, cookie sin token y Bearer malo); X1 (i) |
+| C-03 · importante · la clave `"\ud800"` lanzaba una excepción en vez del 401 | `human_key_matches` trata como no válida una clave que no se puede codificar; W1 con `\ud800` y `\udfff`; X1 (j) |
+| C-04 · importante · el E2E recogía la consola del navegador sin buscar secretos en ella | Al final del guion, ni la clave ni ninguno de los `csrf` emitidos (5 entradas) aparecen en la consola de toda la corrida; X2 (k) y (l) |
+| C-05 · menor · la precondición aceptaba un `NODE_PATH` que Node no resuelve | La precondición pregunta a Node con el mismo `NODE_PATH` y desde la carpeta del guion; un `NODE_PATH` malo da INCONCLUSO (2) |
 
 **Hallazgos propios del orquestador** (sondas de Chromium del 2026-11-14): una página servida con `page.route` no llega a mandar peticiones a 127.0.0.1, así que P6 necesita un servidor real (§6.1); y tras `unroute`, `EventSource` reenvía el último `id` visto, de ahí el `id` alto del `snapshot` falso de P4.

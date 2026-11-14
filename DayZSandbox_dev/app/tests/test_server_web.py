@@ -145,7 +145,9 @@ class W1Entrada(WebBase):
 
     def test_entradas_invalidas_sin_cookie_ni_sesion(self):
         before = len(self.env.backend.sessions)
-        for body in ({}, {"key": "clave-mala"}, {"key": 123}, {"key": None}, {"key": AK}):
+        # "\ud800" y "\udfff": sustitutos aislados, JSON válido que no se puede codificar en UTF-8 (C-03).
+        for body in ({}, {"key": "clave-mala"}, {"key": 123}, {"key": None}, {"key": AK},
+                     {"key": "\ud800"}, {"key": "\udfff"}):
             st, hdrs, text, parsed = raw(self.env, "POST", "/api/session", body)
             self.assertEqual(st, 401)
             self.assertTrue(isinstance(parsed, dict) and parsed.get("code") == "unauthorized")
@@ -462,6 +464,47 @@ class W7ClavesIguales(unittest.TestCase):
         self.assertEqual(p.returncode, 2)
         self.assertTrue(igual not in output)
         self.assertTrue("Escuchando" not in output)
+
+
+class C02CuerpoQueNoLlega(WebBase):
+    """Un POST rechazado que anuncia cuerpo y no lo manda recibe su respuesta igual (C-02)."""
+
+    def send_headers_only(self, headers):
+        self.env.backend.drain_s = 0.3
+        s = socket.create_connection(("127.0.0.1", self.env.port))
+        s.settimeout(3.0)
+        try:
+            lines = ["POST /api/apply HTTP/1.1"] + ["%s: %s" % kv for kv in headers.items()] + \
+                    ["Content-Length: 1", "", ""]
+            s.sendall("\r\n".join(lines).encode("latin-1"))
+            got = b""
+            try:
+                while True:  # el servidor cierra tras responder: se lee hasta el cierre
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    got += chunk
+            except socket.timeout:
+                return got.decode("latin-1") or None
+            return got.decode("latin-1")
+        finally:
+            s.close()
+
+    def test_rechazos_responden_sin_esperar_al_cuerpo(self):
+        _, _, _, sid, csrf = self.do_login()
+        port = self.env.port
+        casos = [
+            ({"Host": "evil.test"}, "403", "forbidden"),
+            ({"Host": "127.0.0.1:%d" % port, "Cookie": cookie_header(self.env, sid),
+              "Origin": good_origin(self.env)}, "403", "csrf_failed"),
+            ({"Host": "127.0.0.1:%d" % port, "Authorization": "Bearer clave-mala"}, "401", "unauthorized"),
+        ]
+        for headers, status, code in casos:
+            text = self.send_headers_only(headers)
+            self.assertTrue(text is not None, "sin respuesta: %s" % code)
+            self.assertTrue(text.startswith("HTTP/1.0 " + status), code)
+            self.assertTrue(code in text)
+        self.assertEqual(self.env.backend.ops, {})
 
 
 if __name__ == "__main__":

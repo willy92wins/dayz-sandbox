@@ -40,6 +40,12 @@ const consoleTexts = [];
 function track(page) {
   page.on("console", (m) => consoleTexts.push(m.text()));
 }
+// csrf emitidos en la corrida, para buscarlos en la consola al final (C-04); nunca se imprimen.
+const seenCsrf = new Set();
+async function rememberCsrf(page) {
+  const v = await page.evaluate(() => localStorage.getItem("csrf"));
+  if (v) seenCsrf.add(v);
+}
 
 function rowLoc(page, opId) {
   return page.locator('tr[data-op-id="' + opId + '"]');
@@ -144,6 +150,7 @@ async function main() {
     assert(!cookies.some((c) => c.name.startsWith("dsbx_session_")), "P1: cookie tras clave mala");
     await login(page, HUMAN_KEY);
     await waitQueue(page);
+    await rememberCsrf(page);
     cookies = await context.cookies();
     const sess = cookies.find((c) => c.name.startsWith("dsbx_session_"));
     assert(sess, "P1: falta cookie de sesion");
@@ -189,6 +196,7 @@ async function main() {
     await waitLoginForm(page2);
     await login(page2, HUMAN_KEY);
     await waitQueue(page2);
+    await rememberCsrf(page2);
     const beforeIds = await page2.evaluate(() =>
       Array.from(document.querySelectorAll("tr[data-op-id]")).map((x) => x.getAttribute("data-op-id")));
     await page2.getByRole("button", { name: /^Aplicar rev / }).click();
@@ -366,6 +374,7 @@ async function main() {
     await waitLoginForm(page);
     await login(page, HUMAN_KEY);
     await waitQueue(page);
+    await rememberCsrf(page);
     await waitApplyEnabled(page);
     await sleep(500);
     assert((await rowLoc(page, "op-1").count()) === 0, "P7: op-1 sigue tras reiniciar y entrar");
@@ -439,7 +448,7 @@ async function main() {
       await Promise.race([hold.captured, sleep(15000).then(() => { throw new Error("P9a: no se capturo GET de A"); })]);
       await waitLoginForm(pageB, 15000);
       await login(pageB, HUMAN_KEY);
-      await waitQueue(pageB); await waitApplyEnabled(pageB);
+      await waitQueue(pageB); await rememberCsrf(pageB); await waitApplyEnabled(pageB);
       hold.release();
       await waitLoginForm(pageA, 15000);
       await assertBStillWorks(pageB);
@@ -463,7 +472,7 @@ async function main() {
       assert(rr && rr.ok, "P9b: restart fallo");
       await waitLoginForm(pageB, 15000);
       await login(pageB, HUMAN_KEY);
-      await waitQueue(pageB); await waitApplyEnabled(pageB);
+      await waitQueue(pageB); await rememberCsrf(pageB); await waitApplyEnabled(pageB);
       hold.release();
       await waitLoginForm(pageA, 15000);
       await assertBStillWorks(pageB);
@@ -471,6 +480,13 @@ async function main() {
       await pageA.close(); await pageB.close();
     }
     console.log("P9b OK");
+
+    // P8 sobre la consola de TODA la corrida, P9 incluido: ni la clave ni ningun csrf emitido (C-04).
+    assert(seenCsrf.size >= 5, "P8: no se registraron los csrf de las entradas");
+    const secretos = [HUMAN_KEY, ...seenCsrf];
+    assert(!consoleTexts.some((t) => secretos.some((s) => s && t.includes(s))),
+      "P8: un secreto aparece en la consola del navegador");
+    console.log("P8 consola sin secretos OK");
 
     await context.close();
     console.log("E2E OK");

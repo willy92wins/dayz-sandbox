@@ -27,6 +27,7 @@ CLIENT_QUEUE = 1000
 PING_S = 15
 TAKE_LOCKED = ("armada", "rodando")
 WAIT_MAX = 30
+DRAIN_S = 2.0  # tope total para descartar el cuerpo de un POST rechazado (C-02)
 HUMAN = {"role": "human", "id": "web"}
 AI = {"role": "ai", "id": "mcp"}
 
@@ -62,6 +63,7 @@ class Backend:
         self.sessions = {}
         self._sessions_lock = threading.Lock()
         self.op_mono = {}
+        self.drain_s = DRAIN_S
         self._keys = ((human_key, HUMAN), (ai_key, AI))
         self.horizon = horizon
         self.log = log if log is not None else sys.stderr
@@ -269,7 +271,13 @@ class Backend:
         return None
 
     def human_key_matches(self, key):
-        return isinstance(key, str) and hmac.compare_digest(key.encode(), self._keys[0][0].encode())
+        if not isinstance(key, str):
+            return False
+        try:
+            raw = key.encode("utf-8")
+        except UnicodeEncodeError:  # un sustituto aislado ("\ud800") no es la clave: 401, no excepción (C-03)
+            return False
+        return hmac.compare_digest(raw, self._keys[0][0].encode())
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -315,22 +323,37 @@ class Handler(BaseHTTPRequestHandler):
         return ("127.0.0.1:%d" % port, "localhost:%d" % port)
 
     def discard_body(self):
-        """Descarta sin parsear el cuerpo de un POST rechazado antes de leerlo."""
+        """Descarta sin parsear el cuerpo de un POST rechazado antes de leerlo.
+
+        Con un plazo total (`drain_s`): un cliente que anuncia un cuerpo y no lo manda no
+        retiene el hilo; se responde igual y se cierra la conexión (C-02).
+        """
         if self.command != "POST" or getattr(self, "_body_gone", False):
             return
         self._body_gone = True
+        self.close_connection = True
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             return
-        if length < 0 or length > MAX_BODY:
+        if length <= 0 or length > MAX_BODY:
             return
+        deadline = time.monotonic() + self.backend.drain_s
         remaining = length
-        while remaining > 0:
-            chunk = self.rfile.read(min(65536, remaining))
-            if not chunk:
-                break
-            remaining -= len(chunk)
+        try:
+            while remaining > 0:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return
+                self.connection.settimeout(left)
+                chunk = self.rfile.read1(min(65536, remaining))
+                if not chunk:
+                    return
+                remaining -= len(chunk)
+        except (OSError, ValueError):  # TimeoutError es OSError: plazo agotado o conexión rota
+            return
+        finally:
+            self.connection.settimeout(None)
 
     def check_host(self):
         if self.headers.get("Host") not in self._allowed_hosts():

@@ -22,17 +22,16 @@ from app.backend.server import Backend, now_ms  # noqa: E402
 from app.backend.store import Store  # noqa: E402
 
 
-def _playwright_resolvable():
-    node_path = os.environ.get("NODE_PATH", "")
-    for entry in node_path.split(os.pathsep):
-        if not entry:
-            continue
-        p = Path(entry)
-        if (p / "playwright" / "package.json").is_file():
-            return True
-        if (p / "node_modules" / "playwright" / "package.json").is_file():
-            return True
-    return False
+def _playwright_resolvable(node):
+    """Lo decide Node con el NODE_PATH de la corrida y desde la carpeta del guion, como hará el guion (C-05)."""
+    if not node or not os.environ.get("NODE_PATH"):
+        return False
+    try:
+        p = subprocess.run([node, "-e", "require.resolve('playwright')"], env=dict(os.environ),
+                           cwd=str(ROOT / "app" / "web" / "e2e"), capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return p.returncode == 0
 
 
 class EvilHandler(BaseHTTPRequestHandler):
@@ -101,7 +100,7 @@ def main():
     node = shutil.which("node")
     if not node:
         missing.append("node")
-    if not _playwright_resolvable():
+    if not _playwright_resolvable(node):
         missing.append("NODE_PATH que resuelva playwright")
     if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
         missing.append("PLAYWRIGHT_BROWSERS_PATH")
