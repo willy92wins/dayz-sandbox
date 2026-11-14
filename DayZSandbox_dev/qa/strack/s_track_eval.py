@@ -1275,6 +1275,8 @@ def detect_windows(samples):
     n = len(samples)
     if n == 0:
         return {}
+    # Ventanas sin etiqueta `giro` (H1): medida de reloj de pared, se queda
+    # en t_ms; no fecha nada del filtro.
     times = []
     t_acc = 0.0
     for i, row in enumerate(samples):
@@ -1523,6 +1525,8 @@ def build_ideal_mode_cameras(samples, reading):
                 pos_filt = pos_t.copy()
                 q_filt = q_t.copy()
             else:
+                # Filtro de mount03 (H1): aplicar alpha frame a frame con el
+                # dt de cada frame es integrar sobre el eje Σdt; no usa t_ms.
                 dt = max(1e-4, float(s.get("dt", 1.0 / 60.0)))
                 alpha = 1.0 - math.exp(-dt / 0.3)
                 pos_filt = pos_filt + alpha * (pos_t - pos_filt)
@@ -2029,6 +2033,46 @@ SUAVE_TRAMO_LABEL = {1: "s0", 2: "s03", 3: "s08"}
 SUAVE_TRAMO_SMOOTH = {1: 0.0, 2: 0.3, 3: 0.8, 4: 0.3}
 
 
+def _cum_dt_s(samples):
+    """Eje Σdt (vuelta 5, H1): instante final de cada frame acumulado desde dt.
+
+    El filtro del mod integra dt (CONTRACT §16), así que toda medida de lo
+    que hace el filtro se fecha en este eje, no en t_ms (otro reloj).
+    """
+    cum = []
+    acc = 0.0
+    for s in samples:
+        try:
+            dt = float(s.get("dt") or 0.0)
+        except (TypeError, ValueError):
+            dt = 0.0
+        if not math.isfinite(dt):
+            dt = 0.0
+        acc += dt
+        cum.append(acc)
+    return cum
+
+
+def _indice_intervalo_carga(samples):
+    """Índice de la fila cuyo dt es el intervalo de carga, o None (H2).
+
+    El intervalo de carga es solo el 0→1: el mod pone m_Frame=-1, arma
+    (TryArm, creación de cámara) en el mismo OnUpdate del frame 0 y el
+    tirón de esa creación y de la primera captura cae en el intervalo que
+    acaba en el frame 1. Que las dos primeras filas vistas sean la pareja
+    de carga solo queda probado si sus frames son exactamente 0 y 1; una
+    corrida que empieza en otro frame no tiene intervalo exento.
+    """
+    if len(samples) < 2:
+        return None
+    try:
+        if int(samples[0].get("frame")) == 0 and int(samples[1].get("frame")) == 1:
+            return 1
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
 def evaluate_suave_run(run):
     """T-suave numérica sobre samples.jsonl. Devuelve (filas, info) con info para el acuerdo entre regímenes."""
     samples = run["samples"]
@@ -2038,14 +2082,18 @@ def evaluate_suave_run(run):
     orient_at = {}
     if not samples:
         return rows, {"regime": regime, "orient_at": orient_at, "fps_measured": 0.0}
-    dts = [float(s.get("dt") or 0.0) for s in samples if float(s.get("dt") or 0.0) > 0]
+    # Vuelta 5 (H2): el intervalo de carga (solo el 0→1, ver
+    # _indice_intervalo_carga) queda fuera de N/Σdt, igual que en
+    # check_runs queda fuera de la deriva. Los demás intervalos cuentan.
+    carga_idx = _indice_intervalo_carga(samples)
+    dts = [float(s.get("dt") or 0.0) for i, s in enumerate(samples)
+           if i != carga_idx and float(s.get("dt") or 0.0) > 0]
     # Vuelta 3 (hallazgos 6 y 7): la cadencia se mide con frames y tiempo
-    # transcurrido (t_ms es el final de cada intervalo, §16); la mediana de
-    # dt se informa aparte y no certifica el regimen.
+    # transcurrido; la mediana de dt se informa aparte y no certifica el regimen.
     fps_median = round(1.0 / float(np.median(dts)), 3) if dts else 0.0
-    # Cadencia = frames / tiempo transcurrido de sus intervalos dt (cuyo
-    # final fecha t_ms, §16); en datos coherentes coincide con (n-1)/(t_n-t_1).
+    # Cadencia = frames / tiempo transcurrido de sus intervalos dt.
     fps_measured = round(len(dts) / sum(dts), 3) if dts else fps_median
+    cum_dt = _cum_dt_s(samples)
     fps_cap = None
     for s in samples:
         if s.get("fps_cap") is not None:
@@ -2206,18 +2254,22 @@ def evaluate_suave_run(run):
         prev_q = None
         prev_t = None
         orient_1_6 = None
-        # Origen explicito del salto: instante del frame previo al grupo.
-        # t_ms ya fecha el final del intervalo (§16): no se suma dt.
+        # Origen explicito del salto (vuelta 5, H1): instante Σdt del frame
+        # previo al grupo. Antes se fechaba con t_ms y un tirón real hacía
+        # discrepar 1,7° a dos cámaras correctas (falso acuerdo FPS).
         t_start = None
         if idxs:
             for j in range(idxs[0] - 1, -1, -1):
-                if samples[j].get("t_ms") is not None:
-                    t_start = float(samples[j].get("t_ms") or 0.0) / 1000.0
-                    prev_q = _cam_q_wxyz(samples[j].get("cam") or {})
-                    prev_t = t_start
-                    break
+                t_start = cum_dt[j]
+                prev_q = _cam_q_wxyz(samples[j].get("cam") or {})
+                prev_t = t_start
+                break
             if t_start is None:
-                t_start = float(samples[idxs[0]].get("t_ms") or 0.0) / 1000.0 - float(samples[idxs[0]].get("dt") or 0.0)
+                try:
+                    dt0 = float(samples[idxs[0]].get("dt") or 0.0)
+                except (TypeError, ValueError):
+                    dt0 = 0.0
+                t_start = cum_dt[idxs[0]] - dt0
         for i in idxs:
             s = samples[i]
             raw_q = _quat_raw_xyzw((s.get("cam") or {}).get("q"))
@@ -2226,7 +2278,7 @@ def evaluate_suave_run(run):
             q = _cam_q_wxyz(s.get("cam") or {})
             if q is not None and prev_q is not None:
                 path_deg += _quat_angle_deg(prev_q, q)
-            t_now = float(s.get("t_ms") or 0.0) / 1000.0
+            t_now = cum_dt[i]
             t_eff = t_now
             if orient_1_6 is None and t_start is not None and t_eff >= (t_start + 1.0 / 6.0) and q is not None:
                 if prev_q is not None and prev_t is not None and t_eff > prev_t:
@@ -2331,7 +2383,8 @@ def evaluate_suave_run(run):
         lata_missing = any(_vec3(((samples[i].get("lata") or {}).get("a"))) is None for i in eval_idxs) if eval_idxs else False
         giro_incomplete = False
         if is_giro:
-            t_last = float(samples[idxs[-1]].get("t_ms") or 0.0) / 1000.0 if idxs else 0.0
+            # Duración del grupo sobre Σdt (H1): es tiempo del filtro, no de pared.
+            t_last = cum_dt[idxs[-1]] if idxs else 0.0
             giro_incomplete = bool(
                 orient_1_6 is None or orient_1_6_deg is None or t_start is None or (t_last - t_start) < 1.0
             )
@@ -2711,6 +2764,48 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
                 if _quat_angle_deg(entries[i][2], entries[j][2]) > SUAVE_FPS_AGREE_DEG:
                     disagree_runs.add(entries[i][0]["run"])
                     disagree_runs.add(entries[j][0]["run"])
+    # Vuelta 5b (B2): el acuerdo no puede quedar satisfecho porque falte
+    # una comparación. Entre los regímenes cualificados para el acuerdo
+    # (fps válido, hallazgo 14, y con estímulo de giro válido por
+    # etiqueta, hallazgo 3), si la orientación a 1/6 s de alguno no entra
+    # en by_label por otra causa (fila INCONCLUSA o ausente), el acuerdo
+    # queda pendiente y ningún régimen que dependa de él se certifica
+    # PASA: sus filas de giro PASA pasan a INCONCLUSO con esta causa. Un
+    # régimen FALLA sigue aportando su orientación y no deja el acuerdo
+    # pendiente por sí solo; un régimen descalificado por fps o por
+    # estímulo no es una referencia que el acuerdo necesite.
+    acuerdo_pendiente = False
+    cualificados = []
+    for _run, _sinfo in suave_infos:
+        _srows = suave_rows_by_run[_run["run"]]
+        if _sinfo.get("fps_bad") or any(r["cause"] == "fps_regime" for r in _srows):
+            continue
+        cualificados.append((_run, _sinfo, _srows))
+    if len(cualificados) >= 2:
+        for label in ("giro+170", "giro-170"):
+            esperados = set()
+            for _run, _sinfo, _srows in cualificados:
+                _row = next((r for r in _srows if r.get("tramo") == label), None)
+                if _row is not None and _row.get("cause") in ("sin_estimulo", "estimulo_giro_invalido"):
+                    continue
+                esperados.add(_sinfo["regime"])
+            presentes = {regime for _run, regime, _q in by_label.get(label, [])}
+            if esperados - presentes:
+                acuerdo_pendiente = True
+    # Vuelta 5c (N1): un desacuerdo ya demostrado entre dos regímenes
+    # tiene prioridad sobre el estado pendiente: la falta de una tercera
+    # comparación no borra ese FALLA. Solo los regímenes sin desacuerdo
+    # demostrado pasan a INCONCLUSO por acuerdo pendiente; el régimen
+    # incompleto conserva su propia causa INCONCLUSA.
+    if acuerdo_pendiente:
+        for run_name, srows in suave_rows_by_run.items():
+            if run_name in disagree_runs:
+                continue
+            if srows and all(r["verdict"] == "PASA" for r in srows):
+                for row in srows:
+                    if str(row.get("tramo", "")).startswith("giro") and row["verdict"] == "PASA":
+                        row["verdict"] = "INCONCLUSO"
+                        row["cause"] = "suave_fps_agree_pendiente"
     for run, sinfo in suave_infos:
         srows = suave_rows_by_run[run["run"]]
         if run["run"] in disagree_runs:
