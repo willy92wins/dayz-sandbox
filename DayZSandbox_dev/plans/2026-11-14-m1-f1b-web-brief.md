@@ -338,4 +338,10 @@ Las dos tandas van en serie sobre el worktree del orquestador, así que no hay c
 | C-04 · importante · el E2E recogía la consola del navegador sin buscar secretos en ella | Al final del guion, ni la clave ni ninguno de los `csrf` emitidos (5 entradas) aparecen en la consola de toda la corrida; X2 (k) y (l) |
 | C-05 · menor · la precondición aceptaba un `NODE_PATH` que Node no resuelve | La precondición pregunta a Node con el mismo `NODE_PATH` y desde la carpeta del guion; un `NODE_PATH` malo da INCONCLUSO (2) |
 
+Ronda 2, sobre los arreglos (`08809dc`): Sol da por cerrados C-02, C-03, C-04 y C-05, y C-01 por bien documentado. Encuentra un hallazgo nuevo en la prueba de C-02:
+
+| Hallazgo | Qué cambia |
+|---|---|
+| C-06 · importante · la prueba de C-02 daba por buena una respuesta seguida de un timeout, así que no acreditaba el cierre ni la liberación del hilo; y con solo «no llega ningún byte» no distinguía un plazo total de uno renovable | La lectura exige EOF o corte del servidor, nunca un timeout, en menos de 2 s; un caso nuevo manda el cuerpo a goteo (un byte cada 50 ms) y exige el cierre en menos de 1,5 s. X1 (k), plazo renovable, y (l), hilo retenido tras el 403, tumban cada una su prueba |
+
 **Hallazgos propios del orquestador** (sondas de Chromium del 2026-11-14): una página servida con `page.route` no llega a mandar peticiones a 127.0.0.1, así que P6 necesita un servidor real (§6.1); y tras `unroute`, `EventSource` reenvía el último `id` visto, de ahí el `id` alto del `snapshot` falso de P4.

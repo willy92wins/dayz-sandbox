@@ -9,6 +9,8 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -467,30 +469,33 @@ class W7ClavesIguales(unittest.TestCase):
 
 
 class C02CuerpoQueNoLlega(WebBase):
-    """Un POST rechazado que anuncia cuerpo y no lo manda recibe su respuesta igual (C-02)."""
+    """Un POST rechazado que anuncia cuerpo y no lo manda (o lo manda a goteo) no retiene el hilo (C-02, C-06)."""
 
-    def send_headers_only(self, headers):
+    def open_post(self, headers, length):
         self.env.backend.drain_s = 0.3
         s = socket.create_connection(("127.0.0.1", self.env.port))
         s.settimeout(3.0)
-        try:
-            lines = ["POST /api/apply HTTP/1.1"] + ["%s: %s" % kv for kv in headers.items()] + \
-                    ["Content-Length: 1", "", ""]
-            s.sendall("\r\n".join(lines).encode("latin-1"))
-            got = b""
-            try:
-                while True:  # el servidor cierra tras responder: se lee hasta el cierre
-                    chunk = s.recv(4096)
-                    if not chunk:
-                        break
-                    got += chunk
-            except socket.timeout:
-                return got.decode("latin-1") or None
-            return got.decode("latin-1")
-        finally:
-            s.close()
+        lines = ["POST /api/apply HTTP/1.1"] + ["%s: %s" % kv for kv in headers.items()] + \
+                ["Content-Length: %d" % length, "", ""]
+        s.sendall("\r\n".join(lines).encode("latin-1"))
+        return s
 
-    def test_rechazos_responden_sin_esperar_al_cuerpo(self):
+    @staticmethod
+    def read_until_closed(s):
+        """(texto, cerrada). Solo cuenta como cierre el EOF o el corte del servidor; un timeout, no (C-06)."""
+        got = b""
+        try:
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    return got.decode("latin-1"), True
+                got += chunk
+        except socket.timeout:
+            return got.decode("latin-1"), False
+        except OSError:  # Windows corta (10053/10054) si el servidor cierra con datos sin leer
+            return got.decode("latin-1"), True
+
+    def test_rechazos_responden_y_cierran_sin_esperar_al_cuerpo(self):
         _, _, _, sid, csrf = self.do_login()
         port = self.env.port
         casos = [
@@ -500,11 +505,44 @@ class C02CuerpoQueNoLlega(WebBase):
             ({"Host": "127.0.0.1:%d" % port, "Authorization": "Bearer clave-mala"}, "401", "unauthorized"),
         ]
         for headers, status, code in casos:
-            text = self.send_headers_only(headers)
-            self.assertTrue(text is not None, "sin respuesta: %s" % code)
+            s = self.open_post(headers, 1)
+            t0 = time.monotonic()
+            try:
+                text, cerrada = self.read_until_closed(s)
+            finally:
+                s.close()
+            self.assertTrue(cerrada, "el servidor no cerro la conexion: %s" % code)
+            self.assertLess(time.monotonic() - t0, 2.0, code)
             self.assertTrue(text.startswith("HTTP/1.0 " + status), code)
             self.assertTrue(code in text)
         self.assertEqual(self.env.backend.ops, {})
+
+    def test_cuerpo_a_goteo_no_alarga_el_plazo(self):
+        # El plazo es total: un byte cada 50 ms no lo renueva. Con un plazo renovable, el drenaje
+        # seguiria mientras haya goteo y la conexion no se cerraria antes del timeout del cliente.
+        s = self.open_post({"Host": "evil.test"}, 100000)
+        parar = threading.Event()
+
+        def goteo():
+            try:
+                while not parar.is_set():
+                    s.sendall(b"x")
+                    time.sleep(0.05)
+            except OSError:
+                pass
+
+        hilo = threading.Thread(target=goteo, daemon=True)
+        t0 = time.monotonic()
+        hilo.start()
+        try:
+            _, cerrada = self.read_until_closed(s)
+            transcurrido = time.monotonic() - t0
+        finally:
+            parar.set()
+            hilo.join(2)
+            s.close()
+        self.assertTrue(cerrada, "el goteo mantuvo la conexion abierta")
+        self.assertLess(transcurrido, 1.5)
 
 
 if __name__ == "__main__":
