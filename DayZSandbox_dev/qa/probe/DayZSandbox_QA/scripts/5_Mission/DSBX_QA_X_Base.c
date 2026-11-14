@@ -767,10 +767,15 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 			Reject(res, "bad_args");
 			return;
 		}
-		// Testigo de BASE-11 (W4): witness_b opcional (0 o 1), como en qa_timer_start, sobre el recurso qa_effect.
-		float effWitnessF = 0.0;
+		// Testigo de BASE-11 (W4) sobre el recurso qa_effect: witness_b opcional (0 o 1) y armado por defecto,
+		// igual que _op_effect_start de qa/fake_ext_base.py.
+		float effWitnessF = 1.0;
 		bool effHasWitness = GetNum(args, "witness_b", effWitnessF);
-		if (effHasWitness && effWitnessF != 0.0 && effWitnessF != 1.0)
+		if (!effHasWitness)
+		{
+			effWitnessF = 1.0;
+		}
+		if (effWitnessF != 0.0 && effWitnessF != 1.0)
 		{
 			Reject(res, "bad_args");
 			return;
@@ -793,7 +798,7 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 		m_EffectDtsumMs = 0.0;
 		m_EffectNextMs = 0.0;
 		m_EffectSent = 0;
-		if (effHasWitness && effWitnessF == 1.0)
+		if (effWitnessF == 1.0)
 		{
 			ArmWitness(op.op_id, "qa_effect");
 		}
