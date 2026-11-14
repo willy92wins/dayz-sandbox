@@ -12,6 +12,44 @@ class DSBX_QA_PingEntry : Managed
 	}
 }
 
+// Un trabajo temporizador en marcha (el A de qa_timer_start o el testigo B). Misma semántica que
+// active_timers de qa/fake_ext_base.py: como mucho una muestra por tick, con el dtsum_ms real.
+class DSBX_QA_TimerRun : Managed
+{
+	bool m_Active;
+	string m_JobId;
+	float m_DurationMs;
+	float m_StepMs;
+	float m_DtsumMs;
+	float m_NextMs;
+	int m_Seq;
+	bool m_Freeze;
+
+	void DSBX_QA_TimerRun()
+	{
+		m_Active = false;
+		m_JobId = "";
+		m_DurationMs = 0.0;
+		m_StepMs = 0.0;
+		m_DtsumMs = 0.0;
+		m_NextMs = 0.0;
+		m_Seq = 0;
+		m_Freeze = false;
+	}
+
+	void Begin(string jobId, float durationMs, float stepMs, bool freeze)
+	{
+		m_Active = true;
+		m_JobId = jobId;
+		m_DurationMs = durationMs;
+		m_StepMs = stepMs;
+		m_DtsumMs = 0.0;
+		m_NextMs = 0.0;
+		m_Seq = 0;
+		m_Freeze = freeze;
+	}
+}
+
 class DSBX_QA_X_Base : DSBX_QA_Ext
 {
 	bool m_InitDone;
@@ -23,24 +61,13 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 	int m_RpcPingCount;
 	int m_RpcLastToken;
 	ref array<ref DSBX_QA_PingEntry> m_PingLog;
-	bool m_TimerActive;
-	string m_TimerJobId;
-	float m_TimerDurationMs;
-	float m_TimerStepMs;
-	float m_TimerDtsumMs;
-	float m_TimerNextMs;
-	int m_TimerSeq;
-	bool m_TimerFreeze;
-	bool m_TimerDefer;
+	ref DSBX_QA_TimerRun m_TimerRun;
+	ref DSBX_QA_TimerRun m_WitnessRun;
 	bool m_WitnessArmed;
 	string m_WitnessJobId;
+	string m_WitnessResource;
 	float m_WitnessStartedTickMs;
 	int m_WitnessAttemptsN;
-	bool m_WitnessActive;
-	string m_WitnessRunJobId;
-	float m_WitnessDtsumMs;
-	float m_WitnessNextMs;
-	int m_WitnessSeq;
 	ref array<string> m_TimerNcol;
 	ref array<string> m_EffectNcol;
 	ref array<string> m_EffectScol;
@@ -51,8 +78,9 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 	int m_EffectCount;
 	int m_EffectToken0;
 	string m_EffectClientInst;
-	float m_EffectElapsedMs;
-	int m_EffectIndex;
+	float m_EffectDtsumMs;
+	float m_EffectNextMs;
+	int m_EffectSent;
 	bool m_EffectIgnore;
 	bool m_EffectSkip;
 
@@ -67,24 +95,13 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 		m_RpcPingCount = 0;
 		m_RpcLastToken = 0;
 		m_PingLog = new array<ref DSBX_QA_PingEntry>();
-		m_TimerActive = false;
-		m_TimerJobId = "";
-		m_TimerDurationMs = 0.0;
-		m_TimerStepMs = 0.0;
-		m_TimerDtsumMs = 0.0;
-		m_TimerNextMs = 0.0;
-		m_TimerSeq = 0;
-		m_TimerFreeze = false;
-		m_TimerDefer = false;
+		m_TimerRun = new DSBX_QA_TimerRun();
+		m_WitnessRun = new DSBX_QA_TimerRun();
 		m_WitnessArmed = false;
 		m_WitnessJobId = "";
+		m_WitnessResource = "";
 		m_WitnessStartedTickMs = 0.0;
 		m_WitnessAttemptsN = 0;
-		m_WitnessActive = false;
-		m_WitnessRunJobId = "";
-		m_WitnessDtsumMs = 0.0;
-		m_WitnessNextMs = 0.0;
-		m_WitnessSeq = 0;
 		m_TimerNcol = new array<string>();
 		m_TimerNcol.Insert("seq_n");
 		m_TimerNcol.Insert("frame");
@@ -103,8 +120,9 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 		m_EffectCount = 0;
 		m_EffectToken0 = 0;
 		m_EffectClientInst = "";
-		m_EffectElapsedMs = 0.0;
-		m_EffectIndex = 0;
+		m_EffectDtsumMs = 0.0;
+		m_EffectNextMs = 0.0;
+		m_EffectSent = 0;
 		m_EffectIgnore = false;
 		m_EffectSkip = false;
 	}
@@ -426,30 +444,29 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 			return;
 		}
 		string fault = m_Probe.GetOpFault();
-		m_TimerFreeze = fault == "freeze_on_wait";
-		m_TimerDefer = fault == "defer_cleanup";
+		bool freezeWait = fault == "freeze_on_wait";
+		bool deferClean = fault == "defer_cleanup";
 		DSBX_QA_Job job = m_Jobs.GetJob(op.op_id);
 		if (job)
 		{
-			job.m_FreezeOnWait = m_TimerFreeze;
-			job.m_DeferCleanup = m_TimerDefer;
+			job.m_FreezeOnWait = freezeWait;
+			job.m_DeferCleanup = deferClean;
 		}
-		m_TimerActive = true;
-		m_TimerJobId = op.op_id;
-		m_TimerDurationMs = durationF;
-		m_TimerStepMs = stepF;
-		m_TimerDtsumMs = 0.0;
-		m_TimerNextMs = 0.0;
-		m_TimerSeq = 0;
-		m_WitnessArmed = false;
+		m_TimerRun.Begin(op.op_id, durationF, stepF, freezeWait);
 		if (hasWitness && witnessF == 1.0)
 		{
-			m_WitnessJobId = op.op_id + ":witness";
-			m_WitnessStartedTickMs = 0.0;
-			m_WitnessAttemptsN = 0;
-			m_WitnessArmed = true;
+			ArmWitness(op.op_id, "qa_timer");
 		}
 		m_Jobs.FillStartRead(res.read, op.op_id, "qa_timer");
+	}
+
+	void ArmWitness(string opId, string resource)
+	{
+		m_WitnessArmed = true;
+		m_WitnessResource = resource;
+		m_WitnessJobId = opId + ":witness";
+		m_WitnessStartedTickMs = 0.0;
+		m_WitnessAttemptsN = 0;
 	}
 
 	void DoRpcPing(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
@@ -750,6 +767,14 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 			Reject(res, "bad_args");
 			return;
 		}
+		// Testigo de BASE-11 (W4): witness_b opcional (0 o 1), como en qa_timer_start, sobre el recurso qa_effect.
+		float effWitnessF = 0.0;
+		bool effHasWitness = GetNum(args, "witness_b", effWitnessF);
+		if (effHasWitness && effWitnessF != 0.0 && effWitnessF != 1.0)
+		{
+			Reject(res, "bad_args");
+			return;
+		}
 		string err = m_Jobs.StartJob(this, op.op_id, "qa_effect", m_EffectNcol, m_EffectScol, 20, 4096, 900000.0, "stop");
 		if (err != "")
 		{
@@ -765,173 +790,155 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 		m_EffectCount = (int)countF;
 		m_EffectToken0 = (int)token0F;
 		m_EffectClientInst = clientInst;
-		m_EffectElapsedMs = 0.0;
-		m_EffectIndex = 0;
+		m_EffectDtsumMs = 0.0;
+		m_EffectNextMs = 0.0;
+		m_EffectSent = 0;
+		if (effHasWitness && effWitnessF == 1.0)
+		{
+			ArmWitness(op.op_id, "qa_effect");
+		}
 		m_Jobs.FillStartRead(res.read, op.op_id, "qa_effect");
 	}
 
-	void AdvanceWitness(float timeslice)
+	void TickTimerRun(DSBX_QA_TimerRun run, float timeslice)
 	{
-		// Testigo B de BASE-08 (§3.2): duration_ms = 200, sample_step_ms = 50; termina en done y libera qa_timer.
-		m_WitnessDtsumMs = m_WitnessDtsumMs + timeslice * 1000.0;
-		while (m_WitnessActive && m_WitnessDtsumMs >= m_WitnessNextMs && m_WitnessNextMs < 200.0)
+		// Igual que el bucle de active_timers de qa/fake_ext_base.py.
+		if (!run.m_Active)
 		{
-			array<float> wvals = new array<float>();
-			wvals.Insert(m_WitnessSeq);
-			wvals.Insert(m_Probe.m_Frame);
-			wvals.Insert(m_Probe.NowMs());
-			wvals.Insert(m_WitnessDtsumMs);
-			array<string> wsvals = new array<string>();
-			if (!m_Jobs.AppendRow(m_WitnessRunJobId, wvals, wsvals))
+			return;
+		}
+		if (m_Jobs.GetState(run.m_JobId) != "running")
+		{
+			run.m_Active = false;
+			return;
+		}
+		if (run.m_Freeze && m_Probe.IsTransportWaiting())
+		{
+			return;
+		}
+		run.m_DtsumMs = run.m_DtsumMs + timeslice * 1000.0;
+		if (run.m_DtsumMs >= run.m_DurationMs)
+		{
+			array<float> fvals = new array<float>();
+			fvals.Insert(run.m_Seq);
+			fvals.Insert(m_Probe.m_Frame);
+			fvals.Insert(m_Probe.NowMs());
+			fvals.Insert(run.m_DtsumMs);
+			array<string> fsvals = new array<string>();
+			run.m_Seq = run.m_Seq + 1;
+			if (m_Jobs.AppendRow(run.m_JobId, fvals, fsvals))
 			{
-				m_WitnessActive = false;
+				m_Jobs.EndJob(run.m_JobId, "done", "");
+			}
+			return;
+		}
+		if (run.m_DtsumMs >= run.m_NextMs)
+		{
+			array<float> nvals = new array<float>();
+			nvals.Insert(run.m_Seq);
+			nvals.Insert(m_Probe.m_Frame);
+			nvals.Insert(m_Probe.NowMs());
+			nvals.Insert(run.m_DtsumMs);
+			array<string> svals = new array<string>();
+			run.m_Seq = run.m_Seq + 1;
+			if (!m_Jobs.AppendRow(run.m_JobId, nvals, svals))
+			{
 				return;
 			}
-			m_WitnessSeq = m_WitnessSeq + 1;
-			m_WitnessNextMs = m_WitnessNextMs + 50.0;
+			if (run.m_StepMs > 0.0)
+			{
+				run.m_NextMs = run.m_NextMs + run.m_StepMs;
+			}
+			else
+			{
+				run.m_NextMs = run.m_DtsumMs;
+			}
 		}
-		if (m_WitnessActive && m_WitnessDtsumMs >= 200.0)
+	}
+
+	void TickEffect(float timeslice)
+	{
+		// Igual que el bucle de active_effects de qa/fake_ext_base.py: como mucho una emisión por tick.
+		if (!m_EffectActive)
 		{
-			array<float> wfvals = new array<float>();
-			wfvals.Insert(m_WitnessSeq);
-			wfvals.Insert(m_Probe.m_Frame);
-			wfvals.Insert(m_Probe.NowMs());
-			wfvals.Insert(m_WitnessDtsumMs);
-			array<string> wfsvals = new array<string>();
-			m_Jobs.AppendRow(m_WitnessRunJobId, wfvals, wfsvals);
-			m_WitnessSeq = m_WitnessSeq + 1;
-			m_WitnessActive = false;
-			m_Jobs.EndJob(m_WitnessRunJobId, "done", "");
+			return;
 		}
+		if (m_Jobs.GetState(m_EffectJobId) != "running")
+		{
+			m_EffectActive = false;
+			return;
+		}
+		m_EffectDtsumMs = m_EffectDtsumMs + timeslice * 1000.0;
+		if (m_EffectDtsumMs < m_EffectNextMs)
+		{
+			return;
+		}
+		float tickNow = m_Probe.NowMs();
+		float leaseAge = m_Probe.LeaseAgeMs();
+		int token = m_EffectToken0 + m_EffectSent;
+		// Hombre muerto (F02-H3): se comprueba antes de cada emisión; el mutante ignore_deadman no lo mira.
+		if (!m_EffectIgnore && m_Jobs.IsDeadmanTripped(m_EffectJobId))
+		{
+			array<float> bvals = new array<float>();
+			bvals.Insert(token);
+			bvals.Insert(tickNow);
+			bvals.Insert(leaseAge);
+			array<string> bsvals = new array<string>();
+			bsvals.Insert("blocked_lease");
+			m_Jobs.AppendRow(m_EffectJobId, bvals, bsvals);
+			m_Jobs.EndJob(m_EffectJobId, "failed", "lease_expired");
+			return;
+		}
+		if (!m_EffectSkip)
+		{
+			SendPing(token, m_EffectClientInst);
+		}
+		array<float> evals = new array<float>();
+		evals.Insert(token);
+		evals.Insert(tickNow);
+		evals.Insert(leaseAge);
+		array<string> esvals = new array<string>();
+		esvals.Insert("sent");
+		bool appended = m_Jobs.AppendRow(m_EffectJobId, evals, esvals);
+		m_EffectSent = m_EffectSent + 1;
+		m_EffectNextMs = m_EffectNextMs + m_EffectPeriodMs;
+		if (appended && m_EffectSent >= m_EffectCount)
+		{
+			m_Jobs.EndJob(m_EffectJobId, "done", "");
+		}
+	}
+
+	void TryArmedWitness()
+	{
+		// Testigo B (N4, W4): intenta arrancar en cada tick, sin depender de HTTP.
+		if (!m_WitnessArmed)
+		{
+			return;
+		}
+		m_WitnessAttemptsN = m_WitnessAttemptsN + 1;
+		string werr = m_Jobs.StartJob(this, m_WitnessJobId, m_WitnessResource, m_TimerNcol, m_NoScol, 20, 4096, 900000.0, "continue");
+		if (werr != "")
+		{
+			return;
+		}
+		DSBX_QA_Job wjob = m_Jobs.GetJob(m_WitnessJobId);
+		if (wjob)
+		{
+			// §13 A2: la marca del testigo es el start_tick_ms que guardó el gestor, sin segunda lectura del reloj.
+			m_WitnessStartedTickMs = wjob.m_StartTickMs;
+		}
+		m_WitnessArmed = false;
+		m_WitnessRun.Begin(m_WitnessJobId, 200.0, 50.0, false);
 	}
 
 	override void OnTick(float timeslice)
 	{
+		// Orden de qa/fake_ext_base.py: temporizadores, efecto y, al final, el intento del testigo.
 		m_TicksN = m_TicksN + 1;
-		if (m_WitnessActive)
-		{
-			AdvanceWitness(timeslice);
-		}
-		if (m_WitnessArmed)
-		{
-			m_WitnessAttemptsN = m_WitnessAttemptsN + 1;
-			string werr = m_Jobs.StartJob(this, m_WitnessJobId, "qa_timer", m_TimerNcol, m_NoScol, 20, 4096, 900000.0, "continue");
-			if (werr == "")
-			{
-				DSBX_QA_Job wjob = m_Jobs.GetJob(m_WitnessJobId);
-				if (wjob)
-				{
-					// §13 A2: la marca del testigo es el start_tick_ms que guardó el gestor, sin segunda lectura del reloj.
-					m_WitnessStartedTickMs = wjob.m_StartTickMs;
-				}
-				m_WitnessArmed = false;
-				m_WitnessActive = true;
-				m_WitnessRunJobId = m_WitnessJobId;
-				m_WitnessDtsumMs = 0.0;
-				m_WitnessNextMs = 0.0;
-				m_WitnessSeq = 0;
-			}
-		}
-		if (m_TimerActive)
-		{
-			bool frozen = false;
-			if (m_TimerFreeze && m_Probe.IsTransportWaiting())
-			{
-				frozen = true;
-			}
-			if (!frozen)
-			{
-				m_TimerDtsumMs = m_TimerDtsumMs + timeslice * 1000.0;
-				if (m_TimerStepMs > 0.0)
-				{
-					while (m_TimerActive && m_TimerDtsumMs >= m_TimerNextMs && m_TimerDtsumMs < m_TimerDurationMs)
-					{
-						array<float> nvals = new array<float>();
-						nvals.Insert(m_TimerSeq);
-						nvals.Insert(m_Probe.m_Frame);
-						nvals.Insert(m_Probe.NowMs());
-						nvals.Insert(m_TimerNextMs);
-						array<string> svals = new array<string>();
-						if (!m_Jobs.AppendRow(m_TimerJobId, nvals, svals))
-						{
-							m_TimerActive = false;
-							break;
-						}
-						m_TimerSeq = m_TimerSeq + 1;
-						m_TimerNextMs = m_TimerNextMs + m_TimerStepMs;
-					}
-				}
-				if (m_TimerActive && m_TimerDtsumMs >= m_TimerDurationMs)
-				{
-					array<float> fvals = new array<float>();
-					fvals.Insert(m_TimerSeq);
-					fvals.Insert(m_Probe.m_Frame);
-					fvals.Insert(m_Probe.NowMs());
-					fvals.Insert(m_TimerDtsumMs);
-					array<string> fsvals = new array<string>();
-					bool appended = m_Jobs.AppendRow(m_TimerJobId, fvals, fsvals);
-					if (appended)
-					{
-						m_TimerSeq = m_TimerSeq + 1;
-						if (m_TimerDefer)
-						{
-							m_Jobs.EndJobDeferred(m_TimerJobId, "done", "");
-							m_TimerActive = false;
-						}
-						else
-						{
-							m_Jobs.EndJob(m_TimerJobId, "done", "");
-						}
-					}
-					else
-					{
-						m_TimerActive = false;
-					}
-				}
-			}
-		}
-		if (m_EffectActive)
-		{
-			m_EffectElapsedMs = m_EffectElapsedMs + timeslice * 1000.0;
-			while (m_EffectActive && m_EffectIndex < m_EffectCount && m_EffectElapsedMs >= m_EffectIndex * m_EffectPeriodMs)
-			{
-				int token = m_EffectToken0 + m_EffectIndex;
-				float leaseAge = m_Probe.LeaseAgeMs();
-				float tickNow = m_Probe.NowMs();
-				if (!m_EffectIgnore && !m_Probe.LeaseOk())
-				{
-					array<float> bvals = new array<float>();
-					bvals.Insert(token);
-					bvals.Insert(tickNow);
-					bvals.Insert(leaseAge);
-					array<string> bsvals = new array<string>();
-					bsvals.Insert("blocked_lease");
-					m_Jobs.AppendRow(m_EffectJobId, bvals, bsvals);
-					m_Jobs.EndJob(m_EffectJobId, "failed", "lease_expired");
-					break;
-				}
-				if (!m_EffectSkip)
-				{
-					SendPing(token, m_EffectClientInst);
-				}
-				array<float> evals = new array<float>();
-				evals.Insert(token);
-				evals.Insert(tickNow);
-				evals.Insert(leaseAge);
-				array<string> esvals = new array<string>();
-				esvals.Insert("sent");
-				if (!m_Jobs.AppendRow(m_EffectJobId, evals, esvals))
-				{
-					break;
-				}
-				m_EffectIndex = m_EffectIndex + 1;
-				if (m_EffectIndex >= m_EffectCount)
-				{
-					m_Jobs.EndJob(m_EffectJobId, "done", "");
-					break;
-				}
-			}
-		}
+		TickTimerRun(m_TimerRun, timeslice);
+		TickTimerRun(m_WitnessRun, timeslice);
+		TickEffect(timeslice);
+		TryArmedWitness();
 	}
 
 	override void OnJobEnd(string job_id, string state, string reason)
@@ -940,17 +947,17 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 		m_LastEndJob = job_id;
 		m_LastEndState = state;
 		m_LastEndReason = reason;
-		if (job_id == m_TimerJobId)
+		if (job_id == m_TimerRun.m_JobId)
 		{
-			m_TimerActive = false;
+			m_TimerRun.m_Active = false;
+		}
+		if (job_id == m_WitnessRun.m_JobId)
+		{
+			m_WitnessRun.m_Active = false;
 		}
 		if (job_id == m_EffectJobId)
 		{
 			m_EffectActive = false;
-		}
-		if (job_id == m_WitnessRunJobId)
-		{
-			m_WitnessActive = false;
 		}
 	}
 
@@ -991,10 +998,10 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 
 	override void OnShutdown()
 	{
-		m_TimerActive = false;
+		m_TimerRun.m_Active = false;
+		m_WitnessRun.m_Active = false;
 		m_EffectActive = false;
 		m_WitnessArmed = false;
-		m_WitnessActive = false;
 	}
 }
 

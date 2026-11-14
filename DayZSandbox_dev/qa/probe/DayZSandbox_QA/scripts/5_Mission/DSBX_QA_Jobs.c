@@ -176,25 +176,26 @@ class DSBX_QA_JobMgr : Managed
 
 	string StartJob(DSBX_QA_Ext owner, string job_id, string resource, array<string> ncol, array<string> scol, int page_size, int max_rows, float max_duration_ms, string deadman)
 	{
+		// Mismo orden de validación que start_job de qa/fake_peer.py.
 		if (deadman != "stop" && deadman != "continue")
 		{
 			return "bad_deadman";
 		}
-		if (resource == "" || page_size <= 0)
+		if (resource == "")
 		{
 			return "bad_args";
 		}
-		if (max_rows <= 0)
+		if (job_id == "" || GetJob(job_id))
 		{
-			max_rows = JOB_MAX_ROWS;
+			return "bad_args";
+		}
+		if (page_size <= 0 || max_rows <= 0 || max_duration_ms <= 0.0)
+		{
+			return "bad_args";
 		}
 		if (max_rows > JOB_MAX_ROWS)
 		{
 			max_rows = JOB_MAX_ROWS;
-		}
-		if (max_duration_ms <= 0.0)
-		{
-			max_duration_ms = JOB_MAX_DURATION_MS;
 		}
 		if (max_duration_ms > JOB_MAX_DURATION_MS)
 		{
@@ -339,33 +340,40 @@ class DSBX_QA_JobMgr : Managed
 		}
 	}
 
-	bool EndJob(string job_id, string state, string reason)
+	bool IsDeadmanTripped(string job_id)
 	{
+		// Igual que JobMgr.is_deadman_tripped: solo un trabajo "stop" en marcha con el lease del peer caducado.
 		DSBX_QA_Job job = FindLive(job_id);
-		if (!job)
+		if (!job || job.m_State != "running" || job.m_Deadman != "stop")
 		{
 			return false;
 		}
-		if (job.m_State != "running")
+		if (!m_Probe)
 		{
 			return false;
 		}
-		job.m_State = state;
-		job.m_Reason = reason;
-		job.m_EndTickMs = NowMs();
+		return !m_Probe.LeaseOk();
+	}
+
+	void FinalizeCleanup(DSBX_QA_Job job)
+	{
 		if (job.m_Owner)
 		{
-			job.m_Owner.OnJobEnd(job_id, state, reason);
+			job.m_Owner.OnJobEnd(job.m_JobId, job.m_State, job.m_Reason);
 		}
 		job.m_OnJobEndTickMs = NowMs();
 		job.m_Released = true;
 		job.m_ReleasedTickMs = NowMs();
 		MoveToRetained(job);
-		return true;
 	}
 
-	bool EndJobDeferred(string job_id, string state, string reason)
+	bool EndJob(string job_id, string state, string reason)
 	{
+		// Única transición terminal (§3.1): fija state, reason y end_tick_ms una sola vez.
+		if (state != "done" && state != "stopped" && state != "failed" && state != "expired")
+		{
+			return false;
+		}
 		DSBX_QA_Job job = FindLive(job_id);
 		if (!job)
 		{
@@ -378,7 +386,13 @@ class DSBX_QA_JobMgr : Managed
 		job.m_State = state;
 		job.m_Reason = reason;
 		job.m_EndTickMs = NowMs();
-		job.m_EndDeferred = true;
+		// Mutante defer_cleanup (N4): sin transporte, OnJobEnd y la liberación esperan al primer poll 200.
+		if (job.m_DeferCleanup && reason != "shutdown" && m_Probe && m_Probe.IsTransportWaiting())
+		{
+			job.m_EndDeferred = true;
+			return true;
+		}
+		FinalizeCleanup(job);
 		return true;
 	}
 
@@ -403,14 +417,7 @@ class DSBX_QA_JobMgr : Managed
 			if (kept && kept.m_EndDeferred)
 			{
 				kept.m_EndDeferred = false;
-				if (kept.m_Owner)
-				{
-					kept.m_Owner.OnJobEnd(kept.m_JobId, kept.m_State, kept.m_Reason);
-				}
-				kept.m_OnJobEndTickMs = NowMs();
-				kept.m_Released = true;
-				kept.m_ReleasedTickMs = NowMs();
-				MoveToRetained(kept);
+				FinalizeCleanup(kept);
 			}
 			k = k + 1;
 		}
@@ -463,14 +470,7 @@ class DSBX_QA_JobMgr : Managed
 					live.m_ElapsedDtsumMs = live.m_ElapsedDtsumMs + timeslice * 1000.0;
 					if (now_ms - live.m_StartTickMs > live.m_MaxDurationMs)
 					{
-						if (live.m_DeferCleanup)
-						{
-							EndJobDeferred(jobId, "expired", "job_timeout");
-						}
-						else
-						{
-							EndJob(jobId, "expired", "job_timeout");
-						}
+						EndJob(jobId, "expired", "job_timeout");
 					}
 				}
 			}
