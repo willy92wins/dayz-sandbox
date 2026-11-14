@@ -481,6 +481,56 @@ async function main() {
     }
     console.log("P9b OK");
 
+    // P10 web con mod falso: Aplicar lleva la fila nueva a Observado (servidor)
+    {
+      const page10 = await context.newPage();
+      track(page10);
+      await page10.goto(BASE + "/");
+      await page10.waitForFunction(() => !!document.querySelector("#human-key") ||
+        Array.from(document.querySelectorAll("button")).some(
+          (b) => b.textContent && b.textContent.startsWith("Aplicar")),
+        null, { timeout: 15000 });
+      if ((await page10.locator("#human-key").count()) > 0 &&
+          await page10.locator("#human-key").isVisible()) {
+        await login(page10, HUMAN_KEY);
+      }
+      await waitQueue(page10);
+      await rememberCsrf(page10);
+      await waitApplyEnabled(page10);
+      const started = await cmd({ cmd: "start_fake_mod" });
+      assert(started && started.ok, "P10: el mod falso no reconcilio");
+      const respP10 = page10.waitForResponse(
+        (r) => r.url().includes("/api/apply") && r.request().method() === "POST", { timeout: 10000 });
+      await page10.getByRole("button", { name: /^Aplicar rev / }).click();
+      const resp10 = await respP10;
+      assert(resp10.status() === 200, "P10: Aplicar no 200");
+      const j10 = await resp10.json();
+      assert(j10 && j10.op_id, "P10: Aplicar sin op_id");
+      await waitRow(page10, j10.op_id, 10000);
+      await waitCellText(page10, j10.op_id, 2, "Observado", 15000);
+      assert((await cell(page10, j10.op_id, 4)) === "servidor", "P10: origen no servidor");
+      console.log("P10 OK");
+
+      // P11 web sin mod: la fila pasa de Pendiente a Fallido con TTL corto
+      const stopped = await cmd({ cmd: "stop_fake_mod" });
+      assert(stopped && stopped.ok, "P11: stop_fake_mod fallo");
+      const ttlSet = await cmd({ cmd: "set_bridge_ttl", ms: 1200 });
+      assert(ttlSet && ttlSet.ok, "P11: set_bridge_ttl fallo");
+      const respP11 = page10.waitForResponse(
+        (r) => r.url().includes("/api/apply") && r.request().method() === "POST", { timeout: 10000 });
+      await page10.getByRole("button", { name: /^Aplicar rev / }).click();
+      const resp11 = await respP11;
+      assert(resp11.status() === 200, "P11: Aplicar no 200");
+      const j11 = await resp11.json();
+      assert(j11 && j11.op_id && j11.op_id !== j10.op_id, "P11: Aplicar sin op_id nuevo");
+      await waitRow(page10, j11.op_id, 10000);
+      await waitCellText(page10, j11.op_id, 2, "Fallido", 15000);
+      assert((await cell(page10, j11.op_id, 2)) !== "Aplicado", "P11: llego a Aplicado sin mod");
+      assert((await cell(page10, j11.op_id, 4)) === "backend", "P11: origen no backend");
+      console.log("P11 OK");
+      await page10.close();
+    }
+
     // P8 sobre la consola de TODA la corrida, P9 incluido: ni la clave ni ningun csrf emitido (C-04).
     assert(seenCsrf.size >= 5, "P8: no se registraron los csrf de las entradas");
     const secretos = [HUMAN_KEY, ...seenCsrf];

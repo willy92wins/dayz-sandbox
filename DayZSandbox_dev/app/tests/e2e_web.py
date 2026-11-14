@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -113,13 +114,15 @@ def main():
 
     human_key = secrets.token_urlsafe(32)
     ai_key = secrets.token_urlsafe(32)
-    while ai_key == human_key:
+    peer_key = secrets.token_urlsafe(32)
+    while ai_key == human_key or peer_key in (human_key, ai_key):
         ai_key = secrets.token_urlsafe(32)
+        peer_key = secrets.token_urlsafe(32)
 
     tmpdir = tempfile.mkdtemp(prefix="dsbx-e2e-")
     log_path = os.path.join(tmpdir, "backend.log")
     log_file = open(log_path, "w+", encoding="utf-8", buffering=1)
-    secrets_seen = {human_key, ai_key}
+    secrets_seen = {human_key, ai_key, peer_key}
 
     def collect_secrets(backend):
         try:
@@ -132,6 +135,7 @@ def main():
             pass
 
     backend_holder = {}
+    fake_holder = {}
     threads = {}
     evil = None
     script_proc = None
@@ -144,7 +148,9 @@ def main():
 
         def make_backend(port):
             b = Backend(store, human_key, ai_key, port=port,
-                        web_root=str(ROOT / "app" / "web" / "dist"), log=log_file)
+                        web_root=str(ROOT / "app" / "web" / "dist"), log=log_file,
+                        bridge_port=0, peer_key=peer_key,
+                        bridge_kwargs={"ttl_ms": 600000})
             b.httpd.handle_error = lambda *a: None
             t = threading.Thread(target=b.serve_forever, daemon=True)
             t.start()
@@ -264,7 +270,29 @@ def main():
                         "session_status": session_status, "session_keys": session_keys,
                         "apply_status": apply_status, "apply_code": apply_code,
                         "ops_delta": after - before}
+            if cmd == "start_fake_mod":
+                if fake_holder.get("fake") is not None:
+                    return {"ok": True}
+                from app.tests.fake_mod import FakeMod
+                fake = FakeMod("http://127.0.0.1:%d" % b.bridge.port, peer_key,
+                               maintenance_ms=50, result_retry_ms=(100, 200, 400))
+                fake_holder["fake"] = fake
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline and not b.bridge.reconciled:
+                    time.sleep(0.05)
+                return {"ok": bool(b.bridge.reconciled)}
+            if cmd == "stop_fake_mod":
+                fake = fake_holder.pop("fake", None)
+                if fake is not None:
+                    fake.close()
+                return {"ok": True}
+            if cmd == "set_bridge_ttl":
+                b.bridge.ttl_ms = int(obj.get("ms", 1200))
+                return {"ok": True}
             if cmd == "restart":
+                fake = fake_holder.pop("fake", None)
+                if fake is not None:
+                    fake.close()
                 collect_secrets(b)
                 b.shutdown()
                 old_thread = threads.get("backend")
@@ -342,6 +370,12 @@ def main():
                 script_proc.kill()
             except OSError:
                 pass
+        try:
+            fake = fake_holder.pop("fake", None)
+            if fake is not None:
+                fake.close()
+        except Exception:
+            pass
         try:
             b = backend_holder.get("backend")
             if b is not None:
