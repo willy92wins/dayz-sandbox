@@ -1,6 +1,6 @@
 # F1b-bridge sin juego: protocolo `dsbx1`, lado del backend y mod falso
 
-2026-11-14 · tarea **F1b-bridge** (subfase offline de F1b), rama `claude/f1b-bridge` (apilada sobre `claude/f1b-web`, que lleva los arreglos de la revisión del código del PR #7) · spec de implementación (R25) de lo que queda de F1b tras F1b-web: [plan v2](2026-10-26-m1-cine-v2.md) F1 (líneas 88, 89 y 91), decisiones #2, #3, #8, #9, #10, #22, #23 y #24 · contrato: `DayZSandbox_dev/product-spec.md`, D2 (línea 88), E1 (99) y E3 (101) · v1.3, tras la ronda 3 de Sol (§12).
+2026-11-14 · tarea **F1b-bridge** (subfase offline de F1b), rama `claude/f1b-bridge` (apilada sobre `claude/f1b-web`, que lleva los arreglos de la revisión del código del PR #7) · spec de implementación (R25) de lo que queda de F1b tras F1b-web: [plan v2](2026-10-26-m1-cine-v2.md) F1 (líneas 88, 89 y 91), decisiones #2, #3, #8, #9, #10, #22, #23 y #24 · contrato: `DayZSandbox_dev/product-spec.md`, D2 (línea 88), E1 (99) y E3 (101) · **v1.4, congelado**: revisión de Sol cerrada en la ronda 4, y su último hallazgo lo arbitró el orquestador (§12).
 
 **Por qué ahora.** S-puente pasó en retail (PR #6, `origin/claude/f0.2-sonda` `9103b5b`). En `evidence/m1/S-puente/retail-20261114T151150Z/verdict.json` (líneas 84-98): `PASA` 16/16, `p50_ms` 200,8, `p95_ms` 603,1, `max_ms` 8679 (un caso suelto) y 0 timeouts; con `lease_ms` = 3000, la ventana acepta hasta 2756 ms y rechaza desde 3037 ms. Guillermo aprobó F1b-bridge el 2026-11-14 en la sesión principal («Sí, arráncalo»).
 
@@ -269,7 +269,12 @@ Gate: el de F1b-web §7, con las pruebas nuevas dentro de la suite y el arnés E
 | BR5 resultado perdido | El mod ejecuta y pierde todos los envíos del resultado → reentrega a la misma `inst` → `dup: true` → `observado`, con efectos = 1; también si la reentrega llega con el plazo ya vencido en el peer | Acuse perdido → el resultado repetido no crea un segundo evento |
 | BR6 peer recreado, mundo conservado | Con los dos pasos ya hechos y antes de mandar el resultado, `restart_peer("server")` → `conn` sube → `parcial/conexion_perdida` enseguida, sin esperar al TTL; la lectura válida muestra la generación → `observado/reconciliada`; efectos = 1 | Sin reentrega a la `inst` nueva: con ella habría 2 efectos (X3 e). Recreado **entre** los dos pasos, la generación no es la suya y se queda `parcial` |
 | BR7 H1 | Backend reiniciado con el mod falso vivo: la orden `(S2, op-1)` se ejecuta, `dup: false`, y los efectos de `op-1` suben aunque la caché tenga `(S1, op-1)` | Con la caché indexada por `op_id` solo, devuelve el resultado viejo (X3 a) |
-| BR8 caché | Tras 1025 órdenes con su retención vencida, la caché tiene exactamente las últimas 1024 en orden | Con el reloj controlado, una caché llena de entradas vivas no pide órdenes (solo `deliver=0`), y la reentrega de la más vieja sigue siendo `dup` y no repite el efecto (X3 b y p). Además, con capacidad 1, TTL de 10 s y un poll retenido 1,9 s antes de traer la orden A: se pierden todos los resultados de A, la contrapresión dura hasta que caduca la entrada y, al liberarse, la reentrega de A sigue siendo `dup` (retirar = 1, anotar = 1; X3 x, corrige B3-01) |
+| BR8 caché | Tras 1025 órdenes con su retención vencida, la caché tiene exactamente las últimas 1024 en orden | Con el reloj controlado, una caché llena de entradas vivas no pide órdenes (solo `deliver=0`), y la reentrega de la más vieja sigue siendo `dup` y no repite el efecto (X3 b y p). Además, con capacidad 1, TTL de 10 s y un poll retenido 1,9 s antes de traer la orden A, que vence en el backend a los 11,9 s, y con todos los resultados de A perdidos:
+  - el peer no manda ningún poll entregador hasta que caduca su entrada, a los 12,9 s (contrapresión);
+  - A pasa a `parcial/sin_resultado` al vencer su TTL y la lectura del mundo la lleva a `observado/reconciliada`;
+  - retirar = 1, anotar = 1.
+
+  Con la retención solo hasta `plazo_local` (X3 x), la entrada caduca antes de 11,9 s, el peer pide órdenes, A se reentrega dentro de su TTL y se ejecuta otra vez (retirar = 2): la prueba lo caza (corrige B3-01 y B4-01) |
 | BR9 H3 | Un trabajo de 5 s con polls de mantenimiento termina `done`; los dos peers renuevan el lease con `deliver=0` | Polls cortados más de `lease_ms` **antes** del primer paso → `rejected/lease_expired`, efectos = 0 y `fallido`; el peer cliente también deja de dar su lease por bueno |
 | BR10 H5 | — | El mod falso no da por buenos un hello con `ok` ausente o `false`, con `lease_ms` 0 o con `session` mal formada, ni un poll sin `now_ms`, ni un acuse sin `ok`: no renueva el lease y reintenta |
 | BR11 plazo al llegar | — | Orden con el plazo ya vencido al llegar → `rejected/expired`, efectos = 0 y `fallido` |
@@ -408,3 +413,11 @@ La parte de F1b que esta subfase no cierra (corrige B-09). La asigna la sesión 
 | Hallazgo | Qué cambia |
 |---|---|
 | B3-01 · bloqueante · el plazo conservador para ejecutar, anclado al envío del poll, se reutilizaba como límite para recordar: con un poll retenido cerca de `hold_ms`, la entrada se expulsaba antes de que el backend dejara de poder reentregar, y la orden se ejecutaba dos veces | Dos plazos distintos: `plazo_local` (anclado al envío, cota inferior) para dejar de actuar, y `retención_hasta` (anclado a la recepción + 1 s, cota superior) para recordar (§2.4.3 y §2.4.4). BR8 con poll retenido, capacidad 1 y resultados perdidos, y X3 (x). El supuesto de que los relojes avanzan al mismo ritmo pasa a §10 y al gate de F1b-peers (§11), como pidió Sol |
+
+**Ronda 4 de Sol, la última** (misma sesión, sobre `c0e5240`; veredicto UNSOUND con un bloqueante nuevo). Sol da por cerrado B3-01. Con esta ronda se llega al tope fijado antes de la ronda 1, así que el último hallazgo lo **arbitra el orquestador**: aplica el arreglo que propone Sol y congela el brief.
+
+| Hallazgo | Qué cambia |
+|---|---|
+| B4-01 · bloqueante · BR8 exigía que A se reentregara «al liberarse» la caché, a los 12,9 s; pero A vence a los 11,9 s, y un backend conforme ya no la reentrega, así que la prueba rechazaría una implementación correcta | BR8 exige contrapresión hasta los 12,9 s, A en `parcial` y luego `observado` por la lectura del mundo, y contadores 1 y 1. La mutación X3 (x) se caza por la liberación prematura y el doble efecto dentro del TTL |
+
+**Trazabilidad de los commits.** Las rondas 1 a 4 se hicieron sobre `86736e2`, `95bec2c`, `b6df2ad` y `c0e5240`, apilados sobre `08809dc`. Después, la rama se rebasó sobre `5efac44`, que añade C-06 de F1b-web. Ese rebase no tocó este fichero: las versiones v1.0 a v1.3 son `82f2343`, `27fd91c`, `7556670` y `5b7ef9f`, con el mismo contenido del brief.
