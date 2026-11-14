@@ -776,11 +776,9 @@ class DSBX_QA_Probe : Managed
 		}
 		if (created)
 		{
+			// §11 D5: el agotamiento se declara solo cuando hace falta CREAR con created_n >= budget_n
+			// (arriba); reutilizar el pool tras la creación número budget_n sigue siendo sano.
 			m_CallbacksCreatedN = m_CallbacksCreatedN + 1;
-			if (m_CallbacksCreatedN >= m_CallbackBudget)
-			{
-				NoteBudgetReached();
-			}
 		}
 		m_NextGen = m_NextGen + 1;
 		cb.Arm(this, kind, m_NextGen);
