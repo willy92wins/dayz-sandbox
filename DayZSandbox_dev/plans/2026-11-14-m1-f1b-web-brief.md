@@ -111,12 +111,12 @@ Y la edad, que #23 también pide que lleve cada dato: `apply` anota en `Backend.
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
     "typescript": "5.9.3",
-    "vite": "6.4.2"
+    "vite": "6.4.5"
   }
 }
 ```
 
-- Versiones publicadas entre 2025-09-30 y 2026-04-06 [V `npm view <paquete> time`, 2026-11-14]. Se instalan con `npm ci --ignore-scripts`. `package-lock.json` se versiona; `node_modules/` y `dist/` no (`app/web/.gitignore`).
+- Versiones publicadas entre 2025-09-30 y 2026-10-21 [V `npm view <paquete> time`, 2026-11-14]. Vite iba en 6.4.2 hasta que `npm audit` marcó alta `vite <=6.4.3`: siete avisos, todos del servidor de desarrollo, que aquí no se usa (solo `vite build`). Aun así se sube a 6.4.5, el parche más reciente con más de dos semanas, y `npm audit` da 0 vulnerabilidades. Se instalan con `npm ci --ignore-scripts`. `package-lock.json` se versiona; `node_modules/` y `dist/` no (`app/web/.gitignore`).
 - Nada más: sin `@vitejs/plugin-react` (el JSX lo compila esbuild con `"jsx": "react-jsx"` en `tsconfig.json`), sin router, sin librería de estado y sin framework de CSS.
 - `npm run build` deja `dist/index.html` y `dist/assets/*.js|*.css`, con nombres que casen la expresión de §3. TypeScript en modo `strict`. `index.html` sin scripts ni estilos en línea, por la CSP de §3.
 - Medido el 2026-11-14 en una copia aparte: `npm ci --ignore-scripts --offline` desde la caché, `tsc` y `vite build` salen 0 con un componente TSX de prueba, y el build deja un único `<script type="module" crossorigin src="/assets/index-<hash>.js">`.
@@ -303,5 +303,28 @@ Las dos tandas van en serie sobre el worktree del orquestador, así que no hay c
 | Hallazgo | Qué cambia |
 |---|---|
 | I-01 · importante · un `snapshot` procesado con retraso deja el ancla baja, y conservarla perpetúa el desfase | El ancla se corrige al alza con un `age_ms` mayor, nunca a la baja (§5.2); P2b (0) con el reloj de la página parado; X2 (i) |
+
+**Revisión del código** (el orquestador, de otra familia que los workers, sobre el diff y sin fiarse de los recibos):
+- **F1bw-1** (Muse, en una copia con sandbox de ficheros y aprobación activos). Se acepta tal cual. Desviación aceptada: `GET /api/session` también responde 200 `{ok: true}` a un Bearer válido, nunca con `csrf`, así que no cambia nada de §2. X1 de la (a) a la (h): las 8 mutaciones tumban al menos una prueba.
+- **F1bw-2** (Muse, en otra copia con sandbox). El orquestador hace tres arreglos:
+  - las etiquetas de estado se buscan solo entre las claves propias: un estado `toString` dejaba la celda vacía en vez de «Desconocido»; P3 lo comprueba ahora y X2 (j) lo mata;
+  - la consulta de sesión se reintenta si falla por red: sin eso, «Reconectando…» nunca volvía a conectar;
+  - la etiqueta del formulario ya no enseña las comillas invertidas.
+- Desviaciones aceptadas del arnés: silencia `handle_error` del backend (ruido de Chromium al cerrar conexiones; los pasos siguen fallando por comportamiento) y sale con 1, no con 2, si no puede reabrir el puerto (medido: lo reabre en 0,001 s).
+- **Vite** sube de 6.4.2 a 6.4.5 por `npm audit` (§5.1).
+- **X2 del orquestador**, sobre una copia: las 11 mutaciones mueren:
+
+  | Mutación | Paso que falla |
+  |---|---|
+  | (a), como upsert optimista | P4 |
+  | (b) | P2 |
+  | (c), (e), (h) e (i) | P2b |
+  | (d) | P5 |
+  | (d) con P5 saltado | P6: los POST de la web ajena dejan de dar 403 |
+  | (f) | P9a |
+  | (g) | P9b |
+  | (j) | P3 |
+
+  La (a) que añade la fila sin mirar si ya existe duplica `op-1` y cae antes, en P3.
 
 **Hallazgos propios del orquestador** (sondas de Chromium del 2026-11-14): una página servida con `page.route` no llega a mandar peticiones a 127.0.0.1, así que P6 necesita un servidor real (§6.1); y tras `unroute`, `EventSource` reenvía el último `id` visto, de ahí el `id` alto del `snapshot` falso de P4.
