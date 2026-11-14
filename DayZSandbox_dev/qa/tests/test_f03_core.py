@@ -5,6 +5,7 @@ cargue sin ImportError y falle por asercion sobre la conducta vieja en cada uno
 de los tres grupos: bridge_qa, m1_gate y fake_peer (§7.4 del encargo).
 """
 
+import contextlib
 import copy
 import http.client
 import importlib
@@ -943,6 +944,8 @@ class BridgeF03Tests(unittest.TestCase):
     def test_bridge_run_id_and_auto_op_id_include_run_id(self):
         rows = []
         b = bridge_qa.QABridge(200, 1000, rows.append)
+        # Arrancado: stop() sin start() se colgaba en socketserver.shutdown() (tambien en e3f530e, R2-1).
+        b.start()
         try:
             self.assertTrue(hasattr(b, "run_id"), "QABridge missing run_id")
             self.assertRegex(b.run_id, r"^[0-9a-f]{8}$")
@@ -1028,9 +1031,12 @@ class BridgeF03Tests(unittest.TestCase):
             self.assertFalse(any(r.get("ev") == "enq" for r in rows))
 
             # Igualdad exacta de poll.body_len entre sano (24 "_") y mutante ("freeze_on_wait" rellenado a 24)
-            with tempfile.TemporaryDirectory() as tmp:
+            # ExitStack dentro del mismo with: cierra los contextos ANTES de borrar el directorio (Windows, R2-4).
+            with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as closers:
                 ctx1 = f03_common.PartContext.from_bridge(b, Path(tmp) / "p1")
+                closers.callback(ctx1.close)
                 ctx2 = f03_common.PartContext.from_bridge(b, Path(tmp) / "p2")
+                closers.callback(ctx2.close)
                 ctx2.op_nonce = ctx1.op_nonce
 
                 def _serve_once():
@@ -1092,7 +1098,8 @@ class BridgeF03Tests(unittest.TestCase):
             issued_f = 500.0
             while True:
                 args_c = wire.pack_payload(scalars_str={"p": "a" * pad_len})
-                w_ord = {"args": args_c, "inst": "S1", "issued_ms": issued_f, "op_id": cand_id, "ttl_ms": 500000000, "verb": "qa_echo"}
+                # Medida como la hace enqueue(): con full_args() (R2-2, el mismo defecto en la prueba).
+                w_ord = {"args": bridge_qa.full_args(args_c), "inst": "S1", "issued_ms": issued_f, "op_id": cand_id, "ttl_ms": 500000000, "verb": "qa_echo"}
                 ln = len(wire.poll_wire_bytes(w_ord, now_ms=99999999.999))
                 if ln == wire.WIRE_CAP:
                     break
@@ -1236,8 +1243,14 @@ class GateF03Tests(unittest.TestCase):
             sig = inspect.signature(gate_core.git_harness)
             if "repo_root" in sig.parameters:
                 return gate_core.git_harness(repo_root=repo_root)
-            with mock.patch.object(gate_core, "ROOT", repo_root / "DayZSandbox_dev"):
+            # e3f530e: git_harness() sin argumentos corre git en el cwd; se ejecuta dentro del repo temporal para que
+            # la prueba llegue a su asercion de conducta (alli la evidencia ensucia la identidad), R2-6.
+            prev_cwd = os.getcwd()
+            os.chdir(repo_root / "DayZSandbox_dev")
+            try:
                 return gate_core.git_harness()
+            finally:
+                os.chdir(prev_cwd)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1422,10 +1435,14 @@ class FakePeerF03Tests(unittest.TestCase):
             }
             bucket = []
             srv._start_op(op_a, 10.0, time.monotonic(), bucket)
-            for _ in range(30):
+            # El reloj falso avanza por LECTURA, no por frame: se avanza hasta que A sea terminal y B haya arrancado.
+            for _ in range(5000):
                 srv.frame += 1
                 srv._step_extensions_and_jobs(0.02)
+                if srv.job_mgr.get_state("jobA") != "running" and "jobA:witness" in srv.job_mgr.jobs_by_id:
+                    break
             reconnect_ms = _advancing_clock()
+            self.assertIn("jobA:witness", srv.job_mgr.jobs_by_id, "el testigo B no arranco tras expirar A")
             job_a = srv.job_mgr.jobs_by_id["jobA"]
             job_b = srv.job_mgr.jobs_by_id["jobA:witness"]
             self.assertEqual(job_a["state"], "expired")
@@ -1450,7 +1467,15 @@ class FakePeerF03Tests(unittest.TestCase):
                 "verb": "qa_timer_start",
             }
             srv._start_op(op_def, 10.0, time.monotonic(), [])
-            for _ in range(30):
+            # Hasta que A expire de verdad (si no, onjobend_tick_ms == 0.0 se cumpliria sin probar nada) y unos
+            # frames mas en los que el testigo podria arrancar si la limpieza no se aplazara.
+            for _ in range(5000):
+                srv.frame += 1
+                srv._step_extensions_and_jobs(0.02)
+                if srv.job_mgr.get_state("jobDef") != "running":
+                    break
+            self.assertEqual(srv.job_mgr.get_state("jobDef"), "expired")
+            for _ in range(20):
                 srv.frame += 1
                 srv._step_extensions_and_jobs(0.02)
             self.assertEqual(srv.job_mgr.jobs_by_id["jobDef"]["onjobend_tick_ms"], 0.0)
@@ -1730,7 +1755,8 @@ class CommonAndEvalF03Tests(unittest.TestCase):
 
     def test_opaque_op_ids_across_two_bridges_slot_lock_after_timeout_and_lost_recovery(self):
         self._require_f03()
-        with tempfile.TemporaryDirectory() as tmp:
+        # ExitStack dentro del mismo with: cierra los contextos ANTES de borrar el directorio (Windows, R2-4).
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as closers:
             tpath = Path(tmp)
             rpc_port = _free_udp_port()
             cfg_path = tpath / "srv_cfg.json"
@@ -1753,6 +1779,7 @@ class CommonAndEvalF03Tests(unittest.TestCase):
                 self.assertIsNotNone(b1.registered("server"))
 
                 ctx1 = f03_common.PartContext.from_bridge(b1, tpath / "base" / "p1")
+                closers.callback(ctx1.close)
                 out1 = f03_common.issue_one(ctx1, "server", "qa_echo", wire.pack_payload(scalars_num={"x_n": 1}))
                 self.assertEqual(out1.status, "done")
                 self.assertFalse(out1.dup)
@@ -1772,6 +1799,7 @@ class CommonAndEvalF03Tests(unittest.TestCase):
                     self.assertIsNotNone(b2.registered("server"))
 
                     ctx2 = f03_common.PartContext.from_bridge(b2, tpath / "base" / "p2")
+                    closers.callback(ctx2.close)
                     self.assertNotEqual(ctx1.op_nonce, ctx2.op_nonce)
                     out2 = f03_common.issue_one(ctx2, "server", "qa_echo", wire.pack_payload(scalars_num={"x_n": 2}))
                     self.assertEqual(out2.status, "done")

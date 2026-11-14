@@ -299,7 +299,9 @@ class QABridge:
                 self.cv.release()
             for t in timers:
                 t.cancel()
-        self.httpd.shutdown()
+        # shutdown() espera a que salga serve_forever(): sin start() no vuelve nunca (R2-1).
+        if self._thread is not None:
+            self.httpd.shutdown()
         self.httpd.server_close()
         if self._thread is not None:
             self._thread.join(timeout=max(0.0, deadline - time.monotonic()))

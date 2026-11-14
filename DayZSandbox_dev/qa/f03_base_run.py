@@ -4,6 +4,7 @@ import secrets
 import time
 from pathlib import Path
 
+import bridge_qa
 import f03_base_eval
 import f03_base_mutants
 import f03_common
@@ -103,8 +104,10 @@ def _run_base_01(ctx: f03_common.PartContext) -> None:
         ttl_int = int(ctx.ttl_ms)
 
         def _make_args(pad_len: int) -> dict:
+            # El relleno no puede ser el ultimo sv: qa_echo devuelve last_sv (§3.2) y el eco pasaria de WIRE_CAP
+            # con result_too_large. Se cierra con un escalar corto (R2-3).
             p = wire.pack_payload(
-                scalars_str={"pad_in": "x" * pad_len, "qa_fault": wire.QA_FAULT_NONE},
+                scalars_str={"pad_in": "x" * pad_len, "tail_s": "z", "qa_fault": wire.QA_FAULT_NONE},
                 scalars_num={"v1_n": 12.5, "v2_n": -2.5},
                 num_cols=["c_n"],
                 str_cols=["c_s"],
@@ -113,8 +116,9 @@ def _run_base_01(ctx: f03_common.PartContext) -> None:
             return p
 
         base_args = _make_args(0)
+        # Se mide la orden tal como la serializa enqueue(): con full_args(), que anade los campos F0.2 (R2-2).
         base_order = {
-            "args": base_args,
+            "args": bridge_qa.full_args(base_args),
             "inst": inst,
             "issued_ms": issued_fixed,
             "op_id": cand_id,
@@ -124,15 +128,15 @@ def _run_base_01(ctx: f03_common.PartContext) -> None:
         base_len = len(wire.poll_wire_bytes(base_order, now_ms=probe_now))
         pad_len = max(0, wire.WIRE_CAP - base_len)
         sized_args = _make_args(pad_len)
-        sized_order = dict(base_order, args=sized_args)
+        sized_order = dict(base_order, args=bridge_qa.full_args(sized_args))
         while len(wire.poll_wire_bytes(sized_order, now_ms=probe_now)) > wire.WIRE_CAP and pad_len > 0:
             pad_len -= 1
             sized_args = _make_args(pad_len)
-            sized_order = dict(base_order, args=sized_args)
+            sized_order = dict(base_order, args=bridge_qa.full_args(sized_args))
         while len(wire.poll_wire_bytes(sized_order, now_ms=probe_now)) < wire.WIRE_CAP:
             pad_len += 1
             cand_args = _make_args(pad_len)
-            cand_order = dict(base_order, args=cand_args)
+            cand_order = dict(base_order, args=bridge_qa.full_args(cand_args))
             if len(wire.poll_wire_bytes(cand_order, now_ms=probe_now)) > wire.WIRE_CAP:
                 pad_len -= 1
                 break
