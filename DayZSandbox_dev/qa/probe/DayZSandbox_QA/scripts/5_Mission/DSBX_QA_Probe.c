@@ -901,9 +901,11 @@ class DSBX_QA_Probe : Managed
 		float now = NowMs();
 		if (kind == KIND_KEEPALIVE)
 		{
+			// Un keepalive fallido no cambia m_State: la orden F0.2 en curso y el resto del lote siguen;
+			// el lease caduca solo si no llega ningún 200, y el flujo normal (resultados, poll) gestiona el fallo.
 			if (!success)
 			{
-				RegisterFailure(isTimeout, errorCode);
+				m_KeepaliveNextMs = now + 500.0;
 				return;
 			}
 			JsonSerializer kaSer = new JsonSerializer();
@@ -912,7 +914,7 @@ class DSBX_QA_Probe : Managed
 			bool kaParsed = kaSer.ReadFromString(kaResp, data, kaErr);
 			if (!kaParsed || !kaResp.ops || !IsFiniteF(kaResp.now_ms))
 			{
-				RegisterFailure(false, 0);
+				m_KeepaliveNextMs = now + 500.0;
 				return;
 			}
 			m_FailCount = 0;

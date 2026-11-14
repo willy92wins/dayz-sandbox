@@ -36,6 +36,11 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 	string m_WitnessJobId;
 	float m_WitnessStartedTickMs;
 	int m_WitnessAttemptsN;
+	bool m_WitnessActive;
+	string m_WitnessRunJobId;
+	float m_WitnessDtsumMs;
+	float m_WitnessNextMs;
+	int m_WitnessSeq;
 	ref array<string> m_TimerNcol;
 	ref array<string> m_EffectNcol;
 	ref array<string> m_EffectScol;
@@ -75,6 +80,11 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 		m_WitnessJobId = "";
 		m_WitnessStartedTickMs = 0.0;
 		m_WitnessAttemptsN = 0;
+		m_WitnessActive = false;
+		m_WitnessRunJobId = "";
+		m_WitnessDtsumMs = 0.0;
+		m_WitnessNextMs = 0.0;
+		m_WitnessSeq = 0;
 		m_TimerNcol = new array<string>();
 		m_TimerNcol.Insert("seq_n");
 		m_TimerNcol.Insert("frame");
@@ -760,9 +770,48 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 		m_Jobs.FillStartRead(res.read, op.op_id, "qa_effect");
 	}
 
+	void AdvanceWitness(float timeslice)
+	{
+		// Testigo B de BASE-08 (§3.2): duration_ms = 200, sample_step_ms = 50; termina en done y libera qa_timer.
+		m_WitnessDtsumMs = m_WitnessDtsumMs + timeslice * 1000.0;
+		while (m_WitnessActive && m_WitnessDtsumMs >= m_WitnessNextMs && m_WitnessNextMs < 200.0)
+		{
+			array<float> wvals = new array<float>();
+			wvals.Insert(m_WitnessSeq);
+			wvals.Insert(m_Probe.m_Frame);
+			wvals.Insert(m_Probe.NowMs());
+			wvals.Insert(m_WitnessDtsumMs);
+			array<string> wsvals = new array<string>();
+			if (!m_Jobs.AppendRow(m_WitnessRunJobId, wvals, wsvals))
+			{
+				m_WitnessActive = false;
+				return;
+			}
+			m_WitnessSeq = m_WitnessSeq + 1;
+			m_WitnessNextMs = m_WitnessNextMs + 50.0;
+		}
+		if (m_WitnessActive && m_WitnessDtsumMs >= 200.0)
+		{
+			array<float> wfvals = new array<float>();
+			wfvals.Insert(m_WitnessSeq);
+			wfvals.Insert(m_Probe.m_Frame);
+			wfvals.Insert(m_Probe.NowMs());
+			wfvals.Insert(m_WitnessDtsumMs);
+			array<string> wfsvals = new array<string>();
+			m_Jobs.AppendRow(m_WitnessRunJobId, wfvals, wfsvals);
+			m_WitnessSeq = m_WitnessSeq + 1;
+			m_WitnessActive = false;
+			m_Jobs.EndJob(m_WitnessRunJobId, "done", "");
+		}
+	}
+
 	override void OnTick(float timeslice)
 	{
 		m_TicksN = m_TicksN + 1;
+		if (m_WitnessActive)
+		{
+			AdvanceWitness(timeslice);
+		}
 		if (m_WitnessArmed)
 		{
 			m_WitnessAttemptsN = m_WitnessAttemptsN + 1;
@@ -772,9 +821,15 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 				DSBX_QA_Job wjob = m_Jobs.GetJob(m_WitnessJobId);
 				if (wjob)
 				{
+					// §13 A2: la marca del testigo es el start_tick_ms que guardó el gestor, sin segunda lectura del reloj.
 					m_WitnessStartedTickMs = wjob.m_StartTickMs;
 				}
 				m_WitnessArmed = false;
+				m_WitnessActive = true;
+				m_WitnessRunJobId = m_WitnessJobId;
+				m_WitnessDtsumMs = 0.0;
+				m_WitnessNextMs = 0.0;
+				m_WitnessSeq = 0;
 			}
 		}
 		if (m_TimerActive)
@@ -893,6 +948,10 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 		{
 			m_EffectActive = false;
 		}
+		if (job_id == m_WitnessRunJobId)
+		{
+			m_WitnessActive = false;
+		}
 	}
 
 	override void OnRpc(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
@@ -935,6 +994,7 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 		m_TimerActive = false;
 		m_EffectActive = false;
 		m_WitnessArmed = false;
+		m_WitnessActive = false;
 	}
 }
 
