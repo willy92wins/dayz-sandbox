@@ -24,8 +24,11 @@ class STRACK_Move
 	static float s_ServerAim;
 	// S-track·2: 180 deg in ~4.0 s at 60 fps (was ~1.75 s with 0.002/0.08).
 	// OwnerTick scales the aim step by dt so the duration is FPS-independent.
-	static float s_AimGain = 0.000875;
-	static float s_AimMax = 0.035;
+	// 2026-11-14: with 0.000875/0.035 the first real bench run (mount0_Ha) measured t=2.003/2.001/2.007 s in the
+	// "move giro fin" log, not 4.0. Gain and max are both halved so the whole trajectory (saturated part and
+	// proportional tail) runs at half the rate: expected ~4.0 s, to be confirmed by the log on the bench.
+	static float s_AimGain = 0.0004375;
+	static float s_AimMax = 0.0175;
 	static float s_ServerUntil;
 	static float s_Dt = 0.0167;
 	static int s_LocalCase;
