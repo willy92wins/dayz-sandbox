@@ -1,5 +1,6 @@
-"""Prueba estatica de la sonda QA en Enforce (brief F0.2 §6.2)."""
+"""Prueba estatica del contrato comun F0.3-0 de la sonda QA en Enforce (brief F0.3-0 §6.1 y §14)."""
 
+import ast
 import re
 import tempfile
 import unittest
@@ -7,30 +8,73 @@ from pathlib import Path
 
 QA_DIR = Path(__file__).resolve().parents[1]
 REAL_PROBE_DIR = QA_DIR / "probe" / "DayZSandbox_QA"
+WIRE_PY_PATH = QA_DIR / "wire.py"
+
+EXTENSION_SPECS = (
+    ("Persist", "DSBX_QA_X_Persist", "per_", 26102800, 26102809),
+    ("Actor", "DSBX_QA_X_Actor", "act_", 26102810, 26102819),
+    ("Cam", "DSBX_QA_X_Cam", "scam_", 26102820, 26102829),
+    ("Cot", "DSBX_QA_X_Cot", "cot_", 26102830, 26102839),
+    ("Env", "DSBX_QA_X_Env", "env_", 26102840, 26102849),
+    ("Take", "DSBX_QA_X_Take", "take_", 26102850, 26102859),
+    ("Perf", "DSBX_QA_X_Perf", "perf_", 26102860, 26102869),
+    ("Map", "DSBX_QA_X_Map", "map_", 26102870, 26102879),
+    ("Base", "DSBX_QA_X_Base", "qa_", 26102880, 26102889),
+)
+
+EXTENSION_BY_NAME = {name: (idx, cls_name, prefix, lo, hi) for idx, (name, cls_name, prefix, lo, hi) in enumerate(EXTENSION_SPECS)}
+ALL_EXT_PREFIXES = tuple(spec[2] for spec in EXTENSION_SPECS)
+
+CORE_5_MISSION_C_FILES = (
+    "scripts/5_Mission/DSBX_QA_Stamp.c",
+    "scripts/5_Mission/DSBX_QA_Messages.c",
+    "scripts/5_Mission/DSBX_QA_Jobs.c",
+    "scripts/5_Mission/DSBX_QA_Probe.c",
+    "scripts/5_Mission/DSBX_QA_Mission.c",
+)
+
+EXT_5_MISSION_C_FILES = tuple(
+    f"scripts/5_Mission/DSBX_QA_X_{name}.c" for name, _, _, _, _ in EXTENSION_SPECS
+)
+
+EXPECTED_C_FILES = (
+    "scripts/4_World/DSBX_QA_W_Actor.c",
+    *CORE_5_MISSION_C_FILES,
+    *EXT_5_MISSION_C_FILES,
+)
 
 EXPECTED_REL_FILES = (
     "$PBOPREFIX$",
     "include.lst",
     "config.cpp",
-    "scripts/5_Mission/DSBX_QA_Messages.c",
-    "scripts/5_Mission/DSBX_QA_Probe.c",
-    "scripts/5_Mission/DSBX_QA_Mission.c",
+    *EXPECTED_C_FILES,
 )
 
-EXPECTED_C_FILES = (
-    "scripts/5_Mission/DSBX_QA_Messages.c",
-    "scripts/5_Mission/DSBX_QA_Probe.c",
-    "scripts/5_Mission/DSBX_QA_Mission.c",
-)
+PAYLOAD_9_MEMBERS = [
+    ("ref array<string>", "sk"),
+    ("ref array<string>", "sv"),
+    ("ref array<string>", "nk"),
+    ("ref array<float>", "nv"),
+    ("ref array<string>", "ncol"),
+    ("ref array<float>", "ncell"),
+    ("ref array<string>", "scol"),
+    ("ref array<string>", "scell"),
+    ("int", "rows"),
+]
 
 EXPECTED_JSON_CLASSES = {
     "DSBX_QA_Config": [
         ("string", "url"),
         ("string", "key"),
         ("int", "retry_ms"),
+        ("int", "callback_budget"),
     ],
     "DSBX_QA_HelloResp": [
+        ("bool", "ok"),
         ("int", "lease_ms"),
+    ],
+    "DSBX_QA_AckResp": [
+        ("bool", "ok"),
     ],
     "DSBX_QA_PollResp": [
         ("float", "now_ms"),
@@ -54,6 +98,7 @@ EXPECTED_JSON_CLASSES = {
         ("int", "interval_ms"),
         ("int", "seq0"),
         ("string", "client_inst"),
+        *PAYLOAD_9_MEMBERS,
     ],
     "DSBX_QA_Result": [
         ("string", "op_id"),
@@ -75,6 +120,7 @@ EXPECTED_JSON_CLASSES = {
         ("ref array<float>", "pos"),
         ("ref array<float>", "ypr"),
         ("ref array<ref DSBX_QA_RpcEntry>", "rpc_log"),
+        *PAYLOAD_9_MEMBERS,
     ],
     "DSBX_QA_RpcEntry": [
         ("int", "seq"),
@@ -100,6 +146,7 @@ FORBIDDEN_C_TOKENS = (
     "DebugList",
     "JsonLoadFile",
     "GetCurrentCamera",
+    ".Replace(",
 )
 
 HELLO_BODY_TOKENS = (
@@ -107,7 +154,8 @@ HELLO_BODY_TOKENS = (
     r'\"peer\":\"',
     r'\"inst\":\"',
     r'\"build\":\"',
-    r'\"probe_ver\":\"dsbx-qa0\"',
+    r'\"probe_ver\":\"dsbx-qa1+',
+    "DSBX_QA_STAMP",
 )
 
 DUP_CONVERSION_LITERALS = (
@@ -116,6 +164,43 @@ DUP_CONVERSION_LITERALS = (
     r'\"dup\":false',
     r'\"dup\":true',
 )
+
+EXT_REQUIRED_METHODS = (
+    "Init",
+    "Handles",
+    "OnStartOp",
+    "OnTick",
+    "OnJobEnd",
+    "OnRpc",
+    "OnShutdown",
+)
+
+JOBMGR_REQUIRED_METHODS = (
+    "StartJob",
+    "AppendRow",
+    "GetState",
+    "EndJob",
+)
+
+ORDERED_LOG_MEMBERS = (
+    "m_CacheOrder",
+    "m_RpcLog",
+    "m_PingLog",
+    "m_EmitLog",
+)
+
+ALLOWED_CFG_FIELDS = {"url", "retry_ms", "callback_budget", "key"}
+
+
+def _read_python_wire_cap(wire_py_path=None):
+    path = Path(wire_py_path) if wire_py_path is not None else WIRE_PY_PATH
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    m = re.search(r"^\s*WIRE_CAP\s*(?::\s*int\s*)?=\s*([+-]?\d+)\b", text, re.MULTILINE)
+    if not m:
+        return None
+    return int(m.group(1))
 
 
 def _strip_comments(text, blank_strings=False):
@@ -176,6 +261,33 @@ def _strip_comments(text, blank_strings=False):
     return "".join(out)
 
 
+def _extract_c_string_literals(code_with_strings):
+    """Devuelve lista de (start_offset, unescaped_value) para cada literal C de cadena."""
+    literals = []
+    n = len(code_with_strings)
+    i = 0
+    while i < n:
+        if code_with_strings[i] == '"':
+            start = i
+            i += 1
+            chars = []
+            while i < n:
+                ch = code_with_strings[i]
+                if ch == "\\" and i + 1 < n:
+                    chars.append(code_with_strings[i + 1])
+                    i += 2
+                elif ch == '"':
+                    i += 1
+                    break
+                else:
+                    chars.append(ch)
+                    i += 1
+            literals.append((start, "".join(chars)))
+        else:
+            i += 1
+    return literals
+
+
 def _find_matching_brace(code_no_strings, open_idx):
     depth = 0
     for idx in range(open_idx, len(code_no_strings)):
@@ -200,6 +312,27 @@ def _find_matching_paren(code_no_strings, open_idx):
             if depth == 0:
                 return idx
     return -1
+
+
+def _split_top_level_spans(code_no_strings, start_idx, end_idx, sep=","):
+    """Parte el rango [start_idx, end_idx) por sep en profundidad 0 de (), [] y {}."""
+    if not code_no_strings[start_idx:end_idx].strip():
+        return []
+    spans = []
+    cur_start = start_idx
+    depth = 0
+    for idx in range(start_idx, end_idx):
+        ch = code_no_strings[idx]
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth > 0:
+                depth -= 1
+        elif ch == sep and depth == 0:
+            spans.append((cur_start, idx))
+            cur_start = idx + 1
+    spans.append((cur_start, end_idx))
+    return spans
 
 
 def _normalize_type(raw_type):
@@ -237,7 +370,7 @@ def _extract_classes_and_members(messages_text):
     raw_blocks = _extract_named_blocks(code_no_strings, keyword="class")
     parsed = []
     method_re = re.compile(
-        r"\b(?:void|bool|string|int|float)\s+(~?[A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*\{",
+        r"\b(?:(?:protected|private|override|static)\s+)*(?:void|bool|string|int|float)\s+(~?[A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*\{",
         re.MULTILINE,
     )
     for class_name, hdr_start, body_start, body_end in raw_blocks:
@@ -329,13 +462,34 @@ def _line_no(text, offset):
     return text.count("\n", 0, offset) + 1
 
 
+def _classify_extension_c_file(rel_posix):
+    """Si rel_posix es un fichero de extension 5_Mission/DSBX_QA_X_<Name>[_<algo>].c, devuelve <Name>, si no None."""
+    m = re.fullmatch(
+        r"scripts/5_Mission/DSBX_QA_X_(Persist|Actor|Cam|Cot|Env|Take|Perf|Map|Base)(?:_([A-Za-z0-9_]+))?\.c",
+        rel_posix,
+    )
+    if not m:
+        return None
+    return m.group(1)
+
+
+def _is_allowed_c_file(rel_posix):
+    if rel_posix in EXPECTED_C_FILES:
+        return True
+    if _classify_extension_c_file(rel_posix) is not None:
+        return True
+    if re.fullmatch(r"scripts/4_World/DSBX_QA_W_Actor_[A-Za-z0-9_]+\.c", rel_posix):
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
-# Las 8 comprobaciones de §6.2
+# Las comprobaciones del contrato estatico (§6.1 y §14)
 # ---------------------------------------------------------------------------
 
 
 def check_1_mod_files(probe_dir):
-    """§6.2(1): $PBOPREFIX$, include.lst y config.cpp estan como en §4.1 (y los 3 .c en 5_Mission)."""
+    """§6.1(1): Ficheros de la sonda, sello DSBX_QA_Stamp.c y config.cpp con 4_World y 5_Mission."""
     probe_dir = Path(probe_dir)
     violations = []
 
@@ -406,10 +560,25 @@ def check_1_mod_files(probe_dir):
                     ('dir = "DayZSandbox_QA"', r'\bdir\s*=\s*"DayZSandbox_QA"\s*;'),
                     ('name = "DayZSandbox_QA"', r'\bname\s*=\s*"DayZSandbox_QA"\s*;'),
                     ('type = "mod"', r'\btype\s*=\s*"mod"\s*;'),
-                    ('dependencies[] = {"Mission"}', r'\bdependencies\s*\[\s*\]\s*=\s*\{\s*"Mission"\s*\}\s*;'),
+                    (
+                        'dependencies[] = {"World", "Mission"}',
+                        r'\bdependencies\s*\[\s*\]\s*=\s*\{\s*"World"\s*,\s*"Mission"\s*\}\s*;',
+                    ),
                 ):
                     if not re.search(pat, mod_body, re.DOTALL):
                         violations.append(f"config.cpp: CfgMods::DayZSandbox_QA sin {desc}")
+
+                if re.search(r"\binputs\s*=", mod_no_str):
+                    if not re.search(r'\binputs\s*=\s*"DayZSandbox_QA/inputs\.xml"\s*;', mod_body):
+                        violations.append(
+                            'config.cpp: inputs en CfgMods::DayZSandbox_QA debe ser exactamente "DayZSandbox_QA/inputs.xml"'
+                        )
+                    elif not (probe_dir / "inputs.xml").is_file():
+                        violations.append("config.cpp declara inputs pero falta inputs.xml en la sonda")
+                elif (probe_dir / "inputs.xml").is_file():
+                    violations.append(
+                        'inputs.xml presente sin inputs = "DayZSandbox_QA/inputs.xml"; en CfgMods::DayZSandbox_QA'
+                    )
 
                 defs_sub = {
                     name: (dbs, dbe)
@@ -425,23 +594,28 @@ def check_1_mod_files(probe_dir):
                         name: (mbs, mbe)
                         for name, _, mbs, mbe in _extract_named_blocks(defs_no_str, "class")
                     }
-                    if set(modules.keys()) != {"missionScriptModule"}:
+                    expected_modules = {"worldScriptModule", "missionScriptModule"}
+                    if set(modules.keys()) != expected_modules:
                         violations.append(
-                            f"config.cpp: defs debe tener solo missionScriptModule, tiene {sorted(modules.keys())}"
+                            f"config.cpp: defs debe tener exactamente {sorted(expected_modules)}, tiene {sorted(modules.keys())}"
                         )
-                    if "missionScriptModule" in modules:
-                        mbs, mbe = modules["missionScriptModule"]
-                        m_body = defs_clean[mbs:mbe]
-                        if not re.search(r'\bvalue\s*=\s*""\s*;', m_body, re.DOTALL):
-                            violations.append('config.cpp: missionScriptModule sin value = ""')
-                        if not re.search(
-                            r'\bfiles\s*\[\s*\]\s*=\s*\{\s*"DayZSandbox_QA/scripts/5_Mission"\s*\}\s*;',
-                            m_body,
-                            re.DOTALL,
-                        ):
-                            violations.append(
-                                'config.cpp: missionScriptModule sin files[] = {"DayZSandbox_QA/scripts/5_Mission"}'
-                            )
+                    for mod_name, expected_path in (
+                        ("worldScriptModule", "DayZSandbox_QA/scripts/4_World"),
+                        ("missionScriptModule", "DayZSandbox_QA/scripts/5_Mission"),
+                    ):
+                        if mod_name in modules:
+                            mbs, mbe = modules[mod_name]
+                            m_body = defs_clean[mbs:mbe]
+                            if not re.search(r'\bvalue\s*=\s*""\s*;', m_body, re.DOTALL):
+                                violations.append(f'config.cpp: {mod_name} sin value = ""')
+                            if not re.search(
+                                rf'\bfiles\s*\[\s*\]\s*=\s*\{{\s*"{re.escape(expected_path)}"\s*\}}\s*;',
+                                m_body,
+                                re.DOTALL,
+                            ):
+                                violations.append(
+                                    f'config.cpp: {mod_name} sin files[] = {{"{expected_path}"}}'
+                                )
 
     for rel in EXPECTED_C_FILES:
         if not (probe_dir / rel).is_file():
@@ -449,14 +623,28 @@ def check_1_mod_files(probe_dir):
 
     all_c = sorted(p.relative_to(probe_dir).as_posix() for p in probe_dir.rglob("*.c"))
     for rel in all_c:
-        if rel not in EXPECTED_C_FILES:
-            violations.append(f"{rel}: fichero .c fuera de los tres de §2")
+        if not _is_allowed_c_file(rel):
+            violations.append(f"{rel}: fichero .c no autorizado por §6.1(1)")
+
+    stamp_path = probe_dir / "scripts/5_Mission/DSBX_QA_Stamp.c"
+    if stamp_path.is_file():
+        stamp_clean = _strip_comments(
+            stamp_path.read_text(encoding="utf-8", errors="replace"),
+            blank_strings=False,
+        ).strip()
+        if not re.fullmatch(
+            r'(?:static\s+)?const\s+string\s+DSBX_QA_STAMP\s*=\s*"(?:unstamped|[0-9a-f]{16})"\s*;',
+            stamp_clean,
+        ):
+            violations.append(
+                'scripts/5_Mission/DSBX_QA_Stamp.c: debe declarar exactamente const string DSBX_QA_STAMP = "unstamped"; (o 16 hex en minúsculas)'
+            )
 
     return violations
 
 
 def check_2_json_classes(probe_dir):
-    """§6.2(2): DSBX_QA_Messages.c tiene exactamente las 8 clases de §4.5 con sus miembros exactos."""
+    """§6.1(2) + §14 (F02-H4, F02-H5): DSBX_QA_Messages.c tiene exactamente las 9 clases JSON con sus miembros exactos."""
     probe_dir = Path(probe_dir)
     msg_path = probe_dir / "scripts/5_Mission/DSBX_QA_Messages.c"
     if not msg_path.is_file():
@@ -532,7 +720,7 @@ def check_2_json_classes(probe_dir):
 
 
 def check_3_write_ctors(probe_dir):
-    """§6.2(3): En las clases que se escriben, el constructor crea cada miembro ref."""
+    """§6.1(3): En las clases que se escriben, el constructor crea cada miembro ref (incluidos los 8 nuevos de DSBX_QA_Read)."""
     probe_dir = Path(probe_dir)
     msg_path = probe_dir / "scripts/5_Mission/DSBX_QA_Messages.c"
     if not msg_path.is_file():
@@ -585,7 +773,7 @@ def check_3_write_ctors(probe_dir):
 
 
 def check_4_forbidden_tokens(probe_dir):
-    """§6.2(4): Ningun .c contiene GET_now, POST_now, FILE_now, .FILE(, .reset(, EnableDebug, DebugList, JsonLoadFile ni GetCurrentCamera."""
+    """§6.1(4): Ningun .c contiene GET_now, POST_now, FILE_now, .FILE(, .reset(, EnableDebug, DebugList, JsonLoadFile, GetCurrentCamera ni .Replace(."""
     violations = []
     patterns = [
         ("GET_now", re.compile(r"(?<![A-Za-z0-9_])GET_now(?![A-Za-z0-9_])")),
@@ -597,6 +785,7 @@ def check_4_forbidden_tokens(probe_dir):
         ("DebugList", re.compile(r"(?<![A-Za-z0-9_])DebugList(?![A-Za-z0-9_])")),
         ("JsonLoadFile", re.compile(r"(?<![A-Za-z0-9_])JsonLoadFile(?![A-Za-z0-9_])")),
         ("GetCurrentCamera", re.compile(r"(?<![A-Za-z0-9_])GetCurrentCamera(?![A-Za-z0-9_])")),
+        (".Replace(", re.compile(r"\.\s*Replace\s*\(")),
     ]
     for rel, path in _iter_c_files(probe_dir):
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -608,8 +797,37 @@ def check_4_forbidden_tokens(probe_dir):
     return violations
 
 
+def _find_http_get_post_calls(code_no_str):
+    """Localiza llamadas <receptor>.GET(...) y <receptor>.POST(...) y devuelve sus spans de argumentos."""
+    calls = []
+    pat = re.compile(
+        r"(?:[A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*\.\s*(GET|POST)\s*\("
+    )
+    pos = 0
+    while pos < len(code_no_str):
+        m = pat.search(code_no_str, pos)
+        if not m:
+            break
+        open_p = m.end() - 1
+        close_p = _find_matching_paren(code_no_str, open_p)
+        if close_p == -1:
+            pos = m.end()
+            continue
+        arg_spans = _split_top_level_spans(code_no_str, open_p + 1, close_p, sep=",")
+        calls.append(
+            {
+                "method": m.group(1),
+                "call_span": (m.start(), close_p + 1),
+                "paren_span": (open_p, close_p),
+                "arg_spans": arg_spans,
+            }
+        )
+        pos = m.end()
+    return calls
+
+
 def check_5_key_containment(probe_dir):
-    """§6.2(5): La clave esta contenida (Log, m_Key, .key, literales en LoadConfig, KeyQuery en GET/POST, err de LoadFile)."""
+    """§6.1(5) + §14 F02-H6: Contencion de la clave y de DSBX_QA_Config por flujo de datos y analisis de argumentos de GET/POST."""
     violations = []
     c_files = _iter_c_files(probe_dir)
     if not c_files:
@@ -621,9 +839,9 @@ def check_5_key_containment(probe_dir):
     m_key_re = re.compile(r"(?<![A-Za-z0-9_])m_Key(?![A-Za-z0-9_])")
     dot_key_re = re.compile(r"\.\s*key(?![A-Za-z0-9_])")
     log_call_re = re.compile(r"(?<![A-Za-z0-9_])Log\s*\(")
-    key_query_re = re.compile(r"(?<![A-Za-z0-9_])KeyQuery\s*\(")
-    get_or_post_re = re.compile(r"\.\s*(?:GET|POST)\s*\(")
+    key_query_re = re.compile(r"(?<![A-Za-z0-9_])KeyQuery(?![A-Za-z0-9_])")
     loadfile_re = re.compile(r"\bLoadFile\s*\(")
+    cfg_type_re = re.compile(r"(?<![A-Za-z0-9_])DSBX_QA_Config(?![A-Za-z0-9_])")
     string_literal_re = re.compile(r'^"(?:\\.|[^"\\])*"$')
 
     total_log_defs = 0
@@ -649,10 +867,12 @@ def check_5_key_containment(probe_dir):
         total_loadconfig_defs += len(loadconfig_defs)
         total_keyquery_defs += len(keyquery_defs)
 
+        class_blocks = _extract_named_blocks(code_no_str, "class")
         probe_class_spans = [
-            (bs, be)
-            for cname, _, bs, be in _extract_named_blocks(code_no_str, "class")
-            if cname == "DSBX_QA_Probe"
+            (bs, be) for cname, _, bs, be in class_blocks if cname == "DSBX_QA_Probe"
+        ]
+        cfg_class_full_spans = [
+            (hs, be + 1) for cname, hs, _, be in class_blocks if cname == "DSBX_QA_Config"
         ]
 
         def _in_spans(offset, spans):
@@ -679,16 +899,60 @@ def check_5_key_containment(probe_dir):
                     f"{rel}:{lineno}: llamada {m.group(0).strip()!r} fuera de Log()"
                 )
 
-        # 5b: m_Key solo en su declaracion, en LoadConfig() y en KeyQuery()
+        # 5b (F02-H6): DSBX_QA_Config solo puede existir en su definicion de clase y como local dentro de LoadConfig()
+        for m in cfg_type_re.finditer(code_no_str):
+            pos = m.start()
+            if _in_spans(pos, cfg_class_full_spans):
+                continue
+            if not _in_spans(pos, loadconfig_body_spans):
+                lineno = _line_no(code_no_str, pos)
+                violations.append(
+                    f"{rel}:{lineno}: DSBX_QA_Config usado fuera de LoadConfig() (prohibido miembro o referencia externa)"
+                )
+
+        # 5c (F02-H6): m_Key solo en su declaracion, en LoadConfig() (solo asignacion desde cfg.key o comparacion con "") y en KeyQuery() (solo return "key=" + m_Key)
         for m in m_key_re.finditer(code_no_str):
             pos = m.start()
             lineno = _line_no(code_no_str, pos)
-            if _in_spans(pos, loadconfig_body_spans) or _in_spans(pos, keyquery_body_spans):
+            if _in_spans(pos, loadconfig_body_spans):
+                b_start, b_end = next(
+                    (bs, be) for bs, be in loadconfig_body_spans if bs <= pos < be
+                )
+                before_str = code_with_str[b_start:pos]
+                after_str = code_with_str[m.end() : b_end]
+                allowed_assign = bool(
+                    re.search(r"(?:^|[;{}])\s*(?:this\s*\.\s*)?$", before_str)
+                    and re.match(r"^\s*=(?!=)\s*[A-Za-z_][A-Za-z0-9_]*\s*\.\s*key\s*;", after_str)
+                )
+                allowed_cmp = bool(
+                    (
+                        re.match(r'^\s*(?:==|!=)\s*""', after_str)
+                        and not re.search(r"(?<![=!<>])=(?!=)\s*(?:this\s*\.\s*)?$", before_str)
+                    )
+                    or re.search(r'""\s*(?:==|!=)\s*(?:this\s*\.\s*)?$', before_str)
+                )
+                if not (allowed_assign or allowed_cmp):
+                    violations.append(
+                        f"{rel}:{lineno}: uso no permitido de m_Key en LoadConfig(): {lines_with_str[lineno - 1].strip()!r}"
+                    )
+                continue
+            if _in_spans(pos, keyquery_body_spans):
+                b_start, b_end = next(
+                    (bs, be) for bs, be in keyquery_body_spans if bs <= pos < be
+                )
+                kq_body = code_with_str[b_start:b_end].strip()
+                if not re.fullmatch(
+                    r'return\s+"key="\s*\+\s*(?:this\s*\.\s*)?m_Key\s*;',
+                    kq_body,
+                ):
+                    violations.append(
+                        f"{rel}:{lineno}: en KeyQuery(), m_Key solo puede usarse en 'return \"key=\" + m_Key;': {kq_body!r}"
+                    )
                 continue
             if _is_at_probe_class_member_scope(pos):
                 line_text = lines_with_str[lineno - 1].strip()
                 if re.fullmatch(
-                    r"(?:(?:protected|private)\s+)?string\s+m_Key\s*(?:=\s*\"\"\s*)?;",
+                    r'(?:(?:protected|private)\s+)?string\s+m_Key\s*(?:=\s*""\s*)?;',
                     line_text,
                 ):
                     total_m_key_decls += 1
@@ -703,15 +967,136 @@ def check_5_key_containment(probe_dir):
                 lineno = _line_no(code_no_str, lm.start())
                 violations.append(f"{rel}:{lineno}: llamada a Log() dentro de KeyQuery()")
 
-        # 5c: .key solo dentro de LoadConfig()
+        # 5d (F02-H6): .key solo dentro de LoadConfig(), y solo asignado a m_Key o comparado con ""
         for m in dot_key_re.finditer(code_no_str):
             total_dot_key += 1
+            lineno = _line_no(code_no_str, m.start())
             if not _in_spans(m.start(), loadconfig_body_spans):
-                lineno = _line_no(code_no_str, m.start())
                 violations.append(f"{rel}:{lineno}: acceso .key fuera de LoadConfig()")
+                continue
+            b_start, b_end = next(
+                (bs, be) for bs, be in loadconfig_body_spans if bs <= m.start() < be
+            )
+            before_full = code_with_str[b_start : m.start()]
+            after_full = code_with_str[m.end() : b_end]
+            obj_m = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", before_full)
+            if not obj_m:
+                violations.append(f"{rel}:{lineno}: acceso .key sin receptor valido")
+                continue
+            before_obj = before_full[: obj_m.start()]
+            is_assign_m_key = bool(
+                re.search(r"(?:^|[;{}])\s*(?:this\s*\.\s*)?m_Key\s*=(?!=)\s*$", before_obj)
+                and re.match(r"^\s*;", after_full)
+            )
+            is_cmp_empty = bool(
+                (
+                    re.match(r'^\s*(?:==|!=)\s*""', after_full)
+                    and not re.search(r"(?<![=!<>])=(?!=)\s*$", before_obj)
+                )
+                or re.search(r'""\s*(?:==|!=)\s*$', before_obj)
+            )
+            if not (is_assign_m_key or is_cmp_empty):
+                violations.append(
+                    f"{rel}:{lineno}: .key solo puede asignarse a m_Key o compararse con \"\": {lines_with_str[lineno - 1].strip()!r}"
+                )
 
-        # 5d: dentro de LoadConfig(), cada llamada a Log( lleva solo un literal de texto
+        # 5e (F02-H6): Analisis de flujo de datos de variables DSBX_QA_Config dentro de LoadConfig()
         for b_start, b_end in loadconfig_body_spans:
+            lc_no_str = code_no_str[b_start:b_end]
+            lc_with_str = code_with_str[b_start:b_end]
+
+            # Localizar variables locales DSBX_QA_Config
+            cfg_vars = set()
+            for decl_m in re.finditer(
+                r"\b(?:(?:ref|autoptr)\s+)?DSBX_QA_Config\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+                lc_no_str,
+            ):
+                cfg_vars.add(decl_m.group(1))
+            for lf_m in loadfile_re.finditer(lc_no_str):
+                op_idx = lf_m.end() - 1
+                cl_idx = _find_matching_paren(lc_no_str, op_idx)
+                if cl_idx != -1:
+                    parts = [p.strip() for p in lc_no_str[op_idx + 1 : cl_idx].split(",")]
+                    if len(parts) == 3 and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", parts[1]):
+                        cfg_vars.add(parts[1])
+
+            for cfg_var in sorted(cfg_vars):
+                var_re = re.compile(rf"(?<![A-Za-z0-9_.]){re.escape(cfg_var)}(?![A-Za-z0-9_])")
+                for vm in var_re.finditer(lc_no_str):
+                    abs_pos = b_start + vm.start()
+                    lineno = _line_no(code_no_str, abs_pos)
+                    line_s = lines_with_str[lineno - 1].strip()
+                    after = lc_no_str[vm.end() :].lstrip()
+
+                    # Caso 1: declaracion o inicializacion local de cfg_var
+                    if re.fullmatch(
+                        rf"(?:(?:(?:ref|autoptr)\s+)?DSBX_QA_Config\s+)?{re.escape(cfg_var)}\s*(?:=\s*(?:null|new\s+DSBX_QA_Config\s*(?:\(\s*\))?))?\s*;",
+                        line_s,
+                    ):
+                        continue
+
+                    # Caso 2: 2o argumento de LoadFile(path, cfg_var, err)
+                    in_loadfile_arg2 = False
+                    for lf_m in loadfile_re.finditer(lc_no_str):
+                        op_idx = lf_m.end() - 1
+                        cl_idx = _find_matching_paren(lc_no_str, op_idx)
+                        if cl_idx != -1 and op_idx < vm.start() < cl_idx:
+                            spans = _split_top_level_spans(lc_no_str, op_idx + 1, cl_idx, sep=",")
+                            if (
+                                len(spans) == 3
+                                and spans[1][0] <= vm.start() < spans[1][1]
+                                and lc_no_str[spans[1][0] : spans[1][1]].strip() == cfg_var
+                            ):
+                                in_loadfile_arg2 = True
+                                break
+                    if in_loadfile_arg2:
+                        continue
+
+                    # Caso 3: acceso a campo cfg.<member>
+                    if after.startswith("."):
+                        mem_m = re.match(r"^\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*(.*)", after, re.DOTALL)
+                        if not mem_m:
+                            violations.append(
+                                f"{rel}:{lineno}: acceso invalido sobre {cfg_var!r}: {line_s!r}"
+                            )
+                            continue
+                        field_name = mem_m.group(1)
+                        rest_after_field = mem_m.group(2)
+                        if field_name not in ALLOWED_CFG_FIELDS:
+                            violations.append(
+                                f"{rel}:{lineno}: de {cfg_var!r} solo se pueden leer {sorted(ALLOWED_CFG_FIELDS)}, accedido .{field_name}"
+                            )
+                            continue
+                        if rest_after_field.startswith("("):
+                            violations.append(
+                                f"{rel}:{lineno}: llamada de metodo no permitida sobre {cfg_var}.{field_name}"
+                            )
+                            continue
+                        if re.match(r"^=(?!=)", rest_after_field):
+                            violations.append(
+                                f"{rel}:{lineno}: escritura no permitida en {cfg_var}.{field_name}"
+                            )
+                            continue
+                        continue
+
+                    # Caso 4: comprobacion de nulo (!cfg, cfg == null, cfg != null, if (cfg))
+                    before = lc_no_str[: vm.start()].rstrip()
+                    if (
+                        before.endswith("!")
+                        or re.match(r"^(?:==|!=)\s*null\b", after)
+                        or re.search(r"\bnull\s*(?:==|!=)\s*$", before)
+                        or (
+                            re.search(r"(?:\bif\s*\(|&&|\|\|)\s*$", before)
+                            and re.match(r"^(?:\)|&&|\|\|)", after)
+                        )
+                    ):
+                        continue
+
+                    violations.append(
+                        f"{rel}:{lineno}: el objeto DSBX_QA_Config {cfg_var!r} no puede copiarse a un alias, serializarse ni pasarse a funciones salvo LoadFile: {line_s!r}"
+                    )
+
+            # 5d-bis: dentro de LoadConfig(), cada llamada a Log( lleva solo un literal de texto
             for lm in log_call_re.finditer(code_no_str, b_start, b_end):
                 open_p = lm.end() - 1
                 close_p = _find_matching_paren(code_no_str, open_p)
@@ -725,23 +1110,94 @@ def check_5_key_containment(probe_dir):
                         f"{rel}:{lineno}: Log() en LoadConfig() debe llevar solo un literal de texto, recibido: {arg_str!r}"
                     )
 
-        # 5e: cada llamada a KeyQuery(), fuera de su definicion, esta en una linea con .GET( o .POST( y sin Log(
+        # 5f (F02-H6): KeyQuery() solo puede aparecer dentro del 2o argumento (request) de ctx.GET(cb, request) o ctx.POST(cb, request, data)
+        http_calls = _find_http_get_post_calls(code_no_str)
+        for hc in http_calls:
+            expected_arity = 2 if hc["method"] == "GET" else 3
+            lineno = _line_no(code_no_str, hc["call_span"][0])
+            if len(hc["arg_spans"]) != expected_arity:
+                violations.append(
+                    f"{rel}:{lineno}: llamada .{hc['method']}() debe tener {expected_arity} argumentos (cb, request{', data' if expected_arity == 3 else ''}), tiene {len(hc['arg_spans'])}"
+                )
+
         for m in key_query_re.finditer(code_no_str):
             if _in_spans(m.start(), keyquery_header_spans):
                 continue
             total_keyquery_calls += 1
             lineno = _line_no(code_no_str, m.start())
-            line_no_s = lines_no_str[lineno - 1]
-            if not get_or_post_re.search(line_no_s):
+            if _in_spans(m.start(), keyquery_body_spans):
+                violations.append(f"{rel}:{lineno}: KeyQuery() no puede invocarse dentro de KeyQuery()")
+                continue
+
+            # Verificar que es una llamada KeyQuery() sin argumentos
+            call_m = re.match(r"^KeyQuery\s*\(\s*\)", code_no_str[m.start() :])
+            if not call_m:
+                violations.append(f"{rel}:{lineno}: KeyQuery debe invocarse como KeyQuery()")
+                continue
+            kq_start = m.start()
+            kq_end = m.start() + call_m.end()
+
+            enclosing_http = [
+                hc
+                for hc in http_calls
+                if hc["paren_span"][0] < kq_start and kq_end <= hc["paren_span"][1]
+            ]
+            if not enclosing_http:
                 violations.append(
-                    f"{rel}:{lineno}: llamada a KeyQuery() en una linea sin .GET( ni .POST("
+                    f"{rel}:{lineno}: KeyQuery() fuera de una llamada ctx.GET(cb, request) o ctx.POST(cb, request, data)"
                 )
-            if log_call_re.search(line_no_s):
+                continue
+
+            hc = enclosing_http[-1]
+            expected_arity = 2 if hc["method"] == "GET" else 3
+            if len(hc["arg_spans"]) != expected_arity:
                 violations.append(
-                    f"{rel}:{lineno}: llamada a KeyQuery() en la misma linea que Log("
+                    f"{rel}:{lineno}: KeyQuery() dentro de .{hc['method']}() con aridad invalida ({len(hc['arg_spans'])})"
+                )
+                continue
+
+            req_start, req_end = hc["arg_spans"][1]
+            if not (req_start <= kq_start and kq_end <= req_end):
+                arg_idx = next(
+                    (
+                        i
+                        for i, (a_s, a_e) in enumerate(hc["arg_spans"])
+                        if a_s <= kq_start and kq_end <= a_e
+                    ),
+                    -1,
+                )
+                arg_label = (
+                    "cb (1er argumento)"
+                    if arg_idx == 0
+                    else ("data (3er argumento)" if arg_idx == 2 else f"argumento {arg_idx + 1}")
+                )
+                violations.append(
+                    f"{rel}:{lineno}: KeyQuery() en {arg_label} de .{hc['method']}(); solo se permite en el 2o argumento (request)"
+                )
+                continue
+
+            # Verificar que dentro del argumento request, KeyQuery() no se pasa a otra funcion ni se asigna
+            req_sub = code_no_str[req_start:req_end]
+            rel_kq_start = kq_start - req_start
+            rel_kq_end = kq_end - req_start
+            nested_fn_violation = False
+            for fn_m in re.finditer(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", req_sub):
+                fn_open = fn_m.end() - 1
+                fn_close = _find_matching_paren(req_sub, fn_open)
+                if fn_close != -1 and fn_open < rel_kq_start and rel_kq_end <= fn_close:
+                    violations.append(
+                        f"{rel}:{lineno}: KeyQuery() pasado a la funcion {fn_m.group(1)}() dentro de request"
+                    )
+                    nested_fn_violation = True
+                    break
+            if nested_fn_violation:
+                continue
+            if re.search(r"(?<![=!<>])=(?!=)", req_sub):
+                violations.append(
+                    f"{rel}:{lineno}: asignacion no permitida en la expresion request que contiene KeyQuery()"
                 )
 
-        # 5f: la variable de error de LoadFile solo aparece en su declaracion y en la linea de LoadFile
+        # 5g: la variable de error de LoadFile solo aparece en su declaracion y en LoadFile
         for lf in loadfile_re.finditer(code_no_str):
             total_loadfile_calls += 1
             open_p = lf.end() - 1
@@ -763,7 +1219,7 @@ def check_5_key_containment(probe_dir):
             lf_count = 0
             for occ in err_re.finditer(code_no_str):
                 occ_line = _line_no(code_no_str, occ.start())
-                if occ_line == lf_lineno and open_p < occ.start() < close_p:
+                if open_p < occ.start() < close_p:
                     lf_count += 1
                     if log_call_re.search(lines_no_str[occ_line - 1]):
                         violations.append(
@@ -772,7 +1228,7 @@ def check_5_key_containment(probe_dir):
                     continue
                 decl_line = lines_with_str[occ_line - 1].strip()
                 if re.fullmatch(
-                    rf"string\s+{re.escape(err_var)}\s*(?:=\s*\"\"\s*)?;", decl_line
+                    rf'string\s+{re.escape(err_var)}\s*(?:=\s*""\s*)?;', decl_line
                 ):
                     decl_count += 1
                     continue
@@ -811,7 +1267,7 @@ def check_5_key_containment(probe_dir):
 
 
 def check_6_hello_body(probe_dir):
-    """§6.2(6): HelloBody() contiene, en orden, \"proto\":\"qa0\", \"peer\":\" , \"inst\":\" , \"build\":\" y \"probe_ver\":\"dsbx-qa0\"."""
+    """§6.1(6): HelloBody() contiene en orden \"proto\":\"qa0\", \"peer\":\" , \"inst\":\" , \"build\":\" , \"probe_ver\":\"dsbx-qa1+ y DSBX_QA_STAMP."""
     violations = []
     hello_bodies = []
     for rel, path in _iter_c_files(probe_dir):
@@ -845,7 +1301,7 @@ def check_6_hello_body(probe_dir):
 
 
 def check_7_required_pieces(probe_dir):
-    """§6.2(7): Literales de dup, #ifdef DIAG_DEVELOPER con diag/retail, DSBX_QA_RPC_CAM >= 1000000, Send(...) y Event_OnRPC Insert/Remove."""
+    """§6.1(7): Literales de dup, #ifdef DIAG_DEVELOPER con diag/retail, DSBX_QA_RPC_CAM >= 1000000, Send(...) y Event_OnRPC Insert/Remove."""
     violations = []
     c_files = _iter_c_files(probe_dir)
     if not c_files:
@@ -873,7 +1329,7 @@ def check_7_required_pieces(probe_dir):
     )
     ifdef_matches = list(ifdef_re.finditer(all_with_str))
     if not ifdef_matches:
-        violations.append('Falta bloque #ifdef DIAG_DEVELOPER ... #else ... #endif')
+        violations.append("Falta bloque #ifdef DIAG_DEVELOPER ... #else ... #endif")
     else:
         ok_diag_retail = any(
             '"diag"' in m.group(1) and '"retail"' in m.group(2)
@@ -926,7 +1382,7 @@ def check_7_required_pieces(probe_dir):
 
 
 def check_8_encoding_and_eol(probe_dir):
-    """§6.2(8): Todos los ficheros de la sonda estan en UTF-8 sin BOM y solo con LF."""
+    """§6.1(8): Todos los ficheros de la sonda estan en UTF-8 sin BOM y solo con LF."""
     probe_dir = Path(probe_dir)
     files = sorted(p for p in probe_dir.rglob("*") if p.is_file())
     if not files:
@@ -950,6 +1406,411 @@ def check_8_encoding_and_eol(probe_dir):
     return violations
 
 
+def check_9_tick_and_wire_cap(probe_dir):
+    """§6.1(9): Tick(float timeslice), DSBX_QA_WIRE_CAP == wire.WIRE_CAP (>= 1024), .Length() tras WriteToString y "result_too_large"."""
+    probe_dir = Path(probe_dir)
+    violations = []
+
+    wire_cap = _read_python_wire_cap()
+    if wire_cap is None:
+        violations.append(f"qa/wire.py: no se pudo leer WIRE_CAP de {WIRE_PY_PATH}")
+    elif wire_cap < 1024:
+        violations.append(f"qa/wire.py: WIRE_CAP debe ser >= 1024, vale {wire_cap}")
+
+    mission_path = probe_dir / "scripts/5_Mission/DSBX_QA_Mission.c"
+    if not mission_path.is_file():
+        violations.append("scripts/5_Mission/DSBX_QA_Mission.c: fichero ausente")
+    else:
+        m_text = mission_path.read_text(encoding="utf-8", errors="replace")
+        m_no_str = _strip_comments(m_text, blank_strings=True)
+        on_update_Re = re.compile(
+            r"\b(?:override\s+)?void\s+OnUpdate\s*\(\s*float\s+([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\{",
+            re.MULTILINE,
+        )
+        updates = []
+        pos = 0
+        while pos < len(m_no_str):
+            um = on_update_Re.search(m_no_str, pos)
+            if not um:
+                break
+            ob = um.end() - 1
+            cb = _find_matching_brace(m_no_str, ob)
+            if cb == -1:
+                break
+            updates.append((um.group(1), m_no_str[ob + 1 : cb]))
+            pos = cb + 1
+
+        if len(updates) != 2:
+            violations.append(
+                f"DSBX_QA_Mission.c: debe tener exactamente 2 OnUpdate(float timeslice), encontrados {len(updates)}"
+            )
+        for idx, (param_name, u_body) in enumerate(updates, 1):
+            if not re.search(rf"\.\s*Tick\s*\(\s*{re.escape(param_name)}\s*\)", u_body):
+                violations.append(
+                    f"DSBX_QA_Mission.c: OnUpdate #{idx} no llama a .Tick({param_name})"
+                )
+        if re.search(r"\.\s*Tick\s*\(\s*\)", m_no_str):
+            violations.append("DSBX_QA_Mission.c: contiene llamada prohibida .Tick() sin timeslice")
+
+    probe_path = probe_dir / "scripts/5_Mission/DSBX_QA_Probe.c"
+    if not probe_path.is_file():
+        violations.append("scripts/5_Mission/DSBX_QA_Probe.c: fichero ausente")
+    else:
+        p_text = probe_path.read_text(encoding="utf-8", errors="replace")
+        p_with_str = _strip_comments(p_text, blank_strings=False)
+        p_no_str = _strip_comments(p_text, blank_strings=True)
+
+        if not re.search(r"\bvoid\s+Tick\s*\(\s*float\b", p_no_str):
+            violations.append("DSBX_QA_Probe.c: falta declaracion 'void Tick(float ...)'")
+        if re.search(r"\bvoid\s+Tick\s*\(\s*\)", p_no_str) or re.search(r"(?<![A-Za-z0-9_])Tick\s*\(\s*\)", p_no_str):
+            violations.append("DSBX_QA_Probe.c: contiene Tick() sin argumento float")
+
+        cap_defs = list(
+            re.finditer(
+                r"\b(?:(?:static|const)\s+)*int\s+DSBX_QA_WIRE_CAP\s*=\s*([+-]?\d+)\s*;",
+                p_no_str,
+            )
+        )
+        if len(cap_defs) != 1:
+            violations.append(
+                f"DSBX_QA_Probe.c: DSBX_QA_WIRE_CAP debe definirse exactamente 1 vez, encontradas {len(cap_defs)}"
+            )
+        else:
+            c_cap = int(cap_defs[0].group(1))
+            if c_cap < 1024:
+                violations.append(
+                    f"DSBX_QA_Probe.c: DSBX_QA_WIRE_CAP debe ser >= 1024, vale {c_cap}"
+                )
+            if wire_cap is not None and c_cap != wire_cap:
+                violations.append(
+                    f"DSBX_QA_Probe.c: DSBX_QA_WIRE_CAP ({c_cap}) no coincide con wire.WIRE_CAP ({wire_cap})"
+                )
+
+        wts_m = re.search(r"\bWriteToString\s*\(", p_no_str)
+        if not wts_m:
+            violations.append("DSBX_QA_Probe.c: falta llamada a WriteToString(")
+        else:
+            len_m = re.search(r"\.\s*Length\s*\(\s*\)", p_no_str[wts_m.end() :])
+            if not len_m:
+                violations.append("DSBX_QA_Probe.c: no mide .Length() tras WriteToString")
+
+        if '"result_too_large"' not in p_with_str:
+            violations.append('DSBX_QA_Probe.c: falta el literal "result_too_large"')
+
+    return violations
+
+
+def check_10_extensions_and_prefixes(probe_dir):
+    """§6.1(10) y Encargo §5.3: DSBX_QA_Ext, DSBX_QA_JobMgr, registro/ciclo de las 9 extensiones y prefijos de literales."""
+    probe_dir = Path(probe_dir)
+    violations = []
+
+    jobs_path = probe_dir / "scripts/5_Mission/DSBX_QA_Jobs.c"
+    if not jobs_path.is_file():
+        violations.append("scripts/5_Mission/DSBX_QA_Jobs.c: fichero ausente")
+    else:
+        j_text = jobs_path.read_text(encoding="utf-8", errors="replace")
+        j_no_str = _strip_comments(j_text, blank_strings=True)
+        j_blocks = {name: (bs, be) for name, _, bs, be in _extract_named_blocks(j_no_str, "class")}
+
+        if "DSBX_QA_Ext" not in j_blocks:
+            violations.append("DSBX_QA_Jobs.c: falta class DSBX_QA_Ext")
+        else:
+            bs, be = j_blocks["DSBX_QA_Ext"]
+            ext_body = j_no_str[bs:be]
+            for mname in EXT_REQUIRED_METHODS:
+                if not re.search(rf"\b(?:void|bool)\s+{re.escape(mname)}\s*\(", ext_body):
+                    violations.append(f"DSBX_QA_Jobs.c: DSBX_QA_Ext sin metodo {mname}()")
+
+        if "DSBX_QA_JobMgr" not in j_blocks:
+            violations.append("DSBX_QA_Jobs.c: falta class DSBX_QA_JobMgr")
+        else:
+            bs, be = j_blocks["DSBX_QA_JobMgr"]
+            mgr_body = j_no_str[bs:be]
+            for mname in JOBMGR_REQUIRED_METHODS:
+                if not re.search(rf"\b(?:void|bool|string)\s+{re.escape(mname)}\s*\(", mgr_body):
+                    violations.append(f"DSBX_QA_Jobs.c: DSBX_QA_JobMgr sin metodo {mname}()")
+
+        if not re.search(r"\.\s*OnJobEnd\s*\(", j_no_str):
+            violations.append("DSBX_QA_Jobs.c: no invoca .OnJobEnd(")
+
+    probe_path = probe_dir / "scripts/5_Mission/DSBX_QA_Probe.c"
+    if not probe_path.is_file():
+        violations.append("scripts/5_Mission/DSBX_QA_Probe.c: fichero ausente")
+    else:
+        p_text = probe_path.read_text(encoding="utf-8", errors="replace")
+        p_no_str = _strip_comments(p_text, blank_strings=True)
+
+        last_pos = -1
+        for _, cls_name, _, _, _ in EXTENSION_SPECS:
+            inst_m = re.search(rf"\bnew\s+{re.escape(cls_name)}\b", p_no_str[last_pos + 1 if last_pos >= 0 else 0 :])
+            if not inst_m:
+                if re.search(rf"\bnew\s+{re.escape(cls_name)}\b", p_no_str):
+                    violations.append(
+                        f"DSBX_QA_Probe.c: {cls_name} no se instancia en el orden exigido de §4.1"
+                    )
+                else:
+                    violations.append(f"DSBX_QA_Probe.c: no instancia {cls_name}")
+            else:
+                last_pos = (last_pos + 1 if last_pos >= 0 else 0) + inst_m.start()
+
+        for hook in ("Init", "Handles", "OnStartOp", "OnTick", "OnRpc", "OnShutdown"):
+            if not re.search(rf"\.\s*{hook}\s*\(", p_no_str):
+                violations.append(f"DSBX_QA_Probe.c: no invoca .{hook}(")
+
+    for rel, path in _iter_c_files(probe_dir):
+        ext_name = _classify_extension_c_file(rel)
+        if ext_name is None:
+            continue
+        _, expected_cls, own_prefix, _, _ = EXTENSION_BY_NAME[ext_name]
+        text = path.read_text(encoding="utf-8", errors="replace")
+        code_with_str = _strip_comments(text, blank_strings=False)
+        code_no_str = _strip_comments(text, blank_strings=True)
+
+        if rel == f"scripts/5_Mission/{expected_cls}.c":
+            if not re.search(
+                rf"\bclass\s+{re.escape(expected_cls)}\s*(?::|extends)\s*DSBX_QA_Ext\b",
+                code_no_str,
+            ):
+                violations.append(
+                    f"{rel}: falta 'class {expected_cls} : DSBX_QA_Ext'"
+                )
+
+        forbidden_prefixes = [p for p in ALL_EXT_PREFIXES if p != own_prefix] + ["job_"]
+        for lit_offset, lit_val in _extract_c_string_literals(code_with_str):
+            for fp in forbidden_prefixes:
+                if lit_val.startswith(fp):
+                    lineno = _line_no(code_with_str, lit_offset)
+                    violations.append(
+                        f"{rel}:{lineno}: literal {lit_val!r} empieza por prefijo prohibido {fp!r} (solo se permite {own_prefix!r})"
+                    )
+
+    return violations
+
+
+def check_11_rpc_ranges(probe_dir):
+    """§6.1(11): Toda constante int DSBX_QA_RPC_* en DSBX_QA_X_<Name>[_<algo>].c cae en su bloque de 10 ids y DSBX_QA_X_Base.c define DSBX_QA_RPC_BASE_PING = 26102880."""
+    probe_dir = Path(probe_dir)
+    violations = []
+    rpc_decl_re = re.compile(
+        r"\b(?:(?:static|const)\s+)*int\s+(DSBX_QA_RPC_[A-Za-z0-9_]*)\s*=\s*([^;]+);"
+    )
+
+    found_base_ping = False
+    base_file_seen = False
+
+    for rel, path in _iter_c_files(probe_dir):
+        ext_name = _classify_extension_c_file(rel)
+        if ext_name is None:
+            continue
+        _, _, _, lo, hi = EXTENSION_BY_NAME[ext_name]
+        text = path.read_text(encoding="utf-8", errors="replace")
+        code_no_str = _strip_comments(text, blank_strings=True)
+
+        if rel == "scripts/5_Mission/DSBX_QA_X_Base.c":
+            base_file_seen = True
+
+        for m in rpc_decl_re.finditer(code_no_str):
+            const_name = m.group(1)
+            raw_val = m.group(2).strip()
+            lineno = _line_no(code_no_str, m.start())
+            if not re.fullmatch(r"[+-]?\d+", raw_val):
+                violations.append(
+                    f"{rel}:{lineno}: {const_name} debe tener un literal entero, recibido {raw_val!r}"
+                )
+                continue
+            val = int(raw_val)
+            if not (lo <= val <= hi):
+                violations.append(
+                    f"{rel}:{lineno}: {const_name} = {val} fuera del rango [{lo}, {hi}] de {ext_name}"
+                )
+            if (
+                rel == "scripts/5_Mission/DSBX_QA_X_Base.c"
+                and const_name == "DSBX_QA_RPC_BASE_PING"
+                and val == 26102880
+            ):
+                found_base_ping = True
+
+    if not base_file_seen:
+        violations.append("scripts/5_Mission/DSBX_QA_X_Base.c: fichero ausente")
+    elif not found_base_ping:
+        violations.append(
+            "scripts/5_Mission/DSBX_QA_X_Base.c: falta DSBX_QA_RPC_BASE_PING = 26102880"
+        )
+
+    return violations
+
+
+def _resolve_qa_dir_for_check12(probe_dir):
+    probe_dir = Path(probe_dir)
+    if (probe_dir / "qa").is_dir():
+        return probe_dir / "qa"
+    if list(probe_dir.glob("*_eval.py")):
+        return probe_dir
+    resolved = probe_dir.resolve()
+    if resolved.parent.name == "probe" and resolved.parents[1].is_dir():
+        return resolved.parents[1]
+    return QA_DIR
+
+
+def _extract_mutant_names_from_file(mutants_py_path):
+    text = mutants_py_path.read_text(encoding="utf-8", errors="replace")
+    names = set()
+    try:
+        tree = ast.parse(text, filename=str(mutants_py_path))
+        for node in ast.walk(tree):
+            value_node = None
+            if isinstance(node, ast.Assign):
+                if any(isinstance(t, ast.Name) and t.id == "EXPECTED_MUTANTS" for t in node.targets):
+                    value_node = node.value
+            elif isinstance(node, ast.AnnAssign):
+                if isinstance(node.target, ast.Name) and node.target.id == "EXPECTED_MUTANTS":
+                    value_node = node.value
+            if isinstance(value_node, ast.Dict):
+                for k in value_node.keys:
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                        names.add(k.value)
+    except SyntaxError:
+        pass
+    return sorted(names)
+
+
+def check_12_blind_evaluators(probe_dir):
+    """§6.1(12): Ningun qa/*_eval.py contiene qa_fault, "faults", "mut-", --fault, injection.json, part.json, EXPECTED_MUTANTS ni nombres de mutante de qa/*_mutants.py."""
+    qa_dir = _resolve_qa_dir_for_check12(probe_dir)
+    eval_files = sorted(qa_dir.glob("*_eval.py"))
+    if not eval_files:
+        return [f"{qa_dir}: no se encontraron ficheros *_eval.py"]
+
+    mutant_names = set()
+    for mut_path in sorted(qa_dir.glob("*_mutants.py")):
+        mutant_names.update(_extract_mutant_names_from_file(mut_path))
+
+    forbidden_checks = [
+        ("qa_fault", re.compile(r"qa_fault")),
+        ('"faults"', re.compile(r"""["']faults["']""")),
+        ('"mut-"', re.compile(r"""["']mut-""")),
+        ("--fault", re.compile(r"--fault")),
+        ("injection.json", re.compile(r"injection\.json")),
+        ("part.json", re.compile(r"part\.json")),
+        ("EXPECTED_MUTANTS", re.compile(r"\bEXPECTED_MUTANTS\b")),
+    ]
+    for mname in sorted(mutant_names):
+        forbidden_checks.append(
+            (
+                f"mutante {mname!r}",
+                re.compile(rf"(?<![A-Za-z0-9_]){re.escape(mname)}(?![A-Za-z0-9_])"),
+            )
+        )
+
+    violations = []
+    for eval_path in eval_files:
+        text = eval_path.read_text(encoding="utf-8", errors="replace")
+        rel = eval_path.name
+        for label, pat in forbidden_checks:
+            for m in pat.finditer(text):
+                lineno = _line_no(text, m.start())
+                violations.append(f"qa/{rel}:{lineno}: evaluador contiene token prohibido {label}")
+
+    return violations
+
+
+def check_13_ordered_remove(probe_dir):
+    """§14 F02-H2 y Encargo §5.1: Prohibe cualquier .Remove( sobre m_CacheOrder, m_RpcLog, m_PingLog y m_EmitLog en toda la sonda (.RemoveOrdered( permitido)."""
+    c_files = _iter_c_files(probe_dir)
+    if not c_files:
+        return ["No se encontraron ficheros .c en la sonda"]
+
+    violations = []
+    forbidden_remove_re = re.compile(
+        r"(?<![A-Za-z0-9_])(m_CacheOrder|m_RpcLog|m_PingLog|m_EmitLog)\s*\.\s*Remove\s*\("
+    )
+    for rel, path in c_files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        code_no_str = _strip_comments(text, blank_strings=True)
+        for m in forbidden_remove_re.finditer(code_no_str):
+            lineno = _line_no(code_no_str, m.start())
+            violations.append(
+                f"{rel}:{lineno}: llamada prohibida {m.group(1)}.Remove(; debe usar RemoveOrdered"
+            )
+
+    return violations
+
+
+def check_14_explicit_deadman(probe_dir):
+    """§14.0 y Encargo §5.2: StartJob declara 9 parametros con 'string deadman' al final sin valor por defecto y toda llamada pasa los 9 argumentos."""
+    probe_dir = Path(probe_dir)
+    violations = []
+
+    jobs_path = probe_dir / "scripts/5_Mission/DSBX_QA_Jobs.c"
+    if not jobs_path.is_file():
+        return ["scripts/5_Mission/DSBX_QA_Jobs.c: fichero ausente"]
+
+    j_text = jobs_path.read_text(encoding="utf-8", errors="replace")
+    j_with_str = _strip_comments(j_text, blank_strings=False)
+    j_no_str = _strip_comments(j_text, blank_strings=True)
+
+    decl_re = re.compile(r"\bstring\s+StartJob\s*\(")
+    decl_matches = list(decl_re.finditer(j_no_str))
+    if len(decl_matches) != 1:
+        violations.append(
+            f"DSBX_QA_Jobs.c: se esperaba 1 declaracion 'string StartJob(...)', encontradas {len(decl_matches)}"
+        )
+    else:
+        dm = decl_matches[0]
+        open_p = dm.end() - 1
+        close_p = _find_matching_paren(j_no_str, open_p)
+        lineno = _line_no(j_no_str, dm.start())
+        if close_p == -1:
+            violations.append(f"DSBX_QA_Jobs.c:{lineno}: StartJob( sin parentesis de cierre")
+        else:
+            param_spans = _split_top_level_spans(j_no_str, open_p + 1, close_p, sep=",")
+            if len(param_spans) != 9:
+                violations.append(
+                    f"DSBX_QA_Jobs.c:{lineno}: StartJob debe declarar 9 parametros, tiene {len(param_spans)}"
+                )
+            else:
+                p9_raw = j_with_str[param_spans[8][0] : param_spans[8][1]].strip()
+                if "=" in p9_raw:
+                    violations.append(
+                        f"DSBX_QA_Jobs.c:{lineno}: el 9o parametro 'deadman' de StartJob no puede tener valor por defecto: {p9_raw!r}"
+                    )
+                if not re.fullmatch(r"string\s+deadman", _normalize_type(p9_raw)):
+                    violations.append(
+                        f"DSBX_QA_Jobs.c:{lineno}: el 9o parametro de StartJob debe ser 'string deadman', recibido {p9_raw!r}"
+                    )
+
+    total_calls = 0
+    call_re = re.compile(r"(?<![A-Za-z0-9_])StartJob\s*\(")
+    for rel, path in _iter_c_files(probe_dir):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        code_no_str = _strip_comments(text, blank_strings=True)
+        for m in call_re.finditer(code_no_str):
+            before = code_no_str[: m.start()].rstrip()
+            if re.search(r"\b(?:void|bool|string|int|float)$", before):
+                continue
+            total_calls += 1
+            open_p = m.end() - 1
+            close_p = _find_matching_paren(code_no_str, open_p)
+            lineno = _line_no(code_no_str, m.start())
+            if close_p == -1:
+                violations.append(f"{rel}:{lineno}: llamada StartJob( sin parentesis de cierre")
+                continue
+            arg_spans = _split_top_level_spans(code_no_str, open_p + 1, close_p, sep=",")
+            non_empty_args = [
+                code_no_str[s:e].strip() for s, e in arg_spans if code_no_str[s:e].strip()
+            ]
+            if len(arg_spans) != 9 or len(non_empty_args) != 9:
+                violations.append(
+                    f"{rel}:{lineno}: toda llamada a StartJob( debe pasar los 9 argumentos explicitos (incluyendo deadman), pasa {len(non_empty_args)}"
+                )
+
+    if total_calls < 1:
+        violations.append("No se encontraron llamadas a StartJob( en la sonda")
+
+    return violations
+
+
 ALL_CHECKS = (
     check_1_mod_files,
     check_2_json_classes,
@@ -959,6 +1820,12 @@ ALL_CHECKS = (
     check_6_hello_body,
     check_7_required_pieces,
     check_8_encoding_and_eol,
+    check_9_tick_and_wire_cap,
+    check_10_extensions_and_prefixes,
+    check_11_rpc_ranges,
+    check_12_blind_evaluators,
+    check_13_ordered_remove,
+    check_14_explicit_deadman,
 )
 
 
@@ -970,7 +1837,7 @@ def run_all_checks(probe_dir):
 
 
 # ---------------------------------------------------------------------------
-# Fixture sintetica minima positiva (§6.2 «Fixtures»)
+# Fixture sintetica minima positiva (§6.1 y §14)
 # ---------------------------------------------------------------------------
 
 SYNTHETIC_CONFIG_CPP = """\
@@ -992,9 +1859,14 @@ class CfgMods
         dir = "DayZSandbox_QA";
         name = "DayZSandbox_QA";
         type = "mod";
-        dependencies[] = {"Mission"};
+        dependencies[] = {"World", "Mission"};
         class defs
         {
+            class worldScriptModule
+            {
+                value = "";
+                files[] = {"DayZSandbox_QA/scripts/4_World"};
+            };
             class missionScriptModule
             {
                 value = "";
@@ -1005,17 +1877,32 @@ class CfgMods
 };
 """
 
+SYNTHETIC_STAMP_C = 'const string DSBX_QA_STAMP = "unstamped";\n'
+
+SYNTHETIC_W_ACTOR_C = """\
+class DSBX_QA_W_Actor : Managed
+{
+}
+"""
+
 SYNTHETIC_MESSAGES_C = """\
 class DSBX_QA_Config
 {
     string url;
     string key;
     int retry_ms;
+    int callback_budget;
 }
 
 class DSBX_QA_HelloResp
 {
+    bool ok;
     int lease_ms;
+}
+
+class DSBX_QA_AckResp
+{
+    bool ok;
 }
 
 class DSBX_QA_PollResp
@@ -1045,6 +1932,15 @@ class DSBX_QA_Args
     int interval_ms;
     int seq0;
     string client_inst;
+    ref array<string> sk;
+    ref array<string> sv;
+    ref array<string> nk;
+    ref array<float> nv;
+    ref array<string> ncol;
+    ref array<float> ncell;
+    ref array<string> scol;
+    ref array<string> scell;
+    int rows;
 }
 
 class DSBX_QA_RpcEntry
@@ -1065,6 +1961,15 @@ class DSBX_QA_Read
     ref array<float> pos;
     ref array<float> ypr;
     ref array<ref DSBX_QA_RpcEntry> rpc_log;
+    ref array<string> sk;
+    ref array<string> sv;
+    ref array<string> nk;
+    ref array<float> nv;
+    ref array<string> ncol;
+    ref array<float> ncell;
+    ref array<string> scol;
+    ref array<string> scell;
+    int rows;
 
     void DSBX_QA_Read()
     {
@@ -1078,6 +1983,15 @@ class DSBX_QA_Read
         ypr.Insert(0.0);
         ypr.Insert(0.0);
         rpc_log = new array<ref DSBX_QA_RpcEntry>();
+        sk = new array<string>();
+        sv = new array<string>();
+        nk = new array<string>();
+        nv = new array<float>();
+        ncol = new array<string>();
+        ncell = new array<float>();
+        scol = new array<string>();
+        scell = new array<string>();
+        rows = 0;
     }
 }
 
@@ -1100,132 +2014,273 @@ class DSBX_QA_Result
 }
 """
 
-SYNTHETIC_PROBE_C = """\
-static const int DSBX_QA_RPC_CAM = 26102701;
-
-class DSBX_QA_Callback : RestCallback
+SYNTHETIC_JOBS_C = """\
+class DSBX_QA_Ext : Managed
 {
-    DSBX_QA_Probe m_Probe;
+    void Init(DSBX_QA_Probe probe) {}
+    bool Handles(string verb, string role) { return false; }
+    void OnStartOp(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res) {}
+    void OnTick(float timeslice) {}
+    void OnJobEnd(string job_id, string state, string reason) {}
+    void OnRpc(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx) {}
+    void OnShutdown() {}
 }
 
-class DSBX_QA_Probe : Managed
+class DSBX_QA_Job : Managed
 {
+    DSBX_QA_Ext owner;
+    string job_id;
+    string state;
+    string reason;
+    string resource;
+    string deadman;
+}
+
+class DSBX_QA_JobMgr : Managed
+{
+    string StartJob(DSBX_QA_Ext owner, string job_id, string resource, array<string> ncol, array<string> scol, int page_size, int max_rows, float max_duration_ms, string deadman)
+    {
+        if (deadman != "stop" && deadman != "continue")
+        {
+            return "bad_deadman";
+        }
+        return "";
+    }
+
+    void FillStartRead(DSBX_QA_Read read, string job_id, string resource)
+    {
+    }
+
+    bool AppendRow(string job_id, array<float> nvals, array<string> svals)
+    {
+        return true;
+    }
+
+    string GetState(string job_id)
+    {
+        return "";
+    }
+
+    bool EndJob(string job_id, string state, string reason)
+    {
+        DSBX_QA_Ext owner;
+        if (owner)
+        {
+            owner.OnJobEnd(job_id, state, reason);
+        }
+        return true;
+    }
+}
+"""
+
+
+def _build_synthetic_probe_c(wire_cap):
+    return f"""\
+static const int DSBX_QA_RPC_CAM = 26102701;
+const int DSBX_QA_WIRE_CAP = {wire_cap};
+
+class DSBX_QA_Callback : RestCallback
+{{
+    DSBX_QA_Probe m_Probe;
+}}
+
+class DSBX_QA_Probe : Managed
+{{
     string m_Role;
     string m_Inst;
     string m_Build;
     string m_Url;
     string m_Key;
     int m_RetryMs;
+    int m_CallbackBudget;
     int m_Frame;
+    float m_DtSumMs;
     RestContext m_Ctx;
+    ref DSBX_QA_JobMgr m_Jobs;
+    ref array<ref DSBX_QA_Ext> m_Exts;
+    ref array<string> m_CacheOrder;
+    ref array<ref DSBX_QA_RpcEntry> m_RpcLog;
+    ref array<string> m_EmitLog;
 
     void DSBX_QA_Probe(string role)
-    {
+    {{
         m_Role = role;
 #ifdef DIAG_DEVELOPER
         m_Build = "diag";
 #else
         m_Build = "retail";
 #endif
-        if (m_Role == "client")
-        {
-            DayZGame.Event_OnRPC.Insert(this.OnRpc);
-        }
-    }
+        m_Jobs = new DSBX_QA_JobMgr();
+        m_Exts = new array<ref DSBX_QA_Ext>();
+        m_Exts.Insert(new DSBX_QA_X_Persist());
+        m_Exts.Insert(new DSBX_QA_X_Actor());
+        m_Exts.Insert(new DSBX_QA_X_Cam());
+        m_Exts.Insert(new DSBX_QA_X_Cot());
+        m_Exts.Insert(new DSBX_QA_X_Env());
+        m_Exts.Insert(new DSBX_QA_X_Take());
+        m_Exts.Insert(new DSBX_QA_X_Perf());
+        m_Exts.Insert(new DSBX_QA_X_Map());
+        m_Exts.Insert(new DSBX_QA_X_Base());
+        for (int i = 0; i < m_Exts.Count(); i++)
+        {{
+            m_Exts.Get(i).Init(this);
+        }}
+        DayZGame.Event_OnRPC.Insert(DSBX_QA_Probe.OnAnyRpc);
+    }}
 
     void ~DSBX_QA_Probe()
-    {
+    {{
         Shutdown();
-    }
+    }}
 
     void Shutdown()
-    {
-        if (m_Role == "client")
-        {
-            DayZGame.Event_OnRPC.Remove(this.OnRpc);
-        }
-    }
+    {{
+        for (int i = 0; i < m_Exts.Count(); i++)
+        {{
+            m_Exts.Get(i).OnShutdown();
+        }}
+        DayZGame.Event_OnRPC.Remove(DSBX_QA_Probe.OnAnyRpc);
+    }}
+
+    void Tick(float timeslice)
+    {{
+        m_Frame++;
+        m_DtSumMs += timeslice * 1000.0;
+        for (int i = 0; i < m_Exts.Count(); i++)
+        {{
+            m_Exts.Get(i).OnTick(timeslice);
+        }}
+    }}
+
+    void EvictOrdered()
+    {{
+        if (m_CacheOrder.Count() > 1024)
+        {{
+            m_CacheOrder.RemoveOrdered(0);
+        }}
+        if (m_RpcLog.Count() > 512)
+        {{
+            m_RpcLog.RemoveOrdered(0);
+        }}
+        if (m_EmitLog.Count() > 512)
+        {{
+            m_EmitLog.RemoveOrdered(0);
+        }}
+    }}
+
+    void DispatchExt(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
+    {{
+        for (int i = 0; i < m_Exts.Count(); i++)
+        {{
+            DSBX_QA_Ext ext = m_Exts.Get(i);
+            if (ext.Handles(op.verb, m_Role))
+            {{
+                ext.OnStartOp(op, args, res);
+                return;
+            }}
+        }}
+    }}
 
     void Log(string msg)
-    {
+    {{
         Print("[DSBX_QA] " + msg);
-    }
+    }}
 
     bool LoadConfig()
-    {
+    {{
         DSBX_QA_Config cfg;
         string err;
         if (!JsonFileLoader<DSBX_QA_Config>.LoadFile("$profile:dsbx_qa.json", cfg, err))
-        {
+        {{
             Log("config unreadable");
             return false;
-        }
-        if (cfg.key == "" || cfg.url.IndexOf("http://127.0.0.1:") != 0)
-        {
+        }}
+        if (!cfg || cfg.key == "" || cfg.url.IndexOf("http://127.0.0.1:") != 0)
+        {{
             Log("config invalid");
             return false;
-        }
+        }}
         m_Url = cfg.url;
         m_Key = cfg.key;
         m_RetryMs = cfg.retry_ms;
+        m_CallbackBudget = cfg.callback_budget;
         Log("config usable");
         return true;
-    }
+    }}
 
     string KeyQuery()
-    {
+    {{
         return "key=" + m_Key;
-    }
+    }}
 
     string HelloBody()
-    {
-        return "{\\"proto\\":\\"qa0\\",\\"peer\\":\\"" + m_Role + "\\",\\"inst\\":\\"" + m_Inst + "\\",\\"build\\":\\"" + m_Build + "\\",\\"probe_ver\\":\\"dsbx-qa0\\"}";
-    }
+    {{
+        return "{{\\"proto\\":\\"qa0\\",\\"peer\\":\\"" + m_Role + "\\",\\"inst\\":\\"" + m_Inst + "\\",\\"build\\":\\"" + m_Build + "\\",\\"probe_ver\\":\\"dsbx-qa1+" + DSBX_QA_STAMP + "\\"}}";
+    }}
 
     void SendHello(DSBX_QA_Callback cb)
-    {
-        m_Ctx.POST("hello?" + KeyQuery(), HelloBody(), cb);
-    }
+    {{
+        m_Ctx.POST(cb, "hello?" + KeyQuery(), HelloBody());
+    }}
 
     void SendPoll(DSBX_QA_Callback cb, float tick_s)
-    {
-        m_Ctx.GET("poll?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&frame=" + m_Frame.ToString() + "&tick_s=" + tick_s.ToString(), cb);
-    }
+    {{
+        m_Ctx.GET(cb, "poll?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&frame=" + m_Frame.ToString() + "&tick_s=" + tick_s.ToString());
+    }}
 
     bool SendResult(DSBX_QA_Result result, DSBX_QA_Callback cb)
-    {
+    {{
         JsonSerializer js = new JsonSerializer();
         string body;
         js.WriteToString(result, false, body);
-        int c0 = body.Replace("\\"dup\\":0", "\\"dup\\":false");
-        int c1 = body.Replace("\\"dup\\":1", "\\"dup\\":true");
-        if (c0 + c1 != 1)
-        {
-            return false;
-        }
-        m_Ctx.POST("result?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst, body, cb);
+        int idx0 = body.IndexOf("\\"dup\\":0");
+        int idx1 = body.IndexOf("\\"dup\\":1");
+        if (idx0 >= 0)
+        {{
+            body = body.Substring(0, idx0) + "\\"dup\\":false" + body.Substring(idx0 + 7, body.Length() - (idx0 + 7));
+        }}
+        else if (idx1 >= 0)
+        {{
+            body = body.Substring(0, idx1) + "\\"dup\\":true" + body.Substring(idx1 + 7, body.Length() - (idx1 + 7));
+        }}
+        if (body.Length() > DSBX_QA_WIRE_CAP)
+        {{
+            result.status = "error";
+            result.reason = "result_too_large";
+        }}
+        m_Ctx.POST(cb, "result?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst, body);
         return true;
-    }
+    }}
 
     void SendCamRpc(int seq, string target_inst, array<float> pos, array<float> ypr)
-    {
+    {{
         ScriptRPC rpc = new ScriptRPC();
         rpc.Write(seq);
         rpc.Write(target_inst);
         rpc.Write(pos);
         rpc.Write(ypr);
         rpc.Send(null, DSBX_QA_RPC_CAM, true, null);
-    }
+    }}
 
-    void OnRpc(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
-    {
-        if (rpc_type != DSBX_QA_RPC_CAM)
-        {
+    static void OnAnyRpc(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
+    {{
+    }}
+
+    void RouteRpc(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
+    {{
+        if (rpc_type == DSBX_QA_RPC_CAM)
+        {{
             return;
-        }
-    }
-}
+        }}
+        if (26102800 <= rpc_type && rpc_type <= 26102889)
+        {{
+            int idx = (rpc_type - 26102800) / 10;
+            m_Exts.Get(idx).OnRpc(sender, target, rpc_type, ctx);
+        }}
+    }}
+}}
 """
+
 
 SYNTHETIC_MISSION_C = """\
 modded class MissionServer
@@ -1236,6 +2291,15 @@ modded class MissionServer
     {
         super.OnMissionStart();
         m_DsbxQaProbe = new DSBX_QA_Probe("server");
+    }
+
+    override void OnUpdate(float timeslice)
+    {
+        super.OnUpdate(timeslice);
+        if (m_DsbxQaProbe)
+        {
+            m_DsbxQaProbe.Tick(timeslice);
+        }
     }
 }
 
@@ -1248,19 +2312,107 @@ modded class MissionGameplay
         super.OnMissionStart();
         m_DsbxQaProbe = new DSBX_QA_Probe("client");
     }
+
+    override void OnUpdate(float timeslice)
+    {
+        super.OnUpdate(timeslice);
+        if (m_DsbxQaProbe)
+        {
+            m_DsbxQaProbe.Tick(timeslice);
+        }
+    }
+}
+"""
+
+SYNTHETIC_X_BASE_C = """\
+static const int DSBX_QA_RPC_BASE_PING = 26102880;
+
+class DSBX_QA_X_Base : DSBX_QA_Ext
+{
+    DSBX_QA_Probe m_Probe;
+    ref array<int> m_PingLog;
+
+    override void Init(DSBX_QA_Probe probe)
+    {
+        m_Probe = probe;
+        m_PingLog = new array<int>();
+    }
+
+    override bool Handles(string verb, string role)
+    {
+        return verb == "qa_echo" || verb == "qa_timer_start" || verb == "qa_rpc_ping";
+    }
+
+    override void OnStartOp(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
+    {
+        if (op.verb == "qa_timer_start")
+        {
+            ref array<string> ncol = new array<string>();
+            ref array<string> scol = new array<string>();
+            m_Probe.m_Jobs.StartJob(this, op.op_id, "qa_timer", ncol, scol, 20, 4096, 900000.0, "continue");
+        }
+    }
+
+    override void OnRpc(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
+    {
+        if (rpc_type == DSBX_QA_RPC_BASE_PING)
+        {
+            if (m_PingLog.Count() >= 512)
+            {
+                m_PingLog.RemoveOrdered(0);
+            }
+        }
+    }
+}
+"""
+
+SYNTHETIC_EVAL_PY = """\
+def evaluate(part_dir):
+    return {"verdict": "PASA", "exit_code": 0, "checks": []}
+"""
+
+SYNTHETIC_MUTANTS_PY = """\
+EXPECTED_MUTANTS = {
+    "ignore_stop": {"expected_exit_code": 1, "must_fail_checks": ["BASE-03"], "allowed_non_pass": {}},
+    "freeze_on_wait": {"expected_exit_code": 1, "must_fail_checks": ["BASE-08"], "allowed_non_pass": {}},
+    "defer_cleanup": {"expected_exit_code": 1, "must_fail_checks": ["BASE-08"], "allowed_non_pass": {}},
 }
 """
 
 
+def _build_skeleton_ext_c(cls_name):
+    return f"""\
+class {cls_name} : DSBX_QA_Ext
+{{
+    override bool Handles(string verb, string role)
+    {{
+        return false;
+    }}
+}}
+"""
+
+
 def make_synthetic_files():
-    return {
+    wire_cap = _read_python_wire_cap() or 3500
+    files = {
         "$PBOPREFIX$": b"DayZSandbox_QA\n",
         "include.lst": b"*.c\n",
         "config.cpp": SYNTHETIC_CONFIG_CPP.encode("utf-8"),
+        "scripts/4_World/DSBX_QA_W_Actor.c": SYNTHETIC_W_ACTOR_C.encode("utf-8"),
+        "scripts/5_Mission/DSBX_QA_Stamp.c": SYNTHETIC_STAMP_C.encode("utf-8"),
         "scripts/5_Mission/DSBX_QA_Messages.c": SYNTHETIC_MESSAGES_C.encode("utf-8"),
-        "scripts/5_Mission/DSBX_QA_Probe.c": SYNTHETIC_PROBE_C.encode("utf-8"),
+        "scripts/5_Mission/DSBX_QA_Jobs.c": SYNTHETIC_JOBS_C.encode("utf-8"),
+        "scripts/5_Mission/DSBX_QA_Probe.c": _build_synthetic_probe_c(wire_cap).encode("utf-8"),
         "scripts/5_Mission/DSBX_QA_Mission.c": SYNTHETIC_MISSION_C.encode("utf-8"),
+        "scripts/5_Mission/DSBX_QA_X_Base.c": SYNTHETIC_X_BASE_C.encode("utf-8"),
+        "qa/f03_base_eval.py": SYNTHETIC_EVAL_PY.encode("utf-8"),
+        "qa/f03_base_mutants.py": SYNTHETIC_MUTANTS_PY.encode("utf-8"),
     }
+    for name, cls_name, _, _, _ in EXTENSION_SPECS:
+        if name == "Base":
+            continue
+        files[f"scripts/5_Mission/{cls_name}.c"] = _build_skeleton_ext_c(cls_name).encode("utf-8")
+    return files
 
 
 def write_probe_tree(root, files_map):
@@ -1303,6 +2455,36 @@ class ProbeStaticTests(unittest.TestCase):
                 )
             self.assertEqual(run_all_checks(tmp), [])
 
+    def test_pos_check1_optional_inputs_and_extra_ext_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            files = make_synthetic_files()
+            files["config.cpp"] = files["config.cpp"].replace(
+                b'        type = "mod";\n',
+                b'        type = "mod";\n        inputs = "DayZSandbox_QA/inputs.xml";\n',
+            )
+            files["inputs.xml"] = b"<modded_inputs></modded_inputs>\n"
+            files["scripts/5_Mission/DSBX_QA_X_Cam_Helper.c"] = b"// helper\n"
+            files["scripts/4_World/DSBX_QA_W_Actor_Gesture.c"] = b"// actor helper\n"
+            write_probe_tree(tmp, files)
+            self.assertEqual(run_all_checks(tmp), [])
+
+    def test_pos_check5_get_and_post_signatures(self):
+        # F02-H6: las dos firmas positivas ctx.GET(cb, <expr con KeyQuery()>) y ctx.POST(cb, <expr con KeyQuery()>, data), incluso en varias lineas
+        with tempfile.TemporaryDirectory() as tmp:
+            files = make_synthetic_files()
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(
+                b'        m_Ctx.POST(cb, "hello?" + KeyQuery(), HelloBody());',
+                b'        m_Ctx.POST(\n            cb,\n            "hello?" + KeyQuery(),\n            HelloBody()\n        );',
+            ).replace(
+                b'        m_Ctx.GET(cb, "poll?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&frame=" + m_Frame.ToString() + "&tick_s=" + tick_s.ToString());',
+                b'        m_Ctx.GET(\n            cb,\n            "poll?" + KeyQuery() + "&peer=" + m_Role\n        );',
+            )
+            write_probe_tree(tmp, files)
+            self.assertEqual(check_5_key_containment(tmp), [])
+            self.assertEqual(run_all_checks(tmp), [])
+
     def test_neg_check1_mod_files(self):
         # 1a: $PBOPREFIX$ incorrecto
         def mut_prefix(files):
@@ -1316,17 +2498,28 @@ class ProbeStaticTests(unittest.TestCase):
 
         self._assert_mutation_caught_by(mut_include, check_1_mod_files)
 
-        # 1c: config.cpp con modulo extra worldScriptModule
-        def mut_config(files):
+        # 1c: config.cpp sin World en dependencies[]
+        def mut_config_deps(files):
             files["config.cpp"] = files["config.cpp"].replace(
-                b'files[] = {"DayZSandbox_QA/scripts/5_Mission"};',
-                b'files[] = {"DayZSandbox_QA/scripts/4_World"};',
+                b'dependencies[] = {"World", "Mission"};',
+                b'dependencies[] = {"Mission"};',
             )
 
-        self._assert_mutation_caught_by(mut_config, check_1_mod_files)
+        self._assert_mutation_caught_by(mut_config_deps, check_1_mod_files)
+
+        # 1d: DSBX_QA_Stamp.c con sello invalido
+        def mut_stamp(files):
+            files["scripts/5_Mission/DSBX_QA_Stamp.c"] = b'const string DSBX_QA_STAMP = "invalid_stamp";\n'
+
+        self._assert_mutation_caught_by(mut_stamp, check_1_mod_files)
+
+        # 1e: fichero .c no autorizado
+        def mut_extra_c(files):
+            files["scripts/5_Mission/DSBX_QA_Unauthorized.c"] = b"// no autorizado\n"
+
+        self._assert_mutation_caught_by(mut_extra_c, check_1_mod_files)
 
     def test_neg_check2_renamed_json_field(self):
-        # Mutacion obligatoria 1 de §6.2: un campo JSON renombrado
         def mut(files):
             files["scripts/5_Mission/DSBX_QA_Messages.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Messages.c"
@@ -1335,7 +2528,6 @@ class ProbeStaticTests(unittest.TestCase):
         self._assert_mutation_caught_by(mut, check_2_json_classes)
 
     def test_neg_check2_extra_member(self):
-        # Mutacion obligatoria 2 de §6.2: un miembro de mas
         def mut(files):
             files["scripts/5_Mission/DSBX_QA_Messages.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Messages.c"
@@ -1343,18 +2535,40 @@ class ProbeStaticTests(unittest.TestCase):
 
         self._assert_mutation_caught_by(mut, check_2_json_classes)
 
+    def test_neg_check2_missing_f02_h4_or_h5_fields(self):
+        # F02-H4: falta callback_budget en DSBX_QA_Config
+        def mut_budget(files):
+            files["scripts/5_Mission/DSBX_QA_Messages.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Messages.c"
+            ].replace(b"    int callback_budget;\n", b"")
+
+        self._assert_mutation_caught_by(mut_budget, check_2_json_classes)
+
+        # F02-H5: falta DSBX_QA_AckResp
+        def mut_ack(files):
+            files["scripts/5_Mission/DSBX_QA_Messages.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Messages.c"
+            ].replace(b"class DSBX_QA_AckResp\n{\n    bool ok;\n}\n\n", b"")
+
+        self._assert_mutation_caught_by(mut_ack, check_2_json_classes)
+
     def test_neg_check3_uncreated_ref_in_ctor(self):
-        # Mutacion obligatoria 3 de §6.2: un ref sin crear en el constructor
-        def mut(files):
+        def mut_rpclog(files):
             files["scripts/5_Mission/DSBX_QA_Messages.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Messages.c"
             ].replace(b"        rpc_log = new array<ref DSBX_QA_RpcEntry>();\n", b"")
 
-        self._assert_mutation_caught_by(mut, check_3_write_ctors)
+        self._assert_mutation_caught_by(mut_rpclog, check_3_write_ctors)
 
-    def test_neg_check4_enable_debug_added(self):
-        # Mutacion obligatoria 4 de §6.2: EnableDebug(true) anadido
-        def mut(files):
+        def mut_scell(files):
+            files["scripts/5_Mission/DSBX_QA_Messages.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Messages.c"
+            ].replace(b"        scell = new array<string>();\n", b"")
+
+        self._assert_mutation_caught_by(mut_scell, check_3_write_ctors)
+
+    def test_neg_check4_forbidden_tokens(self):
+        def mut_enable_debug(files):
             files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Probe.c"
             ].replace(
@@ -1362,10 +2576,19 @@ class ProbeStaticTests(unittest.TestCase):
                 b"    void SendHello(DSBX_QA_Callback cb)\n    {\n        m_Ctx.EnableDebug(true);\n",
             )
 
-        self._assert_mutation_caught_by(mut, check_4_forbidden_tokens)
+        self._assert_mutation_caught_by(mut_enable_debug, check_4_forbidden_tokens)
+
+        def mut_replace(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(
+                b"    void SendHello(DSBX_QA_Callback cb)\n    {\n",
+                b'    void SendHello(DSBX_QA_Callback cb)\n    {\n        m_Role.Replace("a", "b");\n',
+            )
+
+        self._assert_mutation_caught_by(mut_replace, check_4_forbidden_tokens)
 
     def test_neg_check5_print_outside_log(self):
-        # Mutacion obligatoria 5 de §6.2: un Print("x") fuera de Log()
         def mut(files):
             files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Probe.c"
@@ -1377,7 +2600,6 @@ class ProbeStaticTests(unittest.TestCase):
         self._assert_mutation_caught_by(mut, check_5_key_containment)
 
     def test_neg_check5_log_m_key_outside_allowed(self):
-        # Mutacion obligatoria 6 de §6.2: Log(m_Key) fuera de LoadConfig() y de KeyQuery()
         def mut(files):
             files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Probe.c"
@@ -1388,20 +2610,109 @@ class ProbeStaticTests(unittest.TestCase):
 
         self._assert_mutation_caught_by(mut, check_5_key_containment)
 
-    def test_neg_check5_key_query_without_get_or_post(self):
-        # Mutacion obligatoria 7 de §6.2: string r = "poll?" + KeyQuery(); en una linea sin GET ni POST
+    def test_neg_check5_member_key_alias(self):
+        # F02-H6 negativa 1: un miembro alias de la clave
+        def mut_from_cfg_key(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(
+                b"    string m_Key;\n",
+                b"    string m_Key;\n    string m_KeyAlias;\n",
+            ).replace(
+                b"        m_Key = cfg.key;\n",
+                b"        m_Key = cfg.key;\n        m_KeyAlias = cfg.key;\n",
+            )
+
+        self._assert_mutation_caught_by(mut_from_cfg_key, check_5_key_containment)
+
+        def mut_from_m_key(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(
+                b"    string m_Key;\n",
+                b"    string m_Key;\n    string m_KeyAlias;\n",
+            ).replace(
+                b"        m_Key = cfg.key;\n",
+                b"        m_Key = cfg.key;\n        m_KeyAlias = m_Key;\n",
+            )
+
+        self._assert_mutation_caught_by(mut_from_m_key, check_5_key_containment)
+
+    def test_neg_check5_member_cfg_serialized_and_logged(self):
+        # F02-H6 negativa 2 (V8): un miembro que guarda el cfg entero y luego se serializa y se pasa a Log()
         def mut(files):
             files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Probe.c"
             ].replace(
+                b"    string m_Key;\n",
+                b"    string m_Key;\n    ref DSBX_QA_Config m_SavedCfg;\n",
+            ).replace(
+                b"        m_Key = cfg.key;\n",
+                b"        m_Key = cfg.key;\n        m_SavedCfg = cfg;\n",
+            ).replace(
                 b"    void SendHello(DSBX_QA_Callback cb)\n    {\n",
-                b'    void SendHello(DSBX_QA_Callback cb)\n    {\n        string r = "poll?" + KeyQuery();\n',
+                b"    void SendHello(DSBX_QA_Callback cb)\n    {\n        JsonSerializer js = new JsonSerializer();\n        string s;\n        js.WriteToString(m_SavedCfg, false, s);\n        Log(s);\n",
             )
 
         self._assert_mutation_caught_by(mut, check_5_key_containment)
 
+    def test_neg_check5_key_query_in_data_or_cb(self):
+        # F02-H6 negativa 3: KeyQuery() en el argumento data o en el cb
+        def mut_in_data(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(
+                b'        m_Ctx.POST(cb, "hello?" + KeyQuery(), HelloBody());',
+                b'        m_Ctx.POST(cb, "hello", KeyQuery());',
+            )
+
+        self._assert_mutation_caught_by(mut_in_data, check_5_key_containment)
+
+        def mut_in_cb(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(
+                b'        m_Ctx.GET(cb, "poll?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&frame=" + m_Frame.ToString() + "&tick_s=" + tick_s.ToString());',
+                b'        m_Ctx.GET(KeyQuery(), "poll");',
+            )
+
+        self._assert_mutation_caught_by(mut_in_cb, check_5_key_containment)
+
+    def test_neg_check5_intermediate_variable(self):
+        # F02-H6 negativa 4: una variable intermedia (string q = KeyQuery(); ctx.GET(cb, q)), incluso en la misma linea
+        def mut(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(
+                b'        m_Ctx.GET(cb, "poll?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&frame=" + m_Frame.ToString() + "&tick_s=" + tick_s.ToString());',
+                b"        string q = KeyQuery(); m_Ctx.GET(cb, q);",
+            )
+
+        self._assert_mutation_caught_by(mut, check_5_key_containment)
+
+    def test_neg_check5_key_query_passed_to_other_function(self):
+        # F02-H6 negativa 5: KeyQuery() pasado a otra funcion
+        def mut_direct(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(
+                b"    void SendHello(DSBX_QA_Callback cb)\n    {\n",
+                b"    void SendHello(DSBX_QA_Callback cb)\n    {\n        Log(KeyQuery());\n",
+            )
+
+        self._assert_mutation_caught_by(mut_direct, check_5_key_containment)
+
+        def mut_nested_in_request(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(
+                b'        m_Ctx.POST(cb, "hello?" + KeyQuery(), HelloBody());',
+                b'        m_Ctx.POST(cb, "hello?" + Escape(KeyQuery()), HelloBody());',
+            )
+
+        self._assert_mutation_caught_by(mut_nested_in_request, check_5_key_containment)
+
     def test_neg_check5_log_err_inside_load_config(self):
-        # Mutacion obligatoria 8 de §6.2: Log(err) dentro de LoadConfig(), con la variable de error de LoadFile
         def mut(files):
             files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Probe.c"
@@ -1412,21 +2723,8 @@ class ProbeStaticTests(unittest.TestCase):
 
         self._assert_mutation_caught_by(mut, check_5_key_containment)
 
-    def test_neg_check5_dot_key_outside_load_config(self):
-        # Cobertura adicional de §6.2(5): acceso .key fuera de LoadConfig()
-        def mut(files):
-            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
-                "scripts/5_Mission/DSBX_QA_Probe.c"
-            ].replace(
-                b"    void SendHello(DSBX_QA_Callback cb)\n    {\n",
-                b"    void SendHello(DSBX_QA_Callback cb)\n    {\n        DSBX_QA_Config c;\n        string k = c.key;\n",
-            )
-
-        self._assert_mutation_caught_by(mut, check_5_key_containment)
-
-    def test_neg_check6_misspelled_proto_in_hello_body(self):
-        # Mutacion obligatoria 9 de §6.2: proto mal escrito en HelloBody()
-        def mut(files):
+    def test_neg_check6_hello_body(self):
+        def mut_proto(files):
             files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Probe.c"
             ].replace(
@@ -1434,34 +2732,29 @@ class ProbeStaticTests(unittest.TestCase):
                 b'{\\"prto\\":\\"qa0\\"',
             )
 
-        self._assert_mutation_caught_by(mut, check_6_hello_body)
+        self._assert_mutation_caught_by(mut_proto, check_6_hello_body)
 
-    def test_neg_check6_wrong_order_in_hello_body(self):
-        # Cobertura adicional de §6.2(6): campos desordenados en HelloBody()
-        def mut(files):
+        def mut_missing_stamp(files):
             files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Probe.c"
             ].replace(
-                b'{\\"proto\\":\\"qa0\\",\\"peer\\":\\"" + m_Role',
-                b'{\\"peer\\":\\"" + m_Role + "\\",\\"proto\\":\\"qa0\\"',
+                b'\\"probe_ver\\":\\"dsbx-qa1+" + DSBX_QA_STAMP + "\\"}',
+                b'\\"probe_ver\\":\\"dsbx-qa0\\"}',
             )
 
-        self._assert_mutation_caught_by(mut, check_6_hello_body)
+        self._assert_mutation_caught_by(mut_missing_stamp, check_6_hello_body)
 
-    def test_neg_check7_remove_deleted(self):
-        # Mutacion obligatoria 10 de §6.2: el Remove quitado
-        def mut(files):
+    def test_neg_check7_required_pieces(self):
+        def mut_remove(files):
             files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Probe.c"
             ].replace(
-                b"            DayZGame.Event_OnRPC.Remove(this.OnRpc);\n",
+                b"        DayZGame.Event_OnRPC.Remove(DSBX_QA_Probe.OnAnyRpc);\n",
                 b"",
             )
 
-        self._assert_mutation_caught_by(mut, check_7_required_pieces)
+        self._assert_mutation_caught_by(mut_remove, check_7_required_pieces)
 
-    def test_neg_check7_other_pieces(self):
-        # Cobertura adicional de §6.2(7): dup, #ifdef DIAG_DEVELOPER, DSBX_QA_RPC_CAM < 1000000, Send(...)
         def mut_dup(files):
             files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
                 "scripts/5_Mission/DSBX_QA_Probe.c"
@@ -1469,52 +2762,170 @@ class ProbeStaticTests(unittest.TestCase):
 
         self._assert_mutation_caught_by(mut_dup, check_7_required_pieces)
 
-        def mut_ifdef(files):
-            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
-                "scripts/5_Mission/DSBX_QA_Probe.c"
-            ].replace(b"#ifdef DIAG_DEVELOPER", b"#ifdef OTHER_FLAG")
-
-        self._assert_mutation_caught_by(mut_ifdef, check_7_required_pieces)
-
-        def mut_rpc_val(files):
-            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
-                "scripts/5_Mission/DSBX_QA_Probe.c"
-            ].replace(
-                b"DSBX_QA_RPC_CAM = 26102701;",
-                b"DSBX_QA_RPC_CAM = 999999;",
-            )
-
-        self._assert_mutation_caught_by(mut_rpc_val, check_7_required_pieces)
-
-        def mut_send(files):
-            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
-                "scripts/5_Mission/DSBX_QA_Probe.c"
-            ].replace(
-                b"rpc.Send(null, DSBX_QA_RPC_CAM, true, null);",
-                b"rpc.Send(null, DSBX_QA_RPC_CAM, false, null);",
-            )
-
-        self._assert_mutation_caught_by(mut_send, check_7_required_pieces)
-
-    def test_neg_check8_utf8_bom(self):
-        # Mutacion obligatoria 11 de §6.2: un BOM
-        def mut(files):
+    def test_neg_check8_encoding_and_eol(self):
+        def mut_bom(files):
             files["scripts/5_Mission/DSBX_QA_Mission.c"] = (
                 b"\xef\xbb\xbf" + files["scripts/5_Mission/DSBX_QA_Mission.c"]
             )
 
-        self._assert_mutation_caught_by(mut, check_8_encoding_and_eol)
+        self._assert_mutation_caught_by(mut_bom, check_8_encoding_and_eol)
 
-    def test_neg_check8_crlf(self):
-        # Mutacion obligatoria 12 de §6.2: un CRLF
-        def mut(files):
+        def mut_crlf(files):
             files["$PBOPREFIX$"] = b"DayZSandbox_QA\r\n"
 
-        self._assert_mutation_caught_by(mut, check_8_encoding_and_eol)
+        self._assert_mutation_caught_by(mut_crlf, check_8_encoding_and_eol)
+
+    def test_neg_check9_tick_and_wire_cap(self):
+        # 9a: Tick() sin timeslice en DSBX_QA_Mission.c
+        def mut_mission_tick(files):
+            files["scripts/5_Mission/DSBX_QA_Mission.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Mission.c"
+            ].replace(b"m_DsbxQaProbe.Tick(timeslice);", b"m_DsbxQaProbe.Tick();")
+
+        self._assert_mutation_caught_by(mut_mission_tick, check_9_tick_and_wire_cap)
+
+        # 9b: DSBX_QA_WIRE_CAP desincronizado respecto a wire.WIRE_CAP
+        def mut_wire_cap(files):
+            wire_cap = _read_python_wire_cap() or 3500
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(
+                f"const int DSBX_QA_WIRE_CAP = {wire_cap};".encode("utf-8"),
+                f"const int DSBX_QA_WIRE_CAP = {wire_cap + 100};".encode("utf-8"),
+            )
+
+        self._assert_mutation_caught_by(mut_wire_cap, check_9_tick_and_wire_cap)
+
+        # 9c: falta "result_too_large"
+        def mut_result_too_large(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(b'"result_too_large"', b'"too_big"')
+
+        self._assert_mutation_caught_by(mut_result_too_large, check_9_tick_and_wire_cap)
+
+    def test_neg_check10_extensions_and_prefixes(self):
+        # 10a: literal con prefijo de otra extension (per_ en DSBX_QA_X_Cam.c)
+        def mut_wrong_ext_prefix(files):
+            files["scripts/5_Mission/DSBX_QA_X_Cam.c"] = files[
+                "scripts/5_Mission/DSBX_QA_X_Cam.c"
+            ].replace(
+                b"return false;",
+                b'return verb == "per_spawn";',
+            )
+
+        self._assert_mutation_caught_by(mut_wrong_ext_prefix, check_10_extensions_and_prefixes)
+
+        # 10b: literal con prefijo job_ en una extension
+        def mut_job_prefix(files):
+            files["scripts/5_Mission/DSBX_QA_X_Base.c"] = files[
+                "scripts/5_Mission/DSBX_QA_X_Base.c"
+            ].replace(
+                b'verb == "qa_echo"',
+                b'verb == "job_read"',
+            )
+
+        self._assert_mutation_caught_by(mut_job_prefix, check_10_extensions_and_prefixes)
+
+        # 10c: orden de instanciacion de extensiones alterado en DSBX_QA_Probe.c
+        def mut_ext_order(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Probe.c"
+            ].replace(
+                b"        m_Exts.Insert(new DSBX_QA_X_Persist());\n        m_Exts.Insert(new DSBX_QA_X_Actor());\n",
+                b"        m_Exts.Insert(new DSBX_QA_X_Actor());\n        m_Exts.Insert(new DSBX_QA_X_Persist());\n",
+            )
+
+        self._assert_mutation_caught_by(mut_ext_order, check_10_extensions_and_prefixes)
+
+    def test_neg_check11_rpc_ranges(self):
+        # 11a: constante RPC fuera del bloque de su extension
+        def mut_out_of_range(files):
+            files["scripts/5_Mission/DSBX_QA_X_Cam.c"] = (
+                b"static const int DSBX_QA_RPC_CAM_BAD = 26102805;\n"
+                + files["scripts/5_Mission/DSBX_QA_X_Cam.c"]
+            )
+
+        self._assert_mutation_caught_by(mut_out_of_range, check_11_rpc_ranges)
+
+        # 11b: falta DSBX_QA_RPC_BASE_PING = 26102880 en DSBX_QA_X_Base.c
+        def mut_missing_base_ping(files):
+            files["scripts/5_Mission/DSBX_QA_X_Base.c"] = files[
+                "scripts/5_Mission/DSBX_QA_X_Base.c"
+            ].replace(
+                b"static const int DSBX_QA_RPC_BASE_PING = 26102880;",
+                b"static const int DSBX_QA_RPC_BASE_PING = 26102881;",
+            )
+
+        self._assert_mutation_caught_by(mut_missing_base_ping, check_11_rpc_ranges)
+
+    def test_neg_check12_blind_evaluators(self):
+        # 12a: token prohibido part.json / injection.json / qa_fault en *_eval.py
+        for token_line in (
+            b'    _ = "part.json"\n',
+            b'    _ = "injection.json"\n',
+            b'    _ = "qa_fault"\n',
+            b'    _ = "mut-"\n',
+            b"    _ = EXPECTED_MUTANTS\n",
+            b'    _ = "defer_cleanup"\n',
+        ):
+            def mut_eval(files, line=token_line):
+                files["qa/f03_base_eval.py"] = files["qa/f03_base_eval.py"] + line
+
+            self._assert_mutation_caught_by(mut_eval, check_12_blind_evaluators)
+
+        # Comprobar tambien que los *_eval.py reales presentes en qa/ cumplen check_12
+        self.assertEqual(check_12_blind_evaluators(QA_DIR), [])
+
+    def test_neg_check13_ordered_remove(self):
+        # F02-H2: .Remove(0) prohibido sobre m_CacheOrder, m_RpcLog, m_PingLog y m_EmitLog
+        for member in ("m_CacheOrder", "m_RpcLog", "m_EmitLog"):
+            def mut_probe_remove(files, m=member):
+                files["scripts/5_Mission/DSBX_QA_Probe.c"] = files[
+                    "scripts/5_Mission/DSBX_QA_Probe.c"
+                ].replace(
+                    f"{m}.RemoveOrdered(0);".encode("utf-8"),
+                    f"{m}.Remove(0);".encode("utf-8"),
+                )
+
+            self._assert_mutation_caught_by(mut_probe_remove, check_13_ordered_remove)
+
+        def mut_ping_remove(files):
+            files["scripts/5_Mission/DSBX_QA_X_Base.c"] = files[
+                "scripts/5_Mission/DSBX_QA_X_Base.c"
+            ].replace(
+                b"m_PingLog.RemoveOrdered(0);",
+                b"m_PingLog.Remove(0);",
+            )
+
+        self._assert_mutation_caught_by(mut_ping_remove, check_13_ordered_remove)
+
+    def test_neg_check14_explicit_deadman(self):
+        # 14.0a: valor por defecto en deadman en la declaracion de StartJob en DSBX_QA_Jobs.c
+        def mut_default_deadman(files):
+            files["scripts/5_Mission/DSBX_QA_Jobs.c"] = files[
+                "scripts/5_Mission/DSBX_QA_Jobs.c"
+            ].replace(
+                b"float max_duration_ms, string deadman)",
+                b'float max_duration_ms, string deadman = "stop")',
+            )
+
+        self._assert_mutation_caught_by(mut_default_deadman, check_14_explicit_deadman)
+
+        # 14.0b: llamada a StartJob con 8 argumentos (omitiendo deadman)
+        def mut_call_8_args(files):
+            files["scripts/5_Mission/DSBX_QA_X_Base.c"] = files[
+                "scripts/5_Mission/DSBX_QA_X_Base.c"
+            ].replace(
+                b'm_Probe.m_Jobs.StartJob(this, op.op_id, "qa_timer", ncol, scol, 20, 4096, 900000.0, "continue");',
+                b'm_Probe.m_Jobs.StartJob(this, op.op_id, "qa_timer", ncol, scol, 20, 4096, 900000.0);',
+            )
+
+        self._assert_mutation_caught_by(mut_call_8_args, check_14_explicit_deadman)
 
     def test_real_probe_zero_violations(self):
         if not REAL_PROBE_DIR.is_dir():
-            self.skipTest(f"Carpeta de la sonda real ausente: {REAL_PROBE_DIR}")
+            self.fail(f"Falta el directorio de la sonda real: {REAL_PROBE_DIR}")
         for check_fn in ALL_CHECKS:
             self.assertEqual(
                 check_fn(REAL_PROBE_DIR),
