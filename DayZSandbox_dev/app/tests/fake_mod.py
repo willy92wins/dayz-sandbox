@@ -119,6 +119,7 @@ class _Peer:
         self.work_between_ms = int(fake._peer_kwargs.get("work_between_ms", 0))
         self.maintain_polls_during_work = True
         self.poll_response_delay_ms = 0
+        self.ack_delay_ms = 0
         self.annotate_rev_delta = 0
         self.state_read_mode = "ok"
         self.drop_all_results = False
@@ -149,9 +150,10 @@ class _Peer:
         self._started = True
         t1 = threading.Thread(target=self._poll_loop, daemon=True)
         t2 = threading.Thread(target=self._work_loop, daemon=True)
-        self._threads = [t1, t2]
-        t1.start()
-        t2.start()
+        t3 = threading.Thread(target=self._result_loop, daemon=True)
+        self._threads = [t1, t2, t3]
+        for t in self._threads:
+            t.start()
 
     def stop(self):
         self._stop.set()
@@ -494,6 +496,10 @@ class _Peer:
                 "POST", "/result?" + self._qs(), body, route="ack")
         except (OSError, ValueError):
             return "fail"
+        if self.ack_delay_ms:
+            delay = self.ack_delay_ms
+            self.ack_delay_ms = 0
+            self._sleep(delay / 1000.0)
         self.sent_results.append(copy.deepcopy(body))
         if entry.order["verb"] == "state.read" and body["status"] == "done":
             self.state_read_done += 1
@@ -513,26 +519,42 @@ class _Peer:
                 if now >= e.next_attempt:
                     due = e
                     break
-            executing = self._executing > 0
-            pending_any = bool(self._pending)
-        if due is not None:
-            outcome = self._attempt_result(due)
-            with self._lock:
-                if outcome in ("ok", "unknown"):
+        if due is None:
+            return False
+        outcome = self._attempt_result(due)
+        with self._lock:
+            if outcome in ("ok", "unknown"):
+                due.pending = False
+                if due in self._pending:
+                    self._pending.remove(due)
+            else:
+                due.attempts += 1
+                delays = self.fake.result_retry_ms
+                if due.attempts >= 4:
                     due.pending = False
                     if due in self._pending:
                         self._pending.remove(due)
                 else:
-                    due.attempts += 1
-                    delays = self.fake.result_retry_ms
-                    if due.attempts >= 4:
-                        due.pending = False
-                        if due in self._pending:
-                            self._pending.remove(due)
-                    else:
-                        idx = min(due.attempts - 1, len(delays) - 1)
-                        due.next_attempt = time.monotonic() + delays[idx] / 1000.0
-        return executing, pending_any
+                    idx = min(due.attempts - 1, len(delays) - 1)
+                    due.next_attempt = time.monotonic() + delays[idx] / 1000.0
+        return True
+
+    def _result_loop(self):
+        while not self._stop.is_set():
+            try:
+                if self.session is None:
+                    self._sleep(0.02)
+                    continue
+                if not self._service_pending():
+                    now = time.monotonic()
+                    with self._lock:
+                        if self._pending:
+                            wait_s = min(0.02, max(0.0, min(e.next_attempt for e in self._pending) - now))
+                        else:
+                            wait_s = 0.02
+                    self._sleep(wait_s)
+            except Exception:
+                self._sleep(0.02)
 
     # -- poll ------------------------------------------------------------------------
     def _poll_once(self, deliver):
@@ -576,11 +598,6 @@ class _Peer:
         if self.session is None:
             if not self._do_hello():
                 self._sleep(0.05)
-            return
-        executing, pending_any = self._service_pending()
-        now = time.monotonic()
-        if now < self._cut_until:
-            self._sleep(0.01)
             return
         with self._lock:
             cache_full = self._cache_full_live_locked(now)

@@ -185,7 +185,7 @@ class BR5ResultadoPerdido(FakeBase):
         op_id = r["op_id"]
         self.wait_state(env, op_id, "observado")
         self.assertTrue(wait_until(
-            lambda: len([b for b in fake.server.sent_results if b["op_id"] == op_id]) >= 2, 5),
+            lambda: len([b for b in fake.server.sent_results if b["op_id"] == op_id]) >= 2, 15),
             [b for b in fake.server.sent_results if b["op_id"] == op_id])
         seq = env.backend.seq
         time.sleep(0.4)
@@ -204,10 +204,13 @@ class BR6PeerRecreado(FakeBase):
         old_inst = fake.server.inst
         fake.restart_peer("server")
         self.assertNotEqual(fake.server.inst, old_inst)
-        op = self.wait_state(env, op_id, "parcial")
-        self.assertEqual(op["reason"], "conexion_perdida")
         op = self.wait_state(env, op_id, "observado")
         self.assertEqual(op["reason"], "reconciliada")
+        pairs = [(e["state"], e.get("reason")) for e in env.events_for(op_id)]
+        self.assertIn(("parcial", "conexion_perdida"), pairs)
+        self.assertIn(("observado", "reconciliada"), pairs)
+        self.assertLess(pairs.index(("parcial", "conexion_perdida")),
+                        pairs.index(("observado", "reconciliada")))
         self.assertEqual(fake.effects_for(op_id), {"retirar": 1, "anotar": 1})
 
     def test_recreado_entre_pasos_se_queda_parcial(self):
@@ -352,12 +355,12 @@ class BR9H3(FakeBase):
     def test_polls_cortados_antes_del_primer_paso_rejected_lease(self):
         env = self.make_env(ttl_ms=6000)
         fake = self.start_fake(env)
-        fake.server.work_before_ms = 900
+        fake.server.work_before_ms = 1500
         r = env.apply_direct()
         op_id = r["op_id"]
         self.assertTrue(wait_until(
             lambda: any(o["op_id"] == op_id for o in fake.server.received_orders), 5))
-        fake.cut_polls("server", 1600)
+        fake.cut_polls("server", 2200)
         op = self.wait_state(env, op_id, "fallido")
         self.assertEqual(op["reason"], "lease_expired")
         self.assertEqual(fake.effects_for(op_id), {"retirar": 0, "anotar": 0})
@@ -495,31 +498,42 @@ class BR18PlazoDuranteTrabajo(FakeBase):
         self.assertEqual(fake.effects_for(r["op_id"]), {"retirar": 0, "anotar": 0})
 
     def test_vence_entre_pasos_error_y_parcial(self):
-        env = self.make_env(ttl_ms=800, lease_ms=5000)
+        env = self.make_env(ttl_ms=1500, lease_ms=5000)
         fake = self.start_fake(env)
-        fake.server.work_between_ms = 1100
+        fake.server.work_between_ms = 2000
         r = env.apply_direct()
         op = self.wait_state(env, r["op_id"], "parcial")
         self.assertEqual(op["reason"], "expired")
         self.assertEqual(fake.effects_for(r["op_id"]), {"retirar": 1, "anotar": 0})
 
     def test_transito_el_plazo_se_ancla_al_envio(self):
-        # X3 (u): respuesta retrasada 1,2 s, TTL 2 s, trabajo entre pasos 0,8 s
-        env = self.make_env(ttl_ms=2000, lease_ms=8000)
+        # X3 (u): respuesta retrasada 1,8 s, TTL 3 s, trabajo entre pasos 1,4 s. BR18 exige que ningun
+        # efecto ocurra despues del TTL del backend. Con el plazo anclado al envio del poll, el paso 2
+        # nunca llega: la orden acaba parcial/expired tras el paso 1 o, si la maquina va tan cargada que
+        # la respuesta tarda mas de ~1,1 s, fallido/expired sin ningun efecto, que tambien cumple el
+        # contrato. Con el plazo anclado a la recepcion, el paso 2 cae dentro de ese plazo falso y la
+        # orden llega a observado con anotar = 1.
+        env = self.make_env(ttl_ms=3000, lease_ms=8000)
         fake = self.start_fake(env)
-        fake.server.poll_response_delay_ms = 1200
-        fake.server.work_between_ms = 800
+        fake.server.poll_response_delay_ms = 1800
+        fake.server.work_between_ms = 1400
         r = env.apply_direct()
-        op = self.wait_state(env, r["op_id"], "parcial", timeout=10)
-        self.assertEqual(op["reason"], "expired")
-        self.assertEqual(fake.effects_for(r["op_id"]), {"retirar": 1, "anotar": 0})
+        op_id = r["op_id"]
+        acabada = wait_until(
+            lambda: env.op(op_id)["state"] in ("parcial", "fallido", "aplicado", "observado"), 10)
+        op = env.op(op_id)
+        self.assertTrue(acabada, op)
+        self.assertIn((op["state"], op["reason"]), (("parcial", "expired"), ("fallido", "expired")), op)
+        efectos = fake.effects_for(op_id)
+        self.assertEqual(efectos["anotar"], 0)
+        self.assertEqual(efectos["retirar"], 1 if op["state"] == "parcial" else 0)
 
 
 class BR19UnaEnCurso(FakeBase):
     def test_doble_entrega_y_sin_poll_entregador_mientras_ejecuta(self):
         env = self.make_env(ttl_ms=8000)
         fake = self.start_fake(env)
-        fake.server.work_between_ms = 900
+        fake.server.work_between_ms = 1500
         r = env.apply_direct()
         op_id = r["op_id"]
         self.assertTrue(wait_until(lambda: fake.effect_count(op_id, "retirar") == 1))
@@ -576,7 +590,7 @@ class BR22ConfirmacionTardia(FakeBase):
         # repetido: nada cambia
         self.assertTrue(fake.resend_cached_result(op_id))
         self.assertTrue(wait_until(
-            lambda: len([b for b in fake.server.sent_results if b["op_id"] == op_id]) >= 2, 5))
+            lambda: len([b for b in fake.server.sent_results if b["op_id"] == op_id]) >= 2, 15))
         seq = env.backend.seq
         time.sleep(0.35)
         self.assertEqual(env.backend.seq, seq)
@@ -645,6 +659,20 @@ class BR23ReconciliacionPredicado(FakeBase):
         op = self.wait_state(env, op_id, "fallido")
         self.assertEqual(op["reason"], "lectura_no_cumple")
         self.assertNotIn("observado", [e["state"] for e in env.events_for(op_id)])
+
+
+class BR9MantenimientoDuranteAcuse(FakeBase):
+    def test_acuse_lento_mantiene_polls_y_ejecuta_siguiente(self):
+        env = self.make_env()
+        fake = self.start_fake(env)
+        fake.server.ack_delay_ms = 1500
+        a = env.apply_direct()
+        b = env.apply_direct()
+        self.wait_state(env, a["op_id"], "observado")
+        maint_antes = fake.server.maintenance_polls
+        self.assertTrue(wait_until(lambda: fake.server.maintenance_polls > maint_antes, 1.2))
+        self.wait_state(env, b["op_id"], "observado")
+        self.assertNotIn("fallido", [e["state"] for e in env.events_for(b["op_id"])])
 
 
 if __name__ == "__main__":

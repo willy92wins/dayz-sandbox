@@ -66,10 +66,13 @@ class Env:
         self.thread.start()
         self.bodies = []
         self.peers = {}
+        self._closed = False
 
     def close(self):
-        self.backend.shutdown()
-        self.thread.join(timeout=5)
+        if not self._closed:
+            self._closed = True
+            self.backend.shutdown()
+            self.thread.join(timeout=5)
         shutil.rmtree(self.dir, ignore_errors=True)
 
     # --- HTTP al bridge ---
@@ -357,6 +360,20 @@ class BR13Reconciliar(BridgeBase):
         self.assertEqual(st, 200)
         st, r, _ = env.poll()
         env.assert_poll_order(st, r, "scene.apply")
+
+    def test_lectura_sin_generation_400_y_no_reconcilia(self):
+        env = self.make_env()
+        env.hello()
+        env.apply_direct()
+        st, r, _ = env.poll()
+        env.assert_poll_order(st, r, "state.read")
+        order = r["ops"][0]
+        sin_gen = {"epoch": order["epoch"], "registry_n": 0, "registry_sha256": REG_SHA}
+        st, rr, _ = env.result(order, "done", None, sin_gen)
+        self.assertEqual((st, rr["error"]), (400, "bad_request"))
+        self.assertFalse(env.bridge.reconciled)
+        st, r, _ = env.poll()
+        self.assertEqual((st, r["ops"]), (200, []))
 
 
 class BR14Cola(BridgeBase):
@@ -784,6 +801,75 @@ class IntegracionOrquestador(BridgeBase):
         order["session"] = "0" * 16
         st, rr, _ = env.result(order, "done", None, read)
         self.assertEqual((st, rr["error"]), (400, "bad_request"))
+
+    def test_poll_tardio_sin_sweep_declara_perdida_y_da_409(self):
+        for deliver in (None, 0):
+            with self.subTest(deliver=deliver):
+                env = self.make_env(lease_ms=300, ttl_ms=60000)
+                env.hello()
+                env.reconcile()
+                r = env.apply_direct()
+                op_id = r["op_id"]
+                env.clock.advance(0.35)
+                st, poll, _ = env.poll(deliver=deliver)
+                self.assertEqual((st, poll["error"]), (409, "hello_required"))
+                op = env.backend.ops[op_id]
+                self.assertEqual((op["state"], op["reason"]), ("fallido", "conexion_perdida"))
+
+    @staticmethod
+    def _read_until_closed(s):
+        """(texto, cerrada). Solo cuenta como cierre el EOF o el corte del servidor; un timeout, no."""
+        got = b""
+        try:
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    return got.decode("latin-1"), True
+                got += chunk
+        except socket.timeout:
+            return got.decode("latin-1"), False
+        except OSError:
+            return got.decode("latin-1"), True
+
+    def test_cuerpo_aceptado_que_no_llega_da_400_y_cierra(self):
+        env = self.make_env()
+        env.bridge.body_s = 0.3
+        s = socket.create_connection(("127.0.0.1", env.bport))
+        self.addCleanup(s.close)
+        s.settimeout(3.0)
+        req = ("POST /hello?key=%s HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+               "Content-Type: application/json\r\nContent-Length: 100\r\n\r\n{" % PK).encode("latin-1")
+        t0 = time.monotonic()
+        s.sendall(req)
+        texto, cerrada = self._read_until_closed(s)
+        elapsed = time.monotonic() - t0
+        self.assertTrue(cerrada, "el servidor no cerro la conexion")
+        self.assertLess(elapsed, 1.5)
+        self.assertTrue(texto.startswith("HTTP/1.0 400"), texto[:60])
+        self.assertIn('"bad_request"', texto)
+
+    def test_shutdown_cierra_conexion_colgada_en_cuerpo(self):
+        env = self.make_env()
+        env.bridge.body_s = 30.0
+        s = socket.create_connection(("127.0.0.1", env.bport))
+        self.addCleanup(s.close)
+        s.settimeout(3.0)
+        req = ("POST /hello?key=%s HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+               "Content-Type: application/json\r\nContent-Length: 100\r\n\r\n{" % PK).encode("latin-1")
+        s.sendall(req)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            with env.bridge._conns_lock:
+                if env.bridge._conns:
+                    break
+            time.sleep(0.01)
+        time.sleep(0.05)
+        t0 = time.monotonic()
+        env.backend.shutdown()
+        _, cerrada = self._read_until_closed(s)
+        elapsed = time.monotonic() - t0
+        self.assertTrue(cerrada, "shutdown no cerro la conexion colgada")
+        self.assertLess(elapsed, 2.0)
 
 
 class ArranqueConBridge(unittest.TestCase):

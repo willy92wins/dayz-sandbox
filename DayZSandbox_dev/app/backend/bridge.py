@@ -11,6 +11,7 @@ import hmac
 import json
 import re
 import secrets
+import socket
 import sys
 import threading
 import time
@@ -19,6 +20,7 @@ from urllib.parse import parse_qs, urlsplit
 
 WIRE_CAP = 3500
 DRAIN_S = 2.0  # tope total para descartar el cuerpo de una peticion rechazada (como C-02 de F1b-web)
+BODY_S = 2.0  # tope total para leer el cuerpo de una peticion aceptada
 MAX_DRAIN = 1024 * 1024  # por encima no se descarta: se responde y se cierra
 _HEX = re.compile(r"[0-9a-fA-F]+")
 _KEY_IN_PATH = re.compile(r"([?&]key=)[^&\s\"']*")
@@ -37,6 +39,8 @@ def valid_world_read(read):
     if not isinstance(read, dict):
         return False
     if not _is_hex(read.get("epoch"), 32):
+        return False
+    if "generation" not in read:
         return False
     gen = read.get("generation")
     if gen is not None:
@@ -84,9 +88,12 @@ class Bridge:
         self.read_retry_ms = tuple(int(x) for x in read_retry_ms) or (8000,)
         self.sweep_ms = int(sweep_ms)
         self.drain_s = DRAIN_S
+        self.body_s = BODY_S
         self.session = secrets.token_hex(8)
         self.lock = backend.store.lock
         self.cond = threading.Condition(self.lock)
+        self._conns = set()
+        self._conns_lock = threading.Lock()
         self.peers = {}  # rol -> dict de peer vigente
         self.orders = {}  # (session, op_id) -> orden interna
         self._seq = 0
@@ -117,10 +124,19 @@ class Bridge:
         return self.httpd.server_address[1]
 
     def shutdown(self):
+        if self._closed:
+            return
         self._closed = True
         self._stop.set()
         with self.cond:
             self.cond.notify_all()
+        with self._conns_lock:
+            conns = list(self._conns)
+        for conn in conns:
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
         try:
             self.httpd.shutdown()
         finally:
@@ -272,34 +288,39 @@ class Bridge:
             except Exception:
                 pass
 
+    def _check_server_loss_locked(self, t):
+        srv = self.peers.get("server")
+        if srv and not srv.get("lost") and srv.get("inflight", 0) == 0 \
+                and srv.get("last_poll_mono") is not None \
+                and (t - srv["last_poll_mono"]) * 1000.0 > self.lease_ms:
+            old_conn = int(srv["conn"])
+            new_conn = old_conn + 1
+            for order in list(self.orders.values()):
+                if order["conn"] != old_conn:
+                    continue
+                if order["internal"]:
+                    if order["bstate"] in ("pendiente", "ejecutando"):
+                        order["bstate"] = "descartada"
+                    continue
+                if order["bstate"] == "pendiente":
+                    order["bstate"] = "terminal"
+                    if order["op_id"] in self.backend.ops:
+                        self.backend.set_op_state(order["op_id"], "fallido", "backend", "conexion_perdida")
+                elif order["bstate"] == "ejecutando":
+                    order["bstate"] = "parcial"
+                    if order["op_id"] in self.backend.ops:
+                        self.backend.set_op_state(order["op_id"], "parcial", "backend", "conexion_perdida")
+            srv["conn"] = new_conn
+            srv["lost"] = True
+            self.reconciled = False
+            self._read_next_at = None
+            return True
+        return False
+
     def sweep(self, now=None):
         with self.cond:
             t = float(now) if now is not None else self._now()
-            srv = self.peers.get("server")
-            if srv and not srv.get("lost") and srv.get("inflight", 0) == 0 \
-                    and srv.get("last_poll_mono") is not None \
-                    and (t - srv["last_poll_mono"]) * 1000.0 > self.lease_ms:
-                old_conn = int(srv["conn"])
-                new_conn = old_conn + 1
-                for order in list(self.orders.values()):
-                    if order["conn"] != old_conn:
-                        continue
-                    if order["internal"]:
-                        if order["bstate"] in ("pendiente", "ejecutando"):
-                            order["bstate"] = "descartada"
-                        continue
-                    if order["bstate"] == "pendiente":
-                        order["bstate"] = "terminal"
-                        if order["op_id"] in self.backend.ops:
-                            self.backend.set_op_state(order["op_id"], "fallido", "backend", "conexion_perdida")
-                    elif order["bstate"] == "ejecutando":
-                        order["bstate"] = "parcial"
-                        if order["op_id"] in self.backend.ops:
-                            self.backend.set_op_state(order["op_id"], "parcial", "backend", "conexion_perdida")
-                srv["conn"] = new_conn
-                srv["lost"] = True
-                self.reconciled = False
-                self._read_next_at = None
+            self._check_server_loss_locked(t)
             parcial_trigger = False
             for order in list(self.orders.values()):
                 if order["bstate"] not in ("pendiente", "ejecutando"):
@@ -426,6 +447,8 @@ class Bridge:
         if deliver is not None and deliver not in ("0", "1"):
             return _err(400, "bad_request")
         with self.cond:
+            if query.get("peer") == "server":
+                self._check_server_loss_locked(self._now())
             guard = self._check_peer_guard_locked(query)
             if guard is not None:
                 return guard
@@ -704,6 +727,16 @@ class _BridgeHandler(BaseHTTPRequestHandler):
     def bridge(self):
         return self.server.bridge
 
+    def setup(self):
+        super().setup()
+        with self.bridge._conns_lock:
+            self.bridge._conns.add(self.connection)
+
+    def finish(self):
+        with self.bridge._conns_lock:
+            self.bridge._conns.discard(self.connection)
+        super().finish()
+
     def log_message(self, fmt, *args):
         try:
             msg = fmt % args if args else str(fmt)
@@ -721,12 +754,15 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             status = 500
             body = json.dumps({"ok": False, "error": "wire_cap_exceeded"},
                               separators=(",", ":")).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            self.close_connection = True
 
     def _check_key(self, query):
         key = query.get("key")
@@ -777,15 +813,41 @@ class _BridgeHandler(BaseHTTPRequestHandler):
     def _read_json_body(self):
         length = self._content_length()
         if length < 0:
+            self.close_connection = True
             self._send(400, {"ok": False, "error": "bad_request"})
             return None
         if length > WIRE_CAP:
             self.close_connection = True
             self._send(413, {"ok": False, "error": "too_large"})
             return None
-        raw = self.rfile.read(length) if length else b""
-        if not raw:
+        if length == 0:
             return {}
+        deadline = time.monotonic() + self.bridge.body_s
+        chunks = []
+        remaining = length
+        try:
+            while remaining > 0:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                self.connection.settimeout(left)
+                chunk = self.rfile.read1(min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                self.connection.settimeout(None)
+            except OSError:
+                pass
+        if remaining > 0:
+            self.close_connection = True
+            self._send(400, {"ok": False, "error": "bad_request"})
+            return None
+        raw = b"".join(chunks)
         try:
             body = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
