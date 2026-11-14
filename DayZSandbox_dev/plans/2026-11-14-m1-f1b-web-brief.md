@@ -344,4 +344,10 @@ Ronda 2, sobre los arreglos (`08809dc`): Sol da por cerrados C-02, C-03, C-04 y 
 |---|---|
 | C-06 · importante · la prueba de C-02 daba por buena una respuesta seguida de un timeout, así que no acreditaba el cierre ni la liberación del hilo; y con solo «no llega ningún byte» no distinguía un plazo total de uno renovable | La lectura exige EOF o corte del servidor, nunca un timeout, en menos de 2 s; un caso nuevo manda el cuerpo a goteo (un byte cada 50 ms) y exige el cierre en menos de 1,5 s. X1 (k), plazo renovable, y (l), hilo retenido tras el 403, tumban cada una su prueba |
 
+Ronda 3, sobre `5efac44`: Sol da por corregida la primera mitad de C-06 (un timeout ya no cuenta como cierre) y deja abierta la segunda. La prueba del goteo podía pasar sin que el goteo ocurriera: con X1 (k) y el emisor arrancando 500 ms tarde, o parado 400 ms tras el primer byte, el plazo renovable cerraba en el hueco y la prueba daba PASA. Con el tope de rondas de Sol ya superado (Guillermo, 2026-11-14: «Máximo 2 rondas de Sol»), el orquestador arbitra: aplica el arreglo que propone Sol y lo comprueba con sus dos negativos, sin una ronda más.
+
+| Hallazgo | Qué cambia |
+|---|---|
+| C-06 (segunda mitad) · importante · el estímulo del goteo no se comprobaba | La prueba registra cada envío y su instante. Un intento solo cuenta si el goteo no se para nunca 0,2 s o más desde las cabeceras hasta el cierre; si no, se repite, y sin ningún intento válido en 3 la prueba falla. Medido: con el servidor correcto, PASA sin pausas y FALLA con cualquiera de las dos pausas; con X1 (k), FALLA en los tres casos |
+
 **Hallazgos propios del orquestador** (sondas de Chromium del 2026-11-14): una página servida con `page.route` no llega a mandar peticiones a 127.0.0.1, así que P6 necesita un servidor real (§6.1); y tras `unroute`, `EventSource` reenvía el último `id` visto, de ahí el `id` alto del `snapshot` falso de P4.

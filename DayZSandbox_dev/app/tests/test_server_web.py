@@ -518,31 +518,50 @@ class C02CuerpoQueNoLlega(WebBase):
         self.assertEqual(self.env.backend.ops, {})
 
     def test_cuerpo_a_goteo_no_alarga_el_plazo(self):
-        # El plazo es total: un byte cada 50 ms no lo renueva. Con un plazo renovable, el drenaje
-        # seguiria mientras haya goteo y la conexion no se cerraria antes del timeout del cliente.
+        # El plazo es total: un byte cada 50 ms no lo renueva. Con un plazo renovable (drain_s de
+        # 0,3 s por lectura), el drenaje seguiria mientras haya goteo y la conexion no se cerraria
+        # antes del timeout del cliente. El estimulo solo vale si el goteo no se para nunca 0,2 s o
+        # mas, desde las cabeceras hasta el cierre: una pausa de planificacion daria a un plazo
+        # renovable el hueco que necesita para cerrar (ronda 3 de C-06). Un intento con pausa no
+        # cuenta y se repite; sin ningun intento valido, la prueba falla.
+        for _ in range(3):
+            resultado = self._intento_de_goteo()
+            if resultado is not None:
+                cerrada, transcurrido = resultado
+                self.assertTrue(cerrada, "el goteo mantuvo la conexion abierta")
+                self.assertLess(transcurrido, 1.5)
+                return
+        self.fail("el goteo no se pudo mantener sin pausas en 3 intentos")
+
+    def _intento_de_goteo(self):
+        """(cerrada, transcurrido) si el goteo fue continuo hasta el cierre; None si se paro."""
         s = self.open_post({"Host": "evil.test"}, 100000)
+        t_cabeceras = time.monotonic()
+        envios = []
         parar = threading.Event()
 
         def goteo():
             try:
                 while not parar.is_set():
                     s.sendall(b"x")
+                    envios.append(time.monotonic())
                     time.sleep(0.05)
             except OSError:
                 pass
 
         hilo = threading.Thread(target=goteo, daemon=True)
-        t0 = time.monotonic()
         hilo.start()
         try:
             _, cerrada = self.read_until_closed(s)
-            transcurrido = time.monotonic() - t0
+            t_fin = time.monotonic()
         finally:
             parar.set()
             hilo.join(2)
             s.close()
-        self.assertTrue(cerrada, "el goteo mantuvo la conexion abierta")
-        self.assertLess(transcurrido, 1.5)
+        marcas = [t_cabeceras] + [t for t in envios if t <= t_fin] + [t_fin]
+        if max(b - a for a, b in zip(marcas, marcas[1:])) >= 0.2:
+            return None
+        return cerrada, t_fin - t_cabeceras
 
 
 if __name__ == "__main__":
