@@ -1,6 +1,6 @@
 # F2 sin juego: escena viva (aplicar, resetear y observar) sobre `dsbx1`, con el mod falso
 
-2026-11-14 · tarea **F2-offline** (la parte de F2 que se hace y se prueba sin DayZ), rama `claude/f2-offline`, que sale de `claude/f1b-bridge` `a0fa14c` (F1bb con el gate en verde: 181 pruebas, E2E P1-P11, X3 17/17) más `7bede68`, que trae aquí la decisión de A3 (`e127ee7` de `claude/f0.3-briefs`) · spec de implementación (R25) de [plan v2](2026-10-26-m1-cine-v2.md) F2 (líneas 95-102), decisiones #9, #10 y #11 (31-33), #23 (45), #28 (50), Q9 (222), CX-01 (246) y CX-07 (252) · contrato: `DayZSandbox_dev/product-spec.md`, A1-A4 y A6 (47-50 y 52), C5 (78) y D2 (88) · protocolo: [F1b-bridge](2026-11-14-m1-f1b-bridge-brief.md) v1.4 (`dsbx1`) · reset y flags: brief de S-persist en `claude/f0.3-briefs` `6f88973` (`plans/2026-11-14-m1-f0.3-s-persist-brief.md`, §3.1 `:122-128` y §3.3 `:145-158`) · **v1.1**: aplica la ronda 1 de Sol (NEEDS-WORK, 8 BLOQ y 3 MAY, §12). La ronda 2 es la última; después arbitra el orquestador.
+2026-11-14 · tarea **F2-offline** (la parte de F2 que se hace y se prueba sin DayZ), rama `claude/f2-offline`, que sale de `claude/f1b-bridge` `a0fa14c` (F1bb con el gate en verde: 181 pruebas, E2E P1-P11, X3 17/17) más `7bede68`, que trae aquí la decisión de A3 (`e127ee7` de `claude/f0.3-briefs`) · spec de implementación (R25) de [plan v2](2026-10-26-m1-cine-v2.md) F2 (líneas 95-102), decisiones #9, #10 y #11 (31-33), #23 (45), #28 (50), Q9 (222), CX-01 (246) y CX-07 (252) · contrato: `DayZSandbox_dev/product-spec.md`, A1-A4 y A6 (47-50 y 52), C5 (78) y D2 (88) · protocolo: [F1b-bridge](2026-11-14-m1-f1b-bridge-brief.md) v1.4 (`dsbx1`) · reset y flags: brief de S-persist en `claude/f0.3-briefs` `6f88973` (`plans/2026-11-14-m1-f0.3-s-persist-brief.md`, §3.1 `:122-128` y §3.3 `:145-158`) · **v1.2, congelado.** Aplica las dos rondas de Sol (§12). La 2 dio NEEDS-WORK con 2 BLOQ y 4 MAY, y al ser la última los arbitra el orquestador.
 
 **Por qué ahora.** F2 depende de F1 y de S-persist. F1 está a falta de los peers reales (F1b-peers) y S-persist no ha corrido. Todo lo que F2 puede fijar sin juego (el contrato de los verbos de escena, el backend y un mod falso con mundo) se hace ya, para que F2 en partida solo tenga que escribir el mod real y medir. Lo pidió Guillermo («Más frentes en paralelo»).
 
@@ -82,7 +82,7 @@ El backend valida la forma y los rangos de §3.6: tipos de F1b-bridge §4 para l
 
 `args` `{doc_id, rev, hash, plan_sha256, caps, classes, rows}`:
 - `classes`: las clases distintas de las filas, ordenadas;
-- `rows`: una fila por entidad no actor del documento, en el orden del documento, `[lid, ci, x, z, yaw]`, con `ci` el índice en `classes` y los números redondeados a 3 decimales;
+- `rows`: una fila por entidad no actor del documento, en el orden del documento, `[lid, ci, x, z, yaw]`, con `ci` el índice en `classes` y los números redondeados a 3 decimales. El `yaw` se normaliza después de redondear a [0, 360): un 359,9999 queda en 0,0;
 - `caps`: `{objeto, infectado, animal}` de la biblioteca, más `total` si existe;
 - `plan_sha256`: SHA-256 del JSON canónico (`sort_keys`, separadores `,` y `:`, UTF-8) de `{doc_id, rev, hash, classes, rows}`.
 
@@ -110,7 +110,7 @@ El tipo sale del prefijo del `lid` (`obj`, `zmb`, `ani`). Etapas, en este orden 
 
 **Si falla una creación** (la entidad no aparece, o `gy` fuera de rango), con el lease y el plazo vivos, el mod compensa en la misma orden (D8):
 - borra los registros de esta orden con D5;
-- si no queda ninguno, `pending` pasa a `null`;
+- `pending` pasa a `null` si de esta orden ya solo quedan registros retenidos (la misma regla que en §3.4). Si un borrado no se confirma, `pending` sigue con esta orden;
 - `last.outcome` es `compensated`, `retained` si algo se quedó, o `interrupted` si un borrado no se confirmó;
 - termina en `error/create_failed`.
 
@@ -123,7 +123,10 @@ Una fila del checkpoint de una entidad que ya no vive, o con una lectura fuera d
 1. Con `if_pending`, si `scene.pending` no es esa orden → `rejected/not_pending`, sin efecto.
 2. Lo borrable: con `if_pending`, los registros de esa orden; si no, lo de D5. Se calcula la retención (S-persist §3.3 punto 2).
 3. Se borra lo borrable no retenido en dos pasadas (hijos y luego raíces), por lotes. Antes de cada borrado: lease y plazo (§3.3), retención otra vez y confirmación del borrado (D5). Un borrado que se vuelve retenible se salta y se retiene. Uno que no se confirma para la operación con `outcome = "interrupted"` y `error/delete_failed`.
-4. Con `doc_id` solo: `generation` = `null`, `pending` = `null` y `last` = `{session, op_id, verb: "scene.reset", outcome}`, con `outcome` `retained` si algo se quedó y `done` si no. Con `if_pending`: `pending` = `null` si de esa orden solo quedan registros retenidos, y `last` = `{session, op_id del apply, verb: "scene.apply", outcome: "compensated"}` (o `retained`).
+4. Con `doc_id` solo: `generation` = `null`, `pending` = `null` y `last` = `{session, op_id, verb: "scene.reset", outcome}`, con `outcome` `retained` si algo se quedó y `done` si no. Con `if_pending`:
+   - `pending` = `null` si de esa orden ya solo quedan registros retenidos, la misma regla que en §3.3;
+   - `last` = `{session, op_id del apply, verb: "scene.apply", outcome}`, con `outcome` `compensated`, `retained` o `interrupted`;
+   - si un borrado no se confirma, `pending` sigue con esa orden y su `n` con lo que quede.
 5. Resultado `done` con el `read` de §3.2, aunque haya algo retenido: el estado lo decide el backend (D6). Un segundo reset sobre una escena vacía es `done` sin efecto (A3: idempotente). Si solo quedaba un contenedor retenido que sigue guardando algo ajeno, vuelve a salir `retained`.
 
 Nunca: borrar lo que no está en lo borrable (por radio, por clase o por parecido), mover algo, sacar lo ajeno al suelo ni tocar el storage.
@@ -145,7 +148,9 @@ Un resultado que pasaría de `WIRE_CAP` → `rejected/result_too_large`, porque 
 | ahora | `[lid, x, y, z, yaw, hp, n_own, n_foreign]` | `n_own`, descendientes registrados de la escena; `n_foreign`, descendientes no borrables |
 
 **Rangos normativos.** Un peer no manda nada fuera de ellos y el backend no acepta una lectura que se salga.
-- `lid`: el patrón del esquema y ≤ 10 caracteres, también los de los hijos.
+- **Textos:** todos ASCII (`lid`, clases, `doc_id`, motivos), así que su tamaño en el cable no depende de `ensure_ascii`.
+- `lid`: el patrón del esquema **solo con dígitos ASCII** y ≤ 10 caracteres, también los de los hijos. `validate.py` acepta dígitos Unicode en `\d`; F2 no.
+- **Enteros de la orden:** `rev` de 9 dígitos como mucho, número de `op_id` de 6 y `conn` de 6.
 - `x` y `z`: [0, `world_size`], con `world_size` ≤ 99999.
 - `y` y `gy`: [-9999,999, 9999,999].
 - `yaw`: [0, 360).
@@ -153,7 +158,7 @@ Un resultado que pasaría de `WIRE_CAP` → `rejected/result_too_large`, porque 
 - Contadores (`gen_n`, `n`, `retained_n`, `pending.n`, `registry_n`, `n_own`, `n_foreign`, `ci`): enteros en [0, 999999] (`ci` también puede ser -1).
 - Números de las filas: como mucho 3 decimales.
 
-**Envolvente** con esos rangos y 33 raíces con las clases más largas de `catalog-m1.json`. Calculada el 2026-11-14 con el script del orquestador `sizes5.py`:
+**Envolvente** con esos rangos y 33 raíces con las clases más largas de `catalog-m1.json`. Calculada el 2026-11-14 con el script del orquestador `sizes5.py`, con separadores compactos. Como todo es ASCII, sale igual con el serializador de `FakeMod`, `ensure_ascii` por defecto. El backend no se fía de la tabla: calcula la cota de cada apply con los valores **reales** de la orden (`lid`, clases, `rev`, `op_id`, `conn`) y los máximos de esta sección para lo que pone el mod.
 
 | Cuerpo | Bytes |
 |---|---|
@@ -190,9 +195,9 @@ Caben hasta 34 raíces.
 | `unknown_class` | 422 | una clase que no está en ese catálogo | `/entities/<i>/cls` |
 | `out_of_map` | 422 | `x` o `z` fuera de [0, `world_size` del hello] | `/entities/<i>/x` o `/z` |
 | `budget_exceeded` | 422 | cuentas por tipo por encima de `caps` del catálogo del `Store`, o total por encima de `caps.total` | `/entities` |
-| `plan_too_large` | 422 | un `lid` de más de 10 caracteres, o la orden o la envolvente del resultado pasarían de `WIRE_CAP` | `""` |
+| `plan_too_large` | 422 | un `lid` que no sea ASCII o tenga más de 10 caracteres, una `rev` de más de 9 dígitos o un `op_id` de más de 6, o la orden o la envolvente del resultado pasarían de `WIRE_CAP` | `/entities/<i>/id` si es un `lid`; si no, `""` |
 
-La envolvente se calcula con los `lid` y las clases reales y los máximos de §3.6. Si todo pasa, el backend guarda con la orden la expectativa de D11 y la encola con los `args` de §3.3. Sin bridge, o con un peer sin escena, `apply` hace lo mismo que en F1b-bridge.
+La envolvente se calcula como dice §3.6: valores reales de la orden y máximos para lo que pone el mod. Si todo pasa, el backend guarda con la orden la expectativa de D11 y la encola con los `args` de §3.3. Sin bridge, o con un peer sin escena, `apply` hace lo mismo que en F1b-bridge.
 
 ### 4.2 Rutas nuevas
 
@@ -228,13 +233,13 @@ Así salen el multiconjunto exacto por clase, las 33 raíces y el error de posic
 - `outcome: "interrupted"` → `parcial/interrumpida`;
 - cualquier otra cosa → `fallido/lectura_no_cumple`.
 
-**Compensación** de un apply A, sobre una lectura cuyo `last` es A con `verb: "scene.apply"`:
-- `scene.pending` no es A, `outcome: "compensated"`, `scene.n == 0` y `generation == null` → `parcial/compensada`;
-- `outcome: "retained"`, `scene.n == retained_n > 0` → `parcial/contenido_ajeno`;
-- `outcome: "interrupted"` → sigue sin resolver (§4.5);
-- cualquier otra cosa → `fallido/lectura_no_cumple`.
+**Apply detenido.** Cubre un apply A que no publicó: lo paró una retención o un borrado durante su reset, o tuvo que compensar. Se juzga sobre una lectura con `last` = A y `verb: "scene.apply"`, `generation == null` y `scene.pending` distinto de A:
+- `outcome: "compensated"` y `scene.n == 0` → `parcial/compensada`;
+- `outcome: "retained"`, `retained` no vacío y `scene.n >= retained_n >= 1` → `parcial/contenido_ajeno`. Los registros que pasen de `retained_n` son restos sin procesar de la generación anterior; los borrará el siguiente reset o apply (D5);
+- `outcome: "interrupted"` → `parcial/interrumpida`;
+- cualquier otra cosa, incluida una `generation` no nula, → `fallido/lectura_no_cumple`.
 
-Un `done` de la orden de compensación no basta: manda la lectura.
+Si `scene.pending` sigue siendo A, la orden no está resuelta y toca compensar (§4.5). Un `done` de la orden de compensación no basta: manda la lectura.
 
 ### 4.4 Transiciones (se suman a F1b-bridge §3.1; solo para órdenes F2)
 
@@ -246,8 +251,8 @@ Un `done` de la orden de compensación no basta: manda la lectura.
 | reset | `ejecutando` | `fallido` / `parcial` | primer `rejected` / primer `error` | `servidor` | el del peer |
 | apply | `ejecutando` o `parcial` | `aplicado` → `observado` / `fallido` | primer resultado `done`: predicado de apply | `servidor` | — / `lectura_no_cumple` |
 | apply | `parcial` | `observado` / `fallido` | reconciliación: generación de esta orden y predicado de apply sobre su checkpoint | `servidor` | `reconciliada` / `lectura_no_cumple` |
-| apply | `parcial` | `parcial` / `fallido` | reconciliación: predicado de compensación | `servidor` | `compensada` o `contenido_ajeno` / `lectura_no_cumple` |
-| apply | `parcial` | `parcial` | la lectura enseña `last` de esta orden con `interrupted` y nada pendiente de ella | `servidor` | `interrumpida` |
+| apply | `parcial` | `parcial` / `fallido` | reconciliación: predicado de apply detenido (§4.3) | `servidor` | `compensada`, `contenido_ajeno` o `interrumpida` / `lectura_no_cumple` |
+| apply | `parcial` | `parcial` | compensación sin progreso (§4.5) | `backend` | `interrumpida` |
 | reset | `parcial` | lo del predicado de reset | reconciliación: `last` de esta orden | `servidor` | `reconciliada`, `contenido_ajeno`, `interrumpida` o `lectura_no_cumple` |
 
 - **`parcial` resuelta:** un `parcial` con `contenido_ajeno`, `compensada` o `interrumpida` es terminal. La orden del bridge pasa a `terminal` y deja de pedir lecturas.
@@ -259,8 +264,10 @@ Un `done` de la orden de compensación no basta: manda la lectura.
 - **Lecturas.** Mientras quede alguna sin resolver y el servidor esté presentado en ese `epoch`, se siguen pidiendo lecturas con el calendario de F1b-bridge §4 (F1-03). Cada lectura que reconcilia pasa por `SceneLive.on_world_read_locked(read)`, que juzga las órdenes F2; las órdenes F1 las sigue juzgando F1b-bridge.
 - **Qué se hace con cada orden sin resolver**, en el orden de la cola:
   - **apply cuya `(session, op_id)` está en `generation`** → si la identidad completa no casa, `fallido/lectura_no_cumple`. Si casa, se encola `scene.observe {doc_id, at: "checkpoint"}` y, con su resultado, el predicado de apply. Si ese resultado enseña otra generación, la orden no cambia.
-  - **apply cuya `(session, op_id)` está en `scene.pending`** → se encola la compensación `scene.reset {doc_id, if_pending}` (D8). Con la lectura siguiente se aplica el predicado de compensación.
-  - **apply o reset con `scene.last` de esa orden** → su predicado (§4.3).
+  - **apply cuya `(session, op_id)` está en `scene.pending`** → se encola la compensación `scene.reset {doc_id, if_pending}` (D8). Con la lectura siguiente se aplica el predicado de apply detenido.
+    - **Límite:** como mucho 3 compensaciones por orden.
+    - **Sin progreso:** si tras una compensación la lectura enseña `pending` todavía en A con el mismo `n` (un borrado que falla siempre), no hay más intentos y A pasa a `parcial/interrumpida`, terminal, con `origin` `backend`. Los registros siguen en el mod y los borrará un reset explícito.
+  - **apply o reset con `scene.last` de esa orden** (y, si es un apply, `pending` distinto de él) → su predicado: reset, o apply detenido (§4.3).
   - **cualquier otra cosa** → sigue sin resolver.
 - **Órdenes internas.** Hay **una** orden interna de F2 en vuelo a la vez (observe o compensación). Son internas como `state.read`: no crean fila en la API ni `op.state`, no se entregan antes de reconciliar y nunca reentregan la orden original a otra `conn`. Si una termina `rejected`, `error`, caduca o se descarta, la orden no cambia y la siguiente lectura válida la vuelve a pedir.
 - **Tras reiniciar el backend,** las órdenes de la sesión anterior ya no existen (la cola vive en memoria, F1a). La primera lectura válida fija la base, y el siguiente apply resetea todo lo registrado de la escena aunque lo creara otra sesión (D5). Así no se duplica el mundo (A4).
@@ -334,12 +341,12 @@ F2 prueba en el backend que `op.state` lleva `verb: "scene.reset"` y el `reason`
 
 | # | Positivo | Negativo (el defecto que detecta) |
 |---|---|---|
-| F2-A1 | Escena válida → plan con `plan_sha256` reproducible, filas iguales al documento congelado (D11) y una orden en el bridge | Con actores → `expansion_unavailable`; clase fuera del catálogo del mundo → `unknown_class` con `/entities/<i>/cls`; `x` por encima del `world_size` del hello → `out_of_map`; sin catálogo → `catalog_pending`; **catálogo completo de un arranque anterior** (otra `inst` o `build`) y el nuevo sin completar → `catalog_pending`; `lid` de 11 caracteres → `plan_too_large`. En todos, 0 órdenes en `Bridge.orders`, ninguna línea `scene.apply` en el log del bridge y ningún evento (un backend que valida pero despacha) |
+| F2-A1 | Escena válida → plan con `plan_sha256` reproducible, filas iguales al documento congelado (D11) y una orden en el bridge; `yaw` 359,9999 → 0,0 en el plan | Con actores → `expansion_unavailable`; clase fuera del catálogo del mundo → `unknown_class` con `/entities/<i>/cls`; `x` por encima del `world_size` del hello → `out_of_map`; sin catálogo → `catalog_pending`; **catálogo completo de un arranque anterior** (otra `inst` o `build`) y el nuevo sin completar → `catalog_pending`; `lid` de 11 caracteres, `lid` con dígitos no ASCII o `rev` de 10 dígitos → `plan_too_large`. En todos, 0 órdenes en `Bridge.orders`, ninguna línea `scene.apply` en el log del bridge y ningún evento (un backend que valida pero despacha) |
 | F2-A6 | Escena justo en los topes (20/10/3) → `observado` | Topes bajados después de guardar el documento, uno por uno (`objeto` = 19, `infectado` = 9, `animal` = 2) → `budget_exceeded`; `caps.total` = 30 con 20/10/3 → `budget_exceeded`; en todos, 0 órdenes. Una orden directa al mod con más filas que sus `caps` → `rejected/budget_exceeded` y el censo sin cambios |
 | F2-A2 | `escena-sin-actores` → `observado`; el censo tiene el multiconjunto por clase del documento, 33 raíces de Sandbox y cada una a < 0,5 m de `(x_doc, gy, z_doc)`; los infectados y animales también, en el checkpoint, con `tick_s` > 0 y deriva activa | Fila omitida → `fallido/lectura_no_cumple`; `ci` de otra clase → `fallido`; generación con otro `plan_sha256` → `fallido`; creación suprimida → `fallido` y el censo con 32; entidad desplazada 0,6 m → `fallido`; error real de 0,5004 m que el redondeo deja en 0,4999 (posición real `(0,0704, 0, 0,4954)` sobre el objetivo `(0, 0, 0)`) → `fallido`; la misma orden entregada dos veces (`force_double_delivery`) → censo con 33 y creados = 33 |
-| F2-A3 | Reset con dos hijos propios (uno en el cargo de `obj-17` y otro soltado en el suelo) → `observado`, sin `reason`; censo con 0 entidades de Sandbox de la escena; segundo reset → `observado` sin efectos; `storage_ops` = 0 | (a) Objeto ajeno en el suelo entre las entidades de la escena → intacto en clase, pose e inventario. (b) Segunda escena (`seed_scene`) → intacta. (c) Ajeno dentro de `obj-17` → `obj-17` sigue en pie, en su pose, con el ajeno dentro y en su pose; el reset termina `parcial/contenido_ajeno` con `obj-17` en `retained` y `op.state` con `verb: "scene.reset"` y ese `reason`; lo demás de la escena, borrado. Un segundo reset → otra vez `parcial/contenido_ajeno`. (d) Ajeno dentro de un hijo propio contenedor dentro de `obj-15` → se quedan los dos contenedores. (e) Hijo de la segunda escena dentro de `obj-16` → `obj-16` se queda. (f) Apply con un contenedor retenido → `fallido/foreign_content_retained` y el censo sin cambios. (g) Ajeno metido en `obj-17` **después** del primer lote de borrados (`barrier_after(8)`) → `obj-17` no se borra y el reset termina `parcial/contenido_ajeno`; en un apply, lo mismo y el apply no crea nada. (h) `fail_delete("obj-01")` en un reset y en el reset de un apply → `parcial/interrumpida`, `obj-01` sigue registrado y el apply no crea nada (el censo nunca llega a 34). (i) Orden de reset con el `epoch` viejo tras `restart_mission()` → `rejected/stale_epoch` y el censo sin cambios |
+| F2-A3 | Reset con dos hijos propios (uno en el cargo de `obj-17` y otro soltado en el suelo) → `observado`, sin `reason`; censo con 0 entidades de Sandbox de la escena; segundo reset → `observado` sin efectos; `storage_ops` = 0 | (a) Objeto ajeno en el suelo entre las entidades de la escena → intacto en clase, pose e inventario. (b) Segunda escena (`seed_scene`) → intacta. (c) Ajeno dentro de `obj-17` → `obj-17` sigue en pie, en su pose, con el ajeno dentro y en su pose; el reset termina `parcial/contenido_ajeno` con `obj-17` en `retained` y `op.state` con `verb: "scene.reset"` y ese `reason`; lo demás de la escena, borrado. Un segundo reset → otra vez `parcial/contenido_ajeno`. (d) Ajeno dentro de un hijo propio contenedor dentro de `obj-15` → se quedan los dos contenedores. (e) Hijo de la segunda escena dentro de `obj-16` → `obj-16` se queda. (f) Apply con un contenedor retenido → `fallido/foreign_content_retained` y el censo sin cambios. (g) Ajeno metido en `obj-17` **después** del primer lote de borrados (`barrier_after(8)`) → `obj-17` no se borra y el reset termina `parcial/contenido_ajeno`. En un apply, lo mismo: el apply no crea nada, la lectura enseña restos sin procesar (`n > retained_n`) y la orden termina `parcial/contenido_ajeno`. Con su resultado perdido, la reconciliación llega a lo mismo. (h) `fail_delete("obj-01")` en un reset y en el reset de un apply → `parcial/interrumpida`, `obj-01` sigue registrado y el apply no crea nada (el censo nunca llega a 34). (i) Orden de reset con el `epoch` viejo tras `restart_mission()` → `rejected/stale_epoch` y el censo sin cambios |
 | F2-A4 | Mismo `epoch`: aplicar, cerrar el backend, abrir otro sobre el mismo fichero, reconectar el mod falso, reconciliar y aplicar → `observado`, censo con 33 sin extras, **cada una a < 0,5 m** y el mismo hash del documento. `epoch` nuevo (`restart_mission`) → lo mismo, y el registro vacío justo después del reinicio | Resultado del apply perdido y backend reiniciado antes de recibirlo → el apply nuevo deja 33, no 66. Un `parcial` del `epoch` viejo no provoca ni compensación ni observe en el mundo nuevo. Guardado interrumpido: lo cubre `test_store.py:134` (F1), que debe seguir pasando |
-| F2-C | Creación que falla en la fila 12 → `parcial`, y luego `parcial/compensada`; censo con 0 de la escena; la segunda escena, intacta (compensación que no va más allá de su orden) | Con `barrier_after(5)`: cortar el mantenimiento, esperar a que caduque el lease y soltar → `error/lease_expired`, `pending` con 5 y ninguna creación más. Al volver, el backend compensa (`if_pending`) → `parcial/compensada` y el censo con 0. Resultado de la compensación perdido → se vuelve a pedir y termina igual. Compensación cuyo `done` deja `pending` en la lectura → `fallido/lectura_no_cumple`. Plazo vencido durante el reset de la generación anterior y durante una compensación → `interrumpida`. Una compensación con otro `if_pending` → `rejected/not_pending` sin efecto |
+| F2-C | Creación que falla en la fila 12 → `parcial`, y luego `parcial/compensada`; censo con 0 de la escena; la segunda escena, intacta (compensación que no va más allá de su orden) | Con `barrier_after(5)`: cortar el mantenimiento, esperar a que caduque el lease y soltar → `error/lease_expired`, `pending` con 5 y ninguna creación más. Al volver, el backend compensa (`if_pending`) → `parcial/compensada` y el censo con 0. Resultado de la compensación perdido → se vuelve a pedir y termina igual. `fail_delete` permanente sobre una de las 5 → como mucho 3 compensaciones y, sin progreso, `parcial/interrumpida` sin más órdenes. Lectura con `last` = A/`retained` pero una `generation` viva de otra orden, o `retained` vacío → `fallido/lectura_no_cumple`. Plazo vencido durante el reset de la generación anterior y durante una compensación → `interrumpida`. Una compensación con otro `if_pending` → `rejected/not_pending` sin efecto. En el mundo, sin red: registros de **otra orden de la misma escena**, sembrados a mano, sobreviven a la compensación de A |
 | F2-R | Resultado de un reset perdido → `parcial/sin_resultado` → la lectura enseña `last` con `done` y escena vacía → `observado/reconciliada`. Resultado de un apply perdido → la lectura enseña su generación → checkpoint → `observado/reconciliada`. Una orden de la `conn` anterior del mismo `epoch` también se resuelve | `last/done` con restos (`n` = 1) → `fallido/lectura_no_cumple`; misma `(session, op_id)` con otra `rev`, otro `hash` u otro `plan_sha256` → `fallido`; checkpoint que no cumple → `fallido`, nunca `observado` por identidad sola; un `parcial` resuelto (`contenido_ajeno`, `compensada`) no mantiene vivas las lecturas |
 | F2-O | `POST /api/observe` → `scene.observation` por el SSE y `GET /api/observation`; con el reloj inyectado avanzado 5 s, `age_ms` crece 5000; tras mover una entidad 2 m, la fila `now` lo refleja | Sin peer con escena → 409 `scene_unsupported` y 0 órdenes |
 | F2-D1 | Las pruebas de hoy y P1-P11 pasan sin tocarlas; un peer sin `scene` recibe `scene.apply` con `args` `{doc_id, rev, hash}` y `state.read` con `{}` | Una orden F2 `parcial` cuyo servidor vuelve a presentarse **sin** `scene`, en el mismo `epoch`, con una lectura que casa con la identidad F1 pero sin `scene` ni checkpoint → sigue `parcial`, nunca `observado` |
@@ -377,7 +384,12 @@ F2 prueba en el backend que `op.state` lleva `verb: "scene.reset"` y el `reason`
 - (ad) se crea después de un borrado no confirmado;
 - (ae) el predicado sin `EPS_Q`;
 - (af) las órdenes sin resolver de otra `conn` no mantienen vivas las lecturas;
-- (ag) la reconciliación de reset con `last/done` sin mirar `n`.
+- (ag) la reconciliación de reset con `last/done` sin mirar `n`;
+- (ah) la compensación filtra solo por escena, no por orden (F2-05);
+- (ai) compensaciones sin límite ni detección de falta de progreso (F2-02);
+- (aj) `yaw` sin normalizar tras redondear (F2-06);
+- (ak) la rama retenida del apply detenido sin exigir `generation` nula ni `retained` no vacío (F2-03);
+- (al) un apply detenido por retención durante su reset exige `n == retained_n` (F2-01).
 
 **Terminado cuando:**
 1. el gate sale con rc 0 tres veces seguidas;
@@ -465,3 +477,14 @@ Después, Sol revisa el código congelado. Push y PR con el gate en verde; el me
 | F1-11 · MAY · el redondeo a 3 decimales dejaba pasar un error real de 0,5004 m | `EPS_Q` = 0,002 m (D12, §4.3); negativa en F2-A2 y X4 (ae) |
 
 Además, el orquestador cambia el reparto (§0, §6, §8 y §9): la web pasa a F6-web, y el cableado de los ficheros de hoy espera a que F1b-bridge esté en `main`. Son cambios de coordinación, no del contrato.
+
+**Ronda 2 de Sol, la última** (misma configuración, sobre `98abe19`; veredicto NEEDS-WORK). Sol da por cerrados F1-01, F1-02, F1-03, F1-04, F1-07, F1-08 y F1-11, deja parciales F1-05, F1-06, F1-09 y F1-10, y añade 2 BLOQ y 4 MAY. Con esta ronda se llega al tope fijado antes de la ronda 1, así que **arbitra el orquestador**: comprueba cada hallazgo, aplica el arreglo que propone Sol y congela el brief.
+
+| Hallazgo | Qué cambia |
+|---|---|
+| F2-01 · BLOQ · un apply parado por retención durante su reset acababa en `fallido`, contra D7 | Predicado de «apply detenido», que admite restos sin procesar (`n >= retained_n`) (§4.3, §4.4); F2-A3 (g) con resultado perdido; X4 (al) |
+| F2-02 · MAY · un borrado que falla siempre provocaba compensaciones sin fin | Como mucho 3 compensaciones y salida terminal sin progreso (§4.5); F2-C; X4 (ai) |
+| F2-03 · BLOQ · la rama retenida de la compensación aceptaba una generación viva de otra orden | La rama exige `generation` nula y `retained` no vacío; la regla para limpiar `pending` es la misma en §3.3 y en §3.4; F2-C; X4 (ak) |
+| F2-04 · MAY · la envolvente no era normativa (dígitos Unicode, `rev` sin cota) | Textos ASCII, `lid` con dígitos ASCII y cotas de los enteros de la orden; cota calculada con los valores reales (§3.6, §4.1); F2-A1 |
+| F2-05 · MAY · F2-C no distinguía una compensación por escena de una por orden | Prueba del mundo con registros de otra orden de la misma escena (F2-C); X4 (ah) |
+| F2-06 · MAY · `yaw` 359,9999 redondeaba a 360,0, fuera de rango | Normalización a [0, 360) tras redondear (§3.3); F2-A1; X4 (aj) |
