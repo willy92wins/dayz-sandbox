@@ -3,11 +3,18 @@ class DSBX_QA_Config
 	string url;
 	string key;
 	int retry_ms;
+	int callback_budget;
 }
 
 class DSBX_QA_HelloResp
 {
 	int lease_ms;
+	bool ok;
+}
+
+class DSBX_QA_AckResp
+{
+	bool ok;
 }
 
 class DSBX_QA_PollResp
@@ -37,6 +44,15 @@ class DSBX_QA_Args
 	int interval_ms;
 	int seq0;
 	string client_inst;
+	ref array<string> sk;
+	ref array<string> sv;
+	ref array<string> nk;
+	ref array<float> nv;
+	ref array<string> ncol;
+	ref array<float> ncell;
+	ref array<string> scol;
+	ref array<string> scell;
+	int rows;
 }
 
 class DSBX_QA_Result
@@ -67,6 +83,15 @@ class DSBX_QA_Read
 	ref array<float> pos;
 	ref array<float> ypr;
 	ref array<ref DSBX_QA_RpcEntry> rpc_log;
+	ref array<string> sk;
+	ref array<string> sv;
+	ref array<string> nk;
+	ref array<float> nv;
+	ref array<string> ncol;
+	ref array<float> ncell;
+	ref array<string> scol;
+	ref array<string> scell;
+	int rows;
 
 	void DSBX_QA_Read()
 	{
@@ -80,6 +105,15 @@ class DSBX_QA_Read
 		ypr.Insert(0.0);
 		ypr.Insert(0.0);
 		rpc_log = new array<ref DSBX_QA_RpcEntry>();
+		sk = new array<string>();
+		sv = new array<string>();
+		nk = new array<string>();
+		nv = new array<float>();
+		ncol = new array<string>();
+		ncell = new array<float>();
+		scol = new array<string>();
+		scell = new array<string>();
+		rows = 0;
 	}
 }
 

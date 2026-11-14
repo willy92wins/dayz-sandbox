@@ -1,4 +1,5 @@
 const int DSBX_QA_RPC_CAM = 26102701;
+const int DSBX_QA_WIRE_CAP = 3500;
 
 class DSBX_QA_Callback : RestCallback
 {
@@ -77,6 +78,24 @@ class DSBX_QA_Callback : RestCallback
 	}
 }
 
+class DSBX_QA_EmitEntry : Managed
+{
+	string m_OpId;
+	int m_Seq;
+	float m_TickMs;
+	float m_LeaseAgeMs;
+	string m_Outcome;
+
+	void DSBX_QA_EmitEntry()
+	{
+		m_OpId = "";
+		m_Seq = 0;
+		m_TickMs = 0.0;
+		m_LeaseAgeMs = 0.0;
+		m_Outcome = "";
+	}
+}
+
 class DSBX_QA_Probe : Managed
 {
 	const int ST_WAIT = 0;
@@ -88,9 +107,11 @@ class DSBX_QA_Probe : Managed
 	const int KIND_HELLO = 1;
 	const int KIND_POLL = 2;
 	const int KIND_RESULT = 3;
+	const int KIND_KEEPALIVE = 4;
 	const int CALLBACK_POOL_MAX = 4;
 
 	static DSBX_QA_Probe s_ClientProbe;
+	static DSBX_QA_Probe s_ServerProbe;
 
 	string m_Role;
 	bool m_IsClient;
@@ -145,6 +166,19 @@ class DSBX_QA_Probe : Managed
 	bool m_HasPendingPose;
 	ref array<float> m_PendingPos;
 	ref array<float> m_PendingYpr;
+	ref DSBX_QA_JobMgr m_Jobs;
+	ref array<ref DSBX_QA_Ext> m_Exts;
+	float m_DtSumMs;
+	string m_OpFault;
+	int m_CallbackBudget;
+	int m_CallbacksCreatedN;
+	bool m_BudgetLogged;
+	bool m_BudgetExhausted;
+	ref map<string, string> m_ResultVerb;
+	ref array<ref DSBX_QA_EmitEntry> m_EmitLog;
+	ref array<string> m_CacheSnapOrder;
+	string m_CacheSnapId;
+	float m_KeepaliveNextMs;
 
 	void DSBX_QA_Probe(string role)
 	{
@@ -199,17 +233,54 @@ class DSBX_QA_Probe : Managed
 		m_HasPendingPose = false;
 		m_PendingPos = null;
 		m_PendingYpr = null;
+		m_DtSumMs = 0.0;
+		m_OpFault = "";
+		m_CallbackBudget = 2000;
+		m_CallbacksCreatedN = 0;
+		m_BudgetLogged = false;
+		m_BudgetExhausted = false;
+		m_ResultVerb = new map<string, string>();
+		m_EmitLog = new array<ref DSBX_QA_EmitEntry>();
+		m_CacheSnapOrder = new array<string>();
+		m_CacheSnapId = "";
+		m_KeepaliveNextMs = 0.0;
+		m_Jobs = new DSBX_QA_JobMgr(this);
+		m_Exts = new array<ref DSBX_QA_Ext>();
+		m_Exts.Insert(new DSBX_QA_X_Persist());
+		m_Exts.Insert(new DSBX_QA_X_Actor());
+		m_Exts.Insert(new DSBX_QA_X_Cam());
+		m_Exts.Insert(new DSBX_QA_X_Cot());
+		m_Exts.Insert(new DSBX_QA_X_Env());
+		m_Exts.Insert(new DSBX_QA_X_Take());
+		m_Exts.Insert(new DSBX_QA_X_Perf());
+		m_Exts.Insert(new DSBX_QA_X_Map());
+		m_Exts.Insert(new DSBX_QA_X_Base());
+		int ei = 0;
+		while (ei < m_Exts.Count())
+		{
+			m_Exts.Get(ei).Init(this);
+			ei = ei + 1;
+		}
 		int uuid[4];
 		UUIDApi.Generate(uuid);
 		string raw = UUIDApi.FormatString(uuid);
-		raw.Replace("-", "");
-		raw.ToLower();
-		m_Inst = raw;
+		string partA = raw.Substring(0, 8);
+		string partB = raw.Substring(9, 4);
+		string partC = raw.Substring(14, 4);
+		string partD = raw.Substring(19, 4);
+		string partE = raw.Substring(24, 12);
+		string inst = partA + partB + partC + partD + partE;
+		inst.ToLower();
+		m_Inst = inst;
 		if (m_IsClient)
 		{
 			s_ClientProbe = this;
-			DayZGame.Event_OnRPC.Insert(DSBX_QA_Probe.OnCamRpc);
 		}
+		else
+		{
+			s_ServerProbe = this;
+		}
+		DayZGame.Event_OnRPC.Insert(DSBX_QA_Probe.OnAnyRpc);
 	}
 
 	void ~DSBX_QA_Probe()
@@ -224,13 +295,27 @@ class DSBX_QA_Probe : Managed
 			return;
 		}
 		m_ShutdownDone = true;
-		if (m_IsClient)
+		if (m_Jobs)
 		{
-			DayZGame.Event_OnRPC.Remove(DSBX_QA_Probe.OnCamRpc);
-			if (s_ClientProbe == this)
+			m_Jobs.ShutdownJobs();
+		}
+		if (m_Exts)
+		{
+			int ei = 0;
+			while (ei < m_Exts.Count())
 			{
-				s_ClientProbe = null;
+				m_Exts.Get(ei).OnShutdown();
+				ei = ei + 1;
 			}
+		}
+		DayZGame.Event_OnRPC.Remove(DSBX_QA_Probe.OnAnyRpc);
+		if (s_ClientProbe == this)
+		{
+			s_ClientProbe = null;
+		}
+		if (s_ServerProbe == this)
+		{
+			s_ServerProbe = null;
 		}
 		if (m_Camera && g_Game)
 		{
@@ -257,7 +342,7 @@ class DSBX_QA_Probe : Managed
 			{
 				pooledCb.Detach();
 			}
-			i++;
+			i = i + 1;
 		}
 		m_CallbackPool.Clear();
 		Log("shutdown");
@@ -282,6 +367,29 @@ class DSBX_QA_Probe : Managed
 		return value;
 	}
 
+	bool IsFiniteF(float value)
+	{
+		if (value != value)
+		{
+			return false;
+		}
+		if (AbsF(value) > 300000000000000000000000000000000000000.0)
+		{
+			return false;
+		}
+		return true;
+	}
+
+	bool IsIntF(float value)
+	{
+		if (!IsFiniteF(value))
+		{
+			return false;
+		}
+		int iv = (int)value;
+		return (float)iv == value;
+	}
+
 	string BuildName()
 	{
 #ifdef DIAG_DEVELOPER
@@ -298,8 +406,171 @@ class DSBX_QA_Probe : Managed
 
 	string HelloBody()
 	{
-		string body = "{\"proto\":\"qa0\",\"peer\":\"" + m_Role + "\",\"inst\":\"" + m_Inst + "\",\"build\":\"" + BuildName() + "\",\"probe_ver\":\"dsbx-qa0\"}";
+		string body = "{\"proto\":\"qa0\",\"peer\":\"" + m_Role + "\",\"inst\":\"" + m_Inst + "\",\"build\":\"" + BuildName() + "\",\"probe_ver\":\"dsbx-qa1+" + DSBX_QA_STAMP + "\"}";
 		return body;
+	}
+
+	string GetInst()
+	{
+		return m_Inst;
+	}
+
+	string GetRole()
+	{
+		return m_Role;
+	}
+
+	string GetOpFault()
+	{
+		return m_OpFault;
+	}
+
+	bool IsTransportWaiting()
+	{
+		return m_State == ST_WAIT || m_State == ST_HELLO;
+	}
+
+	float LeaseAgeMs()
+	{
+		if (!m_HasLastOk)
+		{
+			return 1000000000.0;
+		}
+		return NowMs() - m_LastOkPollMs;
+	}
+
+	int GetLeaseMs()
+	{
+		return m_LeaseMs;
+	}
+
+	bool LeaseOk()
+	{
+		if (!m_HasLastOk)
+		{
+			return false;
+		}
+		return LeaseAgeMs() <= m_LeaseMs;
+	}
+
+	int CallbacksCreatedN()
+	{
+		return m_CallbacksCreatedN;
+	}
+
+	int CallbacksPooledN()
+	{
+		return m_CallbackPool.Count();
+	}
+
+	int CallbacksInflightN()
+	{
+		if (m_ActiveCb)
+		{
+			return 1;
+		}
+		return 0;
+	}
+
+	int CallbackBudgetN()
+	{
+		return m_CallbackBudget;
+	}
+
+	int CacheSizeN()
+	{
+		return m_CacheOrder.Count();
+	}
+
+	int RpcLogSizeN()
+	{
+		return m_RpcLog.Count();
+	}
+
+	int JobsLiveN()
+	{
+		if (m_Jobs)
+		{
+			return m_Jobs.LiveCount();
+		}
+		return 0;
+	}
+
+	void QaCacheFill(int n, string fillId)
+	{
+		int i = 0;
+		while (i < n)
+		{
+			DSBX_QA_Result syn = new DSBX_QA_Result();
+			syn.op_id = fillId + "-" + i;
+			syn.status = "done";
+			syn.reason = "";
+			syn.dup = 0;
+			syn.recv_ms = NowMs();
+			syn.done_ms = NowMs();
+			syn.frame_recv = m_Frame;
+			syn.frame_done = m_Frame;
+			CachePut(syn);
+			i = i + 1;
+		}
+	}
+
+	int QaCacheSnapshot(string snapId)
+	{
+		m_CacheSnapOrder = new array<string>();
+		int i = 0;
+		while (i < m_CacheOrder.Count())
+		{
+			m_CacheSnapOrder.Insert(m_CacheOrder.Get(i));
+			i = i + 1;
+		}
+		m_CacheSnapId = snapId;
+		return m_CacheSnapOrder.Count();
+	}
+
+	string CacheSnapId()
+	{
+		return m_CacheSnapId;
+	}
+
+	int CacheSnapCount()
+	{
+		return m_CacheSnapOrder.Count();
+	}
+
+	string CacheSnapOpId(int idx)
+	{
+		return m_CacheSnapOrder.Get(idx);
+	}
+
+	DSBX_QA_RpcEntry RpcLogEntry(int idx)
+	{
+		return m_RpcLog.Get(idx);
+	}
+
+	int EmitLogCount()
+	{
+		return m_EmitLog.Count();
+	}
+
+	DSBX_QA_EmitEntry EmitLogEntry(int idx)
+	{
+		return m_EmitLog.Get(idx);
+	}
+
+	void AddEmitEntry(string opId, int seq, string outcome)
+	{
+		DSBX_QA_EmitEntry entry = new DSBX_QA_EmitEntry();
+		entry.m_OpId = opId;
+		entry.m_Seq = seq;
+		entry.m_TickMs = NowMs();
+		entry.m_LeaseAgeMs = LeaseAgeMs();
+		entry.m_Outcome = outcome;
+		m_EmitLog.Insert(entry);
+		while (m_EmitLog.Count() > 512)
+		{
+			m_EmitLog.RemoveOrdered(0);
+		}
 	}
 
 	bool UrlUsable(string url)
@@ -338,7 +609,7 @@ class DSBX_QA_Probe : Managed
 				return false;
 			}
 			port = port * 10 + ch.ToInt();
-			i++;
+			i = i + 1;
 		}
 		if (port < 1 || port > 65535)
 		{
@@ -355,8 +626,8 @@ class DSBX_QA_Probe : Managed
 		bool usable = false;
 		string reason = "missing";
 		int retry = 2000;
+		int budget = 2000;
 		string newUrl = "";
-		string newKey = "";
 		if (loaded && cfg)
 		{
 			retry = cfg.retry_ms;
@@ -364,9 +635,13 @@ class DSBX_QA_Probe : Managed
 			{
 				retry = 2000;
 			}
+			budget = cfg.callback_budget;
+			if (budget <= 0)
+			{
+				budget = 2000;
+			}
 			newUrl = cfg.url;
-			newKey = cfg.key;
-			if (newKey == "")
+			if (cfg.key == "")
 			{
 				reason = "empty_key";
 			}
@@ -380,6 +655,7 @@ class DSBX_QA_Probe : Managed
 				reason = "ok";
 			}
 		}
+		m_CallbackBudget = budget;
 		m_WaitRetryMs = retry;
 		if (usable)
 		{
@@ -412,7 +688,7 @@ class DSBX_QA_Probe : Managed
 		if (usable)
 		{
 			m_Url = newUrl;
-			m_Key = newKey;
+			m_Key = cfg.key;
 			m_RetryMs = retry;
 		}
 		if (usable != m_LogCfgUsable || reason != m_LogCfgReason)
@@ -447,14 +723,35 @@ class DSBX_QA_Probe : Managed
 		return usable;
 	}
 
+	void NoteBudgetReached()
+	{
+		m_BudgetExhausted = true;
+		if (!m_BudgetLogged)
+		{
+			m_BudgetLogged = true;
+			Log("callback_budget_exhausted created_n=" + m_CallbacksCreatedN + " budget_n=" + m_CallbackBudget);
+		}
+	}
+
 	DSBX_QA_Callback AcquireCallback(int kind)
 	{
+		if (m_BudgetExhausted)
+		{
+			return null;
+		}
 		DSBX_QA_Callback cb = null;
+		bool created = false;
 		if (kind == KIND_POLL)
 		{
 			if (!m_PollCallback)
 			{
+				if (m_CallbacksCreatedN >= m_CallbackBudget)
+				{
+					NoteBudgetReached();
+					return null;
+				}
 				m_PollCallback = new DSBX_QA_Callback(this);
+				created = true;
 			}
 			cb = m_PollCallback;
 		}
@@ -464,11 +761,25 @@ class DSBX_QA_Probe : Managed
 			if (last >= 0)
 			{
 				cb = m_CallbackPool.Get(last);
-				m_CallbackPool.Remove(last);
+				m_CallbackPool.RemoveOrdered(last);
 			}
 			else
 			{
+				if (m_CallbacksCreatedN >= m_CallbackBudget)
+				{
+					NoteBudgetReached();
+					return null;
+				}
 				cb = new DSBX_QA_Callback(this);
+				created = true;
+			}
+		}
+		if (created)
+		{
+			m_CallbacksCreatedN = m_CallbacksCreatedN + 1;
+			if (m_CallbacksCreatedN >= m_CallbackBudget)
+			{
+				NoteBudgetReached();
 			}
 		}
 		m_NextGen = m_NextGen + 1;
@@ -527,7 +838,7 @@ class DSBX_QA_Probe : Managed
 		while (i < m_FailCount)
 		{
 			wait = wait * 2.0;
-			i++;
+			i = i + 1;
 		}
 		if (wait > m_RetryMs)
 		{
@@ -540,6 +851,12 @@ class DSBX_QA_Probe : Managed
 	void SendHello()
 	{
 		DSBX_QA_Callback cb = AcquireCallback(KIND_HELLO);
+		if (!cb)
+		{
+			m_State = ST_WAIT;
+			m_NextTryMs = NowMs() + m_RetryMs;
+			return;
+		}
 		m_State = ST_HELLO;
 		m_Ctx.POST(cb, "hello?" + KeyQuery(), HelloBody());
 	}
@@ -547,8 +864,24 @@ class DSBX_QA_Probe : Managed
 	void SendPoll()
 	{
 		DSBX_QA_Callback cb = AcquireCallback(KIND_POLL);
+		if (!cb)
+		{
+			m_State = ST_WAIT;
+			m_NextTryMs = NowMs() + m_RetryMs;
+			return;
+		}
 		m_State = ST_POLL;
 		m_Ctx.GET(cb, "poll?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&frame=" + m_Frame + "&tick_s=" + g_Game.GetTickTime());
+	}
+
+	void SendKeepalive()
+	{
+		DSBX_QA_Callback cb = AcquireCallback(KIND_KEEPALIVE);
+		if (!cb)
+		{
+			return;
+		}
+		m_Ctx.GET(cb, "poll?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&frame=" + m_Frame + "&tick_s=" + g_Game.GetTickTime() + "&deliver=0");
 	}
 
 	void OnHttpDone(DSBX_QA_Callback cb, int kind, int gen, bool success, string data, int errorCode, bool isTimeout)
@@ -566,10 +899,41 @@ class DSBX_QA_Probe : Managed
 		m_ActiveGen = 0;
 		SettleCallback(cb, kind, success);
 		float now = NowMs();
+		if (kind == KIND_KEEPALIVE)
+		{
+			if (!success)
+			{
+				RegisterFailure(isTimeout, errorCode);
+				return;
+			}
+			JsonSerializer kaSer = new JsonSerializer();
+			string kaErr;
+			DSBX_QA_PollResp kaResp = new DSBX_QA_PollResp();
+			bool kaParsed = kaSer.ReadFromString(kaResp, data, kaErr);
+			if (!kaParsed || !kaResp.ops || !IsFiniteF(kaResp.now_ms))
+			{
+				RegisterFailure(false, 0);
+				return;
+			}
+			m_FailCount = 0;
+			m_HadSuccess = true;
+			m_LastOkPollMs = now;
+			m_HasLastOk = true;
+			return;
+		}
 		if (kind == KIND_RESULT)
 		{
 			if (success)
 			{
+				JsonSerializer ackSer = new JsonSerializer();
+				string ackErr;
+				DSBX_QA_AckResp ackResp = new DSBX_QA_AckResp();
+				bool ackParsed = ackSer.ReadFromString(ackResp, data, ackErr);
+				if (!ackParsed || !ackResp.ok)
+				{
+					ResultFailed(now, false);
+					return;
+				}
 				m_SendIndex = m_SendIndex + 1;
 				m_SendFailures = 0;
 				m_SendNextMs = 0.0;
@@ -591,15 +955,12 @@ class DSBX_QA_Probe : Managed
 		{
 			DSBX_QA_HelloResp resp = new DSBX_QA_HelloResp();
 			bool parsed = serializer.ReadFromString(resp, data, parseErr);
-			if (!parsed)
+			if (!parsed || !resp.ok || resp.lease_ms <= 0)
 			{
 				RegisterFailure(false, 0);
 				return;
 			}
-			if (resp.lease_ms > 0)
-			{
-				m_LeaseMs = resp.lease_ms;
-			}
+			m_LeaseMs = resp.lease_ms;
 			m_FailCount = 0;
 			m_HadSuccess = true;
 			Log("hello accepted");
@@ -608,7 +969,7 @@ class DSBX_QA_Probe : Managed
 		}
 		DSBX_QA_PollResp pollResp = new DSBX_QA_PollResp();
 		bool pollParsed = serializer.ReadFromString(pollResp, data, parseErr);
-		if (!pollParsed || !pollResp.ops)
+		if (!pollParsed || !pollResp.ops || !IsFiniteF(pollResp.now_ms))
 		{
 			RegisterFailure(false, 0);
 			return;
@@ -617,6 +978,10 @@ class DSBX_QA_Probe : Managed
 		m_HadSuccess = true;
 		m_LastOkPollMs = now;
 		m_HasLastOk = true;
+		if (m_Jobs)
+		{
+			m_Jobs.CompleteDeferredEnds();
+		}
 		m_Ops = pollResp.ops;
 		m_BatchNowMs = pollResp.now_ms;
 		m_BatchRecvMs = now;
@@ -652,7 +1017,7 @@ class DSBX_QA_Probe : Managed
 		while (i < m_SendFailures)
 		{
 			gap = gap * 2.0;
-			i++;
+			i = i + 1;
 		}
 		m_SendNextMs = now + gap;
 	}
@@ -682,25 +1047,57 @@ class DSBX_QA_Probe : Managed
 			ResultFailed(now, false);
 			return;
 		}
-		if (kind == KIND_HELLO || kind == KIND_POLL)
+		if (kind == KIND_HELLO || kind == KIND_POLL || kind == KIND_KEEPALIVE)
 		{
 			RegisterFailure(true, 0);
 		}
 	}
 
-	void Tick()
+	void Tick(float timeslice)
 	{
 		if (m_ShutdownDone)
 		{
 			return;
 		}
 		m_Frame = m_Frame + 1;
+		m_DtSumMs = m_DtSumMs + timeslice * 1000.0;
 		float now = NowMs();
 		ApplyPendingPose();
 		Watchdog(now);
 		if (m_ShutdownDone)
 		{
 			return;
+		}
+		if (m_Jobs)
+		{
+			m_Jobs.TickJobs(timeslice, now);
+		}
+		if (m_Exts)
+		{
+			int ei = 0;
+			while (ei < m_Exts.Count())
+			{
+				m_Exts.Get(ei).OnTick(timeslice);
+				ei = ei + 1;
+			}
+		}
+		if (m_JobActive)
+		{
+			AdvanceJob(now);
+			if (m_JobActive)
+			{
+				if (m_Bucket.Count() == 0 && !m_ActiveCb && now >= m_KeepaliveNextMs)
+				{
+					m_KeepaliveNextMs = now + 500.0;
+					SendKeepalive();
+				}
+				return;
+			}
+			if (m_State != ST_PROCESS && m_Bucket.Count() > 0)
+			{
+				BeginSend();
+				return;
+			}
 		}
 		if (m_State == ST_WAIT)
 		{
@@ -742,6 +1139,15 @@ class DSBX_QA_Probe : Managed
 		m_State = ST_SEND;
 	}
 
+	bool IsF02Verb(string verb)
+	{
+		if (verb == "srv_read" || verb == "ground_query" || verb == "ambient_set" || verb == "ambient_read" || verb == "rpc_burst" || verb == "cam_pose_set" || verb == "cam_pose_read" || verb == "rpc_log_read")
+		{
+			return true;
+		}
+		return false;
+	}
+
 	void SendStep(float now)
 	{
 		if (m_ActiveCb)
@@ -766,7 +1172,6 @@ class DSBX_QA_Probe : Managed
 			ResultFailed(now, true);
 			return;
 		}
-		// Brief v1.3, §4.5: sin string.Replace, que trunca las cadenas largas (3730 -> 1443 B medido en dbg13).
 		string dupOld = "\"dup\":0";
 		string dupNew = "\"dup\":false";
 		if (res.dup == 1)
@@ -785,7 +1190,55 @@ class DSBX_QA_Probe : Managed
 		string bodyHead = body.Substring(0, dupPos);
 		string bodyRest = body.Substring(dupEnd, body.Length() - dupEnd);
 		body = bodyHead + dupNew + bodyRest;
+		string verbForRes = "";
+		if (m_ResultVerb.Contains(res.op_id))
+		{
+			verbForRes = m_ResultVerb.Get(res.op_id);
+		}
+		if (verbForRes != "" && !IsF02Verb(verbForRes) && body.Length() > DSBX_QA_WIRE_CAP)
+		{
+			DSBX_QA_Result sub = new DSBX_QA_Result();
+			sub.op_id = res.op_id;
+			sub.status = "error";
+			sub.reason = "result_too_large";
+			sub.dup = res.dup;
+			sub.recv_ms = res.recv_ms;
+			sub.done_ms = res.done_ms;
+			sub.frame_recv = res.frame_recv;
+			sub.frame_done = res.frame_done;
+			JsonSerializer subSer = new JsonSerializer();
+			string subBody;
+			bool subWritten = subSer.WriteToString(sub, false, subBody);
+			if (!subWritten)
+			{
+				ResultFailed(now, true);
+				return;
+			}
+			string subOld = "\"dup\":0";
+			string subNew = "\"dup\":false";
+			if (sub.dup == 1)
+			{
+				subOld = "\"dup\":1";
+				subNew = "\"dup\":true";
+			}
+			int subPos = subBody.IndexOf(subOld);
+			int subEnd = subPos + subOld.Length();
+			if (subPos < 0 || subBody.IndexOfFrom(subEnd, subOld) >= 0)
+			{
+				LogResultAbandoned(res.op_id, "dup_replace");
+				m_SendIndex = m_SendIndex + 1;
+				return;
+			}
+			string subHead = subBody.Substring(0, subPos);
+			string subRest = subBody.Substring(subEnd, subBody.Length() - subEnd);
+			body = subHead + subNew + subRest;
+			CachePut(sub);
+		}
 		DSBX_QA_Callback cb = AcquireCallback(KIND_RESULT);
+		if (!cb)
+		{
+			return;
+		}
 		m_Ctx.POST(cb, "result?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst, body);
 	}
 
@@ -830,7 +1283,7 @@ class DSBX_QA_Probe : Managed
 		while (m_CacheOrder.Count() > 1024)
 		{
 			string oldest = m_CacheOrder.Get(0);
-			m_CacheOrder.Remove(0);
+			m_CacheOrder.RemoveOrdered(0);
 			m_Cache.Remove(oldest);
 		}
 	}
@@ -874,10 +1327,372 @@ class DSBX_QA_Probe : Managed
 		}
 	}
 
+	bool GetStrArg(DSBX_QA_Args args, string key, out string value)
+	{
+		value = "";
+		if (!args || !args.sk || !args.sv)
+		{
+			return false;
+		}
+		int i = 0;
+		while (i < args.sk.Count())
+		{
+			if (args.sk.Get(i) == key)
+			{
+				value = args.sv.Get(i);
+				return true;
+			}
+			i = i + 1;
+		}
+		return false;
+	}
+
+	bool GetNumArg(DSBX_QA_Args args, string key, out float value)
+	{
+		value = 0.0;
+		if (!args || !args.nk || !args.nv)
+		{
+			return false;
+		}
+		int i = 0;
+		while (i < args.nk.Count())
+		{
+			if (args.nk.Get(i) == key)
+			{
+				value = args.nv.Get(i);
+				return true;
+			}
+			i = i + 1;
+		}
+		return false;
+	}
+
+	bool KeyListValid(array<string> keys)
+	{
+		int i = 0;
+		while (i < keys.Count())
+		{
+			if (keys.Get(i) == "")
+			{
+				return false;
+			}
+			int j = i + 1;
+			while (j < keys.Count())
+			{
+				if (keys.Get(j) == keys.Get(i))
+				{
+					return false;
+				}
+				j = j + 1;
+			}
+			i = i + 1;
+		}
+		return true;
+	}
+
+	bool KeyListsDisjoint(array<string> a, array<string> b)
+	{
+		int i = 0;
+		while (i < a.Count())
+		{
+			int j = 0;
+			while (j < b.Count())
+			{
+				if (a.Get(i) == b.Get(j))
+				{
+					return false;
+				}
+				j = j + 1;
+			}
+			i = i + 1;
+		}
+		return true;
+	}
+
+	bool ValidateGenericArgs(DSBX_QA_Args args)
+	{
+		if (!args)
+		{
+			return false;
+		}
+		if (!args.sk || !args.sv || !args.nk || !args.nv || !args.ncol || !args.ncell || !args.scol || !args.scell)
+		{
+			return false;
+		}
+		if (args.sk.Count() != args.sv.Count())
+		{
+			return false;
+		}
+		if (args.nk.Count() != args.nv.Count())
+		{
+			return false;
+		}
+		if (args.rows < 0)
+		{
+			return false;
+		}
+		if (args.ncell.Count() != args.rows * args.ncol.Count())
+		{
+			return false;
+		}
+		if (args.scell.Count() != args.rows * args.scol.Count())
+		{
+			return false;
+		}
+		if (args.rows > 0 && args.ncol.Count() + args.scol.Count() == 0)
+		{
+			return false;
+		}
+		if (!KeyListValid(args.sk))
+		{
+			return false;
+		}
+		if (!KeyListValid(args.nk))
+		{
+			return false;
+		}
+		if (!KeyListValid(args.ncol))
+		{
+			return false;
+		}
+		if (!KeyListValid(args.scol))
+		{
+			return false;
+		}
+		if (!KeyListsDisjoint(args.sk, args.nk))
+		{
+			return false;
+		}
+		if (!KeyListsDisjoint(args.ncol, args.scol))
+		{
+			return false;
+		}
+		int fi = 0;
+		while (fi < args.nv.Count())
+		{
+			if (!IsFiniteF(args.nv.Get(fi)))
+			{
+				return false;
+			}
+			fi = fi + 1;
+		}
+		int ci = 0;
+		while (ci < args.ncell.Count())
+		{
+			if (!IsFiniteF(args.ncell.Get(ci)))
+			{
+				return false;
+			}
+			ci = ci + 1;
+		}
+		string faultRaw;
+		if (GetStrArg(args, "qa_fault", faultRaw))
+		{
+			if (faultRaw.Length() != 24)
+			{
+				return false;
+			}
+			string allowed = "abcdefghijklmnopqrstuvwxyz0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+			int ai = 0;
+			while (ai < faultRaw.Length())
+			{
+				string ch = faultRaw.Substring(ai, 1);
+				if (allowed.IndexOf(ch) < 0)
+				{
+					return false;
+				}
+				ai = ai + 1;
+			}
+		}
+		return true;
+	}
+
+	void StripQaFault(DSBX_QA_Args args)
+	{
+		m_OpFault = "";
+		if (!args || !args.sk || !args.sv)
+		{
+			return;
+		}
+		int i = 0;
+		while (i < args.sk.Count())
+		{
+			if (args.sk.Get(i) == "qa_fault")
+			{
+				string raw = args.sv.Get(i);
+				args.sk.RemoveOrdered(i);
+				args.sv.RemoveOrdered(i);
+				while (raw.Length() > 0 && raw.Substring(raw.Length() - 1, 1) == "_")
+				{
+					raw = raw.Substring(0, raw.Length() - 1);
+				}
+				m_OpFault = raw;
+				return;
+			}
+			i = i + 1;
+		}
+	}
+
+	void HandleJobRead(DSBX_QA_Op op, DSBX_QA_Args args, float recvMs, int frameRecv)
+	{
+		string jobId;
+		float pageF;
+		if (!GetStrArg(args, "job", jobId) || !GetNumArg(args, "page_n", pageF) || !IsIntF(pageF))
+		{
+			FinishInstant(MakeResult(op, "rejected", "bad_args", recvMs, frameRecv));
+			return;
+		}
+		int pageN = (int)pageF;
+		DSBX_QA_Job job = m_Jobs.GetJob(jobId);
+		if (!job)
+		{
+			FinishInstant(MakeResult(op, "rejected", "unknown_job", recvMs, frameRecv));
+			return;
+		}
+		int rowsTotal = job.m_RowsTotal;
+		int pageSize = job.m_PageSize;
+		int pagesN = 0;
+		if (rowsTotal > 0)
+		{
+			pagesN = (rowsTotal + pageSize - 1) / pageSize;
+		}
+		if (pageN < 0 || (rowsTotal == 0 && pageN > 0) || (rowsTotal > 0 && pageN >= pagesN))
+		{
+			FinishInstant(MakeResult(op, "rejected", "bad_args", recvMs, frameRecv));
+			return;
+		}
+		int startRow = pageN * pageSize;
+		int endRow = startRow + pageSize;
+		if (endRow > rowsTotal)
+		{
+			endRow = rowsTotal;
+		}
+		DSBX_QA_Result res = MakeResult(op, "done", "", recvMs, frameRecv);
+		res.read.has.Insert("payload");
+		res.read.sk.Insert("job");
+		res.read.sk.Insert("state");
+		res.read.sk.Insert("reason");
+		res.read.sk.Insert("resource");
+		res.read.sv.Insert(job.m_JobId);
+		res.read.sv.Insert(job.m_State);
+		res.read.sv.Insert(job.m_Reason);
+		res.read.sv.Insert(job.m_Resource);
+		res.read.nk.Insert("page_n");
+		res.read.nk.Insert("pages_n");
+		res.read.nk.Insert("rows_total_n");
+		res.read.nk.Insert("start_tick_ms");
+		res.read.nk.Insert("end_tick_ms");
+		res.read.nk.Insert("onjobend_tick_ms");
+		res.read.nk.Insert("released_tick_ms");
+		res.read.nk.Insert("elapsed_dtsum_ms");
+		res.read.nv.Insert(pageN);
+		res.read.nv.Insert(pagesN);
+		res.read.nv.Insert(rowsTotal);
+		res.read.nv.Insert(job.m_StartTickMs);
+		res.read.nv.Insert(job.m_EndTickMs);
+		res.read.nv.Insert(job.m_OnJobEndTickMs);
+		res.read.nv.Insert(job.m_ReleasedTickMs);
+		res.read.nv.Insert(job.m_ElapsedDtsumMs);
+		int nc = 0;
+		while (nc < job.m_Ncol.Count())
+		{
+			res.read.ncol.Insert(job.m_Ncol.Get(nc));
+			nc = nc + 1;
+		}
+		int sc = 0;
+		while (sc < job.m_Scol.Count())
+		{
+			res.read.scol.Insert(job.m_Scol.Get(sc));
+			sc = sc + 1;
+		}
+		res.read.rows = endRow - startRow;
+		int r = startRow;
+		while (r < endRow)
+		{
+			int cc = 0;
+			while (cc < job.m_Ncol.Count())
+			{
+				res.read.ncell.Insert(job.m_Ncell.Get(r * job.m_Ncol.Count() + cc));
+				cc = cc + 1;
+			}
+			int dd = 0;
+			while (dd < job.m_Scol.Count())
+			{
+				res.read.scell.Insert(job.m_Scell.Get(r * job.m_Scol.Count() + dd));
+				dd = dd + 1;
+			}
+			r = r + 1;
+		}
+		FinishInstant(res);
+	}
+
+	void HandleJobStop(DSBX_QA_Op op, DSBX_QA_Args args, float recvMs, int frameRecv)
+	{
+		string jobId;
+		if (!GetStrArg(args, "job", jobId))
+		{
+			FinishInstant(MakeResult(op, "rejected", "bad_args", recvMs, frameRecv));
+			return;
+		}
+		DSBX_QA_Job job = m_Jobs.GetJob(jobId);
+		if (!job)
+		{
+			FinishInstant(MakeResult(op, "rejected", "unknown_job", recvMs, frameRecv));
+			return;
+		}
+		if (job.m_State == "running")
+		{
+			m_Jobs.EndJob(jobId, "stopped", "");
+			job = m_Jobs.GetJob(jobId);
+		}
+		DSBX_QA_Result res = MakeResult(op, "done", "", recvMs, frameRecv);
+		res.read.has.Insert("payload");
+		res.read.sk.Insert("job");
+		res.read.sk.Insert("state");
+		res.read.sk.Insert("reason");
+		res.read.sv.Insert(job.m_JobId);
+		res.read.sv.Insert(job.m_State);
+		res.read.sv.Insert(job.m_Reason);
+		res.read.nk.Insert("rows_total_n");
+		res.read.nv.Insert(job.m_RowsTotal);
+		FinishInstant(res);
+	}
+
+	void HandleJobFree(DSBX_QA_Op op, DSBX_QA_Args args, float recvMs, int frameRecv)
+	{
+		string jobId;
+		if (!GetStrArg(args, "job", jobId))
+		{
+			FinishInstant(MakeResult(op, "rejected", "bad_args", recvMs, frameRecv));
+			return;
+		}
+		DSBX_QA_Job job = m_Jobs.GetJob(jobId);
+		if (!job)
+		{
+			FinishInstant(MakeResult(op, "rejected", "unknown_job", recvMs, frameRecv));
+			return;
+		}
+		if (job.m_State == "running")
+		{
+			FinishInstant(MakeResult(op, "rejected", "busy", recvMs, frameRecv));
+			return;
+		}
+		m_Jobs.FreeJob(jobId);
+		DSBX_QA_Result res = MakeResult(op, "done", "", recvMs, frameRecv);
+		res.read.has.Insert("payload");
+		res.read.sk.Insert("job");
+		res.read.sk.Insert("freed");
+		res.read.sv.Insert(jobId);
+		res.read.sv.Insert("1");
+		FinishInstant(res);
+	}
+
 	void StartOp(DSBX_QA_Op op, float now)
 	{
 		float recvMs = now;
 		int frameRecv = m_Frame;
+		m_ResultVerb.Set(op.op_id, op.verb);
+		m_OpFault = "";
 		if (op.inst != m_Inst)
 		{
 			FinishInstant(MakeResult(op, "rejected", "stale_instance", recvMs, frameRecv));
@@ -908,12 +1723,53 @@ class DSBX_QA_Probe : Managed
 			return;
 		}
 		string verb = op.verb;
+		DSBX_QA_Args args = op.args;
+		if (!IsF02Verb(verb))
+		{
+			if (!args || !ValidateGenericArgs(args))
+			{
+				FinishInstant(MakeResult(op, "rejected", "bad_args", recvMs, frameRecv));
+				return;
+			}
+			StripQaFault(args);
+			if (verb == "job_read")
+			{
+				HandleJobRead(op, args, recvMs, frameRecv);
+				return;
+			}
+			if (verb == "job_stop")
+			{
+				HandleJobStop(op, args, recvMs, frameRecv);
+				return;
+			}
+			if (verb == "job_free")
+			{
+				HandleJobFree(op, args, recvMs, frameRecv);
+				return;
+			}
+			int ei = 0;
+			while (ei < m_Exts.Count())
+			{
+				DSBX_QA_Ext ext = m_Exts.Get(ei);
+				if (ext.Handles(verb, m_Role))
+				{
+					DSBX_QA_Result resExt = MakeResult(op, "done", "", recvMs, frameRecv);
+					ext.OnStartOp(op, args, resExt);
+					resExt.done_ms = NowMs();
+					resExt.frame_done = m_Frame;
+					FinishInstant(resExt);
+					return;
+				}
+				ei = ei + 1;
+			}
+			FinishInstant(MakeResult(op, "rejected", "unknown_verb", recvMs, frameRecv));
+			return;
+		}
 		if (!VerbForRole(verb))
 		{
 			FinishInstant(MakeResult(op, "rejected", "unknown_verb", recvMs, frameRecv));
 			return;
 		}
-		DSBX_QA_Args args = op.args;
 		if (!args || !args.pos || args.pos.Count() != 3 || !args.ypr || args.ypr.Count() != 3)
 		{
 			FinishInstant(MakeResult(op, "rejected", "bad_args", recvMs, frameRecv));
@@ -982,13 +1838,18 @@ class DSBX_QA_Probe : Managed
 				dst.lease_age_ms = src.lease_age_ms;
 				dst.decision = src.decision;
 				resLog.read.rpc_log.Insert(dst);
-				li++;
+				li = li + 1;
 			}
 			FinishInstant(resLog);
 			return;
 		}
 		if (verb == "ambient_set")
 		{
+			if (!LeaseOk())
+			{
+				FinishInstant(MakeResult(op, "error", "lease_expired", recvMs, frameRecv));
+				return;
+			}
 			Weather weatherSet = g_Game.GetWeather();
 			if (!weatherSet)
 			{
@@ -1008,10 +1869,16 @@ class DSBX_QA_Probe : Managed
 			m_JobFrameRecv = frameRecv;
 			m_JobStartMs = now;
 			m_JobFogTarget = args.fog;
+			m_KeepaliveNextMs = now + 500.0;
 			return;
 		}
 		if (verb == "cam_pose_set")
 		{
+			if (!LeaseOk())
+			{
+				FinishInstant(MakeResult(op, "error", "lease_expired", recvMs, frameRecv));
+				return;
+			}
 			vector wantPos;
 			wantPos[0] = args.pos.Get(0);
 			wantPos[1] = args.pos.Get(1);
@@ -1033,6 +1900,7 @@ class DSBX_QA_Probe : Managed
 			m_JobRecvMs = recvMs;
 			m_JobFrameRecv = frameRecv;
 			m_JobStartMs = now;
+			m_KeepaliveNextMs = now + 500.0;
 			return;
 		}
 		if (verb == "rpc_burst")
@@ -1049,6 +1917,7 @@ class DSBX_QA_Probe : Managed
 			m_JobFrameRecv = frameRecv;
 			m_JobStartMs = now;
 			m_BurstIndex = 0;
+			m_KeepaliveNextMs = now + 500.0;
 			return;
 		}
 		FinishInstant(MakeResult(op, "rejected", "unknown_verb", recvMs, frameRecv));
@@ -1169,11 +2038,18 @@ class DSBX_QA_Probe : Managed
 				{
 					return;
 				}
+				if (!LeaseOk())
+				{
+					AddEmitEntry(op.op_id, args.seq0 + m_BurstIndex, "blocked_lease");
+					FinishJob(MakeResult(op, "error", "lease_expired", m_JobRecvMs, m_JobFrameRecv));
+					return;
+				}
 				if (!SendCamRpc(args, m_BurstIndex))
 				{
 					FinishJob(MakeResult(op, "error", "rpc_write_failed", m_JobRecvMs, m_JobFrameRecv));
 					return;
 				}
+				AddEmitEntry(op.op_id, args.seq0 + m_BurstIndex, "sent");
 				m_BurstIndex = m_BurstIndex + 1;
 			}
 			FinishJob(MakeResult(op, "done", "", m_JobRecvMs, m_JobFrameRecv));
@@ -1214,16 +2090,32 @@ class DSBX_QA_Probe : Managed
 		return true;
 	}
 
-	static void OnCamRpc(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
+	static void OnAnyRpc(PlayerIdentity sender, Object target, int rpc_type, ParamsReadContext ctx)
 	{
-		if (rpc_type != DSBX_QA_RPC_CAM)
+		if (rpc_type == DSBX_QA_RPC_CAM)
 		{
+			if (s_ClientProbe)
+			{
+				s_ClientProbe.HandleCamRpc(ctx);
+			}
 			return;
 		}
-		DSBX_QA_Probe probe = s_ClientProbe;
-		if (probe)
+		if (rpc_type >= 26102800 && rpc_type <= 26102889)
 		{
-			probe.HandleCamRpc(ctx);
+			DSBX_QA_Probe probe = s_ClientProbe;
+			if (!probe)
+			{
+				probe = s_ServerProbe;
+			}
+			if (probe)
+			{
+				int idx = (rpc_type - 26102800) / 10;
+				if (idx >= 0 && idx < probe.m_Exts.Count())
+				{
+					probe.m_Exts.Get(idx).OnRpc(sender, target, rpc_type, ctx);
+				}
+			}
+			return;
 		}
 	}
 
@@ -1295,7 +2187,7 @@ class DSBX_QA_Probe : Managed
 		m_RpcLog.Insert(entry);
 		while (m_RpcLog.Count() > 512)
 		{
-			m_RpcLog.Remove(0);
+			m_RpcLog.RemoveOrdered(0);
 		}
 	}
 
@@ -1326,3 +2218,5 @@ class DSBX_QA_Probe : Managed
 		m_Camera.SetOrientation(ypr);
 	}
 }
+
+

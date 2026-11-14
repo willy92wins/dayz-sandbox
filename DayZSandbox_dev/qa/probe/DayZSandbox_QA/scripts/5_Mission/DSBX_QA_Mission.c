@@ -13,7 +13,7 @@ modded class MissionServer
 		super.OnUpdate(timeslice);
 		if (m_DsbxQaProbe)
 		{
-			m_DsbxQaProbe.Tick();
+			m_DsbxQaProbe.Tick(timeslice);
 		}
 	}
 }
@@ -33,7 +33,7 @@ modded class MissionGameplay
 		super.OnUpdate(timeslice);
 		if (m_DsbxQaProbe)
 		{
-			m_DsbxQaProbe.Tick();
+			m_DsbxQaProbe.Tick(timeslice);
 		}
 	}
 }
