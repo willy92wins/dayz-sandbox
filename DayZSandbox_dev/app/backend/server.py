@@ -21,6 +21,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from app.backend.store import Store  # noqa: E402
 from app.backend.lease import Leases  # noqa: E402
+from app.backend.bridge import Bridge  # noqa: E402
 
 MAX_BODY = 1024 * 1024
 CLIENT_QUEUE = 1000
@@ -39,6 +40,7 @@ STATUS = {
     "bad_op": 422, "invalid": 422, "bad_base": 422,
     "unauthorized": 401, "forbidden": 403, "author_mismatch": 403, "csrf_failed": 403,
     "bad_request": 400, "not_found": 404, "internal": 500,
+    "queue_full": 409, "wire_cap_exceeded": 500,
 }
 
 
@@ -54,9 +56,13 @@ class Backend:
     """Une el almacén con HTTP: credenciales, gate (pausa y toma), cola de órdenes y SSE."""
 
     def __init__(self, store, human_key, ai_key, port=0, horizon=1000, log=None, clock=time.monotonic,
-                 web_root=None):
+                 web_root=None, bridge_port=None, peer_key=None, bridge_kwargs=None):
         if not human_key or not ai_key or human_key == ai_key:
             raise ValueError("human_key y ai_key deben ser distintas y no vacías")
+        if peer_key is not None and (not peer_key or peer_key == human_key or peer_key == ai_key):
+            raise ValueError("human_key, ai_key y peer_key deben ser distintas y no vacías")
+        if bridge_port is not None and not peer_key:
+            raise ValueError("human_key, ai_key y peer_key deben ser distintas y no vacías")
         self.store = store
         self.clock = clock
         self.web_root = web_root
@@ -83,6 +89,10 @@ class Backend:
         self.httpd.daemon_threads = True
         self.httpd.block_on_close = False
         self.httpd.backend = self
+        self.bridge = None
+        if bridge_port is not None:
+            self.bridge = Bridge(self, peer_key, port=bridge_port, clock=self.clock,
+                                 log=self.log, **(bridge_kwargs or {}))
 
     @property
     def port(self):
@@ -92,6 +102,8 @@ class Backend:
         self.httpd.serve_forever(poll_interval=0.1)
 
     def shutdown(self):
+        if self.bridge is not None:
+            self.bridge.shutdown()
         self.httpd.shutdown()
         with self.store.lock:
             for q in list(self.clients):
@@ -226,15 +238,34 @@ class Backend:
             self._emit("ai.state", {"paused": paused})
         return {"ok": True, "paused": paused}
 
+    def set_op_state(self, op_id, state, origin, reason=None):
+        with self.store.lock:
+            op = self.ops[op_id]
+            op["state"] = state
+            op["origin"] = origin
+            op["reason"] = reason
+            op["at_ms"] = now_ms()
+            self.op_mono[op_id] = self.clock()
+            self._emit("op.state", dict(op))
+            return dict(op)
+
     def apply(self, doc_id, rev, hash_):
         with self.store.lock:
             frozen = self.store.freeze(doc_id, rev, hash_)
             if not frozen.get("ok"):
                 return frozen
+            if self.bridge is not None and self.bridge.live_scene_count() >= self.bridge.queue_max:
+                return fail("queue_full", "Cola del bridge llena")
             self._op_n += 1
             op = {"op_id": "op-%d" % self._op_n, "state": "pendiente",
                   "rev": frozen["rev"], "hash": frozen["hash"], "at_ms": now_ms(),
-                  "origin": "backend"}
+                  "origin": "backend", "reason": None}
+            if self.bridge is not None:
+                ok, info = self.bridge.enqueue_scene_apply(op["op_id"], doc_id,
+                                                           frozen["rev"], frozen["hash"])
+                if not ok:
+                    self._op_n -= 1
+                    return fail(info, "La orden no cabe en el cable")
             self.ops[op["op_id"]] = op
             self.op_mono[op["op_id"]] = self.clock()
             self._emit("op.state", dict(op))
@@ -649,12 +680,19 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
 
-def load_config(path):
+def load_config(path, persist_peer_key=False):
+    """Lee backend.json y completa lo que falte.
+
+    Un fichero nuevo se escribe con todas sus claves. Uno ya existente solo se reescribe si le falta
+    `human_key` o `ai_key`, o si le falta `peer_key` y `persist_peer_key` es verdadero, que es lo
+    que pide `main`: así `peer_key` queda guardada desde el primer arranque del backend con bridge
+    (brief F1b-bridge §2.1) y la puede leer el mod falso con `--config`.
+    """
     cfg = {}
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
             cfg = json.load(f)
-    defaults = {"port": 8765, "scene": "data/scene.json", "catalog": "fixtures/catalog-m1.json",
+    defaults = {"port": 8765, "bridge_port": 8766, "scene": "data/scene.json", "catalog": "fixtures/catalog-m1.json",
                 "web": "app/web/dist"}
     changed = not os.path.exists(path)
     for k, v in defaults.items():
@@ -662,6 +700,12 @@ def load_config(path):
     for k in ("human_key", "ai_key"):
         if not cfg.get(k):
             cfg[k] = secrets.token_urlsafe(32)
+            changed = True
+    if not cfg.get("peer_key"):
+        cfg["peer_key"] = secrets.token_urlsafe(32)
+        while cfg["peer_key"] in (cfg.get("human_key"), cfg.get("ai_key")):
+            cfg["peer_key"] = secrets.token_urlsafe(32)
+        if persist_peer_key:
             changed = True
     if changed:
         tmp = path + ".tmp"
@@ -678,8 +722,16 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Backend local de Sandbox (F1a)")
     ap.add_argument("--config", required=True)
     ap.add_argument("--port", type=int)
+    ap.add_argument("--bridge-port", type=int,
+                    help="puerto del bridge dsbx1; con --port 0 y sin este, también efímero")
     args = ap.parse_args(argv)
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, persist_peer_key=True)
+    if args.bridge_port is not None:
+        bridge_port = args.bridge_port
+    elif args.port == 0:
+        bridge_port = 0  # puertos efímeros: no choca con un backend que ya esté escuchando
+    else:
+        bridge_port = cfg.get("bridge_port")
     try:
         with open(cfg["catalog"], encoding="utf-8") as f:
             catalog = json.load(f)
@@ -692,11 +744,14 @@ def main(argv=None):
     try:
         backend = Backend(store, cfg["human_key"], cfg["ai_key"],
                           port=args.port if args.port is not None else cfg["port"],
-                          web_root=cfg.get("web"))
+                          web_root=cfg.get("web"), bridge_port=bridge_port,
+                          peer_key=cfg.get("peer_key"))
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return 2
     print("Escuchando en http://127.0.0.1:%d" % backend.port, flush=True)
+    if backend.bridge is not None:
+        print("Bridge dsbx1 en 127.0.0.1:%d" % backend.bridge.port, flush=True)
     try:
         backend.serve_forever()
     except KeyboardInterrupt:
