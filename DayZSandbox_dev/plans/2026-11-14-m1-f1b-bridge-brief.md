@@ -1,6 +1,6 @@
 # F1b-bridge sin juego: protocolo `dsbx1`, lado del backend y mod falso
 
-2026-11-14 · tarea **F1b-bridge** (subfase offline de F1b), rama `claude/f1b-bridge` (apilada sobre `claude/f1b-web`, que lleva los arreglos de la revisión del código del PR #7) · spec de implementación (R25) de lo que queda de F1b tras F1b-web: [plan v2](2026-10-26-m1-cine-v2.md) F1 (líneas 88, 89 y 91), decisiones #2, #3, #8, #9, #10, #22, #23 y #24 · contrato: `DayZSandbox_dev/product-spec.md`, D2 (línea 88), E1 (99) y E3 (101) · v1.1, tras la ronda 1 de Sol (§12).
+2026-11-14 · tarea **F1b-bridge** (subfase offline de F1b), rama `claude/f1b-bridge` (apilada sobre `claude/f1b-web`, que lleva los arreglos de la revisión del código del PR #7) · spec de implementación (R25) de lo que queda de F1b tras F1b-web: [plan v2](2026-10-26-m1-cine-v2.md) F1 (líneas 88, 89 y 91), decisiones #2, #3, #8, #9, #10, #22, #23 y #24 · contrato: `DayZSandbox_dev/product-spec.md`, D2 (línea 88), E1 (99) y E3 (101) · v1.2, tras la ronda 2 de Sol (§12).
 
 **Por qué ahora.** S-puente pasó en retail (PR #6, `origin/claude/f0.2-sonda` `9103b5b`). En `evidence/m1/S-puente/retail-20261114T151150Z/verdict.json` (líneas 84-98): `PASA` 16/16, `p50_ms` 200,8, `p95_ms` 603,1, `max_ms` 8679 (un caso suelto) y 0 timeouts; con `lease_ms` = 3000, la ventana acepta hasta 2756 ms y rechaza desde 3037 ms. Guillermo aprobó F1b-bridge el 2026-11-14 en la sesión principal («Sí, arráncalo»).
 
@@ -55,7 +55,8 @@ Como F1b-web §1: Python 3.14 en `C:\Python314\python.exe`, **solo biblioteca es
 - **`session`**: 16 hex (`secrets.token_hex(8)`), nueva en cada arranque del backend; la da `/hello`. Todo `/poll` y `/result` la lleva; si no es la actual → 409 `{"ok": false, "error": "hello_required"}` y el peer vuelve a presentarse.
 - **`inst`**: 32 hex por arranque de cada peer (en el mod real, el UUID sin guiones construido con `Substring`, nunca con `Replace`: F0.3-0 v4.5, línea 118).
 - **`epoch`** del mundo (#10): 32 hex que genera el peer servidor al arrancar la misión y que no cambia si solo se reinicia el backend o se recrea el peer. El peer cliente lo conoce por el servidor (en el mod real, sincronizado; en el falso, compartido) y lo declara en su `hello`.
-- **Generación de conexión `conn`** del peer servidor, un entero del backend. Sube cada vez que el servidor se presenta y cada vez que el backend lo da por perdido (§2.5.3). **Toda orden nace atada a la `conn` vigente y solo se entrega dentro de ella**: reconectar nunca ejecuta la cola vieja (E1, plan línea 174).
+- **Generación de conexión `conn`**, un entero del backend por peer. Sube cada vez que ese peer se presenta y cada vez que el backend lo da por perdido (§2.5.3). **Viaja en el protocolo** (corrige B2-01): la devuelve `/hello`, cada `/poll` la lleva y cada orden la lleva. Así, un poll retenido de una conexión anterior se distingue de uno nuevo aunque la `session` y la `inst` sean las mismas.
+- **Toda orden nace atada a la `conn` vigente del servidor y solo se entrega dentro de ella**: reconectar nunca ejecuta la cola vieja (E1, plan línea 174).
 - **Identidad de una orden: el par `(session, op_id)`** (corrige H1 de Sol, §2.8). `op_id` es el de la cola de la API (`op-<n>`, `server.py:235`) o, para las lecturas internas, `rd-<n>`. El contador vuelve a 1 en cada arranque del backend, así que **ninguna caché ni ningún registro puede indexar por `op_id` solo**.
 
 ### 2.3 Rutas
@@ -64,17 +65,17 @@ Todas con `?key=`. Cuerpos JSON compactos; toda respuesta lleva `ok`.
 
 | Ruta | Quién | Petición | Respuesta 200 |
 |---|---|---|---|
-| `POST /hello` | los dos | `{proto: "dsbx1", peer: "server"\|"client", inst, epoch, mod_ver, build: "retail"\|"diag"}`; el servidor añade `map`, `world_size`, `modset` (lista de nombres) y `actor_engine` (`"expansion"`\|`"none"`) | `{ok: true, session, lease_ms: 3000, hold_ms: 2000, wire_cap: 3500}` |
-| `GET /poll?peer=&inst=&session=[&deliver=0]` | los dos | — | `{ok: true, now_ms, ops: []}` o con una orden |
+| `POST /hello` | los dos | `{proto: "dsbx1", peer: "server"\|"client", inst, epoch, mod_ver, build: "retail"\|"diag"}`; el servidor añade `map`, `world_size`, `modset` (lista de nombres) y `actor_engine` (`"expansion"`\|`"none"`) | `{ok: true, session, conn, lease_ms: 3000, hold_ms: 2000, wire_cap: 3500}` |
+| `GET /poll?peer=&inst=&session=&conn=[&deliver=0]` | los dos | — | `{ok: true, now_ms, ops: []}` o con una orden |
 | `POST /result?peer=&inst=&session=` | los dos | `{op_id, session, epoch, status: "done"\|"rejected"\|"error", reason, dup, read}` | `{ok: true}` |
 | `POST /catalog?peer=server&inst=&session=` | servidor | una página, §5 | `{ok: true, have, pages}` y, con la última, `complete: true` y `sha256` |
 
-- **Orden**: `{op_id, session, epoch, inst, verb, args, issued_ms, ttl_ms}`, con `issued_ms` y `now_ms` en milisegundos del reloj monotónico del backend.
+- **Orden**: `{op_id, session, conn, epoch, inst, verb, args, issued_ms, ttl_ms}`, con `issued_ms` y `now_ms` en milisegundos del reloj monotónico del backend.
 - **Errores** con `{ok: false, error}`:
   - 400 `bad_request` (forma o tipos);
   - 401 `bad_key`;
   - 409 `proto_mismatch` (hello con otro `proto`);
-  - 409 `hello_required` (`session` o `inst` que no son los registrados, o una conexión que el backend dio por perdida);
+  - 409 `hello_required` (`session`, `inst` o `conn` que no son las vigentes, también la de una conexión que el backend dio por perdida);
   - 409 `unknown_op` (resultado de una orden que no existe en esta sesión);
   - 409 `bad_catalog`;
   - 413 `too_large`;
@@ -90,7 +91,11 @@ Es el contrato del mod falso ahora y del mod real después.
    - Un poll vale solo con `ok` `true`, `now_ms` finito y `ops` lista de 0 o 1 órdenes bien formadas.
    - Un acuse vale solo con `ok` presente y `true`.
 2. **Una orden en curso** (corrige B-03). Mientras ejecuta una orden o tiene un resultado sin acusar, el peer solo manda `/poll?deliver=0`, uno cada 500 ms, uno en vuelo como mucho, y nunca un poll entregador. Primero se envían los resultados pendientes; después vuelve el poll entregador (F0.3-0 v4.5, líneas 119 y 623).
-3. **Plazo local** (corrige B-01). Al recibir una orden, el peer fija `plazo_local = instante de recepción + (ttl_ms − (now_ms − issued_ms)) − 250 ms`, en su reloj local. El margen cubre el tránsito; el `now_ms` es el del mismo poll.
+3. **Plazo local** (corrige B-01). Al recibir una orden, el peer fija `plazo_local = t_envío + (ttl_ms − (now_ms − issued_ms)) − 100 ms`, en su reloj local:
+   - `t_envío` es el instante local en que **mandó** el poll que la trajo;
+   - `now_ms` es el de la respuesta de ese mismo poll.
+
+   El backend genera la respuesta después de que el peer manda la petición, así que el instante local de `now_ms` es ≥ `t_envío`. Por eso `t_envío` + lo que queda es ≤ el plazo real, haya el tránsito o la espera que haya. Los 100 ms cubren la duración de un efecto ya empezado.
 4. **Primero, la deduplicación** (corrige H1, H2, B-03 y B-04). La caché, indexada por `(session, op_id)`, guarda tanto las órdenes **en curso** como los resultados (`done`, `rejected` y `error`).
    - Una orden repetida que ya está en curso se ignora: no se ejecuta otra vez y el resultado lo dará la primera.
    - Una repetida ya terminada devuelve el resultado guardado con `dup: true`, sin efecto.
@@ -101,6 +106,7 @@ Es el contrato del mod falso ahora y del mod real después.
 5. **Comprobaciones de una orden nueva**, en este orden, cada una con su `rejected/<motivo>` y sin efecto:
    - `order.session` es la actual (`stale_session`);
    - `order.inst` es el propio (`stale_inst`);
+   - `order.conn` es la de su presentación vigente (`stale_conn`);
    - `order.epoch` es el del mundo que conoce (`stale_epoch`);
    - todavía no ha pasado `plazo_local` (`expired`).
 6. **Antes de cada efecto** (corrige H3, B-01 y B-05), el peer comprueba dos cosas:
@@ -135,7 +141,7 @@ Es el contrato del mod falso ahora y del mod real después.
 
 ### 2.6 Constantes
 
-`WIRE_CAP` 3500 · `lease_ms` 3000 · `hold_ms` 2000 · mantenimiento cada 500 ms · margen del plazo local 250 ms · retención extra de la caché 1 s · `retry_ms` 2000 · `ttl_ms` 10000 · `queue_max` 32 · caché 1024 · barrido cada 250 ms · reintento de la lectura del mundo 1, 2, 4 y 8 s (y después cada 8 s). Todas, salvo `WIRE_CAP`, son parámetros de `Bridge(...)` y del mod falso, para que las pruebas las acorten.
+`WIRE_CAP` 3500 · `lease_ms` 3000 · `hold_ms` 2000 · mantenimiento cada 500 ms · margen del plazo local 100 ms · retención extra de la caché 1 s · `retry_ms` 2000 · `ttl_ms` 10000 · `queue_max` 32 · caché 1024 · barrido cada 250 ms · reintento de la lectura del mundo 1, 2, 4 y 8 s (y después cada 8 s). Todas, salvo `WIRE_CAP`, son parámetros de `Bridge(...)` y del mod falso, para que las pruebas las acorten.
 
 ### 2.7 Validez de un resultado
 
@@ -143,9 +149,9 @@ Un resultado vale solo si:
 - su `session` es la actual;
 - su `epoch` es el de la `conn` de la orden;
 - su `status` es uno de los tres;
-- su `read`, cuando el verbo lo pide, tiene la forma de §4.
+- con `status` `done`, su `read` tiene la forma de §4 cuando el verbo lo pide.
 
-Si no vale → 400 `bad_request`, y la orden no cambia.
+Un `rejected` o un `error` pueden llevar el `read` vacío (`{}`), como el sustituto `error/result_too_large` (§2.4.7, corrige B2-04). Si no vale → 400 `bad_request`, y la orden no cambia.
 
 ### 2.8 Qué corrige respecto al bridge QA
 
@@ -179,12 +185,19 @@ Cada transición pasa por un único método nuevo del `Backend`, `set_op_state(o
 | `aplicado` | `fallido` | el predicado no se cumple | `servidor` | `lectura_no_cumple` |
 | `ejecutando` o `parcial` | `fallido` | **primer** resultado `rejected` (el peer no tocó nada) | `servidor` | el motivo del peer |
 | `ejecutando` | `parcial` | primer resultado `error` (hubo algún efecto) | `servidor` | el motivo del peer |
+| `parcial` | `parcial` | primer resultado `error`, tardío: se registra, consume el primer resultado y se emite `op.state` con el motivo nuevo (corrige B2-03) | `servidor` | el motivo del peer |
 | `ejecutando` | `parcial` | vence su TTL sin resultado | `backend` | `sin_resultado` |
 | `ejecutando` | `parcial` | cambia la `conn` (§2.5.3) | `backend` | `conexion_perdida` o `mundo_reiniciado` |
-| `parcial` | `observado` | una lectura válida del mundo (§4) muestra su generación | `servidor` | `reconciliada` |
+| `parcial` | `observado` | una lectura válida del mundo (§4) muestra su generación y cumple el predicado completo de su verbo | `servidor` | `reconciliada` |
+| `parcial` | `fallido` | una lectura válida muestra su `(session, op_id)` pero no cumple el predicado (otra `rev` u otro `hash`) | `servidor` | `lectura_no_cumple` |
 
 - **Nunca hacia atrás**: ninguna orden vuelve a `pendiente`, y una orden entregada nunca pasa a «no ocurrió» por un plazo (#23). Desde `ejecutando`, sin respuesta del peer, solo cabe `parcial`.
-- **Solo el peer, con su primer resultado, puede llevar una `parcial` a `fallido`**: `rejected` significa por contrato que no hubo efecto (§2.4.6).
+- **Solo el peer, con su resultado o con una lectura del mundo, puede llevar una `parcial` a `fallido`**, nunca un plazo, y solo de tres maneras (corrige B2-05):
+  - un primer resultado `rejected`, que por contrato significa que no hubo efecto (§2.4.6);
+  - un primer resultado `done` cuyo `read` no cumple el predicado;
+  - una lectura válida que muestra la orden con otra `rev` u otro `hash`.
+
+  Las tres son la misma regla, «la lectura no cumple», por dos vías.
 - `observado` y `fallido` son terminales. `parcial` solo sale por un primer resultado tardío o por reconciliación.
 - `aplicado` y `observado` llegan en el mismo resultado, como dos eventos `op.state` en ese orden.
 
@@ -206,7 +219,11 @@ Cada transición pasa por un único método nuevo del `Backend`, `set_op_state(o
   - `read.epoch` es el `epoch` con el que se presentó el servidor.
 
   Cualquier otra cosa deja al servidor sin reconciliar: un `error`, un `rejected`, un TTL vencido, una lectura incompleta o de otro `epoch`. Mientras tanto, el `state.read` se repite a los 1, 2, 4 y 8 s, y después cada 8 s.
-- **Con una lectura válida**, el backend guarda el estado del mundo y queda reconciliado. Además, toda orden `parcial` de esta sesión cuya `(session, op_id)` aparezca en `read.generation` y cuyo `epoch` coincida pasa a `observado/reconciliada`.
+- **Con una lectura válida**, el backend guarda el estado del mundo y queda reconciliado. Además, para toda orden `parcial` de esta sesión cuya `(session, op_id)` aparezca en `read.generation`, aplica **el mismo predicado completo que la vía directa** (§3.2: `epoch` de su `conn`, y `session`, `op_id`, `rev` y `hash` de la orden; corrige B2-02):
+  - si se cumple, pasa a `observado/reconciliada`;
+  - si no, a `fallido/lectura_no_cumple`.
+
+  Una misma lectura nunca da `observado` por una vía y `fallido` por la otra.
 - **Recuperación de lo `parcial`** (corrige B-08): cada vez que una orden pasa a `parcial`, y mientras quede alguna `parcial` con la `conn` viva, se encola un `state.read`, como mucho uno pendiente a la vez, con el mismo calendario de reintentos. Es el «parcial hasta reconciliar» de D2 (plan línea 170). Una orden `parcial` de un mundo anterior (`epoch` distinto) no se recupera con el mundo nuevo: #10 invalida sus referencias (plan línea 32) y se queda `parcial/mundo_reiniciado`.
 - **Peer cliente**: está «en el mundo» solo si su `epoch` es el del servidor reconciliado. En F1b-bridge no recibe órdenes.
 - **Tras reiniciar el backend**, la cola de la API se pierde, como en F1a: la primera lectura válida fija la base de la sesión nueva.
@@ -229,6 +246,7 @@ Cada transición pasa por un único método nuevo del `Backend`, `set_op_state(o
   - perder el próximo resultado o el próximo acuse;
   - cortar los polls de un peer durante N ms;
   - un trabajo lento de N ms antes o después del primer paso, con o sin polls de mantenimiento;
+  - retrasar N ms el procesado de la respuesta de un poll, para simular tránsito (B-01);
   - `restart_peer(rol)`: `inst` y caché nuevas, **mismo `epoch` y misma generación** (el peer se recrea y el mundo sigue);
   - `restart_mission()`: `epoch`, `inst` y caché nuevos, y un mundo vacío (generación `null`);
   - responder a `state.read` con `error`, con un `epoch` viejo o con un `read` incompleto;
@@ -256,14 +274,15 @@ Gate: el de F1b-web §7, con las pruebas nuevas dentro de la suite y el arnés E
 | BR12 misión reiniciada | `restart_mission()` con una orden `ejecutando` y otra `pendiente`: la primera → `parcial/mundo_reiniciado` y la segunda → `fallido/mundo_reiniciado`; ninguna se ejecuta en el mundo nuevo (efectos en el mundo nuevo = 0) y una orden creada tras reconciliar sí se ejecuta | Cliente con otro `epoch` → fuera del mundo; orden con `epoch` viejo → `rejected/stale_epoch`; la `parcial` del mundo viejo no pasa a `observado` con la lectura del nuevo |
 | BR13 reconciliar antes de autorizar | Tras el hello del servidor, el primer `scene.apply` se entrega solo después de una lectura válida | `state.read` con `error`, con un `epoch` viejo, con un `read` incompleto o de una `inst` anterior → no se entrega ningún `scene.apply` y la lectura se repite (X3 r) |
 | BR14 cola acotada | 32 órdenes vivas → la 33.ª `apply` → 409 `queue_full`, sin orden ni evento | — |
-| BR15 `WIRE_CAP` | Una página de catálogo de 3500 B entra | Una petición de 3501 B → 413 sin leer el cuerpo; un resultado que pasaría del tope → `error/result_too_large` → `parcial`; una orden que no cabría → rechazada al encolar |
+| BR15 `WIRE_CAP` | Una página de catálogo de 3500 B entra | Una petición de 3501 B → 413 sin leer el cuerpo; un resultado que pasaría del tope → `error/result_too_large` con `read` vacío, acusado con 200 al momento, y la orden pasa a `parcial` enseguida, sin esperar al TTL; una orden que no cabría → rechazada al encolar |
 | BR16 catálogo | Páginas desordenadas y una repetida → `complete` con el `sha256` esperado | Clase repetida o `pages` incoherente → 409 `bad_catalog` |
 | BR17 secretos | — | `peer_key` igual a otra clave → el `Backend` no arranca; `peer_key` no aparece en ninguna respuesta de la API ni del bridge, ni en logs ni en la salida de las pruebas |
-| BR18 plazo durante el trabajo (B-01) | — | Un trabajo de más de un TTL con el lease sano: si el plazo vence **antes** del primer paso → `rejected/expired` y efectos = 0; si vence **entre** los dos pasos → `error/expired`, solo el primer paso hecho y `parcial`; nunca un efecto después de `plazo_local` (X3 n) |
-| BR19 una en curso (B-03) | — | Dos entregas de la misma orden antes de que termine la primera → un solo efecto; el peer no manda ningún poll entregador mientras ejecuta (X3 o) |
+| BR18 plazo durante el trabajo (B-01) | — | Un trabajo de más de un TTL con el lease sano: si el plazo vence **antes** del primer paso → `rejected/expired` y efectos = 0; si vence **entre** los dos pasos → `error/expired`, solo el primer paso hecho y `parcial`; nunca un efecto después de `plazo_local` (X3 n). Con la respuesta del poll retrasada 1,5 s (TTL de 2 s y trabajo de 0,6 s), ningún efecto ocurre después del TTL del backend: el plazo se ancla al envío del poll, no a la recepción (X3 u) |
+| BR19 una en curso (B-03) | — | Dos entregas de la misma orden antes de que termine la primera → cada paso se hace una vez (retirar = 1, anotar = 1; corrige B2-06); el peer no manda ningún poll entregador mientras ejecuta (X3 o) |
 | BR20 lease perdido tras un efecto (B-05) | — | Polls cortados después del primer paso → `error/lease_expired` → `parcial`, nunca `fallido` (X3 q) |
-| BR21 reconectar no ejecuta la cola vieja (E1, B-02) | Una orden creada tras reconectar y reconciliar se ejecuta | Servidor sin polls más de `lease_ms` con una orden `pendiente` → `fallido/conexion_perdida`; al volver, esa orden no se ejecuta (efectos = 0) y sus polls viejos reciben 409 (X3 s) |
-| BR22 confirmación tardía (B-08) | Una orden `parcial/sin_resultado` cuyo primer resultado `done` llega después → `aplicado` → `observado` | Primer resultado tardío `rejected` → `fallido`; uno repetido → nada; una lectura que falla se repite hasta reconciliar (X3 t) |
+| BR21 reconectar no ejecuta la cola vieja (E1, B-02) | Una orden creada tras reconectar y reconciliar se ejecuta | Servidor sin polls más de `lease_ms` con una orden `pendiente` → `fallido/conexion_perdida`; al volver, esa orden no se ejecuta (efectos = 0). Un poll con la **misma `session` y la misma `inst`** pero la `conn` anterior, mandado después del nuevo hello, recibe 409 y no entrega nada (X3 s y w; corrige B2-01) |
+| BR22 confirmación tardía (B-08) | Una orden `parcial/sin_resultado` cuyo primer resultado `done` llega después → `aplicado` → `observado` | Primer resultado tardío `rejected` → `fallido`; primer resultado tardío `error` → sigue `parcial`, con un `op.state` que lleva el motivo nuevo (B2-03); uno repetido → nada; una lectura que falla se repite hasta reconciliar (X3 t) |
+| BR23 reconciliar con el predicado completo (B2-02) | — | Orden con `rev` 7 cuyos resultados se pierden y cuya generación queda con `rev` 8: la lectura del mundo la pasa a `fallido/lectura_no_cumple`, nunca a `observado` (X3 v) |
 | P10 web con mod falso | En el E2E: con el mod falso conectado, «Aplicar» lleva la fila a Observado con origen `servidor` | — |
 | P11 web sin mod | — | Con el mod parado, la fila pasa de Pendiente a Fallido (TTL acortado en el arnés), nunca a Aplicado |
 | X3 antitautología | — | El orquestador corre las pruebas contra el código mutado y cada mutación tiene que hacer fallar al menos una prueba. La lista, abajo |
@@ -288,7 +307,10 @@ Las mutaciones de X3:
 - (q) `rejected` después de un efecto;
 - (r) aceptar como reconciliación una lectura que falla o es de otro `epoch`;
 - (s) entregar órdenes de una `conn` anterior;
-- (t) ignorar el primer resultado tardío de una `parcial`.
+- (t) ignorar el primer resultado tardío de una `parcial`;
+- (u) anclar el plazo local a la recepción de la respuesta en vez de al envío del poll;
+- (v) reconciliar comparando solo `(session, op_id)` y `epoch`, sin `rev` ni `hash`;
+- (w) aceptar un poll con una `conn` anterior.
 
 P1-P9b y las 114 pruebas actuales tienen que seguir pasando sin cambios. El arnés arranca el bridge en todas las corridas, pero con un TTL largo hasta P9b, para que ninguna orden de esos pasos caduque, y solo arranca el mod falso en P10.
 
@@ -303,7 +325,7 @@ DayZSandbox_dev/
   app/tests/test_bridge.py                  BR1, BR2, BR4, BR13-BR17 y BR21, con un peer de prueba
                                             mínimo por HTTP                    [F1bb-1]
   app/tests/fake_mod.py                     §6                                  [F1bb-2]
-  app/tests/test_fake_mod.py                BR3, BR5-BR12, BR18-BR20 y BR22 contra el Bridge real   [F1bb-2]
+  app/tests/test_fake_mod.py                BR3, BR5-BR12, BR18-BR20, BR22 y BR23 contra el Bridge real   [F1bb-2]
   app/tests/e2e_web.py, app/web/e2e/queue.e2e.cjs   P10 y P11              [F1bb-2]
 ```
 
@@ -363,3 +385,15 @@ La parte de F1b que esta subfase no cierra (corrige B-09). La asigna la sesión 
 | B-07 · bloqueante · BR13 probaba el orden temporal, no la validez de la reconciliación | Condición normativa de lectura válida y reintentos (§4); negativas en BR13 y X3 (r) |
 | B-08 · importante · una `parcial` descartaba confirmaciones tardías y no tenía vía de recuperación | Se aplica el primer resultado aunque llegue tarde, y se repiten las lecturas mientras quede algo `parcial` (§2.5.4, §3.1 y §4); BR22 y X3 (t) |
 | B-09 · importante · aplazar los peers en Enforce dejaba sin dueño parte de F1b | Subfase offline declarada (§0) y continuación F1b-peers con dueño por asignar, prerrequisitos y gate (§11) |
+
+**Ronda 2 de Sol** (misma sesión, sobre `95bec2c`; veredicto UNSOUND). Sol da por cerrados B-02 a B-09, deja abierto B-01 y añade dos bloqueantes, dos importantes y dos menores. Se aplican todos:
+
+| Hallazgo | Qué cambia |
+|---|---|
+| B-01 · bloqueante (sigue) · anclar el plazo local a la recepción con un margen fijo no es conservador: con 1 s de tránsito, el efecto puede caer después del TTL del backend | El plazo se ancla al envío del poll, `t_envío`: por causalidad, `t_envío` + lo que queda es ≤ el plazo real, haya el tránsito que haya (§2.4.3). BR18 con la respuesta retrasada 1,5 s y X3 (u) |
+| B2-01 · bloqueante · `conn` no viajaba en el protocolo, así que un poll viejo retenido era indistinguible de uno nuevo con la misma `session` e `inst` | `conn` en la respuesta del hello, en cada poll y en cada orden, comprobada en los dos extremos (§2.2, §2.3 y §2.4.5). BR21 con la misma `session` e `inst` y X3 (w) |
+| B2-02 · bloqueante · la reconciliación comparaba solo la identidad y daba `observado` a una generación con otra `rev` | Mismo predicado completo en las dos vías; si no se cumple, `fallido/lectura_no_cumple` (§3.1 y §4). BR23 y X3 (v) |
+| B2-03 · importante · faltaba la fila de un primer `error` tardío sobre una `parcial` | Fila `parcial` → `parcial` con motivo y `op.state` (§3.1); BR22 |
+| B2-04 · importante · el sustituto `error/result_too_large`, con `read` vacío, chocaba con §2.7 | `rejected` y `error` pueden llevar `read` vacío (§2.7); BR15 exige acuse inmediato y `parcial` enseguida |
+| B2-05 · menor · la regla «`parcial` → `fallido` solo por `rejected`» no casaba con la tabla | Regla reescrita: solo el resultado del peer o una lectura llevan una `parcial` a `fallido`, nunca un plazo (§3.1) |
+| B2-06 · menor · BR19 decía «un solo efecto» con dos pasos por ejecución | Contadores por paso: retirar = 1, anotar = 1 |
