@@ -766,21 +766,25 @@ class DSBX_QA_Probe : Managed
 			ResultFailed(now, true);
 			return;
 		}
-		int replaced = 0;
+		// Brief v1.3, §4.5: sin string.Replace, que trunca las cadenas largas (3730 -> 1443 B medido en dbg13).
+		string dupOld = "\"dup\":0";
+		string dupNew = "\"dup\":false";
 		if (res.dup == 1)
 		{
-			replaced = body.Replace("\"dup\":1", "\"dup\":true");
+			dupOld = "\"dup\":1";
+			dupNew = "\"dup\":true";
 		}
-		else
-		{
-			replaced = body.Replace("\"dup\":0", "\"dup\":false");
-		}
-		if (replaced != 1)
+		int dupPos = body.IndexOf(dupOld);
+		int dupEnd = dupPos + dupOld.Length();
+		if (dupPos < 0 || body.IndexOfFrom(dupEnd, dupOld) >= 0)
 		{
 			LogResultAbandoned(res.op_id, "dup_replace");
 			m_SendIndex = m_SendIndex + 1;
 			return;
 		}
+		string bodyHead = body.Substring(0, dupPos);
+		string bodyRest = body.Substring(dupEnd, body.Length() - dupEnd);
+		body = bodyHead + dupNew + bodyRest;
 		DSBX_QA_Callback cb = AcquireCallback(KIND_RESULT);
 		m_Ctx.POST(cb, "result?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst, body);
 	}
