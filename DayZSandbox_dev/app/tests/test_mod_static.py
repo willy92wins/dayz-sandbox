@@ -882,6 +882,44 @@ def check_m12_codificacion(mod_dir: Path) -> list[str]:
     return violations
 
 
+DIAG_ONLY_TOKENS = ("qa_step_gap_ms", "m_QaStepGapMs", "m_RetirarMs")
+
+
+def check_m13_gancho_diag(mod_dir: Path) -> list[str]:
+    """D-P3 del brief en partida: el gancho de G5 no existe fuera de #ifdef DIAG_DEVELOPER (texto crudo)."""
+    violations = []
+    seen = 0
+    for rel in ("scripts/3_Game/DSBX_Messages.c", "scripts/3_Game/DSBX_Peer.c"):
+        p = mod_dir / rel
+        if not p.is_file():
+            continue
+        stack = []  # [kind, macro, es_diag_ahora]
+        for n, line in enumerate(p.read_bytes().decode("utf-8", "replace").splitlines(), 1):
+            s = line.strip()
+            m = re.match(r"#\s*(ifdef|ifndef)\s+(\w+)", s)
+            if m:
+                stack.append([m.group(1), m.group(2), m.group(1) == "ifdef" and m.group(2) == "DIAG_DEVELOPER"])
+                continue
+            if re.match(r"#\s*else\b", s):
+                if stack and stack[-1][1] == "DIAG_DEVELOPER":
+                    stack[-1][2] = not stack[-1][2]
+                elif stack:
+                    stack[-1][2] = False
+                continue
+            if re.match(r"#\s*endif\b", s):
+                if stack:
+                    stack.pop()
+                continue
+            for tok in DIAG_ONLY_TOKENS:
+                if re.search(r"\b%s\b" % tok, line):
+                    seen += 1
+                    if not any(e[2] for e in stack):
+                        violations.append(f"M13: {tok} fuera de #ifdef DIAG_DEVELOPER en {rel}:{n}")
+    if seen == 0:
+        violations.append("M13: falta el gancho qa_step_gap_ms (D-P3)")
+    return violations
+
+
 ALL_CHECKS = {
     "M1": check_m1_forma,
     "M2": check_m2_tokens_prohibidos,
@@ -895,6 +933,7 @@ ALL_CHECKS = {
     "M10": check_m10_epoch,
     "M11": check_m11_errores,
     "M12": check_m12_codificacion,
+    "M13": check_m13_gancho_diag,
 }
 
 
@@ -936,6 +975,9 @@ class TestModStatic(unittest.TestCase):
 
     def test_m12_codificacion(self):
         self.assertEqual(check_m12_codificacion(REAL_MOD_DIR), [])
+
+    def test_m13_gancho_diag(self):
+        self.assertEqual(check_m13_gancho_diag(REAL_MOD_DIR), [])
 
     def _assert_only_rule_fails(self, rel_file: str, old: str, new: str, expected_rule: str):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1131,8 +1173,8 @@ class TestModStatic(unittest.TestCase):
             # (v) M11: quitar la vuelta a HELLO por lease vencido
             (
                 "scripts/3_Game/DSBX_Peer.c",
-                'm_State = DSBX_Const.ST_HELLO;\n\t\t\tLog("lease expired: returning to HELLO");',
-                'Log("lease expired: returning to HELLO");',
+                'm_State = DSBX_Const.ST_HELLO;\n\t\t\tLog("lease lost age_ms=" + ageMs + " tick_ms=" + TickMs());',
+                'Log("lease lost age_ms=" + ageMs + " tick_ms=" + TickMs());',
                 "M11",
             ),
             # (x) M11: en R, abandonar al primer CLIENTERROR, como la v1.1
@@ -1232,6 +1274,13 @@ class TestModStatic(unittest.TestCase):
                 "\t\t\t\toutStr = outStr + ch;\n\t\t\t}\n\t\t\ti = i + 1;\n",
                 "\t\t\t\toutStr = outStr + ch;\n\t\t\t}\n\t\t\ti = i + 2;\n",
                 "M9",
+            ),
+            # Brief en partida D-P3: el gancho del hueco se sale del #ifdef DIAG_DEVELOPER
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "#ifdef DIAG_DEVELOPER\n\t\t\tif (m_QaStepGapMs > 0",
+                "\t\t\tif (m_QaStepGapMs > 0",
+                "M13",
             ),
             # Sol r2 C-05: la guarda de sesion del acuse sin return
             (

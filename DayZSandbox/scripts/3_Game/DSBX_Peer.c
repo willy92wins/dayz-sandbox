@@ -111,6 +111,11 @@ class DSBX_Peer
 	int m_CacheCap;
 	int m_BaseBackoffMs;
 	int m_WatchdogMs;
+	float m_NextClockLogMs;
+#ifdef DIAG_DEVELOPER
+	int m_QaStepGapMs;
+	float m_RetirarMs;
+#endif
 	int m_EpochReqMs;
 	int m_CallbackPoolMax;
 	int m_CallbackBudget;
@@ -530,6 +535,18 @@ class DSBX_Peer
 		{
 			m_Url = newUrl;
 			m_Key = cfg.key;
+#ifdef DIAG_DEVELOPER
+			m_QaStepGapMs = cfg.qa_step_gap_ms;
+			if (m_QaStepGapMs < 0)
+			{
+				m_QaStepGapMs = 0;
+			}
+			if (m_QaStepGapMs > 10000)
+			{
+				m_QaStepGapMs = 10000;
+			}
+			Log("config qa_step_gap_ms=" + m_QaStepGapMs);
+#endif
 		}
 		if (usable != m_LogCfgUsable || reason != m_LogCfgReason)
 		{
@@ -767,9 +784,15 @@ class DSBX_Peer
 		}
 		if (!m_HasLastOkPoll || (now - m_LastOkPollMs) > m_LeaseMs)
 		{
+			int ageMs = -1;
+			if (m_HasLastOkPoll)
+			{
+				ageMs = (int)(now - m_LastOkPollMs);
+			}
 			m_Session = "";
 			m_Conn = 0;
 			m_State = DSBX_Const.ST_HELLO;
+			Log("lease lost age_ms=" + ageMs + " tick_ms=" + TickMs());
 			Log("lease expired: returning to HELLO");
 		}
 	}
@@ -785,6 +808,7 @@ class DSBX_Peer
 			return;
 		}
 		DSBX_Callback cb = m_ActiveCbP;
+		Log("rest timeout ch=P kind=" + m_ActiveKindP + " src=watchdog tick_ms=" + TickMs());
 		m_ActiveCbP = null;
 		m_ActiveKindP = 0;
 		m_ActiveGenP = 0;
@@ -804,6 +828,7 @@ class DSBX_Peer
 		}
 		DSBX_Callback cb = m_ActiveCbR;
 		int kind = m_ActiveKindR;
+		Log("rest timeout ch=R kind=" + kind + " src=watchdog tick_ms=" + TickMs());
 		m_ActiveCbR = null;
 		m_ActiveKindR = 0;
 		m_ActiveGenR = 0;
@@ -822,6 +847,7 @@ class DSBX_Peer
 		{
 			if (cb != m_ActiveCbP || kind != m_ActiveKindP || gen != m_ActiveGenP)
 			{
+				Log("rest late ch=P kind=" + kind + " tick_ms=" + TickMs());
 				return;
 			}
 			m_ActiveCbP = null;
@@ -830,6 +856,7 @@ class DSBX_Peer
 			SettleCallback(cb, canal, success);
 			if (!success)
 			{
+				LogRestFailure("P", kind, errorCode, isTimeout);
 				OnChannelPError(errorCode, isTimeout);
 				return;
 			}
@@ -840,6 +867,7 @@ class DSBX_Peer
 		{
 			if (cb != m_ActiveCbR || kind != m_ActiveKindR || gen != m_ActiveGenR)
 			{
+				Log("rest late ch=R kind=" + kind + " tick_ms=" + TickMs());
 				return;
 			}
 			m_ActiveCbR = null;
@@ -848,6 +876,7 @@ class DSBX_Peer
 			SettleCallback(cb, canal, success);
 			if (!success)
 			{
+				LogRestFailure("R", kind, errorCode, isTimeout);
 				OnChannelRError(kind, now);
 				return;
 			}
@@ -865,6 +894,7 @@ class DSBX_Peer
 			bool parsed = ser.ReadFromString(resp, data, parseErr);
 			if (!parsed || !DSBX_Messages.ValidHello(resp))
 			{
+				Log("rest invalid ch=P kind=" + kind + " tick_ms=" + TickMs());
 				OnChannelPError(0, false);
 				return;
 			}
@@ -903,6 +933,7 @@ class DSBX_Peer
 		bool pollParsed = ser.ReadFromString(pollResp, data, parseErr);
 		if (!pollParsed || !DSBX_Messages.ValidPoll(pollResp))
 		{
+			Log("rest invalid ch=P kind=" + kind + " tick_ms=" + TickMs());
 			OnChannelPError(0, false);
 			return;
 		}
@@ -924,6 +955,7 @@ class DSBX_Peer
 		bool parsed = ser.ReadFromString(ackResp, data, parseErr);
 		if (!parsed || !DSBX_Messages.ValidAck(ackResp))
 		{
+			Log("rest invalid ch=R kind=" + kind + " tick_ms=" + TickMs());
 			OnChannelRError(kind, now);
 			return;
 		}
@@ -1120,6 +1152,10 @@ class DSBX_Peer
 		if (!EffectGuard(order)) { GuardFailed(order); return; }
 		m_ActiveEntry.m_StepsDone = 1;
 		m_World.SetGeneration(null);
+		Log("effect step=retirar session=" + order.session + " op=" + order.op_id + " tick_ms=" + TickMs());
+#ifdef DIAG_DEVELOPER
+		m_RetirarMs = NowMs();
+#endif
 	}
 
 	void StepAnotar(DSBX_Order order)
@@ -1128,6 +1164,7 @@ class DSBX_Peer
 		m_ActiveEntry.m_StepsDone = 2;
 		DSBX_Generation gen = new DSBX_Generation(order.session, order.op_id, order.args.rev, order.args.hash);
 		m_World.SetGeneration(gen);
+		Log("effect step=anotar session=" + order.session + " op=" + order.op_id + " tick_ms=" + TickMs());
 		DSBX_CacheEntry doneEntry = m_ActiveEntry;
 		m_ActiveEntry = null;
 		FinishEntry(doneEntry, "done", "", DSBX_Wire.WorldReadJson(m_World));
@@ -1146,6 +1183,12 @@ class DSBX_Peer
 		}
 		if (m_ActiveEntry.m_StepsDone == 1)
 		{
+#ifdef DIAG_DEVELOPER
+			if (m_QaStepGapMs > 0 && (NowMs() - m_RetirarMs) < m_QaStepGapMs)
+			{
+				return;
+			}
+#endif
 			StepAnotar(m_ActiveEntry.m_Order);
 		}
 	}
@@ -1387,6 +1430,22 @@ class DSBX_Peer
 		}
 	}
 
+	int TickMs()
+	{
+		return (int)NowMs();
+	}
+
+	// Diagnostico de partida (brief en partida D-P4): R lo registra pero no lo mira (D1).
+	void LogRestFailure(string ch, int kind, int errorCode, bool isTimeout)
+	{
+		if (isTimeout)
+		{
+			Log("rest timeout ch=" + ch + " kind=" + kind + " src=engine tick_ms=" + TickMs());
+			return;
+		}
+		Log("rest error ch=" + ch + " kind=" + kind + " state=" + errorCode + " tick_ms=" + TickMs());
+	}
+
 	void Tick(float timeslice)
 	{
 		if (m_ShutdownDone)
@@ -1394,6 +1453,11 @@ class DSBX_Peer
 			return;
 		}
 		float now = NowMs();
+		if (now >= m_NextClockLogMs)
+		{
+			m_NextClockLogMs = now + 5000.0;
+			Log("clock tick_ms=" + TickMs());
+		}
 		WatchdogP(now);
 		WatchdogR(now);
 		if (!m_IsClient && m_Catalog && !m_Catalog.IsScanDone())

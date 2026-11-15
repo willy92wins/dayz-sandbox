@@ -2,6 +2,9 @@ class DSBX_PeerConfig
 {
 	string url;
 	string key;
+#ifdef DIAG_DEVELOPER
+	int qa_step_gap_ms;
+#endif
 }
 
 class DSBX_HelloResp
