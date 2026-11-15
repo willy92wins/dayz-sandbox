@@ -6,6 +6,7 @@ Los tests ``test_e2e_*`` corren el gate entero y hoy fallan porque la
 implementacion es un esqueleto.
 """
 
+import argparse
 import copy
 import json
 import math
@@ -13,8 +14,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import bridge_qa
+import m1_gate
 
 import f03_common
 import gate_core
@@ -219,8 +225,8 @@ class Case:
 
     def add_hellos(self, probe_ver=None):
         pv = probe_ver or f"dsbx-qa1+{self.core_stamp}"
-        for role in ("server", "client"):
-            inst = f"{role}-inst"
+        for role, inst in (("server", "server-inst"), ("client", "client-inst"),
+                           ("server", "s8-inst"), ("server", "s9-inst")):
             self.bridge.append(
                 {
                     "args": {"build": self.build_kind, "inst": inst, "peer": role, "probe_ver": pv, "proto": "qa0"},
@@ -233,10 +239,11 @@ class Case:
                 }
             )
 
-    def add_op(self, name, verb, args, *, status="done", reason="", payload=None):
+    def add_op(self, name, verb, args, *, status="done", reason="", payload=None, inst="server-inst"):
         oid = self._id()
         self.ops[name] = {
             "id": oid,
+            "inst": inst,
             "verb": verb,
             "args": args,
             "status": status,
@@ -246,13 +253,30 @@ class Case:
         }
         return oid
 
+    def add_stop(self, name, job_name, t=None):
+        job = self.jobs[job_name]
+        oid = self._id()
+        self.ops[name] = {
+            "id": oid,
+            "inst": job["inst"],
+            "verb": "job_stop",
+            "args": _pack_args({"job": job["start_id"]}),
+            "status": "done",
+            "reason": "",
+            "payload": wire.pack_payload(scalars_str={"job": job["start_id"], "state": "stopped"},
+                                         scalars_num={"rows_total_n": len(job["rows"])}),
+            "t": job["end_ms"] if t is None else t,
+        }
+        return oid
+
     def add_job(self, name, verb, args, rows, ncols, scols, resource, start_ms, end_ms,
-                start_status="done", start_reason=""):
+                start_status="done", start_reason="", inst="server-inst", state="done"):
         oid = self._id()
         pages_n = max(1, math.ceil(len(rows) / 4)) if rows else 1
         page_ids = [self._id() for _ in range(pages_n)]
         self.jobs[name] = {
             "start_id": oid,
+            "inst": inst,
             "page_ids": page_ids,
             "rows": rows,
             "ncols": list(ncols),
@@ -264,6 +288,7 @@ class Case:
             "verb": verb,
             "start_status": start_status,
             "start_reason": start_reason,
+            "state": state,
         }
         return self.jobs[name]
 
@@ -357,7 +382,8 @@ class Case:
         return wire.pack_payload(scalars_num=nums)
 
     def scene_args(self, *, props=2, rows=2, seed=None, cap_mode="normal", fail_slot=None,
-                   hour=None, minute=None, fog=None, overcast=None, rain=None):
+                   hour=None, minute=None, fog=None, overcast=None, rain=None,
+                   bad_char=None, bad_spec=None):
         strs = {"cap_mode": cap_mode}
         nums = {"props_n": float(props)}
         if seed is not None:
@@ -376,12 +402,12 @@ class Case:
             nums["rain"] = float(rain)
         if rows:
             row_dicts = []
-            for actor in self.fixtures["actors"]["actors"][:rows]:
+            for pos, actor in enumerate(self.fixtures["actors"]["actors"][:rows]):
                 row_dicts.append(
                     {
                         "actor_id": actor["actor_id"],
-                        "character": actor["character"],
-                        "wardrobe_spec": "",
+                        "character": bad_char if (pos == 0 and bad_char) else actor["character"],
+                        "wardrobe_spec": bad_spec if (pos == 0 and bad_spec) else "",
                         "x_m": float(actor["x_m"]),
                         "z_m": float(actor["z_m"]),
                     }
@@ -392,16 +418,26 @@ class Case:
     # ------------------------------------------------------------------ checks
 
     def build_s3_00(self):
-        obs = self.add_op("s3_00_observe", "act_observe", _pack_args(), payload=self.observe())
+        obs = self.add_op("s3_00_observe", "act_observe", _pack_args(), payload=self.observe(),
+                          inst="server-inst")
         self.scenario.append(
             {"check": "S3-00", "kind": "handshake", "phase": "S0_handshake", "observe_op_id": obs, "t_ms": self._t()}
+        )
+        obs9 = self.add_op("s3_00_restore", "act_observe", _pack_args(), payload=self.observe(),
+                           inst="s9-inst")
+        self.scenario.append(
+            {"check": "S3-00", "kind": "handshake", "phase": "S9_restore", "observe_op_id": obs9, "t_ms": self._t()}
         )
 
     def build_s3_01(self):
         base = self.add_op("s3_01_base", "act_observe", _pack_args(), payload=self.observe(weather_frozen=1.0))
         for case, reason in (("unknown_class", "unknown_class"), ("incompatible_slot", "incompatible_slot")):
+            if case == "unknown_class":
+                args = self.scene_args(props=2, rows=2, bad_char="SurvivorM_NoExiste")
+            else:
+                args = self.scene_args(props=2, rows=2, bad_spec="Headgear:HunterPants_Autumn")
             app = self.add_op(
-                f"s3_01_apply_{case}", "act_scene_apply", self.scene_args(props=2, rows=2),
+                f"s3_01_apply_{case}", "act_scene_apply", args,
                 status="rejected", reason=reason,
             )
             post = self.add_op(
@@ -442,7 +478,7 @@ class Case:
         )
 
     def build_s3_02(self):
-        start, end = self._alloc(5000)
+        start, end = self._alloc(15000)
         args = _pack_args(
             {"mode": "ONCE", "threat_case": "none", "actor_id": "actor_1"},
             {"reach_timeout_ms": 30000.0, "settle_window_ms": 10000.0, "sample_step_ms": 500.0},
@@ -454,9 +490,12 @@ class Case:
                   wp_x_m=4540.0, wp_z_m=10320.0, dist_mark_m=5.0, mark_state="en_ruta"),
             _brow(seq_n=3, frame=3, tick_ms=start + 2000, dtsum_ms=2500, x_m=4539.2, z_m=10320.0,
                   wp_x_m=4540.0, wp_z_m=10320.0, dist_mark_m=0.8, mark_state="en_marca"),
-            _brow(seq_n=4, frame=4, tick_ms=start + 4000, dtsum_ms=4500, x_m=4539.2, z_m=10320.0,
+            _brow(seq_n=4, frame=4, tick_ms=start + 6000, dtsum_ms=6000, x_m=4539.2, z_m=10320.0,
                   wp_x_m=4540.0, wp_z_m=10320.0, dist_mark_m=0.8, mark_state="en_marca",
-                  settle_dtsum_ms=10000.0, settle_max_drift_m=0.0),
+                  settle_max_drift_m=0.0),
+            _brow(seq_n=5, frame=5, tick_ms=start + 12000, dtsum_ms=12000, x_m=4539.2, z_m=10320.0,
+                  wp_x_m=4540.0, wp_z_m=10320.0, dist_mark_m=0.8, mark_state="en_marca",
+                  settle_max_drift_m=0.0),
         ]
         job = self.add_job("s3_02_once", "act_behaviour_run", args, rows, B_NCOLS, B_SCOLS,
                            "actor:actor_1", start, end)
@@ -484,10 +523,24 @@ class Case:
             {"duration_ms": 60000.0, "sample_step_ms": 500.0},
         )
         rows2 = [
-            _brow(seq_n=1, tick_ms=start2 + 20000, dtsum_ms=20000, legs_completed_n=1.0, path_len_m=10.0),
-            _brow(seq_n=2, tick_ms=start2 + 40000, dtsum_ms=40000, legs_completed_n=2.0, path_len_m=20.0),
-            _brow(seq_n=3, tick_ms=start2 + 55000, dtsum_ms=55000, legs_completed_n=3.0, path_len_m=25.0),
-            _brow(seq_n=4, tick_ms=start2 + 60000, dtsum_ms=60000, legs_completed_n=4.0, path_len_m=35.0),
+            _brow(seq_n=1, tick_ms=start2 + 5000, dtsum_ms=5000, x_m=4520.0, z_m=10320.0,
+                  wp_x_m=4520.0, wp_z_m=10320.0, mark_state="en_marca",
+                  legs_completed_n=1.0, path_len_m=12.0),
+            _brow(seq_n=2, tick_ms=start2 + 10000, dtsum_ms=10000, x_m=4532.0, z_m=10320.0,
+                  wp_x_m=4532.0, wp_z_m=10320.0, mark_state="en_marca",
+                  legs_completed_n=2.0, path_len_m=24.0),
+            _brow(seq_n=3, tick_ms=start2 + 20000, dtsum_ms=20000, x_m=4520.0, z_m=10320.0,
+                  wp_x_m=4520.0, wp_z_m=10320.0, mark_state="en_marca",
+                  legs_completed_n=3.0, path_len_m=36.0),
+            _brow(seq_n=4, tick_ms=start2 + 30000, dtsum_ms=30000, x_m=4532.0, z_m=10320.0,
+                  wp_x_m=4532.0, wp_z_m=10320.0, mark_state="en_marca",
+                  legs_completed_n=4.0, path_len_m=48.0),
+            _brow(seq_n=5, tick_ms=start2 + 45000, dtsum_ms=45000, x_m=4520.0, z_m=10320.0,
+                  wp_x_m=4520.0, wp_z_m=10320.0, mark_state="en_marca",
+                  legs_completed_n=5.0, path_len_m=60.0),
+            _brow(seq_n=6, tick_ms=start2 + 60000, dtsum_ms=60000, x_m=4532.0, z_m=10320.0,
+                  wp_x_m=4532.0, wp_z_m=10320.0, mark_state="en_marca",
+                  legs_completed_n=6.0, path_len_m=72.0),
         ]
         loop = self.add_job("s3_03_loop", "act_behaviour_run", args2, rows2, B_NCOLS, B_SCOLS,
                             "actor:actor_1", start2, end2)
@@ -534,9 +587,10 @@ class Case:
         start = self.job_t
         end = start + 600000
         self.job_t = end + 1000
-        for name, actor, cx, cz, buildings, offsets in (
-            ("urban", "actor_1", 4600.0, 10300.0, 5.0, ((0.0, 0.0), (4.0, 0.0), (8.0, 1.0), (12.0, 2.0))),
-            ("open", "actor_2", 4400.0, 9800.0, 1.0, ((0.0, 0.0), (3.0, 0.0), (6.0, 2.0), (9.0, -1.0))),
+        offsets = ((10.0, 0.0), (-10.0, 0.0), (0.0, 10.0), (0.0, -10.0), (5.0, 5.0), (-5.0, -5.0))
+        for name, actor, cx, cz, buildings in (
+            ("urban", "actor_1", 4600.0, 10300.0, 5.0),
+            ("open", "actor_2", 4400.0, 9800.0, 1.0),
         ):
             args = _pack_args(
                 {"mode": "ROAM", "actor_id": actor},
@@ -544,16 +598,23 @@ class Case:
             )
             pts = [(cx + dx, cz + dz) for dx, dz in offsets]
             rows = []
+            prev = None
+            path = 0.0
+            max_dc = 0.0
             for i, (x, z) in enumerate(pts):
                 dc = math.hypot(x - cx, z - cz)
+                if prev is not None:
+                    path += math.hypot(x - prev[0], z - prev[1])
+                prev = (x, z)
+                max_dc = max(max_dc, dc)
                 rows.append(
-                    _brow(seq_n=float(i + 1), frame=float(i + 1), tick_ms=start + 200000 * i,
-                          dtsum_ms=200000 * i, x_m=x, z_m=z, dist_center_m=dc,
-                          max_dist_tick_m=dc, path_len_m=14.0 * i, dest_reached_n=float(i),
+                    _brow(seq_n=float(i + 1), frame=float(i + 1), tick_ms=start + 120000 * i,
+                          dtsum_ms=120000 * i, x_m=x, z_m=z,
+                          wp_x_m=x, wp_y_m=0.0, wp_z_m=z, dist_center_m=dc,
+                          max_dist_tick_m=max_dc, path_len_m=path, dest_reached_n=float(i + 1),
                           buildings_near_n=buildings, ticks_checked_n=1000.0,
-                          out_of_radius_ticks_n=0.0)
+                          out_of_radius_ticks_n=0.0, mark_state="en_marca")
                 )
-            rows[-1]["dest_reached_n"] = 4.0
             job = self.add_job(f"s3_05_{name}", "act_behaviour_run", args, rows, B_NCOLS, B_SCOLS,
                                f"actor:{actor}", start, end)
             self.scenario.append({"check": "S3-05", "kind": f"roam_{name}", "actor_id": actor,
@@ -633,7 +694,8 @@ class Case:
                   emote_key="nod", row_kind="event", emote_state="cancelado", observed_end_cause=""),
         ]
         before = self.add_job("s3_cancel_before", "act_emote_run", args, main_rows, E_NCOLS, E_SCOLS,
-                              "actor:actor_1", start, end)
+                              "actor:actor_1", start, end, state="stopped")
+        stop_before = self.add_stop("s3_stop_before", "s3_cancel_before")
         pstart, pend = self._alloc(3000)
         post_args = _pack_args({"emote_key": "nod", "test_case": "post_stop_watch", "actor_id": "actor_1"},
                                {"sample_step_ms": 250.0, "post_watch_ms": 3000.0})
@@ -651,7 +713,7 @@ class Case:
             if check[1]:
                 self.scenario.append({"check": check[0], "kind": "cancel_before_start", "actor_id": "actor_1",
                                       "start_op_id": before["start_id"], "page_op_ids": before["page_ids"],
-                                      "stop_op_id": "stop-before",
+                                      "stop_op_id": stop_before,
                                       "post_watch_start_op_id": post_before["start_id"],
                                       "post_watch_page_op_ids": post_before["page_ids"], "t_ms": self._t()})
 
@@ -693,7 +755,8 @@ class Case:
                   emote_state="cancelado", observed_end_cause="cb_canceled"),
         ]
         after = self.add_job("s3_cancel_after", "act_emote_run", args, main_rows, E_NCOLS, E_SCOLS,
-                             "actor:actor_1", start, end)
+                             "actor:actor_1", start, end, state="stopped")
+        stop_after = self.add_stop("s3_stop_after", "s3_cancel_after")
         pstart, pend = self._alloc(3000)
         post_args = _pack_args({"emote_key": "nod", "test_case": "post_stop_watch", "actor_id": "actor_1"},
                                {"sample_step_ms": 250.0, "post_watch_ms": 3000.0})
@@ -719,7 +782,7 @@ class Case:
             if check[1]:
                 self.scenario.append({"check": check[0], "kind": "cancel_after_start", "actor_id": "actor_1",
                                       "start_op_id": after["start_id"], "page_op_ids": after["page_ids"],
-                                      "stop_op_id": "stop-after",
+                                      "stop_op_id": stop_after,
                                       "post_watch_start_op_id": post_after["start_id"],
                                       "post_watch_page_op_ids": post_after["page_ids"], "t_ms": self._t()})
 
@@ -756,11 +819,12 @@ class Case:
                   expected_emote_id=58.0, expected_cmd_id=1109.0, exp_pending_id=58.0),
         ]
         interrupt = self.add_job("s3_interrupt", "act_emote_run", args, rows, E_NCOLS, E_SCOLS,
-                                 "actor:actor_1", start, end)
+                                 "actor:actor_1", start, end, state="stopped")
+        stop_interrupt = self.add_stop("s3_stop_interrupt", "s3_interrupt")
         if want_08:
             self.scenario.append({"check": "S3-08", "kind": "interrupt_between_samples", "actor_id": "actor_1",
                                   "start_op_id": interrupt["start_id"], "page_op_ids": interrupt["page_ids"],
-                                  "stop_op_id": "stop-interrupt", "t_ms": self._t()})
+                                  "stop_op_id": stop_interrupt, "t_ms": self._t()})
 
         # never_starts
         start, end = self._alloc(5100)
@@ -777,7 +841,8 @@ class Case:
                   expected_cmd_id=1109.0),
         ]
         never = self.add_job("s3_never", "act_emote_run", args, main_rows, E_NCOLS, E_SCOLS,
-                             "actor:actor_1", start, end)
+                             "actor:actor_1", start, end, state="stopped")
+        stop_never = self.add_stop("s3_stop_never", "s3_never")
         pstart, pend = self._alloc(3000)
         post_args = _pack_args({"emote_key": "nod", "test_case": "post_stop_watch", "actor_id": "actor_1"},
                                {"sample_step_ms": 250.0, "post_watch_ms": 3000.0})
@@ -797,7 +862,7 @@ class Case:
             if check[1]:
                 self.scenario.append({"check": check[0], "kind": "never_starts", "actor_id": "actor_1",
                                       "start_op_id": never["start_id"], "page_op_ids": never["page_ids"],
-                                      "stop_op_id": "stop-never",
+                                      "stop_op_id": stop_never,
                                       "post_watch_start_op_id": post_never["start_id"],
                                       "post_watch_page_op_ids": post_never["page_ids"], "t_ms": self._t()})
 
@@ -819,19 +884,21 @@ class Case:
                   emote_state="cancelado", expected_emote_id=58.0, expected_cmd_id=1109.0),
         ]
         stale = self.add_job("s3_stale", "act_emote_run", args, rows, E_NCOLS, E_SCOLS,
-                             "actor:actor_1", start, end)
+                             "actor:actor_1", start, end, state="stopped")
+        stop_stale = self.add_stop("s3_stop_stale", "s3_stale")
         if want_08:
             self.scenario.append({"check": "S3-08", "kind": "stale_callback_isolation", "actor_id": "actor_1",
                                   "start_op_id": stale["start_id"], "page_op_ids": stale["page_ids"],
-                                  "stop_op_id": "stop-stale", "t_ms": self._t()})
+                                  "stop_op_id": stop_stale, "t_ms": self._t()})
 
     def build_s3_11(self):
         obs = self.add_op("s3_11_obs", "act_observe", _pack_args(),
-                          payload=self.observe(backend_available=0.0, adapter_ver=""))
+                          payload=self.observe(backend_available=0.0, adapter_ver=""), inst="s8-inst")
         app = self.add_op("s3_11_apply", "act_scene_apply",
                           self.scene_args(props=2, rows=0, cap_mode="no_expansion"),
-                          payload=self.apply_payload(props=2.0, actors=0.0))
-        post = self.add_op("s3_11_post", "act_observe", _pack_args(), payload=self.observe(world_props=2.0))
+                          payload=self.apply_payload(props=2.0, actors=0.0), inst="s8-inst")
+        post = self.add_op("s3_11_post", "act_observe", _pack_args(), payload=self.observe(world_props=2.0),
+                           inst="s8-inst")
         self.scenario.append({"check": "S3-11", "kind": "observe_no_expansion", "observe_op_id": obs, "t_ms": self._t()})
         self.scenario.append({"check": "S3-11", "kind": "apply_props_only", "apply_op_id": app,
                               "observe_op_id": post, "t_ms": self._t()})
@@ -843,15 +910,16 @@ class Case:
               "last_op_revalidate_tick_ms": 1020.0, "last_op_reject_tick_ms": 1030.0}),
             ("no_expansion", "no_expansion", None),
         ):
+            inst = "s8-inst" if kind == "no_expansion" else "server-inst"
             base = self.add_op(f"s3_12_base_{kind}", "act_observe", _pack_args(),
-                               payload=self.observe(weather_frozen=1.0, mutations=5.0))
+                               payload=self.observe(weather_frozen=1.0, mutations=5.0), inst=inst)
             app = self.add_op(f"s3_12_apply_{kind}", "act_scene_apply",
                               self.scene_args(props=2, rows=2, cap_mode=cap_mode),
-                              status="rejected", reason="expansion_unavailable")
+                              status="rejected", reason="expansion_unavailable", inst=inst)
             post = self.add_op(f"s3_12_post_{kind}", "act_observe", _pack_args(),
                                payload=self.observe(weather_frozen=1.0, world_props=0.0,
                                                     world_actors=0.0, first_effect=-1.0,
-                                                    mutations=5.0, stage=stage))
+                                                    mutations=5.0, stage=stage), inst=inst)
             self.scenario.append({"check": "S3-12", "kind": kind,
                                   "baseline_observe_op_id": base, "apply_op_id": app,
                                   "post_observe_op_id": post, "t_ms": self._t()})
@@ -890,8 +958,8 @@ class Case:
         bridge = list(self.bridge)
         for spec in self.ops.values():
             oid = spec["id"]
-            bridge.append({"ev": "enq", "op_id": oid, "peer": "server", "verb": spec["verb"],
-                           "args": spec["args"], "t_ms": spec["t"]})
+            bridge.append({"ev": "enq", "op_id": oid, "peer": "server", "inst": spec["inst"],
+                           "verb": spec["verb"], "args": spec["args"], "t_ms": spec["t"]})
             read = _read(spec["payload"]) if spec["status"] == "done" and spec["payload"] is not None else {"has": []}
             bridge.append({"ev": "result", "http": 200, "op_id": oid, "peer": "server",
                            "t_ms": spec["t"] + 0.5,
@@ -907,8 +975,8 @@ class Case:
                 scalars_str={"resource": spec["resource"], "state": "running"},
                 scalars_num={"start_tick_ms": start, "end_tick_ms": end},
             )
-            bridge.append({"ev": "enq", "op_id": oid, "peer": "server", "verb": spec["verb"],
-                           "args": spec["args"], "t_ms": start})
+            bridge.append({"ev": "enq", "op_id": oid, "peer": "server", "inst": spec["inst"],
+                           "verb": spec["verb"], "args": spec["args"], "t_ms": start})
             bridge.append({"ev": "result", "http": 200, "op_id": oid, "peer": "server",
                            "t_ms": start + 0.5,
                            "result": {"status": spec.get("start_status", "done"),
@@ -918,14 +986,15 @@ class Case:
             for pno, pid in enumerate(spec["page_ids"]):
                 chunk = rows[pno * 4:(pno + 1) * 4]
                 pp = wire.pack_payload(
-                    scalars_str={"state": "done"},
+                    scalars_str={"state": spec.get("state", "done")},
                     scalars_num={"rows_total_n": len(rows), "pages_n": pages_n,
                                  "start_tick_ms": start, "end_tick_ms": end},
                     num_cols=ncols,
                     str_cols=scols,
                     row_dicts=chunk,
                 )
-                bridge.append({"ev": "enq", "op_id": pid, "peer": "server", "verb": "job_read",
+                bridge.append({"ev": "enq", "op_id": pid, "peer": "server", "inst": spec["inst"],
+                               "verb": "job_read",
                                "args": _pack_args({"job": oid}, {"page_n": pno}), "t_ms": end})
                 bridge.append({"ev": "result", "http": 200, "op_id": pid, "peer": "server",
                                "t_ms": end + 0.5,
@@ -955,7 +1024,7 @@ class Case:
             "execution_identity": {
                 "fake_peer_pids": {"client": 2, "server": 1},
                 "key_sha256": {"client": "b" * 16, "server": "a" * 16},
-                "peer_insts": {"client": ["client-inst"], "server": ["server-inst"]},
+                "peer_insts": {"client": ["client-inst"], "server": ["server-inst", "s8-inst", "s9-inst"]},
                 "port": 9,
             },
             "faults": [],
@@ -1030,6 +1099,25 @@ def _row(payload, col, row_index, value):
     _set_cell(payload, col, row_index, value)
 
 
+def _append_payload_row(payload, num_vals, str_vals):
+    payload["ncell"] = list(payload["ncell"]) + [num_vals[c] for c in payload["ncol"]]
+    payload["scell"] = list(payload["scell"]) + [str_vals[c] for c in payload["scol"]]
+    payload["rows"] += 1
+
+
+def _reverse_payload_rows(payload):
+    data = wire.unpack_payload(payload)
+    rebuilt = wire.pack_payload(
+        scalars_str=data["str"],
+        scalars_num=data["num"],
+        num_cols=data["ncol"],
+        str_cols=data["scol"],
+        row_dicts=list(reversed(data["rows"])),
+    )
+    payload.clear()
+    payload.update(rebuilt)
+
+
 def _bad_fixtures(tmpdir, *, emote_key="nod", emote_id=7):
     dst = Path(tmpdir) / "fixtures"
     shutil.copytree(FIXTURES_DIR, dst)
@@ -1089,8 +1177,8 @@ class S3CheckNegativeTests(S3EvidenceTestBase):
         _set_scalar_str(case.ops["s3_00_observe"]["payload"], "adapter_ver",
                         "dsbx-qa-exp1+deadbeefdeadbeef")
         verdict = self.evaluate(case)
-        chk = self.assert_not_pass(verdict, "S3-00")
-        self.assertIn("adapter_ver", chk["detail"])
+        chk = self.assert_not_pass(verdict, "S3-00", ("missing",))
+        self.assertIn("artifact_unverified", chk["detail"])
 
     def test_neg_s3_01_pre_gear_sweep_incomplete(self):
         case = self.case()
@@ -1125,7 +1213,7 @@ class S3CheckNegativeTests(S3EvidenceTestBase):
             row["observed_emote_id"] = 59.0
         verdict = self.evaluate(case)
         chk = self.assert_not_pass(verdict, "S3-04")
-        self.assertIn("nod:never_started", chk["detail"])
+        self.assertIn("nod:observed_ids", chk["detail"])
 
     def test_neg_s3_05_roam_leaves_radius(self):
         case = self.case()
@@ -1259,7 +1347,7 @@ class S3SolBlockingNegativeTests(S3EvidenceTestBase):
             _set_arg_str(case.jobs["s3_04_nod"]["args"], "qa_fault", label)
             verdict = self.evaluate(case)
             chk = self.assert_not_pass(verdict, "S3-04")
-            self.assertIn("nod:never_started", chk["detail"])
+            self.assertIn("nod:observed_ids", chk["detail"])
             details.append(chk["detail"])
         self.assertEqual(len(set(details)), 1, details)
 
@@ -1283,8 +1371,8 @@ class S3SolBlockingNegativeTests(S3EvidenceTestBase):
         _set_scalar_str(case.ops["s3_00_observe"]["payload"], "adapter_ver",
                         f"dsbx-qa-exp1+{'0' * 16}")
         verdict = self.evaluate(case, part_name="part-stamp")
-        chk = self.assert_not_pass(verdict, "S3-00")
-        self.assertIn("adapter_ver", chk["detail"])
+        chk = self.assert_not_pass(verdict, "S3-00", ("missing",))
+        self.assertIn("artifact_unverified", chk["detail"])
 
     def test_neg_sol08_e1_without_cleanup(self):
         case = self.case()
@@ -1325,15 +1413,187 @@ class S3SolBlockingNegativeTests(S3EvidenceTestBase):
         self.assertIn("emote_catalog_mismatch", chk["detail"])
 
 
+class S3SolR1BlockingNegativeTests(S3EvidenceTestBase):
+    """Negativas de la ronda 4: cada BLOQ de Sol con su reproduccion y motivo."""
+
+    def test_neg_sol1_03_motion_from_observed_positions(self):
+        case = self.case()
+        case.build(checks={"S3-00", "S3-02", "S3-03"})
+        for row in case.jobs["s3_02_once"]["rows"]:
+            row.update({"x_m": 4520.0, "z_m": 10320.0, "dist_mark_m": 0.8,
+                        "mark_state": "en_marca"})
+        verdict = self.evaluate(case, part_name="sol1-03-once")
+        chk = self.assert_not_pass(verdict, "S3-02")
+        self.assertIn("never_reached", chk["detail"])
+
+        case = self.case()
+        case.build(checks={"S3-00", "S3-03"})
+        for row in case.jobs["s3_03_loop"]["rows"]:
+            row.update({"x_m": 4520.0, "z_m": 10320.0, "wp_x_m": 4520.0, "wp_z_m": 10320.0})
+        verdict = self.evaluate(case, part_name="sol1-03-loop")
+        chk = self.assert_not_pass(verdict, "S3-03")
+        self.assertIn("legs_below_three", chk["detail"])
+
+    def test_neg_sol1_04_gesture_identity_whole_sequence(self):
+        case = self.case()
+        case.build(checks={"S3-00", "S3-04"})
+        case.jobs["s3_04_nod"]["rows"][1]["observed_emote_id"] = 59.0
+        verdict = self.evaluate(case, part_name="sol1-04-observed")
+        chk = self.assert_not_pass(verdict, "S3-04")
+        self.assertIn("nod:observed_ids", chk["detail"])
+
+        case = self.case()
+        case.build(checks={"S3-00", "S3-04"})
+        case.jobs["s3_04_nod"]["rows"][2]["cb_inst_id"] = 5.0
+        verdict = self.evaluate(case, part_name="sol1-04-callback")
+        chk = self.assert_not_pass(verdict, "S3-04")
+        self.assertIn("nod:callback_changed", chk["detail"])
+
+        case = self.case()
+        case.build(checks={"S3-00", "S3-04"})
+        case.jobs["s3_04_nod"]["rows"][2]["req_seq_n"] = 2.0
+        verdict = self.evaluate(case, part_name="sol1-04-reqseq")
+        chk = self.assert_not_pass(verdict, "S3-04")
+        self.assertIn("nod:req_seq_mismatch", chk["detail"])
+
+    def test_neg_sol1_05_legacy_resources_and_exclusion(self):
+        case = self.case()
+        case.build(checks={"S3-00", "S3-02", "S3-03"})
+        s2 = case.jobs["s3_02_once"]
+        hold = case.jobs["s3_03_hold"]
+        s2["resource"] = "act_behaviour"
+        hold["resource"] = "act_emote"
+        hold["start_ms"] = s2["start_ms"] + 1000.0
+        hold["end_ms"] = s2["start_ms"] + 4000.0
+        verdict = self.evaluate(case, part_name="sol1-05-resources")
+        self.assertEqual(verdict["exit_code"], 2, verdict)
+        self.assertTrue(any("actor_resource_mismatch" in r for r in verdict["reasons"]), verdict)
+
+    def test_neg_sol1_06_pages_incomplete_or_foreign(self):
+        case = self.case()
+        case.build(checks={"S3-00", "S3-08"})
+        case.jobs["s3_interrupt"]["page_ids"] = case.jobs["s3_interrupt"]["page_ids"][:1]
+        verdict = self.evaluate(case, part_name="sol1-06-pages")
+        chk = self.assert_not_pass(verdict, "S3-08", ("missing",))
+        self.assertIn("interrupt_between_samples:page_no_enq", chk["detail"])
+
+        case = self.case()
+        case.build(checks={"S3-00", "S3-08"})
+        case.jobs["s3_interrupt"]["inst"] = "ghost-inst"
+        verdict = self.evaluate(case, part_name="sol1-06-inst")
+        chk = self.assert_not_pass(verdict, "S3-08", ("missing",))
+        self.assertIn("interrupt_between_samples:unknown_instance", chk["detail"])
+
+    def test_neg_sol1_07_restarts_mandatory(self):
+        case = self.case()
+        case.build(checks={"S3-00"})
+        case.scenario = [r for r in case.scenario
+                         if r.get("phase") != "S9_restore"]
+        verdict = self.evaluate(case, part_name="sol1-07-nos9")
+        chk = self.assert_not_pass(verdict, "S3-00", ("missing",))
+        self.assertIn("missing_phases", chk["detail"])
+
+        case = self.case()
+        case.build(checks={"S3-00"})
+        case.ops["s3_00_restore"]["inst"] = "server-inst"
+        verdict = self.evaluate(case, part_name="sol1-07-sameinst")
+        chk = self.assert_not_pass(verdict, "S3-00", ("missing",))
+        self.assertIn("restart_not_accredited", chk["detail"])
+
+    def test_neg_sol1_08_stop_must_be_effective(self):
+        case = self.case()
+        case.build(checks={"S3-00", "S3-08"})
+        row = next(r for r in case.scenario
+                   if r.get("check") == "S3-08" and r.get("kind") == "cancel_after_start")
+        row["stop_op_id"] = "stop-after"
+        verdict = self.evaluate(case, part_name="sol1-08-invented")
+        chk = self.assert_not_pass(verdict, "S3-08", ("missing",))
+        self.assertIn("cancel_after_start:stop_no_enq", chk["detail"])
+
+        case = self.case()
+        case.build(checks={"S3-00", "S3-08"})
+        case.jobs["s3_cancel_after"]["state"] = "done"
+        verdict = self.evaluate(case, part_name="sol1-08-done")
+        chk = self.assert_not_pass(verdict, "S3-08")
+        self.assertIn("cancel_after_start:job_not_stopped", chk["detail"])
+
+    def test_neg_sol1_09_interruption_never_terminates(self):
+        case = self.case()
+        case.build(checks={"S3-00", "S3-08"})
+        start = case.jobs["s3_interrupt"]["start_ms"]
+        case.jobs["s3_interrupt"]["rows"].append(
+            _erow(seq_n=6, req_seq_n=1.0, tick_ms=start + 600, req_tick_ms=start + 100,
+                  start_tick_ms=start + 200, cancel_req_tick_ms=start + 300,
+                  end_tick_ms=0.0, on_finish_called_b=1.0,
+                  raw_p_canceled_b=0.0, emote_state="terminado",
+                  observed_end_cause="cb_normal")
+        )
+        verdict = self.evaluate(case, part_name="sol1-09-terminated")
+        chk = self.assert_not_pass(verdict, "S3-08")
+        self.assertIn("interrupt_between_samples:terminated", chk["detail"])
+
+    def test_neg_sol1_11_wardrobe_order_independent(self):
+        case = self.case()
+        case.build(checks={"S3-00", "S3-01"})
+        _reverse_payload_rows(case.ops["s3_01_obs1"]["payload"])
+        _reverse_payload_rows(case.ops["s3_01_obs2"]["payload"])
+        verdict = self.evaluate(case, part_name="sol1-11-order")
+        self.assertEqual(_check(verdict, "S3-01")["status"], "pass", verdict)
+        self.assertNotEqual(verdict["exit_code"], 1, verdict)
+
+    def test_neg_sol1_12_environments_by_location_and_census(self):
+        case = self.case()
+        case.build(checks={"S3-00", "S3-05"})
+        urban = case.jobs["s3_05_urban"]["rows"]
+        open_rows = case.jobs["s3_05_open"]["rows"]
+        for pos, row in enumerate(open_rows):
+            dx = urban[pos]["x_m"] - 4600.0
+            dz = urban[pos]["z_m"] - 10300.0
+            x, z = 4400.0 + dx, 9800.0 + dz
+            row.update({"x_m": x, "z_m": z, "wp_x_m": x, "wp_z_m": z})
+        verdict = self.evaluate(case, part_name="sol1-12-identical")
+        self.assertEqual(_check(verdict, "S3-05")["status"], "pass", verdict)
+
+        case = self.case()
+        case.build(checks={"S3-00", "S3-05"})
+        for row in case.jobs["s3_05_open"]["rows"]:
+            row["buildings_near_n"] = 3.0
+        verdict = self.evaluate(case, part_name="sol1-12-open-census")
+        chk = self.assert_not_pass(verdict, "S3-05", ("missing",))
+        self.assertIn("open:too_many_buildings", chk["detail"])
+
+        case = self.case()
+        case.build(checks={"S3-00", "S3-05"})
+        for row in case.jobs["s3_05_urban"]["rows"]:
+            row["buildings_near_n"] = 0.0
+        verdict = self.evaluate(case, part_name="sol1-12-urban-census")
+        chk = self.assert_not_pass(verdict, "S3-05", ("missing",))
+        self.assertIn("urban:not_enough_buildings", chk["detail"])
+
+    def test_neg_sol1_13_binding_negatives_exact(self):
+        case = self.case()
+        case.build(checks={"S3-00", "S3-01"})
+        rows = [r for r in case.scenario
+                if r.get("check") == "S3-01" and r.get("kind") == "reject"]
+        slot = next(r for r in rows if r.get("case") == "incompatible_slot")
+        slot["case"] = "unknown_class"
+        verdict = self.evaluate(case, part_name="sol1-13-dup")
+        chk = self.assert_not_pass(verdict, "S3-01")
+        self.assertIn("reject_cases", chk["detail"])
+
+
 def _mut_roam_out_of_radius(case):
     row = case.jobs["s3_05_urban"]["rows"][2]
     row.update({"x_m": 4616.0, "z_m": 10300.0, "dist_center_m": 16.0})
 
 
 def _mut_roam_stand_still(case):
-    for row in case.jobs["s3_05_urban"]["rows"]:
-        row["path_len_m"] = 0.0
-        row["dest_reached_n"] = 0.0
+    rows = case.jobs["s3_05_urban"]["rows"]
+    x0 = rows[0]["x_m"]
+    z0 = rows[0]["z_m"]
+    for row in rows:
+        row.update({"x_m": x0, "z_m": z0, "wp_x_m": x0, "wp_z_m": z0,
+                    "path_len_m": 0.0, "dest_reached_n": 0.0})
 
 
 def _mut_fsm_is_final_as_reached(case):
@@ -1378,6 +1638,12 @@ def _mut_combat_emote_as_done(case):
 
 def _mut_extra_default_gear(case):
     _set_scalar_num(case.ops["s3_01_apply1"]["payload"], "pre_gear_cleared_n", 0.0)
+    _append_payload_row(
+        case.ops["s3_01_obs1"]["payload"],
+        {"x_m": 4520.0, "y_m": 0.0, "z_m": 10320.0, "health_01": 1.0},
+        {"actor_id": "actor_1", "real_class": "eAI_SurvivorM_Mirek",
+         "slot_name": "Armband", "item_class": "Armband_Red"},
+    )
 
 
 def _mut_props_before_actor_check(case):
@@ -1399,6 +1665,12 @@ _MUTATIONS = {
     "combat_emote_as_done": _mut_combat_emote_as_done,
     "extra_default_gear": _mut_extra_default_gear,
     "props_before_actor_check": _mut_props_before_actor_check,
+}
+
+
+_MUTANT_DETAILS = {
+    "roam_stand_still": ("S3-05", "path_below_forty"),
+    "extra_default_gear": ("S3-01", "pre_gear_sweep"),
 }
 
 
@@ -1426,6 +1698,19 @@ class S3MutantTests(S3EvidenceTestBase):
                                   f"{name}:{cid}")
                 self.assertEqual(_check(verdict, "S3-00")["status"], "pass", name)
                 self.assertEqual(_check(verdict, "S3-10")["status"], "pass", name)
+                if name in _MUTANT_DETAILS:
+                    cid, needle = _MUTANT_DETAILS[name]
+                    self.assertIn(needle, _check(verdict, cid)["detail"], name)
+
+    def test_n30_canceled_as_done_part_accepted(self):
+        case = self.case()
+        case.build()
+        _mut_canceled_emote_as_done(case)
+        verdict = self.evaluate(case, part_name="n30")
+        self.assertEqual(_check(verdict, "S3-08")["status"], "fail", verdict)
+        self.assertEqual(_check(verdict, "S3-09")["status"], "pass", verdict)
+        self.assertEqual(verdict["exit_code"], 1, verdict)
+        self.assertEqual(verdict["verdict"], "FALLA", verdict)
 
 
 class S3E2ETests(unittest.TestCase):

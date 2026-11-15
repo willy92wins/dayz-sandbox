@@ -223,6 +223,7 @@ def _index_bridge(bridge_rows):
     enq_by_op = {}
     results_by_op = {}
     terminal_err_by_op = {}
+    hellos = []
     for ev in bridge_rows:
         kind = ev.get("ev")
         oid = ev.get("op_id")
@@ -234,15 +235,36 @@ def _index_bridge(bridge_rows):
             terminal_err_by_op.setdefault(oid, "result_lost")
         elif kind == "expire" and isinstance(oid, str):
             terminal_err_by_op.setdefault(oid, "result_timeout")
-    return {"enq": enq_by_op, "results": results_by_op, "terminal": terminal_err_by_op}
+        elif kind == "hello" and ev.get("http") == 200 and ev.get("ok") is not False:
+            hellos.append(ev)
+    return {"enq": enq_by_op, "results": results_by_op, "terminal": terminal_err_by_op,
+            "hellos": hellos}
+
+
+def _hello_insts(idx, peer):
+    out = {}
+    for ev in idx.get("hellos") or []:
+        if ev.get("peer") != peer:
+            continue
+        inst = ev.get("inst")
+        if isinstance(inst, str) and inst:
+            t = ev.get("t_ms")
+            out[inst] = t if isinstance(t, (int, float)) else None
+    return out
 
 
 def _resolve(idx, op_id):
     if not isinstance(op_id, str):
         return None, "bad_op_id"
+    enq = idx["enq"].get(op_id)
+    if enq is None:
+        return None, "no_enq"
     lst = idx["results"].get(op_id) or []
     if lst:
-        return lst[0], ""
+        ev = lst[0]
+        if ev.get("peer") != enq.get("peer"):
+            return None, "peer_mismatch"
+        return ev, ""
     err = idx["terminal"].get(op_id)
     if err:
         return None, err
@@ -321,43 +343,110 @@ def _arg_rows(args):
     return rows
 
 
-def _collect_pages(idx, page_ids):
+def _arg_int(args, key):
+    val = _arg_num(args, key)
+    if val is None:
+        return None
+    if val != math.floor(val):
+        return None
+    return int(val)
+
+
+def _arg_col_values(args, col):
+    if not isinstance(args, dict):
+        return None
+    if col in (args.get("scol") or []):
+        scol = list(args["scol"])
+        scell = args.get("scell") or []
+        count = _arg_rows(args)
+        if count is None:
+            return None
+        idx = scol.index(col)
+        width = len(scol)
+        return [scell[r * width + idx] for r in range(count)]
+    if col in (args.get("ncol") or []):
+        ncol = list(args["ncol"])
+        ncell = args.get("ncell") or []
+        count = _arg_rows(args)
+        if count is None:
+            return None
+        idx = ncol.index(col)
+        width = len(ncol)
+        return [ncell[r * width + idx] for r in range(count)]
+    return None
+
+
+def _collect_pages(idx, page_ids, start_id, peer, inst):
     if not isinstance(page_ids, list) or not page_ids:
         return None, [], "no_pages"
     first = None
     rows = []
+    pages_n = None
     for pos, pid in enumerate(page_ids):
+        enq = idx["enq"].get(pid)
+        if enq is None:
+            return None, [], "page_no_enq"
+        if enq.get("verb") != "job_read":
+            return None, [], "page_verb"
+        if enq.get("peer") != peer or enq.get("inst") != inst:
+            return None, [], "page_peer_or_inst"
+        page_args = enq.get("args") or {}
+        if _arg_str(page_args, "job") != start_id:
+            return None, [], "page_job"
+        if _arg_int(page_args, "page_n") != pos:
+            return None, [], "page_ordinal"
         payload, err = _done_payload(idx, pid)
         if payload is None:
             return None, [], err
+        total = payload["num"].get("rows_total_n")
+        if isinstance(total, bool) or not isinstance(total, (int, float)) or total < 0:
+            return None, [], "rows_total_missing"
+        total = int(total)
+        pn = payload["num"].get("pages_n")
+        if isinstance(pn, bool) or not isinstance(pn, (int, float)) or int(pn) != len(page_ids):
+            return None, [], "pages_n_mismatch"
         if pos == 0:
             first = payload
+            pages_n = total
         else:
             assert first is not None
             if payload["str"].get("state") != first["str"].get("state"):
                 return None, [], "state_changed"
-            if int(payload["num"].get("rows_total_n", -1)) != int(first["num"].get("rows_total_n", -2)):
+            if total != pages_n:
                 return None, [], "rows_total_changed"
         rows.extend(payload["rows"])
+    if len(rows) != pages_n:
+        return None, [], "rows_incomplete"
     return first, rows, ""
 
 
 def _job(idx, start_id, page_ids):
     if not isinstance(start_id, str):
         return None, "bad_start_op"
+    start_enq = idx["enq"].get(start_id)
+    if start_enq is None:
+        return None, "start_no_enq"
+    peer = start_enq.get("peer")
+    inst = start_enq.get("inst")
+    if not isinstance(inst, str) or not inst:
+        return None, "start_no_inst"
+    if inst not in _hello_insts(idx, peer):
+        return None, "unknown_instance"
     start_payload, err = _done_payload(idx, start_id)
     if start_payload is None:
         return None, err
-    meta, rows, perr = _collect_pages(idx, page_ids)
+    meta, rows, perr = _collect_pages(idx, page_ids, start_id, peer, inst)
     if meta is None:
         return None, perr
-    enq = idx["enq"].get(start_id) or {}
     return {
-        "args": enq.get("args") or {},
+        "args": start_enq.get("args") or {},
+        "inst": inst,
         "meta": meta,
+        "peer": peer,
         "resource": start_payload["str"].get("resource", ""),
         "rows": rows,
         "start": start_payload["str"],
+        "start_id": start_id,
     }, ""
 
 
@@ -451,6 +540,19 @@ def _wardrobe(payload):
     return out
 
 
+def _wardrobe_multiset(wardrobe):
+    """Multiconjunto (sin orden) por actor: clase y pares (ranura, prenda)."""
+    if wardrobe is None:
+        return None
+    out = {}
+    for aid, entry in wardrobe.items():
+        items = entry.get("items")
+        if not isinstance(items, list):
+            return None
+        out[aid] = (entry.get("real_class"), tuple(sorted(items)))
+    return out
+
+
 def _load_json(path: Path):
     try:
         return gate_core.read_json(path)
@@ -490,8 +592,23 @@ def _eval_s3_00(scen_rows, idx, core_pv, exp_pv):
     rows = [r for r in scen_rows if r.get("check") == "S3-00" and r.get("kind") == "handshake"]
     if not rows:
         return _miss("S3-00", "no_scenario")
+    phases = [r.get("phase") for r in rows]
+    if sorted(p for p in phases if isinstance(p, str)) != ["S0_handshake", "S9_restore"]:
+        return _miss("S3-00", "missing_phases")
+    server_insts = _hello_insts(idx, "server")
+    seen = {}
     for row in rows:
-        payload, err = _done_payload(idx, row.get("observe_op_id"))
+        phase = row.get("phase")
+        op_id = row.get("observe_op_id")
+        enq = idx["enq"].get(op_id) if isinstance(op_id, str) else None
+        if enq is None:
+            return _miss("S3-00", "observe_no_enq")
+        inst = enq.get("inst")
+        if not isinstance(inst, str) or inst not in server_insts:
+            return _miss("S3-00", "unknown_instance")
+        if enq.get("peer") != "server":
+            return _miss("S3-00", "observe_peer")
+        payload, err = _done_payload(idx, op_id)
         if payload is None:
             return _miss("S3-00", err)
         sk = payload["str"]
@@ -503,9 +620,9 @@ def _eval_s3_00(scen_rows, idx, core_pv, exp_pv):
         if sk.get("backend_class") != "DSBX_QA_ExpansionBackend":
             return _fail("S3-00", "backend_class")
         if sk.get("core_ver") != core_pv:
-            return _fail("S3-00", "core_ver")
+            return _miss("S3-00", "artifact_unverified")
         if sk.get("adapter_ver") != exp_pv:
-            return _fail("S3-00", "adapter_ver")
+            return _miss("S3-00", "artifact_unverified")
         core_start = _num(nk, "core_start_tick_ms")
         adapter_reg = _num(nk, "adapter_reg_tick_ms")
         tick = _num(nk, "tick_ms")
@@ -513,6 +630,15 @@ def _eval_s3_00(scen_rows, idx, core_pv, exp_pv):
             return _miss("S3-00", "missing_columns")
         if not (0.0 < core_start <= adapter_reg <= tick):
             return _fail("S3-00", "registration_order")
+        seen[phase] = inst
+    s0 = seen.get("S0_handshake")
+    s9 = seen.get("S9_restore")
+    if s0 is None or s9 is None or s0 == s9:
+        return _miss("S3-00", "restart_not_accredited")
+    t0 = server_insts.get(s0)
+    t9 = server_insts.get(s9)
+    if t0 is None or t9 is None or not (t0 < t9):
+        return _miss("S3-00", "restart_order")
     return _pass("S3-00")
 
 
@@ -557,7 +683,8 @@ def _eval_s3_01(scen_rows, idx, fixtures):
     if _num(obs1["num"], "world_props_n") != 2.0 or _num(obs1["num"], "world_actors_n") != 2.0:
         return _fail("S3-01", "world_counts_before_reset")
     ward1 = _wardrobe(obs1)
-    if ward1 is None or ward1 != expected_wardrobe:
+    exp_wardrobe_ms = _wardrobe_multiset(expected_wardrobe)
+    if ward1 is None or _wardrobe_multiset(ward1) != exp_wardrobe_ms:
         return _fail("S3-01", "wardrobe_before_reset")
 
     reset, err = _done_payload(idx, row["reset_op_id"])
@@ -581,17 +708,30 @@ def _eval_s3_01(scen_rows, idx, fixtures):
     if _num(obs2["num"], "world_props_n") != 2.0 or _num(obs2["num"], "world_actors_n") != 2.0:
         return _fail("S3-01", "world_counts_after_reset")
     ward2 = _wardrobe(obs2)
-    if ward2 is None or ward2 != expected_wardrobe or ward2 != ward1:
+    ward2_ms = _wardrobe_multiset(ward2)
+    if ward2_ms is None or ward2_ms != exp_wardrobe_ms or ward2_ms != _wardrobe_multiset(ward1):
         return _fail("S3-01", "wardrobe_after_reset")
 
     reject_rows = [r for r in rows if r.get("kind") == "reject"]
     if len(reject_rows) != 2:
         return _miss("S3-01", "missing_rejects")
+    if {r.get("case") for r in reject_rows} != {"unknown_class", "incompatible_slot"}:
+        return _fail("S3-01", "reject_cases")
     for rrow in reject_rows:
         case = rrow.get("case")
         expected_reason = {"unknown_class": "unknown_class", "incompatible_slot": "incompatible_slot"}.get(case)
         if expected_reason is None:
             return _miss("S3-01", "bad_reject_case")
+        app_enq = idx["enq"].get(rrow.get("apply_op_id")) or {}
+        app_args = app_enq.get("args") or {}
+        if case == "unknown_class":
+            chars = _arg_col_values(app_args, "character")
+            if chars is None or "SurvivorM_NoExiste" not in chars:
+                return _fail("S3-01", "unknown_class:order_without_invalid_class")
+        else:
+            specs = _arg_col_values(app_args, "wardrobe_spec")
+            if specs is None or "Headgear:HunterPants_Autumn" not in specs:
+                return _fail("S3-01", "incompatible_slot:order_without_invalid_slot")
         base, err = _done_payload(idx, rrow.get("baseline_observe_op_id"))
         if base is None:
             return _miss("S3-01", err)
@@ -666,9 +806,13 @@ def _eval_s3_02(scen_rows, idx):
     start_meta = _num(job["meta"]["num"], "start_tick_ms")
     reach = None
     for pos, row in enumerate(jrows):
-        dm = _num(row, "dist_mark_m")
-        if dm is None:
-            return _miss("S3-02", "missing_dist_mark")
+        x = _num(row, "x_m")
+        z = _num(row, "z_m")
+        mx = _num(row, "wp_x_m")
+        mz = _num(row, "wp_z_m")
+        if None in (x, z, mx, mz):
+            return _miss("S3-02", "missing_mark_position")
+        dm = _dist(x, z, mx, mz)
         if dm < 1.5:
             if _boundary(dm):
                 return _miss("S3-02", "quantization_boundary")
@@ -687,12 +831,13 @@ def _eval_s3_02(scen_rows, idx):
     pz = _num(jrows[reach], "z_m")
     if px is None or pz is None:
         return _miss("S3-02", "missing_settle_position")
-    settle_last = None
+    settle_last_tick = None
     observed_drift = 0.0
     for row in jrows[reach:]:
         x = _num(row, "x_m")
         z = _num(row, "z_m")
-        if x is None or z is None:
+        t = _num(row, "tick_ms")
+        if None in (x, z, t):
             return _miss("S3-02", "missing_position")
         drift = _dist(px, pz, x, z)
         if _boundary(drift):
@@ -700,21 +845,20 @@ def _eval_s3_02(scen_rows, idx):
         if drift >= 0.5:
             return _fail("S3-02", f"settle_drift:{drift:.6f}")
         observed_drift = max(observed_drift, drift)
-        reported = _num(row, "settle_max_drift_m")
-        if reported is None:
-            return _miss("S3-02", "missing_settle_drift")
-        if _boundary(reported):
-            return _miss("S3-02", "quantization_boundary")
-        if reported >= 0.5:
-            return _fail("S3-02", "settle_max_drift")
-        if reported + 1e-6 < observed_drift:
-            return _fail("S3-02", "settle_max_drift_below_observed")
-        sd = _num(row, "settle_dtsum_ms")
-        if sd is None:
-            return _miss("S3-02", "missing_settle_dtsum")
-        settle_last = sd
-    if settle_last is None or settle_last < 10000.0:
+        settle_last_tick = t
+    if settle_last_tick is None or tick is None:
+        return _miss("S3-02", "missing_settle_tick")
+    if settle_last_tick - tick < 10000.0:
         return _fail("S3-02", "settle_window_short")
+    reported = _num(jrows[-1], "settle_max_drift_m")
+    if reported is None:
+        return _miss("S3-02", "missing_settle_drift")
+    if _boundary(reported):
+        return _miss("S3-02", "quantization_boundary")
+    if reported >= 0.5:
+        return _fail("S3-02", "settle_max_drift")
+    if reported + 1e-6 < observed_drift:
+        return _fail("S3-02", "settle_max_drift_below_observed")
     return _pass("S3-02")
 
 
@@ -793,34 +937,31 @@ def _eval_s3_03(scen_rows, idx):
     last_dtsum = _num(lrows[-1], "dtsum_ms")
     if last_dtsum is None or last_dtsum < 60000.0:
         return _fail("S3-03", "loop_window_short")
-    prev_legs = None
-    legs_grew = False
-    prev_path = None
-    path_grew = False
+    prev_pos = None
+    path_sum = 0.0
+    arrivals = 0
+    last_arrival_wp = None
     for row in lrows:
-        legs = _num(row, "legs_completed_n")
-        path = _num(row, "path_len_m")
-        if legs is None or path is None:
+        x = _num(row, "x_m")
+        z = _num(row, "z_m")
+        mx = _num(row, "wp_x_m")
+        mz = _num(row, "wp_z_m")
+        if None in (x, z, mx, mz):
             return _miss("S3-03", "missing_loop_columns")
-        if prev_legs is not None and legs < prev_legs:
-            return _fail("S3-03", "legs_decreased")
-        if prev_legs is not None and legs > prev_legs:
-            legs_grew = True
-        if prev_path is not None and path < prev_path:
-            return _fail("S3-03", "path_decreased")
-        if prev_path is not None and path > prev_path:
-            path_grew = True
-        prev_legs = legs
-        prev_path = path
-    legs_final = _num(lrows[-1], "legs_completed_n")
-    path_final = _num(lrows[-1], "path_len_m")
-    if legs_final is None or legs_final < 3.0:
-        return _fail("S3-03", "legs_below_three")
-    if path_final is None or path_final < 30.0:
-        return _fail("S3-03", "path_below_thirty")
-    if not legs_grew:
-        return _fail("S3-03", "legs_constant")
-    if not path_grew:
+        if prev_pos is not None:
+            path_sum += _dist(prev_pos[0], prev_pos[1], x, z)
+        dm = _dist(x, z, mx, mz)
+        if dm < 1.5:
+            wp_key = (mx, mz)
+            if wp_key != last_arrival_wp:
+                arrivals += 1
+                last_arrival_wp = wp_key
+        prev_pos = (x, z)
+    if arrivals < 3:
+        return _fail("S3-03", f"legs_below_three:{arrivals}")
+    if path_sum < 30.0:
+        return _fail("S3-03", f"path_below_thirty:{path_sum:.6f}")
+    if path_sum <= 0.0:
         return _fail("S3-03", "path_constant")
     return _pass("S3-03")
 
@@ -888,6 +1029,30 @@ def _eval_s3_04(scen_rows, idx, fixtures):
             if _text(row, "observed_end_cause") == "observer_missing":
                 return _miss("S3-04", f"{key}:observer_missing")
 
+        scen_actor = by_key[key][0].get("actor_id")
+        if _arg_str(args, "actor_id") != scen_actor:
+            return _fail("S3-04", f"{key}:actor_arg")
+
+        req_seqs = set()
+        for row in jrows:
+            rq = _num(row, "req_seq_n")
+            if rq is None or rq <= 0.0:
+                return _miss("S3-04", f"{key}:missing_req_seq")
+            req_seqs.add(rq)
+            if _text(row, "emote_key") not in (None, key):
+                return _fail("S3-04", f"{key}:row_key")
+            exp_e = _num(row, "expected_emote_id")
+            exp_c = _num(row, "expected_cmd_id")
+            obs_e = _num(row, "observed_emote_id")
+            if None in (exp_e, exp_c, obs_e):
+                return _miss("S3-04", f"{key}:missing_ids")
+            if exp_e != float(eid) or exp_c != float(cid):
+                return _fail("S3-04", f"{key}:expected_ids")
+            if obs_e > 0.0 and obs_e != float(eid):
+                return _fail("S3-04", f"{key}:observed_ids")
+        if len(req_seqs) != 1:
+            return _fail("S3-04", f"{key}:req_seq_mismatch")
+
         req_pos = None
         for pos, row in enumerate(jrows):
             rt = _num(row, "req_tick_ms")
@@ -901,8 +1066,6 @@ def _eval_s3_04(scen_rows, idx, fixtures):
         if req_pos is None:
             return _miss("S3-04", f"{key}:no_request_row")
         req_row = jrows[req_pos]
-        if _num(req_row, "expected_emote_id") != float(eid) or _num(req_row, "expected_cmd_id") != float(cid):
-            return _fail("S3-04", f"{key}:expected_ids")
         req_tick = _num(req_row, "req_tick_ms")
 
         start_pos = None
@@ -915,6 +1078,7 @@ def _eval_s3_04(scen_rows, idx, fixtures):
                 break
         if start_pos is None:
             return _fail("S3-04", f"{key}:never_started")
+        start_cb = _num(jrows[start_pos], "cb_inst_id")
         start_tick = _num(jrows[start_pos], "start_tick_ms")
 
         finish_pos = None
@@ -930,6 +1094,14 @@ def _eval_s3_04(scen_rows, idx, fixtures):
                 break
         if finish_pos is None:
             return _fail("S3-04", f"{key}:never_finished")
+        finish_cb = _num(jrows[finish_pos], "cb_inst_id")
+        finish_max = _num(jrows[finish_pos], "max_cb_inst_at_req_n")
+        if None in (start_cb, finish_cb, finish_max):
+            return _miss("S3-04", f"{key}:missing_callback")
+        if finish_cb != start_cb:
+            return _fail("S3-04", f"{key}:callback_changed")
+        if finish_cb <= finish_max:
+            return _fail("S3-04", f"{key}:stale_callback")
         end_tick = _num(jrows[finish_pos], "end_tick_ms")
         if None in (req_tick, start_tick, end_tick):
             return _miss("S3-04", f"{key}:missing_ticks")
@@ -944,7 +1116,7 @@ def _eval_s3_04(scen_rows, idx, fixtures):
     return _pass("S3-04")
 
 
-def _roam_aggregate(job):
+def _roam_aggregate(job, center):
     rows = job["rows"]
     if len(rows) < 2:
         return None, "too_few_rows"
@@ -956,85 +1128,62 @@ def _roam_aggregate(job):
     last_dtsum = _num(rows[-1], "dtsum_ms")
     if last_dtsum is None or last_dtsum < 600000.0:
         return None, "window_short"
-    x0 = _num(rows[0], "x_m")
-    z0 = _num(rows[0], "z_m")
-    if x0 is None or z0 is None:
-        return None, "missing_position"
+    cx, cz = center
+    prev_pos = None
+    path_sum = 0.0
+    arrivals = 0
+    last_arrival_wp = None
     observed_max = 0.0
     for row in rows:
         x = _num(row, "x_m")
         z = _num(row, "z_m")
-        dc = _num(row, "dist_center_m")
-        if None in (x, z, dc):
+        mx = _num(row, "wp_x_m")
+        mz = _num(row, "wp_z_m")
+        if None in (x, z, mx, mz):
             return None, "missing_position"
+        dc = _dist(cx, cz, x, z)
         if _boundary(dc):
             return None, "quantization_boundary"
         if dc > 15.0:
             return None, "outside_radius"
-        real = _dist(x0, z0, x, z)
-        if abs(real - dc) > 1e-3:
-            return None, "dist_center_inconsistent"
         observed_max = max(observed_max, dc)
-    max_dist = _num(rows[-1], "max_dist_tick_m")
-    if max_dist is None:
-        return None, "missing_max_dist"
-    if _boundary(max_dist):
-        return None, "quantization_boundary"
-    if max_dist > 15.0:
-        return None, "max_dist_outside_radius"
-    if max_dist + 1e-6 < observed_max:
-        return None, "max_dist_below_observed"
-    out_ticks = _num(rows[-1], "out_of_radius_ticks_n")
-    ticks_checked = _num(rows[-1], "ticks_checked_n")
-    if out_ticks is None or ticks_checked is None:
-        return None, "missing_counters"
-    if ticks_checked <= 0.0:
-        return None, "no_ticks"
-    if out_ticks != 0.0:
-        return None, "out_of_radius"
-    prev_path = None
-    path_grew = False
-    prev_dest = None
-    dest_grew = False
-    for row in rows:
-        path = _num(row, "path_len_m")
-        dest = _num(row, "dest_reached_n")
-        if path is None or dest is None:
-            return None, "missing_path_columns"
-        if prev_path is not None and path < prev_path:
-            return None, "path_decreased"
-        if prev_path is not None and path > prev_path:
-            path_grew = True
-        if prev_dest is not None and dest < prev_dest:
-            return None, "dest_decreased"
-        if prev_dest is not None and dest > prev_dest:
-            dest_grew = True
-        prev_path = path
-        prev_dest = dest
-    path_final = _num(rows[-1], "path_len_m")
-    dest_final = _num(rows[-1], "dest_reached_n")
-    if path_final is None or path_final < 40.0:
-        return None, "path_below_forty"
-    if dest_final is None or dest_final < 4.0:
-        return None, "dest_below_four"
-    if not path_grew:
+        if prev_pos is not None:
+            path_sum += _dist(prev_pos[0], prev_pos[1], x, z)
+        dm = _dist(x, z, mx, mz)
+        if dm < 1.5:
+            wp_key = (mx, mz)
+            if wp_key != last_arrival_wp:
+                arrivals += 1
+                last_arrival_wp = wp_key
+        prev_pos = (x, z)
+    if path_sum < 40.0:
+        return None, f"path_below_forty:{path_sum:.6f}"
+    if arrivals < 4:
+        return None, f"dest_below_four:{arrivals}"
+    if path_sum <= 0.0:
         return None, "path_constant"
-    if not dest_grew:
-        return None, "dest_constant"
     return {
-        "max_dist_tick_m": max_dist,
-        "path_len_m": path_final,
-        "dest_reached_n": dest_final,
+        "max_dist_tick_m": observed_max,
+        "path_len_m": path_sum,
+        "dest_reached_n": float(arrivals),
         "buildings_near_n": _num(rows[-1], "buildings_near_n"),
     }, ""
 
 
-def _eval_s3_05(scen_rows, idx):
+def _eval_s3_05(scen_rows, idx, fixtures):
     rows = [r for r in scen_rows if r.get("check") == "S3-05"]
     urban_rows = [r for r in rows if r.get("kind") == "roam_urban"]
     open_rows = [r for r in rows if r.get("kind") == "roam_open"]
     if len(urban_rows) != 1 or len(open_rows) != 1:
         return _miss("S3-05", "no_scenario")
+    marks = (fixtures.get("marks") or {}).get("points") or {}
+    centers = {
+        "urban": marks.get("roam_urban_center") or {},
+        "open": marks.get("roam_open_center") or {},
+    }
+    for name, point in centers.items():
+        if not isinstance(point.get("x_m"), (int, float)) or not isinstance(point.get("z_m"), (int, float)):
+            return _miss("S3-05", f"{name}:fixture_center")
 
     aggs = {}
     for name, srow in (("urban", urban_rows[0]), ("open", open_rows[0])):
@@ -1051,25 +1200,27 @@ def _eval_s3_05(scen_rows, idx):
             return _fail("S3-05", f"{name}:duration")
         if _arg_num(args, "sample_step_ms") != 5000.0:
             return _fail("S3-05", f"{name}:sample_step")
-        agg, aerr = _roam_aggregate(job)
+        center = (float(centers[name]["x_m"]), float(centers[name]["z_m"]))
+        agg, aerr = _roam_aggregate(job, center)
         if agg is None:
             if aerr == "quantization_boundary":
                 return _miss("S3-05", f"{name}:quantization_boundary")
             return _fail("S3-05", f"{name}:{aerr}")
+        buildings = agg.get("buildings_near_n")
+        point = centers[name]
+        lo = point.get("buildings_near_min")
+        hi = point.get("buildings_near_max")
+        if buildings is None:
+            return _miss("S3-05", f"{name}:missing_buildings")
+        if name == "open":
+            if buildings >= 3.0:
+                return _miss("S3-05", "open:too_many_buildings")
+        else:
+            if isinstance(lo, (int, float)) and buildings < float(lo):
+                return _miss("S3-05", "urban:not_enough_buildings")
+            if isinstance(hi, (int, float)) and buildings > float(hi):
+                return _miss("S3-05", "urban:too_many_buildings")
         aggs[name] = agg
-
-    buildings = aggs["open"].get("buildings_near_n")
-    if buildings is None:
-        return _miss("S3-05", "open:missing_buildings")
-    if buildings >= 3.0:
-        return _miss("S3-05", "open:too_many_buildings")
-
-    u = aggs["urban"]
-    o = aggs["open"]
-    if (u["max_dist_tick_m"] == o["max_dist_tick_m"]
-            and u["path_len_m"] == o["path_len_m"]
-            and u["dest_reached_n"] == o["dest_reached_n"]):
-        return _fail("S3-05", "identical_aggregates_between_environments")
     return _pass("S3-05")
 
 
@@ -1238,6 +1389,35 @@ def _cancel_positions(rows):
     return cancel_pos, cleanup_pos, ""
 
 
+def _stop_check(idx, srow, job):
+    op_id = srow.get("stop_op_id")
+    enq = idx["enq"].get(op_id) if isinstance(op_id, str) else None
+    if enq is None:
+        return None, "stop_no_enq"
+    if enq.get("verb") != "job_stop":
+        return False, "stop_verb"
+    if enq.get("peer") != job.get("peer") or enq.get("inst") != job.get("inst"):
+        return False, "stop_peer_or_inst"
+    if _arg_str(enq.get("args") or {}, "job") != job.get("start_id"):
+        return False, "stop_job"
+    body, _ev, tech = _result(idx, op_id)
+    if body is None:
+        return None, tech
+    if body.get("status") != "done":
+        return False, "stop_status:" + str(body.get("status"))
+    if body.get("reason") not in ("", None):
+        return False, "stop_reason:" + str(body.get("reason"))
+    if job["meta"]["str"].get("state") != "stopped":
+        return False, "job_not_stopped"
+    stop_t = _num(enq, "t_ms")
+    if stop_t is not None:
+        for row in job["rows"]:
+            tick = _num(row, "tick_ms")
+            if tick is not None and tick > stop_t + DRAIN_MAX_MS:
+                return False, "rows_changed_after_stop"
+    return True, ""
+
+
 def _eval_s3_08(scen_rows, idx):
     rows = [r for r in scen_rows if r.get("check") == "S3-08"]
     if not rows:
@@ -1261,6 +1441,11 @@ def _eval_s3_08(scen_rows, idx):
         case, err = _merge_case(idx, case_rows[0])
         if case is None:
             return _miss("S3-08", f"{kind}:{err}")
+        stop_ok, serr = _stop_check(idx, case_rows[0], case["job"])
+        if stop_ok is None:
+            return _miss("S3-08", f"{kind}:{serr}")
+        if not stop_ok:
+            return _fail("S3-08", f"{kind}:{serr}")
         jrows = case["rows"]
         if not jrows:
             return _fail("S3-08", f"{kind}:empty")
@@ -1364,6 +1549,8 @@ def _eval_s3_08(scen_rows, idx):
                     break
             if not good:
                 return _fail("S3-08", f"{kind}:not_canceled")
+            if any(_text(row, "emote_state") == "terminado" for row in jrows):
+                return _fail("S3-08", f"{kind}:terminated")
 
         elif kind == "never_starts":
             for row in jrows[:cancel_pos]:
@@ -1379,6 +1566,8 @@ def _eval_s3_08(scen_rows, idx):
                 return _fail("S3-08", f"{kind}:timeout_too_short")
             if not any(_text(row, "emote_state") == "agotado" for row in jrows[cancel_pos:]):
                 return _fail("S3-08", f"{kind}:not_exhausted")
+            if any(_text(row, "emote_state") == "terminado" for row in jrows):
+                return _fail("S3-08", f"{kind}:terminated")
 
         else:  # stale_callback_isolation
             if not any((_num(row, "foreign_cb_events_n") or 0.0) >= 1.0 for row in jrows):
@@ -1415,6 +1604,11 @@ def _eval_s3_09(scen_rows, idx):
         case, err = _merge_case(idx, case_rows[0])
         if case is None:
             return _miss("S3-09", f"{kind}:{err}")
+        stop_ok, serr = _stop_check(idx, case_rows[0], case["job"])
+        if stop_ok is None:
+            return _miss("S3-09", f"{kind}:{serr}")
+        if not stop_ok:
+            return _fail("S3-09", f"{kind}:{serr}")
         jrows = case["rows"]
         if not jrows:
             return _fail("S3-09", f"{kind}:empty")
@@ -1554,7 +1748,24 @@ def _eval_s3_11(scen_rows, idx):
     apply_rows = [r for r in rows if r.get("kind") == "apply_props_only"]
     if len(obs_rows) != 1 or len(apply_rows) != 1:
         return _miss("S3-11", "no_scenario")
-    obs, err = _done_payload(idx, obs_rows[0].get("observe_op_id"))
+    obs_op = obs_rows[0].get("observe_op_id")
+    obs_enq = idx["enq"].get(obs_op) if isinstance(obs_op, str) else None
+    if obs_enq is None:
+        return _miss("S3-11", "observe_no_enq")
+    s8_inst = obs_enq.get("inst")
+    server_insts = _hello_insts(idx, "server")
+    if not isinstance(s8_inst, str) or s8_inst not in server_insts:
+        return _miss("S3-11", "unknown_instance")
+    restart_insts = set()
+    for row in scen_rows:
+        if row.get("check") != "S3-00" or row.get("kind") != "handshake":
+            continue
+        enq = idx["enq"].get(row.get("observe_op_id")) if isinstance(row.get("observe_op_id"), str) else None
+        if enq is not None and isinstance(enq.get("inst"), str):
+            restart_insts.add(enq["inst"])
+    if s8_inst in restart_insts:
+        return _miss("S3-11", "s8_not_new_instance")
+    obs, err = _done_payload(idx, obs_op)
     if obs is None:
         return _miss("S3-11", err)
     if _num(obs["num"], "core_loaded_b") != 1.0:
@@ -1589,7 +1800,22 @@ def _eval_s3_12(scen_rows, idx):
     noexp_rows = [r for r in rows if r.get("kind") == "no_expansion"]
     if len(lost_rows) != 1 or len(noexp_rows) != 1:
         return _miss("S3-12", "no_scenario")
+    s8_inst = None
+    for row in scen_rows:
+        if row.get("check") == "S3-11" and row.get("kind") == "observe_no_expansion":
+            op = row.get("observe_op_id")
+            enq = idx["enq"].get(op) if isinstance(op, str) else None
+            if enq is not None and isinstance(enq.get("inst"), str):
+                s8_inst = enq["inst"]
     for kind, srow in (("capability_lost", lost_rows[0]), ("no_expansion", noexp_rows[0])):
+        if kind == "no_expansion":
+            for key in ("baseline_observe_op_id", "apply_op_id", "post_observe_op_id"):
+                op = srow.get(key)
+                enq = idx["enq"].get(op) if isinstance(op, str) else None
+                if enq is None:
+                    return _miss("S3-12", "no_expansion:no_enq")
+                if s8_inst is None or enq.get("inst") != s8_inst:
+                    return _miss("S3-12", "no_expansion:not_on_s8_instance")
         base, err = _done_payload(idx, srow.get("baseline_observe_op_id"))
         if base is None:
             return _miss("S3-12", err)
@@ -1643,10 +1869,12 @@ def _eval_s3_12(scen_rows, idx):
     return _pass("S3-12")
 
 
-def _actor_overlap(scen_rows, idx):
+def _actor_resource_checks(scen_rows, idx):
+    """Devuelve (hay_solape, motivo_de_vinculo). El recurso se deriva del actor del escenario."""
     seen = set()
     intervals = []
     for row in scen_rows:
+        actor = row.get("actor_id")
         for sid_key, page_key in (("start_op_id", "page_op_ids"),
                                   ("post_watch_start_op_id", "post_watch_page_op_ids")):
             sid = row.get(sid_key)
@@ -1657,19 +1885,25 @@ def _actor_overlap(scen_rows, idx):
             job, err = _job(idx, sid, pids)
             if job is None:
                 continue
-            res = job["resource"]
+            if not isinstance(actor, str) or not actor:
+                continue
+            arg_actor = _arg_str(job["args"], "actor_id")
+            if arg_actor is not None and arg_actor != actor:
+                return False, f"actor_arg_mismatch:{actor}"
+            if job["resource"] != f"actor:{actor}":
+                return False, f"actor_resource_mismatch:{actor}"
             start = _num(job["meta"]["num"], "start_tick_ms")
             end = _num(job["meta"]["num"], "end_tick_ms")
-            if not isinstance(res, str) or not res.startswith("actor:") or start is None or end is None or end <= 0.0:
+            if start is None or end is None or end <= 0.0:
                 continue
-            intervals.append((res, start, end))
+            intervals.append((f"actor:{actor}", start, end))
     for i in range(len(intervals)):
         for j in range(i + 1, len(intervals)):
             r1, s1, e1 = intervals[i]
             r2, s2, e2 = intervals[j]
             if r1 == r2 and s1 < e2 and s2 < e1:
-                return True
-    return False
+                return True, ""
+    return False, ""
 
 
 def compute_exp_stamp_at_commit(git_head: str, repo_root: Path | None = None) -> str:
@@ -1809,7 +2043,10 @@ def evaluate(part_dir, *, repo_root: Path | None = None, fixtures_dir: Path | No
         return _early("operator_timeout")
 
     idx = _index_bridge(bridge_rows)
-    if _actor_overlap(scen_rows, idx):
+    overlap, resource_reason = _actor_resource_checks(scen_rows, idx)
+    if resource_reason:
+        return _early(resource_reason)
+    if overlap:
         return _early("actor_resource_overlap")
 
     checks = [
@@ -1818,7 +2055,7 @@ def evaluate(part_dir, *, repo_root: Path | None = None, fixtures_dir: Path | No
         _eval_s3_02(scen_rows, idx),
         _eval_s3_03(scen_rows, idx),
         _eval_s3_04(scen_rows, idx, fixtures),
-        _eval_s3_05(scen_rows, idx),
+        _eval_s3_05(scen_rows, idx, fixtures),
         _eval_s3_06(scen_rows, idx),
         _eval_s3_07(scen_rows, idx),
         _eval_s3_08(scen_rows, idx),
