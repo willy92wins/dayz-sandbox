@@ -29,6 +29,7 @@ Una línea por evento: `{"t_ms": <float>, "ev": "<tipo>", ...}`.
 - `rules` `{version, rule_ids}` cuando se escribe una versión, y `rules_active` `{version}` cuando `rules_active.json` la confirma. **Una inyección solo cuenta tras su `rules_active`.**
 - `apply` `{op_id, http_status, ttl_ms}`: cada `POST /api/apply`.
 - `op_state` `{op_id, state, reason}`: cada transición de una op, leída de los eventos del backend.
+- `result_seen` `{op_id, status, reason, dup}`: cada resultado que el bridge recibe de una op, leído del bridge en su `t_ms` de recepción. El proxy no ve los cuerpos.
 - `bridge` `{session, server, client, catalog}`: foto del bridge.
   - `server` y `client` son `{conn, inst, epoch, lost}` o `null`.
   - `catalog` es `{complete, n_classes, catalog_id}` o `null`.
@@ -93,9 +94,9 @@ Son los del brief, §5. «Recuperación» quiere decir un `recovery` cuya op lle
   - b4000: una `retirar`, cero `anotar`, `op_state` `parcial` con `reason` `lease_expired`, y nunca `fallido`.
   - Recuperación tras cada caso. `gap_reset.confirmed` con `config qa_step_gap_ms=0` en el log del servidor.
 - **G6:**
-  - FALLA si el resultado de `pause_order` llega al proxy (`route: result`) con `done` en un `t_ms > D_ms + 150`;
-  - PASA si su op acaba `rejected` o `error` por `expired`;
-  - INCONCLUSO si llegó algún resultado de esa op antes de `T_s_ms`.
+  - FALLA si hay un `result_seen` de la op de `pause_order` con `status: "done"` y `t_ms > D_ms + 150`;
+  - PASA si su `result_seen` es `rejected` o `error` con `reason: "expired"`;
+  - INCONCLUSO si hay algún `result_seen` de esa op con `t_ms < T_s_ms`, o ninguno.
   - La pendiente de las `clock` frente a su `t_ms` de llegada es una medida, y se anota la discontinuidad de `tick_ms` alrededor de la pausa.
   - Recuperación.
 - **G7:**
@@ -107,6 +108,6 @@ Son los del brief, §5. «Recuperación» quiere decir un `recovery` cuya op lle
   - Recuperación.
 - **G8:**
   - a: una pareja de `effect` y ningún cambio por el resultado repetido;
-  - b: una sola pareja de `effect` y un resultado con `dup: true` en el proxy;
+  - b: una sola pareja de `effect` y un `result_seen` con `dup: true` después de la reentrega;
   - c: la op de la sesión nueva con su propia pareja de `effect`.
 - **G9:** cien `mix_op`. Latencia de cada una = `t_ms` del `op_state` `observado` − `t_ms` de su `apply`; `inf` si no llega. p95 sobre las cien, con los fallos en el denominador (como `qa/s_puente_eval.py`, `_m2`), < 1000 ms. Una pareja de `effect` por op.
