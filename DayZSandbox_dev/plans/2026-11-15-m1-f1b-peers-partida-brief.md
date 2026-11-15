@@ -1,6 +1,6 @@
 # F1b-peers en partida: arnés G1-G9 y partidas
 
-2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.3; la v1.2 es `48452b7`). **v1.7, congelada: rondas 1 y 2 de Sol sobre el brief y sobre el código del arnés, con el tope cumplido y el resto arbitrado por el orquestador, más los arbitrajes de las partidas en DayZ y de la revisión del experto de Enforce (§10).**
+2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.3; la v1.2 es `48452b7`). **v1.8, congelada: rondas 1 y 2 de Sol sobre el brief y sobre el código del arnés, con el tope cumplido y el resto arbitrado por el orquestador, más los arbitrajes de las partidas en DayZ y de la revisión del experto de Enforce (§10).**
 
 **Por qué ahora.** F0.3-0 pasó su gate en partida en diag y en retail (`origin/main` `4f18c62`): `WIRE_CAP = 3500` está validado (G10 cumplido). La sesión principal ordenó arrancar las partidas el 2026-11-15. El PR de F1b-peers no se mergea hasta que G1-G9 pasen, porque toca el PBO.
 
@@ -311,3 +311,11 @@ Cada tanda trabaja en una copia del commit congelado. El orquestador revisa, cor
 - **Responde a la pregunta de producto de H-07:** la fila 1 de §3.4 compara ahora con `DSBX_Const.REST_STATE_4XX` (5, lo medido). Un 4xx devuelve el peer al hello sin esperar a `lease_ms`, y un 500 cae en «cualquier otro fallo».
 - **El arnés vuelve al 409.** G4 a (`g4a_409`) y G5 b fuerzan el hello con un 409, el código del `hello_required` del backend (`app/backend/bridge.py:491`). Con el mod nuevo, un 500 ya no devuelve el peer al hello.
 - **G7 no cambia:** sus casos `status*` son medidas. Lo que cambia es qué códigos de P vuelven a presentar el peer: ahora los cuatro 4xx, y ya no el 500.
+
+**H-14, G6 encola tras un poll del servidor (partida diag sobre `1155973`), arbitraje del orquestador:**
+- **Lo medido:** G1, G2, G3, G5, G7, G8 y G9 PASA, y G6 INCONCLUSO por «result_seen antes de T_s».
+  - La orden de 1500 ms se encoló cuando el long-poll del servidor llevaba 1928 ms retenido: el poll anterior terminó en 94894014 y el apply fue en 94895942 (`proxy.jsonl`).
+  - El plazo local cuenta desde el envío del poll (P-02, `DSBX_Peer.c:1116-1117`). Por eso la orden llegó vencida y el peer la rechazó (`rejected/expired`) 63 ms después, antes de la suspensión.
+  - El evaluador acertó: sin la orden en curso, G6 no prueba la pausa.
+- **No es del mod:** `HandleOrder` no cambió, y la regla es la conservadora de P-02. Con `hold_ms` = 2000 y `ttl_ms` = 1500, G6 cae así cuando el apply llega con el poll retenido más de ~1,4 s. Es un 30 % de las veces, según una estimación con polls de ~2,1 s. La partida v1.6 pasó porque el apply cayó antes.
+- **El arnés cambia:** G6 espera a que termine un poll del servidor y encola entonces, con el siguiente poll recién salido (`_g6_wait_server_poll`, `G6_POLL_ALIGN_S` = 5 s). Las pruebas están en `test_f1bp_g56.py`. El evaluador y R12 no cambian.

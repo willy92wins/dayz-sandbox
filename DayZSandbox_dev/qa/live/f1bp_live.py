@@ -65,6 +65,7 @@ OBSERVED_WAIT_S = 60.0
 RECOVERY_WINDOW_S = 60.0  # R20
 RECOVERY_STABLE_WAIT_S = 30.0  # R20
 G4A_HELLO_401_WAIT_S = 30.0  # R25
+G6_POLL_ALIGN_S = 5.0  # H-14
 
 LAST_SECRETS = ()
 
@@ -1524,6 +1525,46 @@ class LiveRun:
         found = [f for f in found if isinstance(f.get("t_done_ms"), (int, float))] or found
         return min(found, key=lambda f: f.get("t_ms") if isinstance(f.get("t_ms"), (int, float)) else 0)
 
+    def _g6_wait_server_poll(self, mark, timeout_s):
+        """H-14: espera a que termine un poll del servidor (linea de proxy.jsonl a partir de `mark`).
+
+        El peer manda el siguiente poll en cuanto recibe la respuesta, asi que una orden encolada justo
+        despues llega en un poll recien salido. Devuelve el t_done_ms de ese poll, o None si no aparece.
+        """
+        deadline = time.monotonic() + timeout_s
+        offset = int(mark or 0)
+        buf = b""
+        while time.monotonic() < deadline:
+            try:
+                with open(self.proxy_log, "rb") as fh:
+                    fh.seek(offset)
+                    chunk = fh.read()
+            except OSError:
+                chunk = b""
+            if chunk:
+                buf += chunk
+                offset += len(chunk)
+                cut = buf.rfind(b"\n")
+                if cut >= 0:
+                    complete, buf = buf[: cut + 1], buf[cut + 1:]
+                    for raw in complete.split(b"\n"):
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            obj = json.loads(raw.decode("utf-8", errors="replace"))
+                        except ValueError:
+                            continue
+                        if (
+                            isinstance(obj, dict)
+                            and obj.get("peer") == "server"
+                            and obj.get("route") == "poll"
+                            and isinstance(obj.get("t_done_ms"), (int, float))
+                        ):
+                            return obj["t_done_ms"]
+            time.sleep(0.005)
+        return None
+
     def _g56_sleep_until(self, t_ms):
         while True:
             left = t_ms - _now_ms()
@@ -1860,6 +1901,10 @@ class LiveRun:
             mark = self._g56_mark()
             if not self.set_rules(self.next_rules_version(), [rule], [rule_id]):
                 raise RuntimeError("rules_not_active")
+            # H-14: el plazo local del peer cuenta desde que envio el poll (P-02). Si el long-poll del
+            # servidor lleva retenido mas de ~1,4 s, una orden de 1500 ms llega ya vencida (rejected/expired)
+            # y G6 no prueba la pausa. Se encola justo al terminar un poll del servidor.
+            self._g6_wait_server_poll(self._g56_mark(), G6_POLL_ALIGN_S)
             with self.bridge.cond:
                 self.bridge.ttl_ms = 1500
             try:

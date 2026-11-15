@@ -283,5 +283,53 @@ class ProcessIdentity(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class G6AlineaConElPoll(unittest.TestCase):
+    """H-14: G6 encola justo al terminar un poll del servidor (proxy.jsonl desde la marca)."""
+
+    def setUp(self):
+        self.live = _load_module("f1bp_live_g6_align", LIVE_PATH)
+        self.run = self.live.LiveRun.__new__(self.live.LiveRun)
+        self.tmp = tempfile.mkdtemp(prefix="dsbx-f1bp-g6al-")
+        self.run.proxy_log = os.path.join(self.tmp, "proxy.jsonl")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write(self, rows, mode="w"):
+        with open(self.run.proxy_log, mode, encoding="utf-8", newline="\n") as fh:
+            for row in rows:
+                fh.write(json.dumps(row) + "\n")
+
+    def test_devuelve_el_primer_poll_del_servidor_tras_la_marca(self):
+        self._write([{"peer": "server", "route": "poll", "t_done_ms": 100}])
+        mark = self.run._g56_mark()
+        self._write([
+            {"peer": "client", "route": "poll", "t_done_ms": 200},
+            {"peer": "server", "route": "result", "t_done_ms": 300},
+            {"peer": "server", "route": "poll"},
+            {"peer": "server", "route": "poll", "t_done_ms": 400},
+            {"peer": "server", "route": "poll", "t_done_ms": 500},
+        ], mode="a")
+        self.assertEqual(self.run._g6_wait_server_poll(mark, 1.0), 400)
+
+    def test_sin_poll_del_servidor_devuelve_none(self):
+        self._write([{"peer": "server", "route": "poll", "t_done_ms": 100}])
+        mark = self.run._g56_mark()
+        self._write([{"peer": "client", "route": "poll", "t_done_ms": 200}], mode="a")
+        t0 = time.monotonic()
+        self.assertIsNone(self.run._g6_wait_server_poll(mark, 0.2))
+        self.assertGreaterEqual(time.monotonic() - t0, 0.2)
+
+    def test_g6_espera_el_poll_antes_de_encolar(self):
+        with open(LIVE_PATH, "r", encoding="utf-8") as fh:
+            source = fh.read()
+        body = source[source.index("    def run_g6_body(self):"):]
+        wait = body.index("self._g6_wait_server_poll(self._g56_mark(), G6_POLL_ALIGN_S)")
+        apply = body.index("self.apply_emit(web, ttl_ms=1500)")
+        rules = body.index("self.set_rules(self.next_rules_version(), [rule], [rule_id])")
+        self.assertLess(rules, wait)
+        self.assertLess(wait, apply)
+
+
 if __name__ == "__main__":
     unittest.main()

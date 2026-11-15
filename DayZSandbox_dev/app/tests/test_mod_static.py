@@ -990,25 +990,22 @@ def check_m15_cuarentena(mod_dir: Path) -> list[str]:
     if pop < 0 or take < 0 or create < 0 or not (pop < take < create):
         violations.append("M15: AcquireCallback debe probar el pool, luego la cuarentena y solo despues crear")
 
-    # Sol, E-01: cada operacion en su sitio (insertar, devolver el extraido, desligar), no solo los nombres
+    # Sol, E-01..E-03: los tres ayudantes de la cuarentena, al pie de la letra (cada operacion en su sitio
+    # y en su orden: insertar dentro del tope, el veto de CALLBACK_QUARANTINE_MS con su return, devolver el
+    # extraido y desligar todos los callbacks desde el primero).
     pick = "array<ref DSBX_Callback> quarantine = m_QuarantineR; if (canal == DSBX_Const.CH_P) { quarantine = m_QuarantineP; }"
-    taker = flat("TakeFromQuarantine").strip()
-    if pick not in taker or "DSBX_Callback oldest = quarantine.Get(0);" not in taker \
-            or "(NowMs() - oldest.m_RetiredMs) < DSBX_Const.CALLBACK_QUARANTINE_MS" not in taker \
-            or not taker.endswith("quarantine.RemoveOrdered(0); return oldest;") \
-            or len(re.findall(r"\breturn\s+(?!null\s*;)", taker)) != 1:
-        violations.append("M15: TakeFromQuarantine solo devuelve el mas antiguo, y solo pasado CALLBACK_QUARANTINE_MS")
-
-    quar = flat("Quarantine")
-    if pick not in quar or "cb.Retire();" not in quar or "cb.m_RetiredMs = NowMs();" not in quar \
-            or "if (quarantine.Count() < DSBX_Const.CALLBACK_QUARANTINE_MAX) { quarantine.Insert(cb); }" not in quar:
-        violations.append("M15: Quarantine debe retirar el callback, sellar m_RetiredMs e insertarlo dentro de CALLBACK_QUARANTINE_MAX")
-
-    detach = flat("DetachAll").strip()
-    if "while (k < callbacks.Count())" not in detach or "k = k + 1;" not in detach \
-            or "DSBX_Callback item = callbacks.Get(k); if (item) { item.Detach(); }" not in detach \
-            or not detach.endswith("callbacks.Clear();"):
-        violations.append("M15: DetachAll debe desligar cada callback (Detach) y vaciar la lista")
+    exact = {
+        "Quarantine": "cb.Retire(); cb.m_RetiredMs = NowMs(); " + pick
+        + " if (quarantine.Count() < DSBX_Const.CALLBACK_QUARANTINE_MAX) { quarantine.Insert(cb); }",
+        "TakeFromQuarantine": pick + " if (quarantine.Count() == 0) { return null; } DSBX_Callback oldest = quarantine.Get(0);"
+        " if (!oldest || (NowMs() - oldest.m_RetiredMs) < DSBX_Const.CALLBACK_QUARANTINE_MS) { return null; }"
+        " quarantine.RemoveOrdered(0); return oldest;",
+        "DetachAll": "int k = 0; while (k < callbacks.Count()) { DSBX_Callback item = callbacks.Get(k);"
+        " if (item) { item.Detach(); } k = k + 1; } callbacks.Clear();",
+    }
+    for name, want in exact.items():
+        if flat(name).strip() != want:
+            violations.append(f"M15: {name} debe ser exactamente: {want}")
 
     for wd, ch in (("WatchdogP", "CH_P"), ("WatchdogR", "CH_R")):
         body = flat(wd)
@@ -1529,6 +1526,27 @@ class TestModStatic(unittest.TestCase):
                 "scripts/3_Game/DSBX_Const.c",
                 "const int CALLBACK_QUARANTINE_MAX = 64;",
                 "const int CALLBACK_QUARANTINE_MAX = 32;",
+                "M15",
+            ),
+            # Sol E-02: el veto de los 60 s sin su return (se reutiliza antes de tiempo)
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "if (!oldest || (NowMs() - oldest.m_RetiredMs) < DSBX_Const.CALLBACK_QUARANTINE_MS)\n\t\t{\n\t\t\treturn null;\n\t\t}\n",
+                "if (!oldest || (NowMs() - oldest.m_RetiredMs) < DSBX_Const.CALLBACK_QUARANTINE_MS)\n\t\t{\n\t\t}\n",
+                "M15",
+            ),
+            # Sol E-03: DetachAll se salta el primer callback
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "\t\tint k = 0;\n\t\twhile (k < callbacks.Count())\n",
+                "\t\tint k = 1;\n\t\twhile (k < callbacks.Count())\n",
+                "M15",
+            ),
+            # Sol E-03: el incremento antes de Get(k) (tambien se salta el primero)
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "\t\t\tDSBX_Callback item = callbacks.Get(k);\n\t\t\tif (item)\n\t\t\t{\n\t\t\t\titem.Detach();\n\t\t\t}\n\t\t\tk = k + 1;\n",
+                "\t\t\tk = k + 1;\n\t\t\tDSBX_Callback item = callbacks.Get(k);\n\t\t\tif (item)\n\t\t\t{\n\t\t\t\titem.Detach();\n\t\t\t}\n",
                 "M15",
             ),
         ]
