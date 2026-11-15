@@ -1985,7 +1985,7 @@ class TestE9AntiFabrication(unittest.TestCase):
     def test_e9_evaluator_looks_at_mutant_names(self):
         """E9: Evaluator must not reference mutant names (check_12 blind evaluators)."""
         # This is a meta-test: check_12 in test_probe_static verifies no mutant names in evaluator
-        import qa.tests.test_probe_static as test_probe_static
+        from tests import test_probe_static
         result = test_probe_static.check_12_blind_evaluators(QA_DIR)
         self.assertEqual(result, [], f"Evaluator references mutant names: {result}")
 

@@ -208,6 +208,8 @@ from typing import Any
 
 import f03_common
 import gate_core
+
+PASA, FALLA, INCONCLUSO = 0, 1, 2  # codigos de gate_core.verdict_name
 import wire
 
 SPIKE_ID = "S-perf"
@@ -795,7 +797,7 @@ def evaluate(
         reasons.append(fixture_err or "modset_fixture_unavailable")
         return gate_core.make_verdict(
             SPIKE_ID,
-            gate_core.INCONCLUSO,
+            INCONCLUSO,
             checks=checks,
             metrics=metrics,
             reasons=reasons,
@@ -826,7 +828,7 @@ def evaluate(
             reasons.append("samples/bridge.jsonl missing")
         return gate_core.make_verdict(
             SPIKE_ID,
-            gate_core.INCONCLUSO,
+            INCONCLUSO,
             checks=checks,
             metrics=metrics,
             reasons=reasons,
@@ -839,7 +841,7 @@ def evaluate(
         reasons.append(f"PRF-01: invalid bridge.jsonl JSONL ({exc})")
         return gate_core.make_verdict(
             SPIKE_ID,
-            gate_core.FALLA,
+            FALLA,
             checks=checks,
             metrics=metrics,
             reasons=reasons,
@@ -852,7 +854,7 @@ def evaluate(
             reasons.append("samples/bridge.jsonl is empty")
         return gate_core.make_verdict(
             SPIKE_ID,
-            gate_core.INCONCLUSO,
+            INCONCLUSO,
             checks=checks,
             metrics=metrics,
             reasons=reasons,
@@ -1233,7 +1235,7 @@ def evaluate(
 
     # Assemble window datasets from perf_window_start + job_read (and step_<step>_polls.jsonl if present)
     step_windows: dict[str, dict[str, Any]] = {}
-    n1a_short_windows: list[dict[str, Any]] = []
+    n1a_brief_windows: list[dict[str, Any]] = []
     n1b_modset_rejects: list[dict[str, Any]] = []
     technical_window_missing = False
 
@@ -1353,7 +1355,7 @@ def evaluate(
             }
 
             if w_info["is_neg_probe"]:
-                n1a_short_windows.append(w_info)
+                n1a_brief_windows.append(w_info)
             else:
                 step_windows[step_id] = w_info
 
@@ -2135,7 +2137,7 @@ def evaluate(
 
     # 3. Check N1a (1-sample window probe rejected as insufficient_samples and freed)
     n1a_valid = False
-    for nw in n1a_short_windows:
+    for nw in n1a_brief_windows:
         t_num = nw["terminal_num"]
         r_tot = int(t_num.get("rows_total_n", len(nw["rows"])))
         if nw["terminal_state"] == "done" and r_tot == 1 and len(nw["rows"]) == 1:
@@ -2177,7 +2179,7 @@ def evaluate(
         == 1
     ]
 
-    neg_battery_ops = n1a_short_windows + n1b_modset_rejects + n2_client_rejects + [
+    neg_battery_ops = n1a_brief_windows + n1b_modset_rejects + n2_client_rejects + [
         bop for bop in budget_check_ops if bop["status"] == "rejected"
     ]
     pre_post_n5_invariance_ok = False
@@ -2441,7 +2443,7 @@ def evaluate(
     # Final Verdict Aggregation (S-perf brief §5: fail > missing > pass)
     # -----------------------------------------------------------------------
     if any(v == "fail" for v in checks.values()):
-        code = gate_core.FALLA
+        code = FALLA
     elif (
         transport_failures
         or technical_data is not None
@@ -2449,13 +2451,13 @@ def evaluate(
         or actor_driver_missing
         or any(v != "pass" for v in checks.values())
     ):
-        code = gate_core.INCONCLUSO
+        code = INCONCLUSO
         if transport_failures:
             reasons.extend(f"transport: {t}" for t in transport_failures)
         if technical_data is not None:
             reasons.append(f"technical: {technical_data.get('reason', 'blocker')}")
     else:
-        code = gate_core.PASA
+        code = PASA
 
     return gate_core.make_verdict(
         SPIKE_ID,
