@@ -160,51 +160,6 @@ def _tree_bytes(root):
     return blob
 
 
-class _FakeKernel32:
-    """API de prioridad simulada: registra llamadas y aplica o rechaza SetPriorityClass."""
-
-    def __init__(self, current=0x20, reject=False):
-        self.current = int(current)
-        self.reject = reject
-        self.handles = {}
-        self.next_handle = 5000
-        self.calls = []
-
-    def GetCurrentProcess(self):
-        return 1
-
-    def GetPriorityClass(self, handle):
-        self.calls.append(("get", int(handle)))
-        if int(handle) == 1:
-            return self.current
-        return self.handles.get(int(handle), self.current)
-
-    def SetPriorityClass(self, handle, priority_class):
-        self.calls.append(("set", int(handle), int(priority_class)))
-        if self.reject:
-            return 0
-        if int(handle) == 1:
-            self.current = int(priority_class)
-        else:
-            self.handles[int(handle)] = int(priority_class)
-        return 1
-
-    def OpenProcess(self, access, inherit, pid):
-        handle = self.next_handle
-        self.next_handle += 1
-        self.handles[handle] = self.current
-        return handle
-
-    def CloseHandle(self, handle):
-        return 1
-
-    def new_handle(self, priority_class):
-        handle = self.next_handle
-        self.next_handle += 1
-        self.handles[handle] = int(priority_class)
-        return handle
-
-
 class _FakeProc:
     def __init__(self, pid, handle, exit_code=None):
         self.pid = pid
@@ -226,22 +181,6 @@ class _FakeProc:
 
     def kill(self):
         self.killed = True
-
-
-def _fake_popen_factory(api, captured, real_popen=None):
-    next_pid = [7000]
-
-    def factory(cmd, **kwargs):
-        if "--peer" not in cmd:
-            return real_popen(cmd, **kwargs)
-        role = cmd[cmd.index("--peer") + 1]
-        flags = kwargs.get("creationflags", 0)
-        captured[role] = flags
-        next_pid[0] += 1
-        handle = api.new_handle(flags or api.current)
-        return _FakeProc(next_pid[0], handle)
-
-    return factory
 
 
 @contextlib.contextmanager
@@ -271,6 +210,130 @@ def _row_code(fault):
         verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
         bad = [(row["id"], row["status"]) for row in verdict["checks"] if row["status"] != "pass"]
     return code, bad
+
+
+def _n6_ctx(accept_ms, apply_ms, pose_read_ms, read_pose=None, reject_ms=626, lease_ms=600, accepts=None):
+    """Evidencia N6 minima con el rpc_log y la pose que produce un peer de reloj controlado.
+
+    El peer aplica una pose diferida en el frame siguiente y solo la descarta si su lease ya no
+    vale en ese frame (`fake_peer.py:1106-1110`). El reloj lo mueve el test para fijar la edad del
+    lease al recibir y al aplicar.
+
+    `accepts = [(recibida_ms, aplicada_ms), ...]` sustituye a la unica aceptada `(accept_ms, apply_ms)`:
+    la i-esima lleva `seq0 + i` y la pose `x = 7200 + i`. Despues llega una rechazada en `reject_ms`.
+    """
+    import fake_peer
+    import s_puente_eval
+
+    clock = [0.0]
+    peer = fake_peer.Peer(
+        config=None,
+        role="client",
+        rpc_port=0,
+        frame_hz=60,
+        fault=None,
+        clock_ms_fn=lambda: clock[0],
+    )
+    peer.lease_ms = lease_ms
+    peer.last_ok_ms = 0.0
+    peer.pose = ([7300.0, 370.0, 7300.0], [0.0, 0.0, 0.0])
+    peer.frame = 100
+    seq0 = 1000
+    accepts = list(accepts) if accepts is not None else [(accept_ms, apply_ms)]
+    for i, (acc_ms, app_ms) in enumerate(accepts):
+        clock[0] = float(acc_ms)
+        peer._handle_cam_rpc(
+            {
+                "target_inst": peer.inst,
+                "seq": seq0 + i,
+                "pos": [7200.0 + i, 360.0, 7200.0],
+                "ypr": [90.0, 0.0, 0.0],
+            }
+        )
+        clock[0] = float(app_ms)
+        peer.frame += 1
+        peer._apply()
+    clock[0] = float(reject_ms)
+    peer._handle_cam_rpc(
+        {
+            "target_inst": peer.inst,
+            "seq": seq0 + len(accepts),
+            "pos": [7200.0 + len(accepts), 360.0, 7200.0],
+            "ypr": [90.0, 0.0, 0.0],
+        }
+    )
+    if read_pose is None:
+        read_pose = peer.pose
+    log_done_ms = max(float(pose_read_ms), float(reject_ms) + 1.0)
+    bridge = [
+        {
+            "ev": "result",
+            "op_id": "pre",
+            "t_ms": 1,
+            "result": {
+                "status": "done",
+                "dup": False,
+                "done_ms": 0,
+                "read": {"has": ["rpc_log"], "rpc_log": []},
+            },
+        },
+        {
+            "ev": "enq",
+            "op_id": "burst",
+            "t_ms": 2,
+            "args": {
+                "seq0": seq0,
+                "count": len(accepts) + 1,
+                "pos": [7200.0, 360.0, 7200.0],
+                "ypr": [90.0, 0.0, 0.0],
+            },
+        },
+        {
+            "ev": "result",
+            "op_id": "log",
+            "t_ms": 3,
+            "result": {
+                "status": "done",
+                "dup": False,
+                "done_ms": log_done_ms,
+                "read": {"has": ["rpc_log"], "rpc_log": list(peer.rpc_log)},
+            },
+        },
+        {
+            "ev": "result",
+            "op_id": "read",
+            "t_ms": 4,
+            "result": {
+                "status": "done",
+                "dup": False,
+                "done_ms": float(pose_read_ms),
+                "read": {
+                    "has": ["pos", "ypr"],
+                    "pos": list(read_pose[0]),
+                    "ypr": list(read_pose[1]),
+                },
+            },
+        },
+    ]
+    scenario = [
+        {"ev": "step_start", "step": "N6", "peer": "client", "t_ms": 0},
+        {
+            "ev": "expect",
+            "step": "N6",
+            "peer": "client",
+            "t_ms": 5,
+            "roles": {"pre_log": "pre", "burst": "burst", "log": "log", "read": "read"},
+        },
+        {"ev": "step_end", "step": "N6", "peer": "client", "t_ms": 10},
+    ]
+    ctx = {
+        "bridge": bridge,
+        "scenario": scenario,
+        "lease": lease_ms,
+        "skipped": {},
+        "index": {id(ev): i for i, ev in enumerate(bridge)},
+    }
+    return s_puente_eval._n6(ctx)
 
 
 class E2ESpuenteTests(unittest.TestCase):
@@ -351,7 +414,7 @@ class E2ESpuenteTests(unittest.TestCase):
                             self.assertIn(planted.encode("ascii"), evidence_key_bytes(evidence, planted))
 
     def test_point7_rows_hold_under_cpu_load(self):
-        # Sin el arreglo (peers y bridge a prioridad normal) esta carga da 1 en vez de 0 (M2 p95, N5 "d not done").
+        """Carga extrema, fuera del gate: M2 (p95 con carga extrema) es un residual del entorno."""
         if os.environ.get("DSBX_STRESS") != "1":
             self.skipTest("prueba de carga: solo con DSBX_STRESS=1 (fuera del gate determinista)")
         with _cpu_load():
@@ -360,189 +423,67 @@ class E2ESpuenteTests(unittest.TestCase):
                     code, bad = _row_code(fault)
                     self.assertEqual(code, expected, bad)
 
-    def test_point7_priority_boost_is_restored(self):
-        import s_puente_run
+    def test_n6_applies_last_accepted_pose_when_lease_is_valid(self):
+        status, detail, _ = _n6_ctx(566, 599, 630)
+        self.assertEqual(status, "pass", detail)
 
-        if os.name != "nt":
-            self.skipTest("integracion real con ctypes: solo Windows")
-        boost = s_puente_run._PriorityBoost()
-        me = boost.api.GetCurrentProcess()
-        before = int(boost.api.GetPriorityClass(me))
-        self.assertTrue(boost.apply(), boost.error)
-        self.assertEqual(int(boost.api.GetPriorityClass(me)), s_puente_run._HIGH_PRIORITY_CLASS)
-        ok, observed = boost.restore()
-        self.assertTrue(ok)
-        self.assertEqual(observed, before)
-        self.assertEqual(int(boost.api.GetPriorityClass(me)), before)
-        # como mucho HIGH: nunca REALTIME_PRIORITY_CLASS (0x100)
-        self.assertEqual(s_puente_run._HIGH_PRIORITY_CLASS, 0x80)
+    def test_n6_excuses_pose_discarded_after_lease_expiry(self):
+        status, detail, _ = _n6_ctx(566, 601, 630)
+        self.assertEqual(status, "pass", detail)
+        self.assertEqual(detail, "pose discarded after lease expiry")
 
-    def test_gpu_lease_check_reads_the_lease_script(self):
-        import s_puente_run
-
-        with tempfile.TemporaryDirectory(prefix="dsbx-lease-") as tmp:
-            busy = Path(tmp) / "busy.py"
-            busy.write_text("import sys\nprint('OCUPADA: partida en curso')\nsys.exit(1)\n", encoding="utf-8")
-            free = Path(tmp) / "free.py"
-            free.write_text("print('LIBRE')\n", encoding="utf-8")
-            cases = ((busy, True), (free, False), (Path(tmp) / "missing.py", None))
-            for script, expected in cases:
-                with self.subTest(script=script.name):
-                    with mock.patch.dict(os.environ, {s_puente_run._GPU_LEASE_SCRIPT_ENV: str(script)}):
-                        self.assertIs(s_puente_run._gpu_lease_busy(), expected)
-
-    def test_priority_decision_respects_the_gpu_lease(self):
-        import s_puente_run
-
-        if os.name != "nt":
-            self.assertEqual(s_puente_run._priority_decision("offline"), "not_windows")
-            return
-        for busy, expected in ((True, "skipped_gpu_lease_busy"), (None, "skipped_gpu_lease_unknown"), (False, "applied")):
-            with self.subTest(busy=busy):
-                with mock.patch.object(s_puente_run, "_gpu_lease_busy", return_value=busy):
-                    self.assertEqual(s_puente_run._priority_decision("offline"), expected)
-        with mock.patch.object(s_puente_run, "_gpu_lease_busy", return_value=False):
-            self.assertEqual(s_puente_run._priority_decision("diag"), "not_offline")
-
-    def test_run_does_not_boost_while_a_game_holds_the_gpu_lease(self):
-        import s_puente_run
-
-        def must_not_boost():
-            raise AssertionError("subio la prioridad con el lease de la GPU ocupado")
-
-        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
-            evidence = Path(tmp) / "run"
-            evidence.mkdir()
-            with mock.patch.object(s_puente_run, "_gpu_lease_busy", return_value=True), mock.patch.object(
-                s_puente_run._PriorityBoost, "apply", side_effect=must_not_boost
-            ):
-                out = io.StringIO()
-                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-                    s_puente_run.run(_args(fault=None), evidence, [])
-            note = json.loads((evidence / "priority_boost.json").read_text(encoding="utf-8"))
-            expected = "skipped_gpu_lease_busy" if os.name == "nt" else "not_windows"
-            self.assertEqual(note["decision"], expected)
-            self.assertEqual(note["priority_class"], "unchanged")
-
-    def test_peer_creationflags_high_only_when_applied(self):
-        import s_puente_run
-
-        for reject, expected_flags in ((False, s_puente_run._HIGH_PRIORITY_CLASS), (True, 0)):
-            with self.subTest(reject=reject):
-                api = _FakeKernel32(reject=reject)
-                captured = {}
-                real_popen = subprocess.Popen
-                with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
-                    evidence = Path(tmp) / "run"
-                    evidence.mkdir()
-                    with mock.patch.object(s_puente_run, "_priority_decision", return_value="applied"), mock.patch.object(
-                        s_puente_run, "_priority_api", return_value=api
-                    ), mock.patch.object(
-                        s_puente_run, "_gpu_lease_busy", return_value=False
-                    ), mock.patch.object(
-                        s_puente_run.subprocess, "Popen", side_effect=_fake_popen_factory(api, captured, real_popen)
-                    ):
-                        s_puente_run.run(_args(peer_timeout=0.2), evidence, [])
-                    note = json.loads((evidence / "priority_boost.json").read_text(encoding="utf-8"))
-                self.assertEqual(captured.get("server"), expected_flags)
-                self.assertEqual(captured.get("client"), expected_flags)
-                if reject:
-                    self.assertFalse(note["apply"]["runner"]["ok"])
-                    self.assertEqual(note["priority_class"], "unchanged")
-                else:
-                    self.assertTrue(note["apply"]["runner"]["ok"])
-                    self.assertEqual(note["apply"]["runner"]["observed"], "HIGH")
-                    self.assertEqual(note["apply"]["peers"]["server"]["observed"], "HIGH")
-                    self.assertEqual(note["apply"]["peers"]["client"]["observed"], "HIGH")
-
-    def test_lease_transition_lowers_runner_and_peers(self):
-        import s_puente_run
-
-        api = _FakeKernel32()
-        captured = {}
-        lease_calls = {"n": 0}
-
-        def lease():
-            lease_calls["n"] += 1
-            return False if lease_calls["n"] == 1 else True
-
-        real_popen = subprocess.Popen
-        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
-            evidence = Path(tmp) / "run"
-            evidence.mkdir()
-            with mock.patch.object(s_puente_run, "_priority_decision", return_value="applied"), mock.patch.object(
-                s_puente_run, "_priority_api", return_value=api
-            ), mock.patch.object(
-                s_puente_run, "_gpu_lease_busy", side_effect=lease
-            ), mock.patch.object(
-                s_puente_run, "_LEASE_RECHECK_S", 0.01
-            ), mock.patch.object(
-                s_puente_run.subprocess, "Popen", side_effect=_fake_popen_factory(api, captured, real_popen)
-            ):
-                s_puente_run.run(_args(peer_timeout=1.0), evidence, [])
-            note = json.loads((evidence / "priority_boost.json").read_text(encoding="utf-8"))
-        self.assertEqual(captured.get("server"), s_puente_run._HIGH_PRIORITY_CLASS)
-        self.assertEqual(captured.get("client"), s_puente_run._HIGH_PRIORITY_CLASS)
-        self.assertTrue(note["lease_lowered"], note)
-        self.assertEqual(note["lease_lowered"][0]["reason"], "gpu_lease_busy")
-        self.assertEqual(note["lease_lowered"][0]["runner"], "NORMAL")
-        self.assertEqual(note["apply"]["peers"]["server"]["observed"], "NORMAL")
-        self.assertEqual(note["apply"]["peers"]["client"]["observed"], "NORMAL")
-        self.assertTrue(note["restore"]["ok"])
-        peer_normal_sets = [c for c in api.calls if c[0] == "set" and c[1] != 1 and c[2] == s_puente_run._NORMAL_PRIORITY_CLASS]
-        self.assertGreaterEqual(len(peer_normal_sets), 2, api.calls)
-
-    def test_cleanup_failure_still_restores_priority(self):
-        import s_puente_run
-
-        api = _FakeKernel32()
-
-        def stop_raises(procs):
-            raise RuntimeError("stop de peers fallo")
-
-        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
-            root = Path(tmp)
-            (root / "s").mkdir()
-            (root / "c").mkdir()
-            evidence = root / "run"
-            evidence.mkdir()
-            args = _args(build="retail", peer_timeout=0.2, server_profile=str(root / "s"), client_profile=str(root / "c"))
-            with mock.patch.object(s_puente_run, "_priority_decision", return_value="applied"), mock.patch.object(
-                s_puente_run, "_priority_api", return_value=api
-            ), mock.patch.object(s_puente_run, "_gpu_lease_busy", return_value=False), mock.patch.object(
-                s_puente_run, "_stop_peers", side_effect=stop_raises
-            ):
-                with self.assertRaises(RuntimeError):
-                    s_puente_run.run(args, evidence, [])
-            note = json.loads((evidence / "priority_boost.json").read_text(encoding="utf-8"))
-        self.assertTrue(note["restore"]["done"])
-        self.assertTrue(note["restore"]["ok"])
-        self.assertEqual(api.current, s_puente_run._NORMAL_PRIORITY_CLASS)
-        self.assertIn(("set", 1, s_puente_run._HIGH_PRIORITY_CLASS), api.calls)
-        self.assertIn(("set", 1, s_puente_run._NORMAL_PRIORITY_CLASS), api.calls)
-
-    def test_ambiguous_lease_outputs_do_not_boost(self):
-        import s_puente_run
-
-        cases = (
-            ("NO LIBRE", "", 0, None),
-            ("OCUPADA\nLIBRE", "", 0, True),
-            ("", "", 0, None),
-            ("LISTO", "", 0, None),
-            ("LIBRE", "", 1, True),
-            ("LIBRE", "aviso", 0, None),
+    def test_n6_fails_pose_discarded_while_lease_is_valid(self):
+        status, detail, _ = _n6_ctx(
+            100,
+            150,
+            200,
+            read_pose=([7300.0, 370.0, 7300.0], [0.0, 0.0, 0.0]),
         )
-        with tempfile.TemporaryDirectory(prefix="dsbx-lease-") as tmp:
-            script = Path(tmp) / "lease.py"
-            script.write_text("print('LIBRE')\n", encoding="utf-8")
-            with mock.patch.dict(os.environ, {s_puente_run._GPU_LEASE_SCRIPT_ENV: str(script)}):
-                for stdout, stderr, code, expected in cases:
-                    with self.subTest(stdout=stdout, stderr=stderr, code=code):
-                        completed = subprocess.CompletedProcess(["lease"], code, stdout, stderr)
-                        with mock.patch.object(s_puente_run.subprocess, "run", return_value=completed):
-                            self.assertIs(s_puente_run._gpu_lease_busy(), expected)
-                            if os.name == "nt":
-                                self.assertNotEqual(s_puente_run._priority_decision("offline"), "applied")
+        self.assertEqual(status, "fail", detail)
+        self.assertEqual(detail, "pose is not last accepted")
+
+    def test_n6_fails_must_apply_pose_dropped_even_if_read_after_expiry(self):
+        # Llega con 500 ms de lease restante: tuvo que aplicarse. Que la lectura sea posterior a la caducidad
+        # (600 <= 700) no excusa nada; en la rafaga real todas las aceptadas comparten esa caducidad.
+        status, detail, _ = _n6_ctx(
+            100,
+            150,
+            700,
+            read_pose=([7300.0, 370.0, 7300.0], [0.0, 0.0, 0.0]),
+        )
+        self.assertEqual(status, "fail", detail)
+        self.assertEqual(detail, "pose is not last accepted")
+
+    def test_n6_excuses_discarded_tail_after_last_must_apply(self):
+        # A (100) y B (300) llegan con 500 y 300 ms de lease: obligadas. C (560) llega con 40 ms y el peer la
+        # descarta al aplicarla a los 601 ms. La pose es la de B, la ultima obligada.
+        status, detail, _ = _n6_ctx(None, None, 640, accepts=[(100, 110), (300, 310), (560, 601)])
+        self.assertEqual(status, "pass", detail)
+        self.assertEqual(detail, "pose discarded after lease expiry")
+
+    def test_n6_fails_pose_older_than_last_must_apply(self):
+        # Misma rafaga, pero la pose leida es la de A: B era obligada y no se aplico.
+        status, detail, _ = _n6_ctx(
+            None,
+            None,
+            640,
+            accepts=[(100, 110), (300, 310), (560, 601)],
+            read_pose=([7200.0, 360.0, 7200.0], [90.0, 0.0, 0.0]),
+        )
+        self.assertEqual(status, "fail", detail)
+        self.assertEqual(detail, "pose is not last accepted")
+
+    def test_n6_fails_when_no_burst_pose_was_applied(self):
+        # Un peer que no aplica ninguna pose diferida: la pose sigue siendo la de antes de la rafaga.
+        status, detail, _ = _n6_ctx(
+            None,
+            None,
+            640,
+            accepts=[(100, 110), (300, 310), (560, 601)],
+            read_pose=([7300.0, 370.0, 7300.0], [0.0, 0.0, 0.0]),
+        )
+        self.assertEqual(status, "fail", detail)
+        self.assertEqual(detail, "pose is not last accepted")
 
     def test_cpu_load_kills_partially_created_burners(self):
         created = []
