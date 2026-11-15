@@ -81,6 +81,7 @@ import time
 
 from app.backend.scene_plan import (
     check_apply_predicate,
+    evaluate_compensation_predicate,
     evaluate_reset_predicate,
     extract_caps,
     valid_scene_read,
@@ -193,66 +194,18 @@ def _reset_predicate(order, read, world_size):
 
 
 def _stopped_apply_predicate(order, read, world_size):
-    """Predicado de «apply detenido» (§4.3).
+    """Predicado de «apply detenido» (§4.3): usa el de scene_plan.
 
-    # TODO integrar con scene_plan: scene_plan.py (foto parcial, F2-1a) solo
-    # trae el predicado de compensacion con `n == retained_n`; §4.3 pide
-    # `n >= retained_n >= 1` para los restos sin procesar de la generacion
-    # anterior, exige `generation` nula y trata `pending` de la orden como «sin
-    # resolver». Se deja local hasta que la otra tanda lo integre.
-
-    Devuelve (state, reason) con state en ("parcial", "fallido", "unresolved").
+    `evaluate_compensation_predicate` ya hace el «apply detenido» con `n >=
+    retained_n >= 1`, `generation` nula y `pending` de la orden como «sin
+    resolver». Se normaliza el `rev` de 9 digitos (A2) como en el resto de
+    predicados; no queda copia local de la logica.
     """
-    if not isinstance(order, dict) or not _valid_read_compat(read, None, world_size):
+    order2, read2 = _normalized_for_predicate(order, read)
+    try:
+        return evaluate_compensation_predicate(order2, read2, world_size=world_size)
+    except Exception:
         return ("fallido", "lectura_no_cumple")
-    if read.get("epoch") != order.get("epoch"):
-        return ("fallido", "lectura_no_cumple")
-    scene = read["scene"]
-    args = order.get("args") or {}
-    if args.get("doc_id") and scene.get("doc_id") != args.get("doc_id"):
-        return ("fallido", "lectura_no_cumple")
-    last = scene.get("last")
-    if not isinstance(last, dict):
-        return ("fallido", "lectura_no_cumple")
-    if (
-        last.get("session") != order.get("session")
-        or last.get("op_id") != order.get("op_id")
-        or last.get("verb") != "scene.apply"  # A4: otro verb -> lectura_no_cumple
-    ):
-        return ("fallido", "lectura_no_cumple")
-    if read.get("generation") is not None:
-        # F2-03 / hallazgo 4: una generacion viva de otra orden no es un apply detenido.
-        return ("fallido", "lectura_no_cumple")
-
-    pending = scene.get("pending")
-    pending_is_a = (
-        isinstance(pending, dict)
-        and pending.get("session") == order.get("session")
-        and pending.get("op_id") == order.get("op_id")
-    )
-    if pending_is_a:
-        return ("unresolved", None)
-
-    outcome = last.get("outcome")
-    n = scene.get("n")
-    retained_n = scene.get("retained_n")
-    retained = scene.get("retained")
-
-    if outcome == "compensated" and n == 0 and retained_n == 0 and retained == []:
-        return ("parcial", "compensada")
-    if (
-        outcome == "retained"
-        and isinstance(retained, list)
-        and len(retained) > 0
-        and _is_int(retained_n)
-        and retained_n >= 1
-        and _is_int(n)
-        and n >= retained_n
-    ):
-        return ("parcial", "contenido_ajeno")
-    if outcome == "interrupted":
-        return ("parcial", "interrumpida")
-    return ("fallido", "lectura_no_cumple")
 
 
 class SceneLive:

@@ -51,6 +51,7 @@ _MAX_COUNT = 999999
 _MAX_REV = 999999999
 _MAX_WORLD_SIZE = 99999
 _MAX_Y = 9999.999
+MAX_STRING_CHARS = 1023  # A15/M20: el motor corta cada cadena de un JSON leido
 
 
 def _is_int(val):
@@ -474,12 +475,32 @@ def validate_for_apply(doc, rev, hash_, store_catalog, world_catalog=None,
     lids = []
     classes = []
     large_errors = []
+    doc_id = doc.get("doc_id") if isinstance(doc, dict) else None
+    if isinstance(doc_id, str) and len(doc_id) > MAX_STRING_CHARS:
+        large_errors.append({
+            "code": "plan_too_large",
+            "pointer": "",
+            "msg": f"El doc_id supera {MAX_STRING_CHARS} caracteres.",
+        })
     for i, ent in enumerate(entities):
         if not isinstance(ent, dict):
             continue
         lid = ent.get("id")
         lids.append(lid if isinstance(lid, str) else "")
-        classes.append(ent.get("cls", ""))
+        cls = ent.get("cls")
+        classes.append(cls if isinstance(cls, str) else "")
+        if isinstance(lid, str) and len(lid) > MAX_STRING_CHARS:
+            large_errors.append({
+                "code": "plan_too_large",
+                "pointer": f"/entities/{i}/id",
+                "msg": f"El lid supera {MAX_STRING_CHARS} caracteres.",
+            })
+        if isinstance(cls, str) and len(cls) > MAX_STRING_CHARS:
+            large_errors.append({
+                "code": "plan_too_large",
+                "pointer": f"/entities/{i}/cls",
+                "msg": f"La clase supera {MAX_STRING_CHARS} caracteres.",
+            })
         if not valid_lid(lid):
             large_errors.append({
                 "code": "plan_too_large",

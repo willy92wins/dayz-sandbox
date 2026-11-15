@@ -23,6 +23,7 @@ from app.backend.store import Store  # noqa: E402
 from app.backend.lease import Leases  # noqa: E402
 from app.backend.profile import Profile  # noqa: E402
 from app.backend.bridge import Bridge  # noqa: E402
+from app.backend.scene_live import SceneLive  # noqa: E402
 
 MAX_BODY = 1024 * 1024
 CLIENT_QUEUE = 1000
@@ -42,6 +43,9 @@ STATUS = {
     "unauthorized": 401, "forbidden": 403, "author_mismatch": 403, "csrf_failed": 403,
     "bad_request": 400, "not_found": 404, "internal": 500,
     "queue_full": 409, "wire_cap_exceeded": 500,
+    "expansion_unavailable": 422, "catalog_pending": 409,
+    "unknown_class": 422, "out_of_map": 422, "budget_exceeded": 422,
+    "plan_too_large": 422, "scene_unsupported": 409,
 }
 
 
@@ -93,9 +97,11 @@ class Backend:
         self.httpd.block_on_close = False
         self.httpd.backend = self
         self.bridge = None
+        self.scene_live = None
         if bridge_port is not None:
             self.bridge = Bridge(self, peer_key, port=bridge_port, clock=self.clock,
                                  log=self.log, **(bridge_kwargs or {}))
+            self.scene_live = SceneLive(self.bridge)
 
     @property
     def port(self):
@@ -257,6 +263,22 @@ class Backend:
             frozen = self.store.freeze(doc_id, rev, hash_)
             if not frozen.get("ok"):
                 return frozen
+            if self.bridge is not None and self.scene_live is not None \
+                    and self.scene_live.server_has_scene_locked():
+                # D1/A10: con un peer con escena, apply es una orden F2. SceneLive
+                # valida (§4.1), crea la fila de la API y la encola; Backend no
+                # crea otra fila.
+                res = self.scene_live.prepare_apply_locked(
+                    frozen["doc"], frozen["rev"], frozen["hash"])
+                if not res.get("ok"):
+                    return res
+                if self.scene_live._scene_queue_len_locked() >= self.bridge.queue_max:
+                    return fail("queue_full", "Cola del bridge llena")
+                ok, order = self.scene_live.enqueue_apply_locked(
+                    None, res["plan"], res["expectation"])
+                if not ok:
+                    return order
+                return {"ok": True, "op_id": order["op_id"]}
             if self.bridge is not None and self.bridge.live_scene_count() >= self.bridge.queue_max:
                 return fail("queue_full", "Cola del bridge llena")
             self._op_n += 1
@@ -273,6 +295,30 @@ class Backend:
             self.op_mono[op["op_id"]] = self.clock()
             self._emit("op.state", dict(op))
             return {"ok": True, "op_id": op["op_id"]}
+
+    def reset(self, doc_id):
+        """POST /api/reset (§4.2/A11): delega en SceneLive; sin bridge, 409."""
+        with self.store.lock:
+            if self.bridge is None or self.scene_live is None:
+                return fail("scene_unsupported", "El servidor no soporta escena F2")
+            ok, info = self.scene_live.enqueue_reset_locked(None, doc_id)
+            if not ok:
+                return info
+            return {"ok": True, "op_id": info["op_id"]}
+
+    def request_observe(self, doc_id):
+        """POST /api/observe (§4.2): lectura `now` interna a traves de SceneLive."""
+        with self.store.lock:
+            if self.bridge is None or self.scene_live is None:
+                return fail("scene_unsupported", "El servidor no soporta escena F2")
+            return self.scene_live.request_observe_locked(doc_id)
+
+    def observation(self):
+        """GET /api/observation (§4.2): ultima lectura `now` y su antiguedad."""
+        with self.store.lock:
+            if self.scene_live is None:
+                return {"ok": True, "observation": None, "age_ms": None}
+            return self.scene_live.observation_locked()
 
     def author_for(self, header):
         token = header[7:] if header and header.startswith("Bearer ") else None
@@ -538,6 +584,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_result(self.backend.changes(since, wait))
         elif self.path == "/api/events":
             self.stream_events()
+        elif url.path == "/api/observation":
+            self.send_json(200, self.backend.observation())
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 
@@ -662,6 +710,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             length = int(self.headers.get("Content-Length") or 0)
             self.send_json(*self.backend.profile.save_profile(body, length))
+        elif path == "/api/reset":
+            if not human:
+                self.send_json(403, fail("forbidden", "Solo la persona quita del juego"))
+                return
+            v = self.fields(body, [("doc_id", (str,))])
+            if v is not None:
+                self.send_result(self.backend.reset(v[0]))
+        elif path == "/api/observe":
+            v = self.fields(body, [("doc_id", (str,))])
+            if v is not None:
+                self.send_result(self.backend.request_observe(v[0]))
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 
