@@ -482,6 +482,9 @@ def _n6(ctx):
     return status, detail, metrics
 
 
+_N6_APPLY_KEYS = ("apply_ms", "apply_lease_age_ms", "applied_b")
+
+
 def _n6_has_apply_record(entry):
     applied = entry.get("applied_b")
     return (
@@ -498,35 +501,37 @@ def _n6_pose_check(accepted, lease, seq0, p0, pose_read, pose_ok):
     El peer aplica la pose aceptada en el frame siguiente y la descarta si en ese frame su lease ya no
     vale (`fake_peer.py`, `_apply`). Solo el registro del propio peer acredita un descarte: en cada
     aceptada del `rpc_log`, `apply_ms`, `apply_lease_age_ms` y `applied_b`, anotados al aplicar.
-    - **Con ese registro en todas las aceptadas:** cada resultado tiene que casar con el lease en ese
-      instante (aplicada si y solo si `apply_lease_age_ms <= lease`), y la pose leida tiene que ser la de
-      la ultima aplicada. Si ninguna se aplico, la pose de antes de la rafaga no esta en la evidencia:
-      `missing`.
-    - **Sin el registro** (la sonda real todavia no lo da), con la pose de la ultima aceptada: `pass`.
-      Si no lo es:
-      - **pose de una aceptada anterior:** las posteriores pudieron descartarse, asi que es `missing`,
-        nunca `pass`. Que el lease caducara antes de leer no acredita nada, porque en la rafaga todas las
-        aceptadas comparten caducidad.
-      - **pose de ninguna aceptada:** solo seria valido si se hubieran descartado todas. Con aceptadas en
-        dos instantes de recepcion distintos, eso es imposible: el peer aplica antes de drenar en cada
-        frame, y las del primer instante se aplicaron con el lease vigente, porque la siguiente se acepto
-        despues. Es FALLA.
+    - **Cada registro presente se valida siempre,** aunque falten otros: un registro a medias o mal
+      formado es FALLA, y uno que contradiga el lease en ese instante (aplicada si y solo si
+      `apply_lease_age_ms <= lease`) tambien.
+    - **Con registro en todas las aceptadas:** la pose leida tiene que ser la de la ultima aplicada. Si no
+      se aplico ninguna, la pose de antes de la rafaga no esta en la evidencia: `missing`.
+    - **Sin registro completo** (la sonda real todavia no lo da): con la pose de la ultima aceptada,
+      `pass`, salvo que su propio registro diga que se descarto. Cualquier otra pose es `missing`, nunca
+      `pass` ni `fail`: sin identidad de frame ni de aplicacion no se puede acreditar que pose debia
+      quedar. Que el lease caducara antes de leer no acredita nada, porque en la rafaga todas las
+      aceptadas comparten caducidad.
     """
     ordered = sorted(accepted, key=lambda e: (e["recv_ms"], e["seq"]))
-    if not ordered or not all(_n6_has_apply_record(e) for e in ordered):
-        if pose_ok:
-            return "pass", ""
-        for entry in ordered:
-            if _pose_match(pose_read, [p0[0] + (entry["seq"] - seq0), p0[1], p0[2]], [90, 0, 0]):
-                return "missing", "pose mismatch without apply evidence"
-        if len({entry["recv_ms"] for entry in ordered}) >= 2:
-            return "fail", "pose is not an accepted pose"
-        return "missing", "pose mismatch without apply evidence"
+    if not ordered:
+        return "missing", "no accepted entries"
     for entry in ordered:
+        present = [key for key in _N6_APPLY_KEYS if key in entry]
+        if not present:
+            continue
+        if len(present) != len(_N6_APPLY_KEYS) or not _n6_has_apply_record(entry):
+            return "fail", "malformed apply record"
         if entry["apply_ms"] < entry["recv_ms"]:
             return "fail", "pose applied before received"
         if bool(entry["applied_b"]) != (entry["apply_lease_age_ms"] <= lease):
             return "fail", "pose apply contradicts lease"
+    if not all(_n6_has_apply_record(e) for e in ordered):
+        if pose_ok:
+            last_entry = ordered[-1]
+            if _n6_has_apply_record(last_entry) and last_entry["applied_b"] == 0:
+                return "fail", "pose contradicts apply record"
+            return "pass", ""
+        return "missing", "pose mismatch without apply evidence"
     applied = [e for e in ordered if e["applied_b"] == 1]
     if not applied:
         return ("fail", "pose applied without apply record") if pose_ok else ("missing", "no burst pose applied")

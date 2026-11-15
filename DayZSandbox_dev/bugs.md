@@ -52,21 +52,27 @@ Lo que aparece fuera del alcance de una tanda, o lo que un arbitraje aplaza, se 
   Se quitaron `_HIGH_PRIORITY_CLASS`, `_gpu_lease_busy`, `_priority_decision`, `_PriorityBoost` (apply/lower/restore), `_lower_process_priority`, `_read_priority`/`_set_priority`/`_process_handle`/`_observed_priority`/`_priority_api`, el vigía del lease, `priority_boost.json`, los `creationflags` de prioridad de los peers y las restauraciones, junto con sus ocho pruebas. No queda ningún gancho ni flag de prioridad.
 - **Causa real de N6:** desajuste entre F02-H3 y el oráculo. F02-H3 obliga al peer a comprobar el lease antes de cada efecto (`plans/2026-11-14-m1-f0.3-0-brief.md:669-673`) y el peer descarta la pose diferida si el lease caducó en el frame en que la aplica (`qa/fake_peer.py:1106-1110`). El evaluador exigía siempre la «última pose aceptada» (`qa/s_puente_eval.py:482`), así que una aceptación a 566 ms y una aplicación a 601 ms (lease 600) daban `pose is not last accepted` sin carga real. No era un fallo del peer: era el oráculo exigiendo una pose que F02-H3 manda descartar.
 - **Arreglo de N6** (`_n6_pose_check` en `qa/s_puente_eval.py`): el descarte lo acredita el registro del propio peer, nunca una inferencia por tiempos.
-  - **El peer falso anota el resultado al aplicar** (`qa/fake_peer.py`, `_apply`): en la entrada del `rpc_log` de cada aceptada, `apply_ms`, `apply_lease_age_ms` y `applied_b`. La decisión P7 no cambia.
-  - **Con ese registro en todas las aceptadas:**
-    - cada resultado tiene que casar con F02-H3: aplicada si y solo si `apply_lease_age_ms <= lease_ms`. Si no casa, FALLA `pose apply contradicts lease`;
+  - **El peer falso anota el resultado al aplicar** (`qa/fake_peer.py`, `_apply`): en la entrada del `rpc_log` de cada aceptada, `apply_ms`, `apply_lease_age_ms` y `applied_b`.
+    - Decide y anota con **la misma muestra** de la edad del lease.
+    - La decisión P7 no cambia.
+    - Las lecturas del `rpc_log` devuelven **copias** de las entradas, así que una lectura ya devuelta, o su duplicado cacheado, no cambia después.
+  - **Cada registro presente se valida siempre,** aunque falten otros:
+    - un registro a medias o mal formado es FALLA `malformed apply record`;
+    - uno que no case con F02-H3 (aplicada si y solo si `apply_lease_age_ms <= lease_ms`) es FALLA `pose apply contradicts lease`.
+  - **Con registro en todas las aceptadas:**
     - la pose leída tiene que ser la de la última aplicada; si no, FALLA `pose is not last applied`;
     - si no se aplicó ninguna, la pose de antes de la ráfaga no está en la evidencia: INCONCLUSO.
-  - **Sin el registro** (la sonda real todavía no lo da): con la pose de la última aceptada, `pass`.
-    - Con la de una aceptada anterior, INCONCLUSO: las posteriores pudieron descartarse.
-    - Con una pose que no es de ninguna aceptada y aceptadas en dos recepciones distintas, FALLA `pose is not an accepted pose`. Las del primer instante se aplicaron, porque el peer aplica antes de drenar y la siguiente se aceptó con el lease vigente.
-  - **Historia de la ronda:**
-    - el primer criterio de DS4.1 («el lease caducó antes de leer») dejaba pasar a un peer que no aplicaba ninguna pose: en la ráfaga todas las aceptadas comparten caducidad;
-    - el segundo, del orquestador (un margen fijo de 250 ms de aplazamiento), seguía con falsos PASS y daba FALLA a un peer lento correcto;
-    - los dos los tumbó Sol en la revisión del delta (`spikes/s-puente-point7/LAST_sol_delta.md`).
+  - **Sin registro completo** (la sonda real todavía no lo da):
+    - con la pose de la última aceptada, `pass`, salvo que su propio registro diga que se descartó (FALLA `pose contradicts apply record`);
+    - cualquier otra pose es INCONCLUSO, nunca `pass` ni FALLA. Sin identidad de frame ni de aplicación no se acredita qué pose debía quedar: dos `recv_ms` distintos no prueban dos frames.
+  - **Historia de la ronda.** Sol tumbó tres criterios intermedios:
+    - el primero, de DS4.1 («el lease caducó antes de leer»), dejaba pasar a un peer que no aplicaba ninguna pose, porque en la ráfaga todas las aceptadas comparten caducidad;
+    - el segundo, un margen fijo de 250 ms de aplazamiento, seguía con falsos PASS y daba FALLA a un peer lento correcto;
+    - el tercero (registro solo si estaba completo, y la inferencia por dos `recv_ms`) ocultaba contradicciones con un registro parcial y daba FALLA con dos RPC del mismo frame;
+    - están en `spikes/s-puente-point7/LAST_sol_delta.md` y `LAST_sol_confirm.md`.
   - No se relaja ningún otro predicado de N6: ventana de aceptados y rechazados, orden y métricas.
   - **Pendiente, fuera de este PR:** que la sonda real (`DSBX_QA_Probe.c`, `ApplyPendingPose`) anote el mismo registro. Hasta entonces, en partida un desajuste ambiguo de N6 sale INCONCLUSO, no FALLA ni PASA.
-- **Pruebas de N6 con reloj controlado** (`clock_ms_fn`, `qa/fake_peer.py:431`), en `qa/tests/test_e2e_s_puente.py`, 16:
+- **Pruebas de N6 y del `rpc_log` con reloj controlado** (`clock_ms_fn`, `qa/fake_peer.py:431`), en `qa/tests/test_e2e_s_puente.py`, 22:
   - **566/599:** `pass`;
   - **566/601, única aceptada:** INCONCLUSO. No se exige como última aceptada y no es FALLA, pero la pose previa no está en la evidencia;
   - **con una aplicada antes:** `pass` `pose discarded after lease expiry`;
@@ -79,7 +85,8 @@ Lo que aparece fuera del alcance de una tanda, o lo que un arbitraje aplaza, se 
     - la pose de una RPC rechazada;
     - una pose anterior a la última aplicada;
     - ninguna pose de la ráfaga;
-  - **sin registro:** pose de una aceptada anterior, INCONCLUSO; pose ajena, FALLA; la última aceptada, `pass`;
-  - el registro que anota el peer, comprobado con valores exactos.
+  - **sin registro:** pose de una aceptada anterior o ajena, INCONCLUSO (también dos RPC del mismo frame descartadas a 800); la última aceptada, `pass`;
+  - **registro parcial:** una contradicción presente es FALLA; la última anotada como descartada pero con su pose leída, FALLA; un registro a medias, FALLA;
+  - **el registro que anota el peer:** valores exactos, una sola muestra de reloj en la frontera del lease (reloj que avanza en cada lectura) y lecturas que no cambian después.
 - **Mitigaciones que se mantienen:** `_write_cfg` reintenta hasta 40 veces con 50 ms si `Path.replace` da `PermissionError` (`test_write_cfg_retries_a_busy_file`, `test_write_cfg_retry_is_bounded`); los burners de la prueba de carga se crean dentro del bloque protegido (`test_cpu_load_kills_partially_created_burners`).
 - **Residual (M2):** con carga extrema (2 x núcleos de procesos girando, a veces con otras suites a la vez) puede fallar M2 (`p95 >= 1000 ms`) y arrastrar N5/N4/N6. Es un residual del entorno, no del código: los plazos son contrato y no se tocan. La prueba de carga corre solo con `DSBX_STRESS=1`, fuera del gate determinista; su docstring lo deja dicho.

@@ -540,9 +540,9 @@ class E2ESpuenteTests(unittest.TestCase):
         )
         self.assertEqual((status, detail), ("missing", "pose mismatch without apply evidence"))
 
-    def test_n6_without_apply_record_foreign_pose_fails(self):
-        # Sin registro: con aceptadas en dos recepciones distintas, las primeras se aplicaron; una pose que no es
-        # de ninguna aceptada (la de antes de la rafaga, o la de una rechazada) es FALLA.
+    def test_n6_without_apply_record_foreign_pose_is_missing(self):
+        # Sin registro no hay identidad de frame ni de aplicacion: una pose ajena (la de antes de la rafaga, o la
+        # de una rechazada) no se puede acreditar como FALLA ni como PASS. INCONCLUSO.
         for pose in (self._PRE_BURST, self._pose_of(3)):
             with self.subTest(pose=pose[0][0]):
                 status, detail, _ = _n6_ctx(
@@ -553,11 +553,112 @@ class E2ESpuenteTests(unittest.TestCase):
                     read_pose=pose,
                     mutate_log=self._strip_apply,
                 )
-                self.assertEqual((status, detail), ("fail", "pose is not an accepted pose"))
+                self.assertEqual((status, detail), ("missing", "pose mismatch without apply evidence"))
+
+    def test_n6_without_apply_record_same_frame_discards_are_missing(self):
+        # Sol, confirmacion MEN 3: dos RPC drenadas a 599 y 600, las dos descartadas al aplicar a 800. Dos recv_ms
+        # distintos no acreditan dos frames: sin registro, INCONCLUSO, no FALLA.
+        status, detail, _ = _n6_ctx(
+            None,
+            None,
+            900,
+            accepts=[(599, 800), (600, 800)],
+            reject_ms=850,
+            read_pose=self._PRE_BURST,
+            mutate_log=self._strip_apply,
+        )
+        self.assertEqual((status, detail), ("missing", "pose mismatch without apply evidence"))
 
     def test_n6_without_apply_record_last_accepted_pose_passes(self):
         status, detail, _ = _n6_ctx(566, 599, 630, mutate_log=self._strip_apply)
         self.assertEqual((status, detail), ("pass", ""))
+
+    def test_n6_partial_record_contradiction_fails(self):
+        # Sol, confirmacion BLOQ 1: A descartada con edad 110 (lease 600) y B sin registro cuya pose casa con la
+        # lectura. El registro presente se valida aunque falte el otro.
+        def partial(entries):
+            entries[0]["applied_b"] = 0
+            for key in ("apply_ms", "apply_lease_age_ms", "applied_b"):
+                entries[1].pop(key, None)
+
+        status, detail, _ = _n6_ctx(
+            None, None, 640, accepts=[(100, 110), (300, 310)], read_pose=self._pose_of(1), mutate_log=partial
+        )
+        self.assertEqual((status, detail), ("fail", "pose apply contradicts lease"))
+
+    def test_n6_partial_record_last_discarded_but_pose_shown_fails(self):
+        # La ultima aceptada se anota descartada (y es coherente: 601 > 600), pero la pose leida es la suya.
+        def strip_first(entries):
+            for key in ("apply_ms", "apply_lease_age_ms", "applied_b"):
+                entries[0].pop(key, None)
+
+        status, detail, _ = _n6_ctx(
+            None, None, 640, accepts=[(100, 110), (566, 601)], read_pose=self._pose_of(1), mutate_log=strip_first
+        )
+        self.assertEqual((status, detail), ("fail", "pose contradicts apply record"))
+
+    def test_n6_malformed_apply_record_fails(self):
+        def half(entries):
+            entries[0].pop("applied_b", None)
+
+        status, detail, _ = _n6_ctx(566, 599, 630, mutate_log=half)
+        self.assertEqual((status, detail), ("fail", "malformed apply record"))
+
+    def test_n6_apply_record_uses_one_clock_sample(self):
+        # Sol, confirmacion MEN 2: un reloj que avanza 1 ms en cada lectura. La decision de aplicar y la edad que se
+        # anota salen de la misma muestra, asi que nunca se contradicen en la frontera del lease.
+        import itertools
+
+        import fake_peer
+
+        checked = 0
+        for start in range(590, 606):
+            ticks = itertools.count(start)
+            peer = fake_peer.Peer(
+                config=None,
+                role="client",
+                rpc_port=0,
+                frame_hz=60,
+                fault=None,
+                clock_ms_fn=lambda: float(next(ticks)),
+            )
+            peer.lease_ms = 600
+            peer.last_ok_ms = 0.0
+            peer.frame = 100
+            peer._handle_cam_rpc(
+                {"target_inst": peer.inst, "seq": 1, "pos": [1.0, 2.0, 3.0], "ypr": [90.0, 0.0, 0.0]}
+            )
+            peer.frame += 1
+            peer._apply()
+            entry = peer.rpc_log[0]
+            if entry["decision"] != "accepted":
+                continue
+            checked += 1
+            with self.subTest(start=start):
+                self.assertEqual(bool(entry["applied_b"]), entry["apply_lease_age_ms"] <= 600, entry)
+        self.assertGreater(checked, 3)
+
+    def test_rpc_log_read_is_a_snapshot(self):
+        # Sol, confirmacion MEN 4: una lectura ya devuelta (o su duplicado cacheado) no cambia cuando _apply anota
+        # despues el resultado en la entrada viva.
+        import fake_peer
+
+        clock = [100.0]
+        peer = fake_peer.Peer(
+            config=None, role="client", rpc_port=0, frame_hz=60, fault=None, clock_ms_fn=lambda: clock[0]
+        )
+        peer.lease_ms = 600
+        peer.last_ok_ms = 0.0
+        peer.frame = 100
+        peer._handle_cam_rpc({"target_inst": peer.inst, "seq": 1, "pos": [1.0, 2.0, 3.0], "ypr": [90.0, 0.0, 0.0]})
+        before = peer._read(["rpc_log"])
+        frozen = json.dumps(before, sort_keys=True)
+        clock[0] = 110.0
+        peer.frame += 1
+        peer._apply()
+        self.assertEqual(json.dumps(before, sort_keys=True), frozen)
+        self.assertNotIn("applied_b", before["rpc_log"][0])
+        self.assertEqual(peer._read(["rpc_log"])["rpc_log"][0]["applied_b"], 1)
 
     def test_cpu_load_kills_partially_created_burners(self):
         created = []

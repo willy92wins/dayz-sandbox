@@ -1034,7 +1034,9 @@ class Peer:
             read["pos"] = [float(v) for v in self.pose[0]]
             read["ypr"] = [float(v) for v in self.pose[1]]
         if "rpc_log" in has:
-            read["rpc_log"] = list(self.rpc_log)
+            # Copia de cada entrada: _apply anota despues el resultado en la entrada viva, y una lectura ya
+            # devuelta (o su duplicado cacheado) no puede cambiar a posteriori.
+            read["rpc_log"] = [dict(entry) for entry in self.rpc_log]
         return read
 
     def _done(self, op, read, job):
@@ -1106,14 +1108,17 @@ class Peer:
                 elif item[1] == "rpc_pose":
                     # Igual que DSBX_QA_Probe.ApplyPendingPose: sin lease vigente en este frame, la pose se descarta
                     # (F02-H3; la decision P7 no cambia; H5 de Sol r1).
-                    valid = self.lease_valid()
+                    # Una sola muestra de la edad del lease para decidir y para anotar (Sol, confirmacion de #18).
+                    apply_ms = self.local_ms()
+                    age = self.lease_age_ms()
+                    valid = (self.last_ok_ms is not None or self.last_ok is not None) and age <= float(self.lease_ms)
                     if valid:
                         self.pose = item[2]
                     # Evidencia del propio peer para N6: cuando aplico o descarto la pose diferida y con que edad
                     # de lease. Se anota en la entrada del rpc_log de esa RPC, sin tocar su decision.
                     if len(item) > 3 and isinstance(item[3], dict):
-                        item[3]["apply_ms"] = self.local_ms()
-                        item[3]["apply_lease_age_ms"] = self.lease_age_ms()
+                        item[3]["apply_ms"] = apply_ms
+                        item[3]["apply_lease_age_ms"] = age
                         item[3]["applied_b"] = 1 if valid else 0
                 else:
                     self.pose = item[2]
