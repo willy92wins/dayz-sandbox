@@ -70,6 +70,13 @@ function isEffectPost(req) {
   return EFFECT_POST_PATHS.includes(p) || p.startsWith("/api/scene/batches/");
 }
 
+// Antes de escribir el perfil a mano hay que dejar quieta la página: un guardado pendiente
+// (agrupado a 500 ms) o en vuelo de la página anterior pisaría lo escrito antes de recargar.
+async function quietPageForProfileWrite(page) {
+  await page.goto("about:blank");
+  await sleep(800);
+}
+
 const consoleTexts = [];
 const pageErrors = [];
 const externalRequests = [];
@@ -697,8 +704,9 @@ async function runS2(browser) {
     );
 
     // Negativo 1: Basura en el fichero -> layout y atajos de fabrica con perfil-corrupto + ranura responde (mata Xh)
+    await quietPageForProfileWrite(page);
     await cmd({ cmd: "profile_write", text: "{perfil-corrupto-no-json" });
-    await page.reload();
+    await page.goto(BASE + "/");
     await loginIfNeeded(context, page);
     const corruptAviso = page.locator('[data-aviso="perfil-corrupto"]');
     await corruptAviso.first().waitFor({ state: "visible", timeout: 5000 });
@@ -738,6 +746,7 @@ async function runS2(browser) {
       }
       return false;
     })(unknownPanelLayout.grid && unknownPanelLayout.grid.root);
+    await quietPageForProfileWrite(page);
     await cmd({
       cmd: "profile_write",
       text: JSON.stringify({
@@ -746,7 +755,7 @@ async function runS2(browser) {
         keymap: { colocar: "G" },
       }) + "\n",
     });
-    await page.reload();
+    await page.goto(BASE + "/");
     await loginIfNeeded(context, page);
     const incompAviso1 = page.locator('[data-aviso="layout-incompatible"]');
     await incompAviso1.first().waitFor({ state: "visible", timeout: 5000 });
@@ -776,6 +785,7 @@ async function runS2(browser) {
       }
       return false;
     })(badFromJsonLayout.grid && badFromJsonLayout.grid.root);
+    await quietPageForProfileWrite(page);
     await cmd({
       cmd: "profile_write",
       text: JSON.stringify({
@@ -787,7 +797,7 @@ async function runS2(browser) {
         keymap: { colocar: "G" },
       }) + "\n",
     });
-    await page.reload();
+    await page.goto(BASE + "/");
     await loginIfNeeded(context, page);
     await page.locator('[data-aviso="layout-incompatible"]').first().waitFor({ state: "visible", timeout: 5000 });
     assert(
@@ -805,11 +815,12 @@ async function runS2(browser) {
     // Negativo 3a: Orden de escrituras (mata Xy): retener primer POST /api/profile (cambio A),
     // hacer cambio B, esperar 1,5 s (> agrupamiento de 500 ms) con A retenida -> exactamente 1 POST iniciado;
     // soltar A -> sale un segundo POST con B, profile_read acaba con B y, al recargar, se ve B
+    await quietPageForProfileWrite(page);
     await cmd({
       cmd: "profile_write",
       text: JSON.stringify({ v: 1, layouts: { escena: null, rodaje: null }, keymap: {} }) + "\n",
     });
-    await page.reload();
+    await page.goto(BASE + "/");
     await loginIfNeeded(context, page);
     assert(
       !(await page.locator('[data-aviso="atajos-corregidos"]').first().isVisible().catch(() => false)),
@@ -930,6 +941,7 @@ async function runS2(browser) {
 
     // Negativo 3b: Atajos reparados al cargar (mata XF)
     // Corrida 1: perfil valido con {"aplicar": "Ctrl+W"} (tecla del navegador) -> vuelve a Ctrl+Intro, sale atajos-corregidos y funciona
+    await quietPageForProfileWrite(page);
     await cmd({
       cmd: "profile_write",
       text:
@@ -939,7 +951,7 @@ async function runS2(browser) {
           keymap: { aplicar: "Ctrl+W" },
         }) + "\n",
     });
-    await page.reload();
+    await page.goto(BASE + "/");
     await loginIfNeeded(context, page);
     const fixedAviso1 = page.locator('[data-aviso="atajos-corregidos"]');
     await fixedAviso1.first().waitFor({ state: "visible", timeout: 5000 });
@@ -974,6 +986,7 @@ async function runS2(browser) {
     );
 
     // Corrida 2: perfil valido con {"colocar": null} (obligatoria sin tecla) -> vuelve a Intro, sale atajos-corregidos y funciona
+    await quietPageForProfileWrite(page);
     await cmd({
       cmd: "profile_write",
       text:
@@ -983,7 +996,7 @@ async function runS2(browser) {
           keymap: { colocar: null },
         }) + "\n",
     });
-    await page.reload();
+    await page.goto(BASE + "/");
     await loginIfNeeded(context, page);
     const fixedAviso2 = page.locator('[data-aviso="atajos-corregidos"]');
     await fixedAviso2.first().waitFor({ state: "visible", timeout: 5000 });
@@ -1033,11 +1046,12 @@ async function runS2(browser) {
         hostileLayout.panels[k].title = "<img src=x>";
       }
     }
+    await quietPageForProfileWrite(page);
     await cmd({
       cmd: "profile_write",
       text: JSON.stringify({ v: 1, layouts: { escena: hostileLayout, rodaje: null }, keymap: {} }) + "\n",
     });
-    await page.reload();
+    await page.goto(BASE + "/");
     await loginIfNeeded(context, page);
     const hostileCheck = await page.evaluate(() => {
       const imgs = document.querySelectorAll("img").length;
@@ -1096,8 +1110,9 @@ async function runS3(browser) {
     await page.keyboard.press("Escape");
 
     // 4. Con aviso perfil-corrupto de S2
+    await quietPageForProfileWrite(page);
     await cmd({ cmd: "profile_write", text: "corrupto!!!" });
-    await page.reload();
+    await page.goto(BASE + "/");
     await loginIfNeeded(context, page);
     await page.locator('[data-aviso="perfil-corrupto"]').first().waitFor({ state: "visible", timeout: 5000 });
     for (const w of widths) {
@@ -1108,6 +1123,7 @@ async function runS3(browser) {
     }
 
     // 5. Con aviso layout-incompatible de S2
+    await quietPageForProfileWrite(page);
     await cmd({
       cmd: "profile_write",
       text: JSON.stringify({
@@ -1117,7 +1133,7 @@ async function runS3(browser) {
       }) + "\n",
     });
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.reload();
+    await page.goto(BASE + "/");
     await loginIfNeeded(context, page);
     await page.locator('[data-aviso="layout-incompatible"]').first().waitFor({ state: "visible", timeout: 5000 });
     for (const w of widths) {
@@ -1181,6 +1197,16 @@ async function runS4(browser) {
       await route.continue();
     };
     await page.route("**/api/scene/ops", fakeOpsHandler);
+    // Un fantasma que dura milisegundos (la entidad pintada con la respuesta y borrada por la
+    // lectura autoritativa) también es estado optimista: se vigila todo el rato, no solo al final.
+    await page.evaluate(() => {
+      window.__dsbxGhost = 0;
+      const obs = new MutationObserver(() => {
+        if (document.querySelector('[data-panel="jerarquia"] [data-entity-id]')) window.__dsbxGhost += 1;
+      });
+      obs.observe(document.body, { subtree: true, childList: true, attributes: true });
+      window.__dsbxGhostObs = obs;
+    });
     try {
       const barrelItem = page.locator('[data-panel="anadir"] [data-cls="Barrel_Red"]').first();
       await barrelItem.click();
@@ -1190,7 +1216,14 @@ async function runS4(browser) {
       assert(interceptedOps === 1, "S4(-): colocar no disparo POST /api/scene/ops");
       await sleep(2000);
       const ghostCount = await page.locator('[data-panel="jerarquia"] [data-entity-id]').count();
-      assert(ghostCount === 0, "S4(-): el arbol pinto la entidad con la respuesta del POST (Xj): " + ghostCount);
+      const ghostSeen = await page.evaluate(() => {
+        if (window.__dsbxGhostObs) window.__dsbxGhostObs.disconnect();
+        return window.__dsbxGhost || 0;
+      });
+      assert(
+        ghostCount === 0 && ghostSeen === 0,
+        "S4(-): el arbol pinto la entidad con la respuesta del POST (Xj): ahora=" + ghostCount + ", vista=" + ghostSeen
+      );
       await page.keyboard.press("Escape");
     } finally {
       await page.unroute("**/api/scene/ops", fakeOpsHandler);
