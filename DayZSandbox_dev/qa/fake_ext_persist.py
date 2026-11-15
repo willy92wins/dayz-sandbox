@@ -7,8 +7,10 @@ disco con trabajo protegido (resource per_census, deadman stop) y reinicio de mu
 solo conserva lo creado sin ECE_NOPERSISTENCY_WORLD.
 """
 
+import json
 import math
 import secrets
+from pathlib import Path
 
 import wire
 from fake_peer import FakeExt
@@ -73,6 +75,8 @@ CENSUS_NCOL = [
 CENSUS_PAGE_SIZE = 5
 CENSUS_MAX_ROWS = 4096
 CENSUS_MAX_MS = 900000.0
+CENSUS_FINISH_DELAY_FRAMES = 10
+STATE_FILE_NAME = "_dsbx_persist_world.json"
 DEFAULT_MAX_HP = 100.0
 DIRECTOR_UID = "dir-uid-778899"
 DIRECTOR_ROOT_NET = "1:2"
@@ -106,15 +110,117 @@ class PersistFakeExt(FakeExt):
         self.next_net_low = 100
         self.raw_net_ids = set()
         self.qa_net_ids = set()
-        self.pending_finish = set()
+        self.pending_finish = {}
         self.director_items = []
         self.director_uid = DIRECTOR_UID
+
+    def _state_file(self):
+        cfg = getattr(self.peer, "config", None)
+        if cfg is None:
+            return None
+        try:
+            return Path(cfg).parent / STATE_FILE_NAME
+        except (TypeError, OSError):
+            return None
+
+    def _save_state(self):
+        sf = self._state_file()
+        if sf is None:
+            return
+        entities = []
+        for ent in self.world.values():
+            if ent.get("owner_uid") == self.director_uid:
+                continue
+            entities.append({
+                "net_id": ent["net_id"],
+                "pers_id": ent["pers_id"],
+                "class_name": ent["class_name"],
+                "cat": ent["cat"],
+                "loc_kind": ent["loc_kind"],
+                "parent_net_id": ent["parent_net_id"],
+                "parent_class": ent["parent_class"],
+                "slot_name": ent["slot_name"],
+                "owner_uid": ent["owner_uid"],
+                "pos": [float(ent["pos"][0]), float(ent["pos"][1]), float(ent["pos"][2])],
+                "ori": [float(ent["ori"][0]), float(ent["ori"][1]), float(ent["ori"][2])],
+                "max_hp": float(ent["max_hp"]),
+                "health_hp": float(ent["health_hp"]),
+                "spawn_tick_ms": float(ent["spawn_tick_ms"]),
+                "alive": bool(ent["alive"]),
+                "ai_agent": bool(ent["ai_agent"]),
+                "persistent": bool(ent["persistent"]),
+                "own_logical_id": ent["own_logical_id"],
+                "own_b": int(ent["own_b"]),
+                "scene_id": ent["scene_id"],
+                "area_id": ent["area_id"],
+            })
+        data = {
+            "director_uid": self.director_uid,
+            "next_net_low": self.next_net_low,
+            "entities": entities,
+        }
+        try:
+            sf.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+
+    def _load_state(self):
+        sf = self._state_file()
+        if sf is None or not sf.is_file():
+            return False
+        try:
+            data = json.loads(sf.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        try:
+            self.next_net_low = max(int(data.get("next_net_low", 100)), 100)
+        except (TypeError, ValueError):
+            self.next_net_low = 100
+        loaded = data.get("entities")
+        if not isinstance(loaded, list):
+            return False
+        for raw in loaded:
+            if not isinstance(raw, dict) or not raw.get("persistent"):
+                continue
+            ent = self._add_entity(
+                net_id=str(raw.get("net_id") or ""),
+                pers_id=str(raw.get("pers_id") or ZERO_PERS_ID),
+                class_name=str(raw.get("class_name") or ""),
+                cat=str(raw.get("cat") or "raw"),
+                loc_kind=str(raw.get("loc_kind") or "ground"),
+                parent_net_id=str(raw.get("parent_net_id") or ""),
+                parent_class=str(raw.get("parent_class") or ""),
+                slot_name=str(raw.get("slot_name") or ""),
+                owner_uid=str(raw.get("owner_uid") or ""),
+                pos=tuple(raw.get("pos") or (0.0, 0.0, 0.0)),
+                ori=tuple(raw.get("ori") or (0.0, 0.0, 0.0)),
+                max_hp=float(raw.get("max_hp", DEFAULT_MAX_HP)),
+                health_hp=float(raw.get("health_hp", DEFAULT_MAX_HP)),
+                spawn_tick_ms=float(raw.get("spawn_tick_ms", 0.0)),
+                persistent=True,
+                own_logical_id="",
+                own_b=0,
+                area_id=str(raw.get("area_id") or ""),
+            )
+            ent["alive"] = bool(raw.get("alive", True))
+            ent["ai_agent"] = bool(raw.get("ai_agent", False))
+            if ent["owner_uid"] != self.director_uid:
+                self.raw_net_ids.add(ent["net_id"])
+        return True
 
     def init(self, peer, jobs):
         self.peer = peer
         self.jobs = jobs
         self.epoch = peer.inst
         self._build_director()
+        if self._load_state():
+            self.records = []
+            self.scene_gen = {}
+            self.scene_last_op = {}
+            self.scene_applied = {}
+            self.scene_center = {}
+            self.pending_finish.clear()
+            self.qa_net_ids.clear()
 
     def handles(self, verb, role):
         return role == "server" and verb in SERVER_VERBS
@@ -517,6 +623,7 @@ class PersistFakeExt(FakeExt):
             str_cols=scol,
             row_dicts=out_rows,
         )
+        self._save_state()
         return ("done", "", payload)
 
     def _op_reset(self, args_unpacked, fault):
@@ -568,6 +675,7 @@ class PersistFakeExt(FakeExt):
                 str_cols=["logical_id", "class_name", "net_id"],
                 row_dicts=[],
             )
+            self._save_state()
             return ("done", "", payload)
 
         deletable = {rec["ent"]["net_id"]: rec for rec in scene_recs}
@@ -607,7 +715,7 @@ class PersistFakeExt(FakeExt):
             survivors = 0
             for desc in self._descendants(ent["net_id"]):
                 dnid = desc["net_id"]
-                if dnid not in deletable or retain.get(dnid):
+                if dnid not in deletable:
                     survivors += 1
             retained_rows.append({
                 "logical_id": rec["logical_id"],
@@ -636,6 +744,7 @@ class PersistFakeExt(FakeExt):
             str_cols=["logical_id", "class_name", "net_id"],
             row_dicts=retained_rows,
         )
+        self._save_state()
         return ("done", "", payload)
 
     def _op_transition(self, args_unpacked):
@@ -705,6 +814,7 @@ class PersistFakeExt(FakeExt):
             "frame": float(self.peer.frame),
         }
         payload = wire.pack_payload(scalars_str=s, scalars_num=n)
+        self._save_state()
         return ("done", "", payload)
 
     def _op_spawn_raw(self, args_unpacked):
@@ -823,6 +933,7 @@ class PersistFakeExt(FakeExt):
             "frame": float(self.peer.frame),
         }
         payload = wire.pack_payload(scalars_str=s, scalars_num=n)
+        self._save_state()
         return ("done", "", payload)
 
 
@@ -901,7 +1012,7 @@ class PersistFakeExt(FakeExt):
             "director_inv_count_n": float(len(self.director_items)),
         }
         payload = wire.pack_payload(scalars_str=s, scalars_num=n)
-        self.pending_finish.add(job_id)
+        self.pending_finish[job_id] = CENSUS_FINISH_DELAY_FRAMES
         return ("done", "", payload)
 
     def _op_cleanup(self, args_unpacked):
@@ -928,6 +1039,7 @@ class PersistFakeExt(FakeExt):
                 "frame": float(self.peer.frame),
             }
         )
+        self._save_state()
         return ("done", "", payload)
 
     def simulate_world_restart(self):
@@ -948,12 +1060,17 @@ class PersistFakeExt(FakeExt):
         self.scene_applied = {}
         self.scene_center = {}
         self.pending_finish.clear()
+        self._save_state()
 
     def on_tick(self, timeslice_s):
         for job_id in list(self.pending_finish):
+            left = int(self.pending_finish.get(job_id, 0)) - 1
+            if left > 0:
+                self.pending_finish[job_id] = left
+                continue
             if self.jobs.get_state(job_id) == "running":
                 self.jobs.end_job(job_id, "done", "")
-            self.pending_finish.discard(job_id)
+            self.pending_finish.pop(job_id, None)
 
     def on_shutdown(self):
         self.pending_finish.clear()
