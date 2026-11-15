@@ -56,6 +56,34 @@ function CloseOwn($o) {
   for ($i = 0; $i -lt 240; $i++) { Start-Sleep -Milliseconds 500; if (-not (IsAlive $o)) { return "$($o.role) pid $($o.pid) cerrado por WM_CLOSE" } }
   return "$($o.role) pid $($o.pid) SIGUE VIVO tras WM_CLOSE"
 }
+# R16 (rev. H-15). Bajo BattlEye el padre de DayZ_x64 puede ser un intermedio que ya ha salido (medido el
+# 15-nov: padre 66172 inexistente), y entonces la cadena no llega al lanzador. El juego escribe su linea de
+# ordenes completa en el RPT de su perfil: si un RPT del perfil propio, posterior al lanzador, lleva nuestro
+# -mod, -profiles y -port exactos, devuelve el instante (local) de su nombre; si no, $null.
+function RptPropio([string]$Dir, [string]$ModArg, [int]$PortArg, [datetime]$Desde) {
+  foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter 'DayZ_x64_*.RPT' -File -ErrorAction SilentlyContinue)) {
+    if ($f.LastWriteTime -lt $Desde) { continue }
+    $m = [regex]::Match($f.Name, '^DayZ_x64_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.RPT$')
+    if (-not $m.Success) { continue }
+    $t = New-Object DateTime ([int]$m.Groups[1].Value), ([int]$m.Groups[2].Value), ([int]$m.Groups[3].Value), ([int]$m.Groups[4].Value), ([int]$m.Groups[5].Value), ([int]$m.Groups[6].Value)
+    # La cabecera tiene dos lineas '== ': la del ejecutable y la de la linea de ordenes (medido el 15-nov).
+    $lines = @()
+    try {
+      $fs = [IO.File]::Open($f.FullName, 'Open', 'Read', 'ReadWrite')
+      try {
+        $sr = New-Object IO.StreamReader($fs)
+        for ($k = 0; $k -lt 20 -and -not $sr.EndOfStream; $k++) { $l = $sr.ReadLine(); if ($l.StartsWith('== ')) { $lines += $l } }
+      } finally { $fs.Dispose() }
+    } catch { $lines = @() }
+    foreach ($line in $lines) {
+      $okMod = $line -match ('-mod=' + [regex]::Escape($ModArg) + '("|\s|$)')
+      $okPro = $line -match ('-profiles=' + [regex]::Escape($Dir) + '("|\s|$)')
+      $okPort = $line -match ('(^|\s)-port=' + $PortArg + '(\s|$)')
+      if ($okMod -and $okPro -and $okPort) { return $t }
+    }
+  }
+  return $null
+}
 # JSON con LF (EVIDENCIA); las claves van ya ordenadas en los [ordered] de quien llama.
 function WriteJson([string]$Path, $Obj) {
   $tmp = "$Path.tmp"
@@ -128,28 +156,39 @@ try {
     $bepid = Start-ExeViaWmi (Join-Path $GameDir 'DayZ_BE.exe') $GameDir "0 1 1 -exe DayZ_x64.exe `"-mod=$Mod`" -connect=127.0.0.1 -port=$Port `"-profiles=$C`" -name=DSBXQA -window -x=1280 -y=720 -noPause"
     $beOwn = Own 'battleye_launcher' $bepid
     $own += $beOwn; L "lanzador BattlEye pid=$bepid"
-    # R14 y R16 (Z-01 de Sol). Bajo BattlEye la linea de ordenes de DayZ_x64 sale vacia (F0.3-0). La unica
-    # procedencia que se acepta es descender del lanzador BattlEye: la cadena de ParentProcessId (hasta 3
-    # niveles) llega a su PID. Sin adopcion por tiempo. Un candidato exacto se adopta; cero o varios: no se
-    # adopta ni se cierra ninguno y no se suelta el lease.
+    # R14 y R16 (Z-01 de Sol; rev. H-15). Bajo BattlEye la linea de ordenes de DayZ_x64 sale vacia en WMI
+    # (F0.3-0). Un DayZ_x64 nuevo tiene procedencia si (a) su cadena de ParentProcessId (hasta 3 niveles) llega
+    # al lanzador BattlEye, o (b) un RPT del perfil propio, posterior al lanzador, lleva nuestro -mod, -profiles
+    # y -port exactos y su instante dista 10 s o menos de la creacion del candidato (RptPropio). Sin adopcion
+    # solo por tiempo. Un candidato con procedencia se adopta; cero o varios: no se adopta ni se cierra ninguno y
+    # no se suelta el lease.
+    $beStart = $null
+    try { $beStart = (Get-Process -Id $bepid -ErrorAction Stop).StartTime } catch { $beStart = (Get-Date).AddSeconds(-5) }
     $adopted = $false
-    for ($i = 0; $i -lt 120; $i++) {
+    for ($i = 0; $i -lt 240; $i++) {
       Start-Sleep -Milliseconds 500
       $todos = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
       $padre = @{}; foreach ($p in $todos) { $padre[[int]$p.ProcessId] = [int]$p.ParentProcessId }
-      $cands = @($todos | Where-Object { $_.Name -eq 'DayZ_x64.exe' -and ($antes -notcontains [int]$_.ProcessId) } | Where-Object {
-          $x = [int]$_.ParentProcessId; $hit = $false
-          for ($n = 0; $n -lt 3 -and $x -gt 0; $n++) { if ($x -eq $bepid) { $hit = $true; break }; if ($padre.ContainsKey($x)) { $x = $padre[$x] } else { break } }
-          $hit })
+      $nuevos = @($todos | Where-Object { $_.Name -eq 'DayZ_x64.exe' -and ($antes -notcontains [int]$_.ProcessId) })
+      if ($nuevos.Count -eq 0) { continue }
+      $rpt = RptPropio $C $Mod $Port $beStart
+      $cands = @()
+      foreach ($q in $nuevos) {
+        $via = $null
+        $x = [int]$q.ParentProcessId
+        for ($n = 0; $n -lt 3 -and $x -gt 0; $n++) { if ($x -eq $bepid) { $via = 'desciende del lanzador BattlEye'; break }; if ($padre.ContainsKey($x)) { $x = $padre[$x] } else { break } }
+        if (-not $via -and $rpt -and [math]::Abs(($q.CreationDate - $rpt).TotalSeconds) -le 10) { $via = 'su RPT en el perfil propio lleva nuestra linea de ordenes' }
+        if ($via) { $cands += [pscustomobject]@{ pid = [int]$q.ProcessId; via = $via } }
+      }
       if ($cands.Count -eq 0) { continue }
       if ($cands.Count -eq 1) {
-        $cli = Own 'client' ([int]$cands[0].ProcessId)
+        $cli = Own 'client' $cands[0].pid
         if (-not $cli.start_time) { $identityProblem = $true; L "cliente retail pid=$($cli.pid) sin instante de creacion: identidad sin acreditar" }
-        $own = @($cli) + $own; $adopted = $true; L "cliente retail (juego) pid=$($cli.pid): desciende del lanzador BattlEye"; break
+        $own = @($cli) + $own; $adopted = $true; L "cliente retail (juego) pid=$($cli.pid): $($cands[0].via)"; break
       }
-      $identityProblem = $true; L "hay $($cands.Count) DayZ_x64 que descienden del lanzador: no adopto ninguno"; break
+      $identityProblem = $true; L "hay $($cands.Count) DayZ_x64 con procedencia: no adopto ninguno"; break
     }
-    if (-not $adopted -and -not $identityProblem) { $identityProblem = $true; L "ningun DayZ_x64 desciende del lanzador BattlEye en 60 s: identidad sin acreditar, no cierro ni adopto nada" }
+    if (-not $adopted -and -not $identityProblem) { $identityProblem = $true; L "ningun DayZ_x64 con procedencia (cadena ni RPT propio) en 120 s: identidad sin acreditar, no cierro ni adopto nada" }
   }
   foreach ($o in $own) { if (-not $o.start_time) { $identityProblem = $true; L "$($o.role) pid $($o.pid) sin instante de creacion: identidad sin acreditar" } }
   WriteJson $pidsFile @{ processes = $own }

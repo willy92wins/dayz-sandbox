@@ -1,6 +1,6 @@
 # F1b-peers en partida: arnés G1-G9 y partidas
 
-2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.3; la v1.2 es `48452b7`). **v1.8, congelada: rondas 1 y 2 de Sol sobre el brief y sobre el código del arnés, con el tope cumplido y el resto arbitrado por el orquestador, más los arbitrajes de las partidas en DayZ y de la revisión del experto de Enforce (§10).**
+2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.3; la v1.2 es `48452b7`). **v1.9, congelada: rondas 1 y 2 de Sol sobre el brief y sobre el código del arnés, con el tope cumplido y el resto arbitrado por el orquestador, más los arbitrajes de las partidas en DayZ y de la revisión del experto de Enforce (§10).**
 
 **Por qué ahora.** F0.3-0 pasó su gate en partida en diag y en retail (`origin/main` `4f18c62`): `WIRE_CAP = 3500` está validado (G10 cumplido). La sesión principal ordenó arrancar las partidas el 2026-11-15. El PR de F1b-peers no se mergea hasta que G1-G9 pasen, porque toca el PBO.
 
@@ -319,3 +319,13 @@ Cada tanda trabaja en una copia del commit congelado. El orquestador revisa, cor
   - El evaluador acertó: sin la orden en curso, G6 no prueba la pausa.
 - **No es del mod:** `HandleOrder` no cambió, y la regla es la conservadora de P-02. Con `hold_ms` = 2000 y `ttl_ms` = 1500, G6 cae así cuando el apply llega con el poll retenido más de ~1,4 s. Es un 30 % de las veces, según una estimación con polls de ~2,1 s. La partida v1.6 pasó porque el apply cayó antes.
 - **El arnés cambia:** G6 espera a que termine un poll del servidor y encola entonces, con el siguiente poll recién salido (`_g6_wait_server_poll`, `G6_POLL_ALIGN_S` = 5 s). Las pruebas están en `test_f1bp_g56.py`. El evaluador y R12 no cambian.
+
+**H-15, la procedencia del cliente retail (partida retail sobre `525da99`), arbitraje del orquestador:**
+- **Lo medido:**
+  - el lanzador no adoptó el cliente, así que G1 y G4 quedaron INCONCLUSO por «logs no finales»;
+  - por R14, dejó el lease sin soltar.
+- **La causa:** bajo BattlEye, el padre de `DayZ_x64` (62876) era un intermedio que ya había salido (PID 66172). La cadena de R16 se cortaba antes de llegar a `DayZ_BE.exe` (60528), que sí era propio.
+- **La identidad sí se podía acreditar.** El cliente era el único `DayZ_x64`, creado 21 s después del lanzador propio. Escribía en el perfil propio `DayZ_x64_2026-11-15_17-38-40.RPT`, cuya segunda línea `== ` es la línea de órdenes exacta del lanzador: el `-mod` del PBO de `1155973`, `-port=2502`, el perfil y `-name=DSBXQA`.
+  - El orquestador lo cerró por WM_CLOSE, con la guarda del instante de creación. El lanzador BattlEye salió solo, y se soltó el lease.
+- **R16 cambia (EVIDENCIA):** además de la cadena, cuenta como procedencia el RPT del perfil propio con nuestra línea de órdenes, si su instante dista 10 s o menos de la creación del candidato. La ventana de adopción pasa de 60 a 120 s.
+  - La función `RptPropio` del lanzador se probó sobre el RPT real: positivo, más ocho negativos y un caso sintético. Los negativos son otro puerto, un puerto prefijo, un mod con sufijo o recortado, un RPT anterior al lanzador, el RPT en otro perfil, `-profiles` con sufijo y una cabecera sin línea de órdenes.

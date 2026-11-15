@@ -192,9 +192,11 @@ Mandan sobre lo anterior cuando choquen. Quién lo hace: **L** = lanzador (`run_
 ## v1.6: reglas tras la ronda 2 de Sol y la partida diag final (brief §10, Z-01..Z-10, H-10, H-11)
 Mandan sobre lo anterior cuando choquen. Las letras son las de v1.5: **L** lanzador, **O** orquestador, **E** evaluador, **P** proxy.
 
-- **R16, cliente retail (Z-01; L).**
-  - Solo se adopta un `DayZ_x64` que **desciende del lanzador BattlEye**: la cadena de `ParentProcessId`, hasta 3 niveles, llega al PID de `DayZ_BE.exe`.
-  - Sin esa procedencia no se adopta ni se cierra nada, y no se suelta el lease. No hay adopción por tiempo.
+- **R16, cliente retail (Z-01; L; revisada por H-15).**
+  - Solo se adopta un `DayZ_x64` nuevo **con procedencia**, que puede ser de dos clases:
+    - (a) desciende del lanzador BattlEye: la cadena de `ParentProcessId`, hasta 3 niveles, llega al PID de `DayZ_BE.exe`;
+    - (b) un `DayZ_x64_<instante>.RPT` del perfil propio del cliente, posterior al lanzador, lleva en una línea `== ` nuestro `-mod`, `-profiles` y `-port` exactos, y el instante de su nombre dista 10 s o menos de la creación del candidato.
+  - Un solo candidato con procedencia se adopta. Con cero o con varios no se adopta ni se cierra nada, y no se suelta el lease. No hay adopción solo por tiempo.
 - **R17, reenvío y barrera (Z-02; P).**
   - El proxy marca la petición como reenviada **bajo el candado y antes de mandarla** al upstream.
   - No la manda si ya estaba abortada.
