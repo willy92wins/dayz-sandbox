@@ -115,6 +115,9 @@ CAL_IDS = ("C1", "C2", "C3")
 VER_IDS = ("V1", "V2", "V3")
 PATCH_IDS = ("C1", "C2", "C3", "V1", "V2", "V3")
 SURFACE_IDS = ("P_GROUND", "P_OUT", "P_BRIDGE", "P_ROOF")
+# Clase contractual de la plantilla (§4.3, D5).  No basta con que la respuesta
+# repita la clase pedida: el pedido y la observacion tienen que ser esta clase.
+CONTRACT_CLASS = "Barrel_Green"
 HEX_COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
 HEX_STAMP_RE = re.compile(r"^[0-9a-f]{16}$")
 HEX_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -727,6 +730,8 @@ def _attribution_failure(reason: str, metrics: dict[str, object] | None = None) 
 
 def _extract_complete_ops(
     bridge_rows: list[dict],
+    expected_build: str,
+    expected_stamp: str,
 ) -> tuple[dict[str, dict], str | None]:
     """Indexa operaciones ligadas a la instancia del servidor observada en el hello.
 
@@ -735,15 +740,29 @@ def _extract_complete_ops(
     saludado como servidor.  Se exige orden temporal ``enq <= poll <= result``, que
     el ``result.op_id`` interior coincida con el exterior y que no haya duplicados
     ambiguos (mismo ``op_id`` con contenido distinto).
+
+    BLOQ 4: las instancias admitidas salen solo de saludos aceptados y sellados
+    (``ok == true``, ``proto == qa0``, build del manifiesto y sello historico), no
+    de cualquier fila ``hello`` con HTTP 200.
+
+    El nucleo emite ``poll`` de los dos peers.  El cliente tambien hace polls
+    vacios legitimos: se admiten y solo se exige la atribucion al servidor en las
+    operaciones y polls que transportan ordenes ``map_*``.
     """
+    hello_stamp = f"dsbx-qa1+{expected_stamp}"
     server_insts = {
         r.get("inst")
         for r in bridge_rows
         if r.get("ev") == "hello"
         and r.get("peer") == "server"
         and r.get("http") == 200
+        and r.get("ok") is True
         and isinstance(r.get("inst"), str)
         and r["inst"]
+        and isinstance(r.get("args"), dict)
+        and r["args"].get("proto") == "qa0"
+        and r["args"].get("build") == expected_build
+        and r["args"].get("probe_ver") == hello_stamp
     }
     if not server_insts:
         return ({}, "missing_server_hello")
@@ -778,6 +797,10 @@ def _extract_complete_ops(
                 return ({}, f"ambiguous_operation:{oid}")
             enqs[oid] = row
         elif ev == "poll" and row.get("http") == 200:
+            # Trafico legitimo del cliente (polls vacios): no transporta ordenes
+            # map_* ni se le exige instancia de servidor.
+            if row.get("peer") == "client":
+                continue
             if not _attr_ok(row, require_inst=True):
                 return ({}, f"poll_not_from_server_instance:{row.get('inst')}")
             for oid in row.get("op_ids") or []:
@@ -1401,7 +1424,7 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
     if cert_err is not None or reconstructed_certified is None:
         return _inconclusive(cert_err or "unaccredited_fixture")
 
-    ops, ops_err = _extract_complete_ops(bridge_rows)
+    ops, ops_err = _extract_complete_ops(bridge_rows, build, expected_stamp)
     if ops_err is not None:
         if ops_err.startswith(_ATTRIBUTION_ERROR_PREFIXES):
             return _attribution_failure(ops_err)
@@ -1920,6 +1943,14 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
                 map02_detail = f"srv_vs_patch256_mismatch:{pid}"
                 break
 
+            # BLOQ 5: las muestras crudas de la corrida tambien se contrastan con
+            # la captura certificadora congelada.  Desplazar a la vez las alturas
+            # del parche, del localizador y de la colocacion no puede pasar.
+            if abs(float(w_rec["srv_y_m"]) - float(cert_info["certified_y_m"])) > 0.02:
+                map02_ok = False
+                map02_detail = f"patch_vs_certified_height_mismatch:{pid}"
+                break
+
             # Comprobar que las 2 filas de auditoria pertenecen a las 256 muestras del parche
             x_min, z_min, x_max, z_max = cert_info["world_roi_m"]
             patch_cells_set = [
@@ -2069,6 +2100,16 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
     seq_posts: list[int] = []
     max_contact_err = 0.0
 
+    # Testigo congelado de la caja de la plantilla: la colocacion certificada en
+    # P_GROUND conserva su lectura de ClippingInfo.  La misma clase debe producir
+    # la misma caja en todas las colocaciones (BLOQ 5: una caja que "compensa" la
+    # altura cambia con el terreno y delata la fabricacion).
+    pg_cert_read = wire.unpack_payload(
+        cert_cap["surfaces"]["P_GROUND"]["place_ground_op"]["result"]["read"]
+    )
+    cert_box_min_y = float(pg_cert_read["num"]["bbox_min_y_m"])
+    cert_box_max_y = float(pg_cert_read["num"]["bbox_max_y_m"])
+
     # N23: contadores exactos (no redondeados), no negativos y continuos durante
     # toda la sesion, incluidos los rechazos.  Se recorren en orden de emision.
     counters_ok = True
@@ -2131,6 +2172,10 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
             map03_ok = False
             map03_detail = f"missing_class_args:{pid}"
             break
+        if arg_class != CONTRACT_CLASS:
+            map03_ok = False
+            map03_detail = f"wrong_contract_class_args:{pid}:{arg_class}"
+            break
 
         obs_x = float(p_num["obs_x_m"])
         obs_y = float(p_num["obs_y_m"])
@@ -2148,13 +2193,20 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
             map03_ok = False
             map03_detail = f"invalid_spawn_seq_delta:{pid}:{seq_pre}->{seq_post}"
             break
-        if p_str.get("point_id") != pid or p_str.get("obs_class_id") != arg_class:
+        if p_str.get("point_id") != pid or p_str.get("obs_class_id") != CONTRACT_CLASS:
             map03_ok = False
             map03_detail = f"wrong_obs_class:{pid}:{p_str.get('obs_class_id')}"
             break
         if not (bbox_max_y > bbox_min_y):
             map03_ok = False
             map03_detail = f"invalid_bbox:{pid}"
+            break
+        if not (_same_num(bbox_min_y, cert_box_min_y, 1e-6) and _same_num(bbox_max_y, cert_box_max_y, 1e-6)):
+            map03_ok = False
+            map03_detail = (
+                f"box_witness_mismatch:{pid}:{bbox_min_y}/{bbox_max_y}"
+                f"!={cert_box_min_y}/{cert_box_max_y}"
+            )
             break
         if ent_id < 0:
             map03_ok = False
@@ -2171,10 +2223,18 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
             map03_detail = f"horizontal_req_drift:{pid}:{horiz_req_err:.4f}"
             break
 
-        # Testigo independiente de la superficie: para V1..V3 las 256 muestras
-        # crudas del parche en map_world_read; para P_GROUND la superficie
-        # certificada de la captura.  Un valor fabricado no puede pasar.
+        # Testigo independiente de la superficie en las coordenadas que tocan:
+        # la superficie observada se acredita contra la captura certificadora
+        # congelada (altura del rasgo) y, para P_GROUND, contra la superficie
+        # certificada.  El contacto se calcula en la posicion observada, como
+        # exige el brief, sin imponer igualdad vertical entre posiciones distintas
+        # (un desplazamiento de 0,04 m puede cambiar 0,12 m la altura).
         if pid in VER_IDS:
+            cert_y = float(reconstructed_certified[pid]["certified_y_m"])
+            if abs(obs_surf_y - cert_y) > 1.5:
+                map03_ok = False
+                map03_detail = f"obs_surface_vs_certified_mismatch:{pid}:{obs_surf_y:.3f}!={cert_y:.3f}"
+                break
             w_ref = rebuilt_world_features[pid]
             if abs(terrain_y - float(w_ref["srv_y_m"])) > 5.0:
                 map03_ok = False
@@ -2192,6 +2252,10 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
             cap_surf = cert_cap["surfaces"]["P_GROUND"]
             if not (
                 _same_num(terrain_y, float(cap_surf["terrain_y_m"]), 0.05)
+                # La superficie se acredita en la posicion observada, no en la
+                # pedida: un desplazamiento de 0,04 m puede cambiar 0,12 m la
+                # altura.  Se acota contra la superficie certificada en la pedida.
+                and _same_num(obs_surf_y, float(cap_surf["terrain_y_m"]), 0.5)
                 and _same_num(p_num.get("road_y_m"), float(cap_surf["road_y_m"]), 0.05)
                 and _same_num(p_num.get("ray_hit_b"), float(cap_surf["ray_hit_b"]), 1e-6)
                 and _same_num(p_num.get("hit_y_m"), float(cap_surf["hit_y_m"]), 0.05)
@@ -2200,24 +2264,29 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
                 map03_detail = "pground_surface_witness_mismatch"
                 break
             pground_fix = next(p for p in fixture["placement_points"] if p["point_id"] == "P_GROUND")
-            if a_ok is not None and b_ok is not None:
-                gx_hat, gz_hat = apply_affine_2d(a_ok, b_ok, float(pground_fix["u_px"]), float(pground_fix["v_px"]))
-                if math.hypot(obs_x - gx_hat, obs_z - gz_hat) >= 10.0:
-                    map03_ok = False
-                    map03_detail = "pground_projected_drift"
-                    break
             if math.hypot(obs_x - float(pground_fix["req_x_m"]), obs_z - float(pground_fix["req_z_m"])) >= 10.0:
                 map03_ok = False
                 map03_detail = "pground_certified_drift"
                 break
 
-        # El punto de contacto se mide contra terrain_y_m (lectura independiente
-        # de SurfaceY en la coordenada pedida), no contra el eco obs_surf_y_m.
-        if not _same_num(obs_surf_y, terrain_y, 0.05):
-            map03_ok = False
-            map03_detail = f"obs_surface_not_terrain:{pid}"
-            break
-        contact_err = abs(obs_y + bbox_min_y - terrain_y)
+        # La posicion observada tiene que coincidir con la proyeccion independiente
+        # del rasgo de imagen (no solo con la peticion, que podria ser un eco).
+        if a_ok is not None and b_ok is not None:
+            if pid in VER_IDS:
+                u_proj, v_proj = detected_img_features[pid]
+            else:
+                pground_fix = next(p for p in fixture["placement_points"] if p["point_id"] == "P_GROUND")
+                u_proj = float(pground_fix["u_px"])
+                v_proj = float(pground_fix["v_px"])
+            x_proj, z_proj = apply_affine_2d(a_ok, b_ok, u_proj, v_proj)
+            if math.hypot(obs_x - x_proj, obs_z - z_proj) > 0.05:
+                map03_ok = False
+                map03_detail = f"observed_position_vs_projection:{pid}"
+                break
+
+        # El contacto se mide en la posicion observada, contra la superficie
+        # observada alli (SurfaceY(obs_x, obs_z)), no contra la pedida.
+        contact_err = abs(obs_y + bbox_min_y - obs_surf_y)
         max_contact_err = max(max_contact_err, contact_err)
         if not (contact_err < 0.2):
             map03_ok = False
@@ -2256,8 +2325,15 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
                 i_str = iop["read"]["str"]
                 i_num = iop["read"]["num"]
                 i_args = iop["args"]
-                req_x = float(i_args["num"]["req_x_m"])
-                req_z = float(i_args["num"]["req_z_m"])
+                cert_info = reconstructed_certified[vid]
+                arg_req_x = i_args["num"].get("req_x_m")
+                arg_req_z = i_args["num"].get("req_z_m")
+                if not (_is_finite_num(arg_req_x) and _is_finite_num(arg_req_z)):
+                    map04_ok = False
+                    map04_detail = f"inv_missing_req_args:{vid}"
+                    break
+                req_x = float(arg_req_x)
+                req_z = float(arg_req_z)
                 if not (
                     _same_num(i_num.get("req_x_m"), req_x, 1e-6)
                     and _same_num(i_num.get("req_z_m"), req_z, 1e-6)
@@ -2269,8 +2345,66 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
                     map04_ok = False
                     map04_detail = f"inv_order_mismatch:{vid}"
                     break
+                # BLOQ 3: la orden negativa tambien tiene que hablar del rasgo y de
+                # la ventana acreditados, no de un ``feature_kind`` inventado ni de
+                # una ventana puesta a cero.
+                if i_args["str"].get("feature_kind") != cert_info["feature_kind"]:
+                    map04_ok = False
+                    map04_detail = f"inv_feature_kind_mismatch:{vid}"
+                    break
+                inv_roi = cert_info["world_roi_m"]
+                if not (
+                    _same_num(i_args["num"].get("x_min_m"), inv_roi[0], 1e-3)
+                    and _same_num(i_args["num"].get("z_min_m"), inv_roi[1], 1e-3)
+                    and _same_num(i_args["num"].get("x_max_m"), inv_roi[2], 1e-3)
+                    and _same_num(i_args["num"].get("z_max_m"), inv_roi[3], 1e-3)
+                ):
+                    map04_ok = False
+                    map04_detail = f"inv_roi_mismatch:{vid}"
+                    break
                 srv_x = float(i_num["srv_x_m"])
+                srv_y = float(i_num["srv_y_m"])
                 srv_z = float(i_num["srv_z_m"])
+                prom = float(i_num["prominence_m"])
+                # Lectura independiente: el rasgo devuelto tiene que ser el que
+                # reconstruye el evaluador desde las 256 muestras del parche.
+                w_rec = rebuilt_world_features[vid]
+                if (
+                    abs(srv_x - float(w_rec["srv_x_m"])) > 0.02
+                    or abs(srv_y - float(w_rec["srv_y_m"])) > 0.02
+                    or abs(srv_z - float(w_rec["srv_z_m"])) > 0.02
+                    or abs(prom - float(w_rec["prominence_m"])) > 0.02
+                ):
+                    map04_ok = False
+                    map04_detail = f"inv_srv_vs_patch256_mismatch:{vid}"
+                    break
+                p_idx = PATCH_IDS.index(vid)
+                patch_cells_set = [
+                    (
+                        inv_roi[0] + 3.75 * float(c),
+                        inv_roi[3] - 3.75 * float(r),
+                        patch_samples[(p_idx, r, c)][0],
+                        patch_samples[(p_idx, r, c)][1],
+                    )
+                    for r in range(16)
+                    for c in range(16)
+                ]
+                rows_in_patch = True
+                for a_row in iop["read"]["rows"]:
+                    sx = float(a_row["sx_m"])
+                    sz = float(a_row["sz_m"])
+                    sy = float(a_row["y_m"])
+                    sb = float(a_row["sea_b"])
+                    if not any(
+                        abs(sx - px) <= 0.02 and abs(sz - pz) <= 0.02 and abs(sy - py) <= 1e-4 and sb == psb
+                        for px, pz, py, psb in patch_cells_set
+                    ):
+                        rows_in_patch = False
+                        break
+                if not rows_in_patch:
+                    map04_ok = False
+                    map04_detail = f"inv_audit_rows_not_in_patch:{vid}"
+                    break
 
                 if math.hypot(req_x - x_inv_hat, req_z - z_inv_hat) > 0.05:
                     map04_ok = False
@@ -2310,6 +2444,8 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
             return (False, f"req_echo_mismatch:{neg_id}")
         if not isinstance(arg_class, str) or arg_class == "":
             return (False, f"missing_class_args:{neg_id}")
+        if arg_class != CONTRACT_CLASS:
+            return (False, f"wrong_contract_class_args:{neg_id}:{arg_class}")
         if n_str.get("point_id") != neg_id:
             return (False, f"point_mismatch:{neg_id}")
 

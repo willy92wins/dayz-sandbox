@@ -101,6 +101,43 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
 
 
+def _iter_done_reads(rows: list[dict]):
+    """Itera (row, res, unpacked_read) de resultados ``done`` con payload."""
+    for row in rows:
+        if row.get("ev") != "result" or not isinstance(row.get("result"), dict):
+            continue
+        res = row["result"]
+        if res.get("status") != "done":
+            continue
+        try:
+            u = wire.unpack_payload(res["read"])
+        except ValueError:
+            continue
+        yield row, res, u
+
+
+def _repack_read(res: dict, u: dict) -> None:
+    packed = wire.pack_payload(
+        scalars_str=u["str"],
+        scalars_num=u["num"],
+        num_cols=u["ncol"],
+        str_cols=u["scol"],
+        row_dicts=u["rows"],
+    )
+    packed["has"] = ["payload"]
+    res["read"] = packed
+
+
+def _rewrite_args(row: dict, u: dict) -> None:
+    row["args"] = wire.pack_payload(
+        scalars_str=u["str"],
+        scalars_num=u["num"],
+        num_cols=u["ncol"],
+        str_cols=u["scol"],
+        row_dicts=u["rows"],
+    )
+
+
 def _strip_enforce_comments(txt: str) -> str:
     """Quita comentarios de Enforce Script para no acreditar un .c solo-comentario."""
     out: list[str] = []
@@ -357,6 +394,22 @@ def _build_synthetic_part(
             "ok": True,
             "peer": "client",
             "t_ms": 11.0,
+        },
+        # El nucleo emite polls vacios del cliente; son trafico legitimo y no
+        # transportan ordenes map_* (BLOQ nuevo de Sol r2).
+        {
+            "body_len": len(json.dumps({"now_ms": 12.0, "ops": []}, separators=(",", ":"))),
+            "ev": "poll",
+            "frame": 100,
+            "held_ms": 0.5,
+            "http": 200,
+            "inst": "cli-map-1",
+            "n_ops": 0,
+            "now_ms": 12.0,
+            "op_ids": [],
+            "peer": "client",
+            "t_ms": 12.0,
+            "tick_s": 0.012,
         },
     ]
 
@@ -758,8 +811,8 @@ def _build_synthetic_part(
         spawn_seq[0] += 1
         seq_post = spawn_seq[0]
         surf_y = srv_y
-        bbox_min_y = -0.5625
-        bbox_max_y = 0.5625
+        bbox_min_y = -0.5
+        bbox_max_y = 0.5
         # Posicion observada independiente de la pedida (no es un simple eco):
         # el motor coloca con un residuo deterministico dentro de la tolerancia.
         obs_x = req_x + 0.0125
@@ -808,8 +861,8 @@ def _build_synthetic_part(
     spawn_seq[0] += 1
     seq_post = spawn_seq[0]
     pg_surf_y = 12.5
-    pg_bbox_min_y = -0.5625
-    pg_bbox_max_y = 0.5625
+    pg_bbox_min_y = -0.5
+    pg_bbox_max_y = 0.5
     pg_obs_x = pg_x + 0.0125
     pg_obs_z = pg_z - 0.0125
     pg_obs_y = pg_surf_y - pg_bbox_min_y + contact_offset_y_m
@@ -2096,14 +2149,18 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             self.assertEqual(v["exit_code"], 2)
             self.assertEqual(v["reasons"], ["unaccredited_fixture"])
 
-            # Una captura offline relabelada como diag/ingame en samples/ no vale
-            # si la fixture congelada sigue diciendo offline.
+            # Una captura relabelada a diag/offline en samples/ no vale si la
+            # fixture congelada dice lo contrario.  Se parte del estado real para
+            # que el test siga valiendo tras el recongelado acreditado (MEN).
+            frozen_now = gate_core.read_json(FIXTURE_PATH)
+            frozen_ingame = frozen_now["accreditation"]["accredited_ingame"]
+            opposite_build = "offline" if frozen_ingame else "diag"
             pdir2 = Path(tmp) / "neg_offline_declared_diag"
             _build_synthetic_part(pdir2, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
             fx = gate_core.read_json(pdir2 / "samples" / "s_mapa_puntos.json")
-            fx["accreditation"]["accredited_ingame"] = True
-            fx["certifying_capture"]["certifying_build"] = "diag"
-            fx["certifying_capture"]["certifying_hello"]["build"] = "diag"
+            fx["accreditation"]["accredited_ingame"] = not frozen_ingame
+            fx["certifying_capture"]["certifying_build"] = opposite_build
+            fx["certifying_capture"]["certifying_hello"]["build"] = opposite_build
             fx = _compute_stamped_fixture(
                 fx,
                 cert_git_head=self.real_git_head,
@@ -2205,21 +2262,50 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             self.assertEqual(next(c for c in v3["checks"] if c["id"] == "MAP-02")["status"], "fail")
 
     def test_neg_sol09_implementer_cannot_self_accredit(self) -> None:
-        """BLOQ 9: la acreditacion diag es del propietario; el implementador no puede autoacreditar samples/."""
+        """BLOQ 9/MEN: la acreditacion es del propietario; solo vale respecto al estado congelado.
+
+        No se asume que la fixture este en ``offline``: se parte del estado
+        congelado real y se prueba el estado contrario.  El recongelado del
+        integrador actualiza la fixture congelada, y entonces el mismo paquete
+        pasa.  Asi el test cubre los dos estados sin exigir ``False``.
+        """
         frozen = gate_core.read_json(FIXTURE_PATH)
-        self.assertIs(frozen["accreditation"]["accredited_ingame"], False)
+        frozen_ingame = frozen["accreditation"]["accredited_ingame"]
+        self.assertIsInstance(frozen_ingame, bool)
+        opposite_build = "offline" if frozen_ingame else "diag"
+        opposite_ingame = not frozen_ingame
         with tempfile.TemporaryDirectory() as tmp:
             pdir = Path(tmp) / "neg_self_accredited"
             _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
             fx = gate_core.read_json(pdir / "samples" / "s_mapa_puntos.json")
-            fx["accreditation"]["accredited_ingame"] = True
+            fx["accreditation"]["accredited_ingame"] = opposite_ingame
+            fx["certifying_capture"]["certifying_build"] = opposite_build
+            fx["certifying_capture"]["certifying_hello"]["build"] = opposite_build
+            fx = _compute_stamped_fixture(
+                fx,
+                cert_git_head=self.real_git_head,
+                cert_probe_stamp=self.real_probe_stamp,
+            )
+            (pdir / "samples" / "s_mapa_certifying_capture.json").write_bytes(
+                json.dumps(fx["certifying_capture"], indent=2, sort_keys=True).encode("utf-8")
+            )
             gate_core.write_json(pdir / "samples" / "s_mapa_puntos.json", fx)
             prov = gate_core.read_json(pdir / "samples" / "map_provenance.json")
             prov["fixture_sha256"] = f03_common.sha256_file_hex(pdir / "samples" / "s_mapa_puntos.json")
+            prov["certifying_capture_sha256"] = f03_common.sha256_file_hex(
+                pdir / "samples" / "s_mapa_certifying_capture.json"
+            )
             gate_core.write_json(pdir / "samples" / "map_provenance.json", prov)
+
+            # Contra la fixture congelada real, el cambio de estado no vale.
             v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
-            self.assertEqual(v["exit_code"], 2)
+            self.assertEqual(v["exit_code"], 2, v)
             self.assertEqual(v["reasons"], ["unaccredited_fixture"])
+
+            # Simulando el recongelado del propietario, el mismo paquete vale.
+            with mock.patch.object(s_mapa_eval, "_load_frozen_fixture", return_value=copy.deepcopy(fx)):
+                v_recongelado = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v_recongelado["exit_code"], 0, v_recongelado)
 
     def test_neg_sol10_truncated_zlib_stream(self) -> None:
         """MEN 10: un PNG con flujo zlib truncado no puede pasar aunque descomprima al tamano esperado."""
@@ -2251,6 +2337,260 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             c_m1 = next(c for c in v["checks"] if c["id"] == "MAP-01")
             self.assertEqual(c_m1["status"], "fail")
             self.assertIn("idat_stream_not_terminated", c_m1["detail"])
+
+    # =========================================================================
+    # Regresiones del arbitraje r2 (2026-11-15): cada contraejemplo de Sol r2
+    # con nombre fijo ``test_sol2_<id>_*``.  Las fabricaciones no dan PASA; las
+    # dos variantes honestas (poll del cliente y superficie medida en la posicion
+    # observada) dan PASA.
+    # =========================================================================
+    def _step_op_ids(self, pdir: Path, step: str) -> list[str]:
+        for srow in f03_common.read_jsonl(pdir / "samples" / "scenario.jsonl"):
+            if srow.get("step") == step:
+                return list(srow.get("op_ids") or [])
+        return []
+
+    def test_sol2_poll_client_traffic_allowed(self) -> None:
+        """Nuevo BLOQ r2: un poll vacio del cliente es trafico legitimo y da PASA."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "run"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            rows.insert(
+                2,
+                {
+                    "body_len": len(json.dumps({"now_ms": 12.5, "ops": []}, separators=(",", ":"))),
+                    "ev": "poll",
+                    "frame": 100,
+                    "held_ms": 0.5,
+                    "http": 200,
+                    "inst": "cli-map-1",
+                    "n_ops": 0,
+                    "now_ms": 12.5,
+                    "op_ids": [],
+                    "peer": "client",
+                    "t_ms": 12.5,
+                    "tick_s": 0.0125,
+                },
+            )
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 0, v)
+            self.assertTrue(all(c["status"] == "pass" for c in v["checks"]), v)
+
+    def test_sol2_class_substituted_stone_rejected(self) -> None:
+        """Nuevo BLOQ r2: la clase contractual Barrel_Green es obligatoria en pedido y observacion."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_stone_class"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            for row in rows:
+                if row.get("ev") == "enq" and row.get("verb") == "map_place_ground":
+                    u = wire.unpack_payload(row["args"])
+                    u["str"]["class_id"] = "Stone"
+                    _rewrite_args(row, u)
+            for _row, res, u in _iter_done_reads(rows):
+                if u["str"].get("decision_id") == "placed":
+                    u["str"]["obs_class_id"] = "Stone"
+                    _repack_read(res, u)
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 1, v)
+            by_id = {c["id"]: c["status"] for c in v["checks"]}
+            self.assertEqual(by_id["MAP-03"], "fail")
+            self.assertEqual(by_id["MAP-05"], "fail")
+            self.assertEqual(by_id["MAP-06"], "fail")
+            self.assertEqual(by_id["MAP-07"], "fail")
+
+    def test_sol2_r1_3_inverted_orders_window_and_kind(self) -> None:
+        """r1-3: MAP-04 tambien contrasta ventana, rasgo y lectura independiente."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_inverted_zero_window"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            inv_ids = set(self._step_op_ids(pdir, "neg_inverted_axis"))
+            self.assertEqual(len(inv_ids), 3)
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            for row in rows:
+                if row.get("ev") != "enq" or row.get("op_id") not in inv_ids:
+                    continue
+                u = wire.unpack_payload(row["args"])
+                u["str"]["feature_kind"] = "inventado"
+                for key in ("x_min_m", "z_min_m", "x_max_m", "z_max_m"):
+                    u["num"][key] = 0.0
+                _rewrite_args(row, u)
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 1, v)
+            self.assertEqual(next(c for c in v["checks"] if c["id"] == "MAP-04")["status"], "fail")
+
+    def test_sol2_r1_4_ops_on_unstamped_instance(self) -> None:
+        """r1-4: las instancias admitidas salen solo de saludos aceptados y sellados."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_ghost_instance"
+            man = _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            build = man["build"]
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            rows.append(
+                {
+                    "args": {
+                        "build": build,
+                        "inst": "srv-ghost",
+                        "peer": "server",
+                        "probe_ver": "dsbx-qa1+unstamped",
+                        "proto": "qa0",
+                    },
+                    "ev": "hello",
+                    "http": 200,
+                    "inst": "srv-ghost",
+                    "ok": False,
+                    "peer": "server",
+                    "t_ms": 11.5,
+                }
+            )
+            for row in rows:
+                if row.get("ev") in ("enq", "poll") and row.get("peer") == "server":
+                    row["inst"] = "srv-ghost"
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 1, v)
+            self.assertTrue(v["reasons"][0].startswith("op_not_from_server_instance"), v)
+
+    def test_sol2_r1_5_fixed_obs_y_compensating_box(self) -> None:
+        """r1-5: una obs_y fija con una caja que compensa la altura no puede pasar."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_fixed_obs_y"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            for _row, res, u in _iter_done_reads(rows):
+                if u["str"].get("decision_id") != "placed":
+                    continue
+                terrain = float(u["num"]["terrain_y_m"])
+                u["num"]["obs_y_m"] = 0.5625
+                u["num"]["bbox_min_y_m"] = terrain - 0.5625
+                u["num"]["bbox_max_y_m"] = terrain + 0.5625
+                u["num"]["obs_surf_y_m"] = terrain
+                _repack_read(res, u)
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 1, v)
+            c3 = next(c for c in v["checks"] if c["id"] == "MAP-03")
+            self.assertEqual(c3["status"], "fail")
+            self.assertIn("box_witness_mismatch", c3["detail"])
+
+    def test_sol2_r1_5_copied_request_pose(self) -> None:
+        """r1-5: copiar la pose de la peticion con una caja generica no puede pasar."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_copied_request_pose"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            for _row, res, u in _iter_done_reads(rows):
+                if u["str"].get("decision_id") != "placed":
+                    continue
+                terrain = float(u["num"]["terrain_y_m"])
+                u["num"]["obs_x_m"] = float(u["num"]["req_x_m"])
+                u["num"]["obs_z_m"] = float(u["num"]["req_z_m"])
+                u["num"]["bbox_min_y_m"] = -0.5625
+                u["num"]["bbox_max_y_m"] = 0.5625
+                u["num"]["obs_surf_y_m"] = terrain
+                u["num"]["obs_y_m"] = terrain + 0.5625
+                _repack_read(res, u)
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 1, v)
+            self.assertEqual(next(c for c in v["checks"] if c["id"] == "MAP-03")["status"], "fail")
+
+    def test_sol2_r1_5_shifted_v_heights(self) -> None:
+        """r1-5: desplazar 4 m a la vez las alturas de V1 no puede pasar (testigo certificado)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_shifted_v1_heights"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            for row in rows:
+                if row.get("ev") != "result" or not isinstance(row.get("result"), dict):
+                    continue
+                res = row["result"]
+                if res.get("status") != "done":
+                    continue
+                u = wire.unpack_payload(res["read"])
+                mode = u["str"].get("mode_id")
+                if mode == "patch_row" and 48.0 <= float(u["num"].get("row_n", -1)) <= 63.0:
+                    ncell = res["read"]["ncell"]
+                    for idx_c in range(0, len(ncell), 2):
+                        ncell[idx_c] = float(ncell[idx_c]) + 4.0
+                elif u["str"].get("point_id") == "V1" and mode in ("calibrate", "verify"):
+                    u["num"]["srv_y_m"] = float(u["num"]["srv_y_m"]) + 4.0
+                    for audit_row in u["rows"]:
+                        audit_row["y_m"] = float(audit_row["y_m"]) + 4.0
+                    _repack_read(res, u)
+                elif u["str"].get("point_id") == "V1" and u["str"].get("decision_id") == "placed":
+                    for key in ("terrain_y_m", "obs_y_m", "obs_surf_y_m"):
+                        u["num"][key] = float(u["num"][key]) + 4.0
+                    _repack_read(res, u)
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 1, v)
+            c2 = next(c for c in v["checks"] if c["id"] == "MAP-02")
+            self.assertEqual(c2["status"], "fail")
+            self.assertIn("patch_vs_certified_height_mismatch", c2["detail"])
+
+    def test_sol2_r1_7_separate_capture_differs_from_frozen(self) -> None:
+        """r1-7: el archivo certificador separado no puede diferir del bloque congelado."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_separate_capture_chunk0"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            cert_path = pdir / "samples" / "s_mapa_certifying_capture.json"
+            cert = json.loads(cert_path.read_text(encoding="utf-8"))
+            for pid in s_mapa_eval.PATCH_IDS:
+                patch = cert["patches"][pid]
+                for op_entry in patch["patch_row_ops"]:
+                    u = wire.unpack_payload(op_entry["order"]["args"])
+                    u["num"]["chunk_n"] = 0.0
+                    op_entry["order"]["args"] = wire.pack_payload(
+                        scalars_str=u["str"], scalars_num=u["num"], num_cols=u["ncol"], str_cols=u["scol"]
+                    )
+                loc = patch["feature_locate_op"]["order"]
+                u = wire.unpack_payload(loc["args"])
+                for key in ("x_min_m", "z_min_m", "x_max_m", "z_max_m"):
+                    u["num"][key] = 0.0
+                loc["args"] = wire.pack_payload(
+                    scalars_str=u["str"], scalars_num=u["num"], num_cols=u["ncol"], str_cols=u["scol"]
+                )
+            cert_bytes = json.dumps(cert, indent=2, sort_keys=True).encode("utf-8")
+            cert_path.write_bytes(cert_bytes)
+            cert_sha = hashlib.sha256(cert_bytes).hexdigest()
+            fx = gate_core.read_json(pdir / "samples" / "s_mapa_puntos.json")
+            fx["accreditation"]["certifying_capture_sha256"] = cert_sha
+            gate_core.write_json(pdir / "samples" / "s_mapa_puntos.json", fx)
+            prov = gate_core.read_json(pdir / "samples" / "map_provenance.json")
+            prov["fixture_sha256"] = f03_common.sha256_file_hex(pdir / "samples" / "s_mapa_puntos.json")
+            prov["certifying_capture_sha256"] = cert_sha
+            gate_core.write_json(pdir / "samples" / "map_provenance.json", prov)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 2, v)
+            self.assertEqual(v["reasons"], ["unaccredited_fixture"])
+
+    def test_sol2_obs_surface_at_observed_position(self) -> None:
+        """Variante honesta r2: superficie medida en la posicion observada (0,04 m / 0,12 m) da PASA."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "run_observed_surface"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            for _row, res, u in _iter_done_reads(rows):
+                if u["str"].get("decision_id") != "placed":
+                    continue
+                req_x = float(u["num"]["req_x_m"])
+                req_z = float(u["num"]["req_z_m"])
+                terrain = float(u["num"]["terrain_y_m"])
+                obs_surf = terrain + 0.12
+                u["num"]["obs_x_m"] = req_x + 0.04
+                u["num"]["obs_z_m"] = req_z
+                u["num"]["obs_surf_y_m"] = obs_surf
+                u["num"]["obs_y_m"] = obs_surf - float(u["num"]["bbox_min_y_m"])
+                _repack_read(res, u)
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 0, v)
+            self.assertTrue(all(c["status"] == "pass" for c in v["checks"]), v)
 
     # =========================================================================
     # Tests end-to-end (prefijo test_e2e_): ejercitan la implementacion real
