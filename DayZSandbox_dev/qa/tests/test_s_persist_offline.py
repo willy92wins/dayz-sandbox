@@ -724,9 +724,9 @@ class _SyntheticPartBuilder:
             return scene_op_id, out_rows, a_args, a_read
 
         for sc_id in active_scenes:
-            if self.q9_use_pathway_b and sc_id in (ret_scene_id, "scene_b"):
+            if self.q9_use_pathway_b and sc_id == "scene_b":
                 _apply_one_scene(sc_id, 1, "a", creature_drift=0.65)
-                # Reset before pathway b
+                # Reset before pathway b (Q9 contingency for scene_b)
                 r_args = self._pack_ext_args(
                     strings={
                         "scene_id": sc_id,
@@ -754,6 +754,9 @@ class _SyntheticPartBuilder:
                 )
                 self._emit_op("server", self.server_epoch_old, "per_reset_scene", r_args, r_read)
                 scop_id, out_rows, a_args, a_read = _apply_one_scene(sc_id, 2, "b", creature_drift=0.02)
+            elif self.q9_use_pathway_b and sc_id == ret_scene_id:
+                # For retained scene, apply directly with pathway b (contingency is internal)
+                scop_id, out_rows, a_args, a_read = _apply_one_scene(sc_id, 1, "b", creature_drift=0.02)
             else:
                 scop_id, out_rows, a_args, a_read = _apply_one_scene(sc_id, 1, "a", creature_drift=0.02)
 
@@ -1863,14 +1866,24 @@ class TestSPersistOracleOffline(unittest.TestCase):
             part_dir = _SyntheticPartBuilder("run").build_into(Path(tmp) / "single_clean_reset")
             bpath = part_dir / "samples" / "bridge.jsonl"
             events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            rst_clean_2_op_id = None
+            for ev in events:
+                if ev.get("ev") == "enq" and ev.get("verb") == "per_reset_scene":
+                    u_s, _, _ = _unpack(ev["args"])
+                    if u_s.get("reset_op_id") == "rst-clean-2":
+                        rst_clean_2_op_id = ev.get("op_id")
+                        break
             filtered = []
             for ev in events:
                 if ev.get("ev") == "result":
                     res_list = ev.get("results") or []
-                    if res_list and res_list[0].get("verb") == "per_reset_scene":
-                        u_s, _, _ = _unpack(res_list[0]["read"])
-                        if u_s.get("reset_op_id") == "rst-clean-2":
-                            continue
+                    for res in res_list:
+                        if res.get("verb") == "per_reset_scene" and res.get("op_id") == rst_clean_2_op_id:
+                            break
+                    else:
+                        filtered.append(ev)
+                        continue
+                    continue
                 filtered.append(ev)
             bpath.write_text("\n".join(json.dumps(e) for e in filtered) + "\n", encoding="utf-8")
             verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
@@ -2042,42 +2055,55 @@ class TestSPersistOracleOffline(unittest.TestCase):
             self.assertEqual(root_verdict["exit_code"], 0)
 
     def test_e2e_lease_expired_blocks_effects_and_allows_cleanup_e1(self) -> None:
-        now_box = [1000.0]
-        peer = fake_peer.Peer(
-            fake_peer.PeerConfig(),
-            "server",
-            0,
-            30.0,
-            "",
-            clock_ms_fn=lambda: now_box[0],
-        )
-        peer.last_poll_ok_ms = 1000.0
-        # Advance virtual clock past PEER_LEASE_TIMEOUT_MS (5000 ms) without polling
-        now_box[0] = 7500.0
-        peer._check_lease_on_tick(now_box[0])
-        self.assertEqual(peer.lease_expired_flag, 1)
+        import tempfile
+        import json as _json
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tf:
+            _json.dump({
+                "url": "http://127.0.0.1:18999/",
+                "key": "test-key",
+                "retry_ms": 2000,
+                "callback_budget": 2000,
+            }, tf)
+            config_path = tf.name
+        try:
+            now_box = [1000.0]
+            peer = fake_peer.Peer(
+                config_path,
+                "server",
+                0,
+                30.0,
+                "",
+                clock_ms_fn=lambda: now_box[0],
+            )
+            peer.last_ok_ms = 1000.0
+            # Advance virtual clock past PEER_LEASE_TIMEOUT_MS (5000 ms) without polling
+            now_box[0] = 7500.0
+            # Lease expiration is checked lazily via lease_valid()
 
-        results: list[dict[str, Any]] = []
-        for idx, verb in enumerate(
-            ("per_apply_scene", "per_reset_scene", "per_child_transition", "per_spawn_raw", "per_census_start")
-        ):
-            op = {"op_id": f"op-exp-{idx}", "verb": verb, "args": wire.pack_payload()}
-            peer._start_op(op, now_box[0], 1.0, results)
-        clean_op = {
-            "op_id": "op-clean",
-            "verb": "per_cleanup_qa",
-            "args": wire.pack_payload(scalars_str={"cleanup_tag": "t6"}),
-        }
-        peer._start_op(clean_op, now_box[0], 1.0, results)
-        by_id = {r["op_id"]: r for r in results}
-        for idx in range(5):
-            r = by_id.get(f"op-exp-{idx}")
-            self.assertIsNotNone(r)
-            self.assertEqual(r["status"], "error")
-            self.assertEqual(r["reason"], "lease_expired")
-        r_clean = by_id.get("op-clean")
-        self.assertIsNotNone(r_clean)
-        self.assertEqual(r_clean["status"], "done")
+            results: list[dict[str, Any]] = []
+            for idx, verb in enumerate(
+                ("per_apply_scene", "per_reset_scene", "per_child_transition", "per_spawn_raw", "per_census_start")
+            ):
+                op = {"op_id": f"op-exp-{idx}", "verb": verb, "args": wire.pack_payload()}
+                peer._start_op(op, now_box[0], 1.0, results)
+            clean_op = {
+                "op_id": "op-clean",
+                "verb": "per_cleanup_qa",
+                "args": wire.pack_payload(scalars_str={"cleanup_tag": "t6"}),
+            }
+            peer._start_op(clean_op, now_box[0], 1.0, results)
+            by_id = {r["op_id"]: r for r in results}
+            for idx in range(5):
+                r = by_id.get(f"op-exp-{idx}")
+                self.assertIsNotNone(r)
+                self.assertEqual(r["status"], "error")
+                self.assertEqual(r["reason"], "lease_expired")
+            r_clean = by_id.get("op-clean")
+            self.assertIsNotNone(r_clean)
+            self.assertEqual(r_clean["status"], "done")
+        finally:
+            import os
+            os.unlink(config_path)
 
 
 if __name__ == "__main__":
