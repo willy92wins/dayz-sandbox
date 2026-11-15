@@ -555,6 +555,121 @@ def verify_geometry_spec(k: int = 3) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _checks_out(checks: dict[str, str], reasons: list[str]) -> list[dict[str, str]]:
+    """Core verdict format: list of {id, status, detail} (f03_common.aggregate_spike reads it)."""
+    out: list[dict[str, str]] = []
+    for cid in CHECK_IDS:
+        detail = ""
+        prefix = f"{cid}:"
+        for r in reasons:
+            if r.startswith(prefix):
+                detail = r[len(prefix):].strip()[:300]
+                break
+        out.append({"detail": detail, "id": cid, "status": checks.get(cid, "missing")})
+    return out
+
+
+_CORE_EVENT_KINDS = ("enq", "deliver", "result", "expire", "lost")
+
+
+def _merge_core_events(raw: list[Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Join the REAL bridge event log (enq -> deliver -> result, written by the harness core
+    from the HTTP traffic) into one record per op. Anything not written by the core
+    (no ``ev``) is a violation: the evaluator never accepts pre-merged records."""
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    viol: list[str] = []
+    for idx, ev in enumerate(raw):
+        if not isinstance(ev, dict) or not isinstance(ev.get("ev"), str):
+            viol.append(f"record[{idx}] is not a bridge event (no 'ev')")
+            continue
+        kind = ev["ev"]
+        if kind not in _CORE_EVENT_KINDS:
+            continue  # hello, poll, keepalive, test_mode, ... are not operations
+        op_id = ev.get("op_id")
+        if not isinstance(op_id, str) or not op_id.strip():
+            viol.append(f"record[{idx}] missing valid op_id")
+            continue
+        t_ms = ev.get("t_ms")
+        if kind == "enq":
+            if op_id in merged:
+                viol.append(f"duplicate op_id {op_id!r}")
+                continue
+            merged[op_id] = {
+                "op_id": op_id,
+                "verb": ev.get("verb"),
+                "peer": ev.get("peer"),
+                "args": ev.get("args") if isinstance(ev.get("args"), dict) else {},
+                "issued_ms": t_ms,
+                "deliver_ms": None,
+                "result": None,
+                "result_ms": None,
+                "terminal": None,
+                "terminal_ms": None,
+            }
+            order.append(op_id)
+            continue
+        rec = merged.get(op_id)
+        if rec is None:
+            viol.append(f"{kind} for op {op_id!r} without enq")
+            continue
+        if kind == "deliver":
+            if rec["deliver_ms"] is None:
+                rec["deliver_ms"] = t_ms
+                if ev.get("peer") not in (None, rec["peer"]):
+                    viol.append(f"op {op_id}: delivered to {ev.get('peer')!r}, enqueued for {rec['peer']!r}")
+        elif kind == "result":
+            if rec["result"] is None and isinstance(ev.get("result"), dict):
+                rec["result"] = ev["result"]
+                rec["result_ms"] = t_ms
+        elif rec["terminal"] is None:  # expire / lost
+            rec["terminal"] = kind
+            rec["terminal_ms"] = t_ms
+    out: list[dict[str, Any]] = []
+    for op_id in order:
+        rec = merged[op_id]
+        issued = rec["issued_ms"]
+        if rec["result"] is not None:
+            if rec["deliver_ms"] is None:
+                viol.append(f"op {op_id}: result without deliver")
+                continue
+            body = rec["result"]
+            read = dict(body.get("read") or {}) if isinstance(body.get("read"), dict) else {}
+            read["status"] = body.get("status")
+            read["reason"] = body.get("reason", "")
+            out.append(
+                {
+                    "op_id": op_id,
+                    "verb": rec["verb"],
+                    "peer": rec["peer"],
+                    "args": rec["args"],
+                    "issued_ms": issued,
+                    "ack_ms": rec["deliver_ms"],
+                    "read_ms": rec["result_ms"],
+                    "ack": {"status": "ok", "reason": ""},
+                    "read": read,
+                }
+            )
+        else:
+            status = "lost" if rec["terminal"] == "lost" else "timeout"
+            t_end = rec["terminal_ms"] if rec["terminal_ms"] is not None else issued
+            out.append(
+                {
+                    "op_id": op_id,
+                    "verb": rec["verb"],
+                    "peer": rec["peer"],
+                    "args": rec["args"],
+                    "issued_ms": issued,
+                    "ack_ms": rec["deliver_ms"] if rec["deliver_ms"] is not None else issued,
+                    "read_ms": t_end,
+                    "ack": {"status": "ok", "reason": ""},
+                    "read": {"status": status, "reason": status, "has": []},
+                }
+            )
+    return out, viol
+
+
+
 def _is_finite_number(val: Any) -> bool:
     if isinstance(val, bool) or not isinstance(val, (int, float)):
         return False
@@ -798,7 +913,7 @@ def evaluate(
         return gate_core.make_verdict(
             SPIKE_ID,
             INCONCLUSO,
-            checks=checks,
+            checks=_checks_out(checks, reasons),
             metrics=metrics,
             reasons=reasons,
         )
@@ -829,7 +944,7 @@ def evaluate(
         return gate_core.make_verdict(
             SPIKE_ID,
             INCONCLUSO,
-            checks=checks,
+            checks=_checks_out(checks, reasons),
             metrics=metrics,
             reasons=reasons,
         )
@@ -842,7 +957,7 @@ def evaluate(
         return gate_core.make_verdict(
             SPIKE_ID,
             FALLA,
-            checks=checks,
+            checks=_checks_out(checks, reasons),
             metrics=metrics,
             reasons=reasons,
         )
@@ -855,12 +970,13 @@ def evaluate(
         return gate_core.make_verdict(
             SPIKE_ID,
             INCONCLUSO,
-            checks=checks,
+            checks=_checks_out(checks, reasons),
             metrics=metrics,
             reasons=reasons,
         )
 
     # Parse and anti-fabrication check on every bridge record (E9)
+    raw_records, merge_violations = _merge_core_events(raw_records)
     seen_op_ids: set[str] = set()
     ops: list[dict[str, Any]] = []
     prf01_violations: list[str] = []
@@ -870,7 +986,9 @@ def evaluate(
     prf05_violations: list[str] = []
     prf06_violations: list[str] = []
     transport_failures: list[str] = []
+    transport_failed_verbs: set[str] = set()
 
+    prf01_violations.extend(merge_violations)
     prev_server_issued_ms: float | None = None
 
     for idx, rec in enumerate(raw_records):
@@ -937,6 +1055,7 @@ def evaluate(
 
         if res_env["status"] in ("timeout", "lost"):
             transport_failures.append(f"op {op_id} ({verb}): {res_env['status']}")
+            transport_failed_verbs.add(verb)
             continue
 
         ops.append(
@@ -1145,10 +1264,12 @@ def evaluate(
     step_window_starts: dict[str, list[dict[str, Any]]] = {}
     job_reads_by_id: dict[str, list[dict[str, Any]]] = {}
     job_frees_by_id: set[str] = set()
+    job_free_idx: dict[str, int] = {}
     step_snaps: dict[str, list[dict[str, Any]]] = {}
     all_snap_ops: list[dict[str, Any]] = []
     budget_check_ops: list[dict[str, Any]] = []
     cleanup_ops: list[dict[str, Any]] = []
+    current_apply_step: str | None = None
     act_ops: list[dict[str, Any]] = []
 
     for op in ops:
@@ -1168,8 +1289,9 @@ def evaluate(
                 )
 
         elif verb == "perf_step_apply":
-            raw_step = p_str.get("step_id") or req_str.get("step_id", "")
+            raw_step = req_str.get("step_id") or p_str.get("step_id", "")
             step_id = _normalize_step_id(raw_step)
+            current_apply_step = step_id
             if step_id == "cleanup":
                 cleanup_ops.append(op)
             elif step_id in STEP_SPEC:
@@ -1184,23 +1306,31 @@ def evaluate(
             step_window_starts.setdefault(step_id, []).append(op)
 
         elif verb in ("job_read", "poll_job"):
-            job_id = p_str.get("job") or req_str.get("job", "")
+            job_id = req_str.get("job") or p_str.get("job", "")
             if job_id:
                 job_reads_by_id.setdefault(job_id, []).append(op)
 
         elif verb == "job_free":
-            job_id = p_str.get("job") or req_str.get("job", "")
+            job_id = req_str.get("job") or p_str.get("job", "")
             if job_id and op["status"] == "done":
                 job_frees_by_id.add(job_id)
+                job_free_idx.setdefault(job_id, op["idx"])
 
         elif verb == "perf_snap":
             all_snap_ops.append(op)
-            raw_step = p_str.get("step_id") or req_str.get("step_id", "")
+            raw_step = req_str.get("step_id") or p_str.get("step_id", "")
             step_id = _normalize_step_id(raw_step)
-            # Group multi-page snaps or checkpoints for load steps (excluding N6 foreign injection)
+            # A snapshot belongs to the step whose perf_step_apply precedes it in the bridge
+            # order (the label alone is a probe string); snapshots after a cleanup, and the N6
+            # injection, are not checkpoints of any load step.
             inj_b = int(req_num.get("inject_foreign_cargo_b", p_num.get("foreign_injected_b", 0)))
-            if step_id in STEP_SPEC and inj_b == 0 and op["status"] == "done":
-                step_snaps.setdefault(step_id, []).append(op)
+            if inj_b == 0 and op["status"] == "done" and current_apply_step in STEP_SPEC:
+                if step_id != current_apply_step:
+                    prf02_violations.append(
+                        f"op {op['op_id']}: perf_snap labelled {step_id!r} taken while step {current_apply_step!r} is applied"
+                    )
+                else:
+                    step_snaps.setdefault(current_apply_step, []).append(op)
 
         elif verb == "perf_budget_check":
             budget_check_ops.append(op)
@@ -1238,6 +1368,7 @@ def evaluate(
     n1a_brief_windows: list[dict[str, Any]] = []
     n1b_modset_rejects: list[dict[str, Any]] = []
     technical_window_missing = False
+    dup_row_violations: list[str] = []
 
     for step_id, start_ops in step_window_starts.items():
         for w_op in start_ops:
@@ -1291,12 +1422,22 @@ def evaluate(
                     terminal_state = st
                     terminal_num.update(rp_num)
                 last_poll_h_ms = max(last_poll_h_ms, r_op["read_ms"])
+                seen_in_read: set[int] = set()
                 for row in r_op["payload"]["rows"]:
                     if "seq_n" in row and _is_finite_number(row["seq_n"]):
                         s_idx = int(row["seq_n"])
+                        if s_idx in seen_in_read:
+                            dup_row_violations.append(
+                                f"step {step_id}: duplicate window row seq_n={s_idx} inside one job_read (op {r_op['op_id']})"
+                            )
+                        seen_in_read.add(s_idx)
                         if s_idx not in merged_rows_by_seq:
                             merged_rows_by_seq[s_idx] = row
                             raw_rows_list.append(row)
+                        elif merged_rows_by_seq[s_idx] != row:
+                            dup_row_violations.append(
+                                f"step {step_id}: window row seq_n={s_idx} differs between two reads of the job"
+                            )
                     else:
                         raw_rows_list.append(row)
 
@@ -1362,26 +1503,34 @@ def evaluate(
     valid_prf03_steps: set[str] = set()
     prf03_technical = False
 
-    # Check for multiple concurrent perf_sampler jobs (E9: resource conflict)
-    active_sampler_jobs: dict[str, list[dict[str, Any]]] = {}
-    for step_id, start_ops in step_window_starts.items():
-        for w_op in start_ops:
-            if w_op["status"] == "done":
-                resource = w_op["payload"]["str"].get("resource")
-                if resource == "perf_sampler":
-                    job_id = w_op["payload"]["str"].get("job", "")
-                    active_sampler_jobs.setdefault(resource, []).append({
-                        "job_id": job_id,
-                        "op_id": w_op["op_id"],
-                        "step_id": step_id,
-                    })
-    for resource, jobs in active_sampler_jobs.items():
-        if len(jobs) > 1:
-            # Multiple active perf_sampler jobs without freeing - resource conflict
-            for job in jobs[1:]:
-                prf03_violations.append(
-                    f"op {job['op_id']} ({job['step_id']}): concurrent perf_sampler job without freeing previous (job={job['job_id']})"
-                )
+    # Two perf_sampler jobs alive at once (E9: the resource must serialise them): a second
+    # perf_window_start answered `done` is only legitimate after the previous job has been
+    # read in a terminal state (or freed) earlier in the bridge order.
+    sampler_starts = sorted(
+        (
+            w_op
+            for start_ops in step_window_starts.values()
+            for w_op in start_ops
+            if w_op["status"] == "done" and w_op["payload"]["str"].get("resource") == "perf_sampler"
+        ),
+        key=lambda o: o["idx"],
+    )
+    for pos, w_op in enumerate(sampler_starts):
+        if pos == 0:
+            continue
+        prev = sampler_starts[pos - 1]
+        prev_job = prev["payload"]["str"].get("job", "")
+        closed = any(
+            r["status"] == "done"
+            and r["payload"]["str"].get("state") in ("done", "stopped", "failed", "expired")
+            and prev["idx"] < r["idx"] < w_op["idx"]
+            for r in job_reads_by_id.get(prev_job, [])
+        ) or (prev_job in job_free_idx and prev["idx"] < job_free_idx[prev_job] < w_op["idx"])
+        if not closed:
+            prf03_violations.append(
+                f"op {w_op['op_id']} ({w_op['payload']['str'].get('step_id', '?')}): concurrent perf_sampler job "
+                f"started while previous job {prev_job!r} was not terminal or freed"
+            )
 
     # Check regular step windows
     for step_id, w_info in step_windows.items():
@@ -1497,16 +1646,9 @@ def evaluate(
         if step_id not in [v.split(":")[0].replace("step ", "") for v in prf03_violations]:
             valid_prf03_steps.add(step_id)
 
-    # Check N1a negative probe windows (single sample) - must fail with insufficient_samples
-    for nw in n1a_brief_windows:
-        t_state = nw["terminal_state"]
-        t_num = nw["terminal_num"]
-        rows_total_n = int(t_num.get("rows_total_n", len(nw["rows"])))
-        if t_state == "done" and rows_total_n == 1:
-            prf03_violations.append(
-                f"op {nw['op_id']}: N1a single-sample window (rows_total_n={rows_total_n} < {EXPECTED_WINDOW_ROWS})"
-            )
+    # N1a (1-sample probe window) is a negative of the product audited by PRF-06 (brief section 6), not a PRF-03 window.
 
+    prf03_violations.extend(dup_row_violations)
     if prf03_violations:
         checks["PRF-03"] = "fail"
         reasons.extend(f"PRF-03: {v}" for v in prf03_violations)
@@ -1621,7 +1763,10 @@ def evaluate(
         step_bad = False
         apply_op = step_apply_ops.get(step_id)
         if apply_op is None:
-            prf02_violations.append(f"step {step_id}: missing perf_step_apply")
+            if "perf_step_apply" in transport_failed_verbs:
+                reasons.append(f"PRF-02 technical: perf_step_apply for step {step_id!r} lost or timed out")
+            else:
+                prf02_violations.append(f"step {step_id}: missing perf_step_apply")
             continue
         if apply_op["status"] != "done":
             if apply_op["reason"] == "expansion_unavailable":
@@ -1639,8 +1784,10 @@ def evaluate(
         # Verify requested and observed counts match STEP_SPEC[step_id]
         for cat in ("objects", "infected", "animals", "actors"):
             exp_val = spec[f"{cat}_n"]
-            req_val = ap_num.get(f"{cat}_n", req_num.get(f"{cat}_n"))
-            alive_val = ap_num.get(f"{cat}_alive_n", ap_num.get(f"{cat}_n"))
+            # The order comes from the core's enq record, the observation from the peer's
+            # *_alive_n reading; a missing observation is NOT replaced by the requested echo.
+            req_val = req_num.get(f"{cat}_n")
+            alive_val = ap_num.get(f"{cat}_alive_n")
             if req_val != exp_val or alive_val != exp_val:
                 prf02_violations.append(
                     f"step {step_id}: {cat} count mismatch (expected={exp_val}, req={req_val}, alive={alive_val})"
@@ -1755,6 +1902,19 @@ def evaluate(
         if len(cps) < EXPECTED_SNAP_CHECKPOINTS:
             prf02_violations.append(
                 f"step {step_id}: insufficient perf_snap checkpoints ({len(cps)} < {EXPECTED_SNAP_CHECKPOINTS})"
+            )
+            step_bad = True
+
+        # Checkpoints must really be spread over the window (cp = 0..12 about every 5 s)
+        cp_gaps = [b["tick_ms"] - a["tick_ms"] for a, b in zip(cps, cps[1:])]
+        if any(g < 2500.0 or g > 10000.0 for g in cp_gaps):
+            prf02_violations.append(
+                f"step {step_id}: checkpoint tick_ms spacing outside [2500, 10000] ms (min={min(cp_gaps):.0f}, max={max(cp_gaps):.0f})"
+            )
+            step_bad = True
+        elif cps and cps[-1]["tick_ms"] - cps[0]["tick_ms"] < 50000.0:
+            prf02_violations.append(
+                f"step {step_id}: checkpoints span only {cps[-1]['tick_ms'] - cps[0]['tick_ms']:.0f} ms (< 50000)"
             )
             step_bad = True
 
@@ -2032,8 +2192,18 @@ def evaluate(
             )
             steps_up_to_k_valid[s_name] = admissible
 
+        # Brief §5 PRF-05: k* is derived "con los 4 escalones validos en PRF-01..PRF-04"; a partial
+        # run (fewer steps, or a step whose PRF-02..04 did not pass) cannot certify a budget.
+        all_four_valid = all(
+            s_name in valid_prf02_steps
+            and s_name in valid_prf03_steps
+            and s_name in valid_prf04_steps
+            and s_name in step_fps_metrics
+            for s_name in STEP_ORDER
+        )
+
         # Derive k* consecutively from fixture
-        if not prf05_violations and checks["PRF-01"] == "pass":
+        if not prf05_violations and checks["PRF-01"] == "pass" and all_four_valid:
             k_star = 0
             for s_name in ("fixture", "inc1", "inc2"):
                 if steps_up_to_k_valid.get(s_name, False):
@@ -2545,7 +2715,7 @@ def evaluate(
     return gate_core.make_verdict(
         SPIKE_ID,
         code,
-        checks=checks,
+        checks=_checks_out(checks, reasons),
         metrics=metrics,
         reasons=reasons,
     )

@@ -5,9 +5,11 @@ checked by ``test_probe_static.check_12_blind_evaluators``.
 Each entry specifies:
 - ``expected_exit_code``: expected evaluator verdict exit code (1 = FALLA).
 - ``must_fail_checks``: checks that MUST be in state ``"fail"``.
-- ``allowed_non_pass``: checks allowed to be non-``"pass"`` as causal downstream
-  consequences of the injected fault or unexecuted steps in partial mutant runs
-  (disjoint from ``must_fail_checks``; see S-perf brief §7).
+- ``allowed_non_pass``: ``{check_id: [states]}`` in the format that
+  ``f03_common.aggregate_spike`` reads (``allowed_non_pass.get(cid)``): the non-pass
+  states a check may show besides the ones in ``must_fail_checks``, as causal
+  downstream consequences of the injected fault or of unexecuted steps in the partial
+  mutant runs (keys disjoint from ``must_fail_checks``; S-perf brief §7).
 """
 
 from __future__ import annotations
@@ -16,57 +18,113 @@ EXPECTED_MUTANTS = {
     "client_fps": {
         "expected_exit_code": 1,
         "must_fail_checks": ["PRF-01"],
-        "allowed_non_pass": ["PRF-02", "PRF-03", "PRF-04", "PRF-05", "PRF-06"],
+        "allowed_non_pass": {
+            "PRF-02": ["missing"],
+            "PRF-03": ["missing"],
+            "PRF-04": ["missing"],
+            "PRF-05": ["missing"],
+            "PRF-06": ["missing"],
+        },
     },
     "idle_actor": {
         "expected_exit_code": 1,
         "must_fail_checks": ["PRF-02"],
-        "allowed_non_pass": ["PRF-03", "PRF-04", "PRF-05", "PRF-06"],
+        "allowed_non_pass": {
+            "PRF-03": ["missing"],
+            "PRF-04": ["missing"],
+            "PRF-05": ["missing"],
+            "PRF-06": ["missing"],
+        },
     },
     "pending_emote": {
         "expected_exit_code": 1,
         "must_fail_checks": ["PRF-02"],
-        "allowed_non_pass": ["PRF-03", "PRF-04", "PRF-05", "PRF-06"],
+        "allowed_non_pass": {
+            "PRF-03": ["missing"],
+            "PRF-04": ["missing"],
+            "PRF-05": ["missing"],
+            "PRF-06": ["missing"],
+        },
     },
     "early_burst_idle": {
         "expected_exit_code": 1,
         "must_fail_checks": ["PRF-02"],
-        "allowed_non_pass": ["PRF-03", "PRF-04", "PRF-05", "PRF-06"],
+        "allowed_non_pass": {
+            "PRF-03": ["missing"],
+            "PRF-04": ["missing"],
+            "PRF-05": ["missing"],
+            "PRF-06": ["missing"],
+        },
     },
     "burst_per_quarter": {
         "expected_exit_code": 1,
         "must_fail_checks": ["PRF-02"],
-        "allowed_non_pass": ["PRF-03", "PRF-04", "PRF-05", "PRF-06"],
+        "allowed_non_pass": {
+            "PRF-03": ["missing"],
+            "PRF-04": ["missing"],
+            "PRF-05": ["missing"],
+            "PRF-06": ["missing"],
+        },
     },
     "single_sample": {
         "expected_exit_code": 1,
         "must_fail_checks": ["PRF-03"],
-        "allowed_non_pass": ["PRF-02", "PRF-04", "PRF-05", "PRF-06"],
+        "allowed_non_pass": {
+            "PRF-02": ["missing", "fail"],
+            "PRF-04": ["missing", "fail"],
+            "PRF-05": ["missing"],
+            "PRF-06": ["missing"],
+        },
     },
     "short_window": {
         "expected_exit_code": 1,
         "must_fail_checks": ["PRF-03"],
-        "allowed_non_pass": ["PRF-02", "PRF-04", "PRF-05", "PRF-06"],
+        "allowed_non_pass": {
+            "PRF-02": ["missing", "fail"],
+            "PRF-04": ["missing", "fail"],
+            "PRF-05": ["missing"],
+            "PRF-06": ["missing"],
+        },
     },
     "clustered_samples": {
         "expected_exit_code": 1,
         "must_fail_checks": ["PRF-03"],
-        "allowed_non_pass": ["PRF-02", "PRF-04", "PRF-05", "PRF-06"],
+        "allowed_non_pass": {
+            "PRF-02": ["missing", "fail"],
+            "PRF-04": ["missing", "fail"],
+            "PRF-05": ["missing"],
+            "PRF-06": ["missing"],
+        },
     },
     "desync_fps": {
         "expected_exit_code": 1,
         "must_fail_checks": ["PRF-04"],
-        "allowed_non_pass": ["PRF-02", "PRF-03", "PRF-05", "PRF-06"],
+        "allowed_non_pass": {
+            "PRF-02": ["missing"],
+            "PRF-03": ["missing"],
+            "PRF-05": ["missing"],
+            "PRF-06": ["missing"],
+        },
     },
     "overload_floor": {
         "expected_exit_code": 1,
         "must_fail_checks": ["PRF-05"],
-        "allowed_non_pass": ["PRF-02", "PRF-03", "PRF-04", "PRF-06"],
+        "allowed_non_pass": {
+            "PRF-02": ["missing"],
+            "PRF-03": ["missing"],
+            "PRF-04": ["missing"],
+            "PRF-06": ["missing"],
+        },
     },
     "accept_budget_exceeded": {
         "expected_exit_code": 1,
         "must_fail_checks": ["PRF-06"],
-        "allowed_non_pass": ["PRF-02", "PRF-03", "PRF-04", "PRF-05"],
+        "allowed_non_pass": {
+            "PRF-02": ["missing"],
+            "PRF-03": ["missing"],
+            "PRF-04": ["missing"],
+            "PRF-05": ["missing"],
+        },
     },
 }
 
