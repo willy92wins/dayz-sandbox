@@ -1018,6 +1018,7 @@ def _write_synthetic_probe_budget_part(
     exhausted_ms: dict | None = None,
     leak_t_ms: float = 5000.0,
     quiet_end_ms: float = 22000.0,
+    neg_ms: dict | None = None,
 ) -> None:
     pdir = Path(part_dir)
     samples = pdir / "samples"
@@ -1042,9 +1043,11 @@ def _write_synthetic_probe_budget_part(
         bridge_rows.append({"ev": leak_ev, "http": leak_http, "inst": "srv-inst-b", "peer": "server", "t_ms": leak_t_ms})
     _write_jsonl(samples / "bridge.jsonl", bridge_rows)
     exh = {"server": 1000.0, "client": 1000.0} if exhausted_ms is None else exhausted_ms
+    # D12: neg_ms es el inicio de la ultima lectura del log sin la linea; por defecto, 10 ms antes de verla.
+    negs = {p: float(t) - 10.0 for p, t in exh.items()} if neg_ms is None else neg_ms
     _write_jsonl(
         samples / "scenario.jsonl",
-        [{"check": "BASE-12", "exhausted_ms": exh, "quiet_end_ms": quiet_end_ms, "t_ms": quiet_end_ms + 1.0}],
+        [{"check": "BASE-12", "exhausted_ms": exh, "neg_ms": negs, "quiet_end_ms": quiet_end_ms, "t_ms": quiet_end_ms + 1.0}],
     )
     _write_jsonl(
         samples / "probe_log.jsonl",
@@ -2344,6 +2347,29 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             self.assertEqual(v_hf401["exit_code"], 1)
             self.assertEqual(v_hf401["reasons"], ["harness_test_failed:probe-budget"])
 
+            # D12 (brief, §15), reproduccion de Sol r3: agotamiento real a 10 ms, peticion indebida a 50 ms y observacion
+            # a 100 ms (ultima lectura sin la linea a 20 ms, despues de los hello sinteticos de 10 y 11 ms). La peticion
+            # cae en el intervalo de orden incierto: el agregado da 2 (antes daba 0 PASA). Una peticion despues de la
+            # observacion da 1 (casos b_hfail de arriba).
+            b_unc = _clone_base("b_unc")
+            _write_synthetic_probe_budget_part(
+                b_unc / "probe-budget",
+                git_head=head1,
+                probe_stamp=stamp1,
+                leak_request_after=True,
+                leak_t_ms=50.0,
+                exhausted_ms={"server": 100.0, "client": 100.0},
+                neg_ms={"server": 20.0, "client": 20.0},
+                quiet_end_ms=20200.0,
+            )
+            v_unc_part = f03_base_eval.evaluate(b_unc / "probe-budget", repo_root=root)
+            c12_unc = next(c for c in v_unc_part["checks"] if c["id"] == "BASE-12")
+            self.assertEqual((c12_unc["status"], c12_unc["detail"]), ("missing", "exhaustion_order_uncertain:1"))
+            gate_core.write_json(b_unc / "probe-budget" / "verdict.json", v_unc_part)
+            v_unc = f03_common.aggregate_spike(b_unc, "F0.3-0", repo_root=root)
+            self.assertEqual(v_unc["exit_code"], 2)
+            self.assertEqual(v_unc["reasons"], ["harness_test_inconclusive:probe-budget"])
+
             # H2 de Sol r1: con historia previa de fallos (contador de toda la vida, D5), BASE-12 en run/ acredita
             # crecimiento cero durante las 50 ordenes y el pool en su tope, no un valor absoluto bajo.
             def _base12(created_before, created_after, pooled, pooled_before=None):
@@ -2571,6 +2597,36 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             self.assertEqual(results["in"]["status"], "pass")
             self.assertEqual(results["edge"]["status"], "pass")
             self.assertEqual((results["out"]["status"], results["out"]["detail"]), ("fail", "result_body_len_out_of_range:3449"))
+
+    def test_d12_probe_budget_params_verified_against_git_head(self):
+        # D12: si git_head define PROBE_BUDGET_LOG_POLL_MS y PROBE_BUDGET_RETRY_MS, identity.params tiene que traerlos
+        # iguales; en un commit que no los define (evidencia historica) no se exigen.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            head0 = _init_temp_git_repo(root)
+            base_params = {"hold_ms": 2000, "lease_ms": 3000, "retry_ms": 1000, "seed": 1, "ttl_ms": 10000, "wire_cap": 3500}
+
+            def _mf(head, params):
+                return {"build": "offline", "identity": {"git_head": head, "git_dirty": False, "params": params}}
+
+            self.assertEqual(f03_common.verify_eval_params_at_commit(_mf(head0, base_params), repo_root=root), (True, ""))
+            (root / "DayZSandbox_dev" / "qa" / "f03_common.py").write_bytes(
+                b"PROBE_BUDGET_LOG_POLL_MS = 10\nPROBE_BUDGET_RETRY_MS = 1000\n"
+            )
+            _git_run(root, "add", ".")
+            _git_run(root, "commit", "-m", "d12")
+            head1 = _git_run(root, "rev-parse", "HEAD").stdout.strip()
+            self.assertEqual(
+                f03_common.verify_eval_params_at_commit(_mf(head1, base_params), repo_root=root), (False, "params_unverified")
+            )
+            good = dict(base_params, probe_budget_log_poll_ms=10, probe_budget_retry_ms=1000)
+            self.assertEqual(f03_common.verify_eval_params_at_commit(_mf(head1, good), repo_root=root), (True, ""))
+            bad = dict(good, probe_budget_retry_ms=100)
+            self.assertEqual(
+                f03_common.verify_eval_params_at_commit(_mf(head1, bad), repo_root=root), (False, "params_unverified")
+            )
 
     def test_probe_budget_quiet_window_is_per_peer_h6(self):
         # H6 de Sol r2: servidor agotado en 1000 ms, peticion indebida del servidor en 1050 ms, cliente agotado en 1100.

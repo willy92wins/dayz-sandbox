@@ -56,6 +56,17 @@ _PROBE_PREFIXES = (
     "DayZSandbox_dev/qa/probe/DayZSandbox_QA",
     "qa/probe/DayZSandbox_QA",
 )
+_F03_COMMON_PATHS = (
+    "DayZSandbox_dev/qa/f03_common.py",
+    "qa/f03_common.py",
+)
+
+# D12 (brief F0.3-0, §15): en la parte probe-budget el log se lee cada PROBE_BUDGET_LOG_POLL_MS y la sonda reintenta
+# cada PROBE_BUDGET_RETRY_MS (reintentos escasos: el caso sano no cae en el intervalo de orden incierto). Van en
+# identity.params y verify_eval_params_at_commit los compara con los que define git_head.
+PROBE_BUDGET_LOG_POLL_MS = 10
+PROBE_BUDGET_RETRY_MS = 1000
+
 _WIRE_PATHS = (
     "DayZSandbox_dev/qa/wire.py",
     "qa/wire.py",
@@ -227,6 +238,44 @@ def _is_untracked_precommit_wire(toplevel: Path) -> bool:
     return False
 
 
+def read_int_const_at_commit(git_head: str, rel_paths, name: str, repo_root: Path | None = None) -> int | None:
+    """Entero de `name = <int>` a nivel de modulo en el primer rel_path que exista en git_head; None si no lo define."""
+    if not isinstance(git_head, str) or not git_head.strip():
+        return None
+    toplevel = _git_toplevel(_resolve_repo_root(repo_root))
+    if toplevel is None:
+        return None
+    for rel in rel_paths:
+        show = subprocess.run(
+            ["git", "show", f"{git_head.strip()}:{rel}"],
+            cwd=toplevel,
+            capture_output=True,
+            check=False,
+        )
+        if show.returncode != 0:
+            continue
+        try:
+            tree = ast.parse(show.stdout.decode("utf-8"), filename=rel)
+        except (UnicodeDecodeError, SyntaxError):
+            return None
+        for node in tree.body:
+            value = None
+            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                value = node.value
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
+                value = node.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, int) and not isinstance(value.value, bool):
+                return int(value.value)
+        return None
+    return None
+
+
+_D12_PARAMS = (
+    ("probe_budget_log_poll_ms", "PROBE_BUDGET_LOG_POLL_MS"),
+    ("probe_budget_retry_ms", "PROBE_BUDGET_RETRY_MS"),
+)
+
+
 def verify_eval_params_at_commit(manifest: dict, repo_root: Path | None = None) -> tuple[bool, str]:
     eff_root = _resolve_repo_root(repo_root)
     identity = manifest.get("identity")
@@ -246,6 +295,11 @@ def verify_eval_params_at_commit(manifest: dict, repo_root: Path | None = None) 
     if committed_cap is not None:
         if saved_cap != committed_cap:
             return False, "params_unverified"
+        # D12: si git_head ya define los parametros de probe-budget, la identidad tiene que traerlos iguales.
+        for pname, cname in _D12_PARAMS:
+            committed = read_int_const_at_commit(git_head, _F03_COMMON_PATHS, cname, repo_root=eff_root)
+            if committed is not None and id_params.get(pname) != committed:
+                return False, "params_unverified"
         return True, ""
 
     toplevel = _git_toplevel(eff_root)
@@ -753,6 +807,8 @@ class PartContext:
             "params": {
                 "hold_ms": self.hold_ms,
                 "lease_ms": self.lease_ms,
+                "probe_budget_log_poll_ms": PROBE_BUDGET_LOG_POLL_MS,
+                "probe_budget_retry_ms": PROBE_BUDGET_RETRY_MS,
                 "retry_ms": self.retry_ms,
                 "seed": self.seed,
                 "ttl_ms": self.ttl_ms,

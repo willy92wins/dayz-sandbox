@@ -815,19 +815,29 @@ def _eval_base_12(
     scen_12 = [r for r in scen_rows if r.get("check") == "BASE-12"]
 
     if budget_logs or any("exhausted_ms" in r or "quiet_start_ms" in r for r in scen_12):
-        # H6 de Sol (r1 y r2): ventana por peer desde el instante en que se observo SU agotamiento hasta quiet_end_ms.
-        # Sin ese instante por peer (p. ej. la ventana comun antigua) no se acredita: missing.
-        q_rows = [r for r in scen_12 if isinstance(r.get("exhausted_ms"), dict) and "quiet_end_ms" in r]
+        # H6 de Sol (r1-r3) con D12 (brief v4.5.x, §15), en el reloj del arnes y por peer: el agotamiento se hizo visible
+        # en (neg_ms, exhausted_ms]. Una peticion despues de exhausted_ms es FALLA segura; una dentro de ese intervalo
+        # tiene orden incierto y da missing (nunca PASS). Sin los dos instantes por peer no se acredita: missing.
+        q_rows = [
+            r
+            for r in scen_12
+            if isinstance(r.get("exhausted_ms"), dict) and isinstance(r.get("neg_ms"), dict) and "quiet_end_ms" in r
+        ]
         if not q_rows:
             return _chk("BASE-12", "missing", "callback_budget_exhausted")
         q = q_rows[-1]
         q_end = float(q["quiet_end_ms"])
         exhausted = q["exhausted_ms"]
+        negs = q["neg_ms"]
+        uncertain_n = 0
         for peer in req_peers:
-            if peer not in exhausted:
+            if peer not in exhausted or peer not in negs:
                 return _chk("BASE-12", "missing", f"no_exhaustion_instant_for_{peer}")
-            q_start = float(exhausted[peer])
-            if not (math.isfinite(q_start) and math.isfinite(q_end)) or q_end - q_start < 20000.0:
+            q_obs = float(exhausted[peer])
+            q_neg = float(negs[peer])
+            if not (math.isfinite(q_obs) and math.isfinite(q_neg) and math.isfinite(q_end)) or q_neg > q_obs:
+                return _chk("BASE-12", "missing", f"no_exhaustion_instant_for_{peer}")
+            if q_end - q_obs < 20000.0:
                 return _chk("BASE-12", "fail", "quiet_window_shorter_than_20s")
             p_logs = [r for r in budget_logs if r.get("peer") == peer]
             if len(p_logs) != 1:
@@ -836,15 +846,18 @@ def _eval_base_12(
             b_n = p_logs[0].get("budget_n")
             if not isinstance(c_n, int) or not isinstance(b_n, int) or b_n <= 0 or c_n < b_n:
                 return _chk("BASE-12", "fail", "created_below_budget")
-            after_reqs = [
-                ev
+            p_reqs = [
+                float(ev.get("t_ms", -1.0))
                 for ev in bridge_rows
-                if ev.get("ev") in HTTP_BRIDGE_EVENTS
-                and ev.get("peer") == peer
-                and q_start <= float(ev.get("t_ms", -1.0)) <= q_end
+                if ev.get("ev") in HTTP_BRIDGE_EVENTS and ev.get("peer") == peer
             ]
-            if after_reqs:
-                return _chk("BASE-12", "fail", f"requests_after_budget_exhausted:{len(after_reqs)}")
+            after_n = sum(1 for t in p_reqs if q_obs < t <= q_end)
+            if after_n:
+                return _chk("BASE-12", "fail", f"requests_after_budget_exhausted:{after_n}")
+            uncertain_n += sum(1 for t in p_reqs if q_neg < t <= q_obs)
+        # La FALLA segura de cualquier peer manda; solo despues se mira el orden incierto.
+        if uncertain_n:
+            return _chk("BASE-12", "missing", f"exhaustion_order_uncertain:{uncertain_n}")
         return _chk("BASE-12", "pass", "budget_exhaustion_verified")
 
     entries = {r.get("peer"): r for r in scen_12 if isinstance(r.get("peer"), str)}

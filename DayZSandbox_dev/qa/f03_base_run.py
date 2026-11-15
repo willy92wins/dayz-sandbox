@@ -793,24 +793,38 @@ def _run_standard_part(ctx: f03_common.PartContext, part_name: str) -> None:
 
 
 def _run_probe_budget_part(ctx: f03_common.PartContext) -> None:
+    # D12 (brief F0.3-0, §15): reintentos escasos (PROBE_BUDGET_RETRY_MS) para que el caso sano no caiga en el intervalo
+    # de orden incierto. Offline el peer falso arranca de cero en cada parte y tarda ~budget x retry en agotarse, de ahi
+    # la espera de 45 s; en partida el contador es de toda la vida del proceso (D5) y se agota al releer la config.
     for role in ctx.required_peers():
-        ctx.write_config(role, callback_budget=30, retry_ms=100)
+        ctx.write_config(role, callback_budget=30, retry_ms=f03_common.PROBE_BUDGET_RETRY_MS)
     ctx.bridge.hello_503 = -1
     for role in ctx.required_peers():
         ctx.bridge.cut(role, 150)
 
-    # H6 de Sol (r1 y r2): la ventana silenciosa es POR PEER y empieza en cuanto se observa SU agotamiento, sin margen.
-    # Una peticion de un peer ya agotado mientras se espera al otro tambien es un fallo.
+    # H6 de Sol (r1-r3) con D12: por peer, neg_ms es el INICIO de la ultima lectura del log que aun no traia su linea de
+    # agotamiento y exhausted_ms el FINAL de la primera que si la traia. El agotamiento se hizo visible en
+    # (neg_ms, exhausted_ms]: una peticion ahi tiene orden incierto (nunca PASS) y una posterior es FALLA segura.
+    poll_s = f03_common.PROBE_BUDGET_LOG_POLL_MS / 1000.0
+    start_ms = ctx.now_h_ms()
+    neg_ms: dict[str, float] = {p: start_ms for p in ctx.required_peers()}
     exhausted_ms: dict[str, float] = {}
-    deadline = time.monotonic() + 20.0
+    deadline = time.monotonic() + 45.0
     while time.monotonic() < deadline:
+        read_start_ms = ctx.now_h_ms()
         rows = ctx.collect_probe_budget_logs()
-        seen_ms = ctx.now_h_ms()
-        for r in rows:
-            exhausted_ms.setdefault(r["peer"], seen_ms)
+        read_end_ms = ctx.now_h_ms()
+        seen = {r["peer"] for r in rows}
+        for p in ctx.required_peers():
+            if p in exhausted_ms:
+                continue
+            if p in seen:
+                exhausted_ms[p] = read_end_ms
+            else:
+                neg_ms[p] = read_start_ms
         if all(p in exhausted_ms for p in ctx.required_peers()):
             break
-        time.sleep(0.1)
+        time.sleep(poll_s)
 
     # Se observa hasta 20,2 s despues del ultimo agotamiento visto; el evaluador mira cada peer desde el suyo.
     if exhausted_ms:
@@ -823,6 +837,7 @@ def _run_probe_budget_part(ctx: f03_common.PartContext) -> None:
         {
             "check": "BASE-12",
             "exhausted_ms": exhausted_ms,
+            "neg_ms": neg_ms,
             "quiet_end_ms": quiet_end_ms,
         }
     )
