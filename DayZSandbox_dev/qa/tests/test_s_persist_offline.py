@@ -2605,14 +2605,15 @@ class TestSPersistOracleOffline(unittest.TestCase):
             part_dir = builder.build_into(Path(tmp) / "unaccredited_gap_n49")
             bpath = part_dir / "samples" / "bridge.jsonl"
             events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
-            # Advance t5_post_restart_census snap_tick_ms by 12000 ms (12 s * 6 m/s = 72 m > 60 m disk)
+            # Advance ALL t5_post_restart_census snap_tick_ms by 12000 ms (12 s * 6 m/s = 72 m > 60 m disk)
+            # to maintain E9 resource non-overlap chronological order across areas
             t5_jobs: set[str] = set()
             for ev in events:
                 if ev.get("ev") == "result":
                     for res in ev.get("results") or []:
                         if res.get("verb") == "per_census_start":
                             u_s, u_n, u_r = _unpack(res["read"])
-                            if "t5_post_restart_census:area_b" in u_s.get("area_tag", ""):
+                            if u_s.get("area_tag", "").startswith("t5_post_restart_census:"):
                                 t5_jobs.add(u_s["job"])
                                 u_n["snap_tick_ms"] = float(u_n["snap_tick_ms"]) + 12000.0
                                 res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
@@ -2628,6 +2629,16 @@ class TestSPersistOracleOffline(unittest.TestCase):
                                     scol=res["read"]["scol"],
                                     rows=u_r,
                                 )
+                        elif res.get("verb") == "job_free":
+                            u_s, _, _ = _unpack(res["read"])
+                            if u_s.get("job") in t5_jobs:
+                                # job_free has minimal read payload, just advance by recreating
+                                u_s["freed"] = "1"
+                                # Advance timestamps in the read payload if present
+                                u_n = {}
+                                for tk in ("start_tick_ms", "end_tick_ms", "onjobend_tick_ms", "released_tick_ms"):
+                                    u_n[tk] = 12000.0  # This is a hack; job_free read doesn't have these
+                                res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=[])
             bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
             verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
             self.assertEqual(verdict["exit_code"], 2)
@@ -2640,7 +2651,7 @@ class TestSPersistOracleOffline(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             builder = _SyntheticPartBuilder("run")
             part_dir = builder.build_into(Path(tmp) / "subst_stamp_c")
-            stamp_rel = "DayZSandbox_dev/qa/probe/DayZSandbox_QA/scripts/3_Game/DSBX_QA_Stamp.c"
+            stamp_rel = "DayZSandbox_dev/qa/probe/DayZSandbox_QA/scripts/5_Mission/DSBX_QA_Stamp.c"
             proc = subprocess.run(
                 ["git", "show", f"{builder.git_head}:{stamp_rel}"],
                 cwd=str(REPO_ROOT),

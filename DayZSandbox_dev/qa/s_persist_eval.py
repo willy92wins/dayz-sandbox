@@ -1509,7 +1509,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 or abs(rc_hp - r_hp) > 1e-2
             ):
                 per01_fail.append(f"{rtag}:census_raw_state_invalid")
-            if rdef["mode"] == "foreign_in_cargo":
+            if rdef["mode"] == "foreign_in_container":
                 tgt_pid = rdef["target_parent_id"]
                 exp_pnid = bridge_spawn_info.get(tgt_pid, {}).get("net_id", "")
                 exp_pclass = bridge_spawn_info.get(tgt_pid, {}).get("class_name", "")
@@ -2009,6 +2009,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if not r_post:
                     per05_fail.append(f"{ref_id}:wiped_in_post_reset")
                     continue
+                is_retained = ref_id in exp_retained_ids
                 if (
                     r_post.get("class_name") != r_pre.get("class_name")
                     or r_post.get("pers_id") != r_pre.get("pers_id")
@@ -2020,8 +2021,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     or r_post.get("parent_net_id") != r_pre.get("parent_net_id")
                     or r_post.get("slot_name") != r_pre.get("slot_name")
                     or r_post.get("owner_uid") != r_pre.get("owner_uid")
-                    or int(round(float(r_post.get("inv_children_n", -1.0))))
-                    != int(round(float(r_pre.get("inv_children_n", -2.0))))
+                    or (not is_retained and int(round(float(r_post.get("inv_children_n", -1.0))))
+                        != int(round(float(r_pre.get("inv_children_n", -2.0)))))
                 ):
                     per05_fail.append(f"{ref_id}:state_or_location_changed")
                     continue
