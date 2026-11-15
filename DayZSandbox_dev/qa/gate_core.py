@@ -22,7 +22,11 @@ SPIKE_REGISTRY = {
     "S-toma": ("s_toma_run", "s_toma_eval", "s_toma_mutants"),
     "S-perf": ("s_perf_run", "s_perf_eval", "s_perf_mutants"),
     "S-mapa": ("s_mapa_run", "s_mapa_eval", "s_mapa_mutants"),
+    "F2P": ("f2p_run", "f2p_eval", "f2p_mutants"),
 }
+
+# Spikes que ademas de la sonda (--pbo) exigen el PBO del producto (--product-pbo) en retail/diag.
+PRODUCT_PBO_SPIKES = frozenset({"F2P"})
 
 SPIKES = tuple(SPIKE_REGISTRY.keys())
 # Informativo: m1_gate despacha cualquier spike registrado a sus modulos (brief F0.3-0 §5.1); los esqueletos
@@ -112,6 +116,99 @@ def read_json(path):
 
 def utc_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _git_bytes(repo_root, *git_args):
+    """(returncode, stdout bytes) de `git -c core.autocrlf=false ...` en repo_root; (127, b"") si git no corre."""
+    try:
+        proc = subprocess.run(
+            ["git", "-c", "core.autocrlf=false", *git_args],
+            cwd=str(repo_root),
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return 127, b""
+    return proc.returncode, proc.stdout
+
+
+def oracle_base(spike_id):
+    """Nombre base del oraculo: modulo de evaluacion del registro sin `_eval` (s_persist_eval -> s_persist)."""
+    eval_mod = SPIKE_REGISTRY[spike_id][1]
+    return eval_mod[: -len("_eval")] if eval_mod.endswith("_eval") else eval_mod
+
+
+def check_oracle_files(spike_id, commit, *, repo_root, qa_dir=None):
+    """Compara byte a byte los ficheros del oraculo del spike con `commit` (sin normalizar finales de linea).
+
+    Devuelve {"ok", "commit", "files": [{"path", "blob_sha", "status"}], "problems": [...]}. Estados:
+    ok / modified / deleted / added / missing_at_commit / head_differs. No importa ningun modulo del spike.
+    """
+    import fnmatch
+
+    repo_root = Path(os.path.realpath(repo_root))
+    qa_dir = Path(os.path.realpath(qa_dir if qa_dir is not None else Path(__file__).resolve().parent))
+    prefix = qa_dir.relative_to(repo_root).as_posix()
+    prefix = "" if prefix == "." else prefix + "/"
+    base = oracle_base(spike_id)
+    result = {"ok": False, "commit": commit, "files": [], "problems": []}
+
+    commit_str = commit if isinstance(commit, str) else ""
+    rc, out = (
+        _git_bytes(repo_root, "rev-parse", "--verify", "--quiet", commit_str + "^{commit}")
+        if commit_str and not commit_str.startswith("-")
+        else (1, b"")
+    )
+    resolved = out.decode("ascii", "replace").strip()
+    if rc != 0 or not resolved:
+        result["problems"].append("commit_unavailable")
+        return result
+    result["commit"] = resolved
+
+    def blob_at(rev, path):
+        code, data = _git_bytes(repo_root, "rev-parse", "--verify", "--quiet", f"{rev}:{path}")
+        sha = data.decode("ascii", "replace").strip()
+        return sha if code == 0 and sha else None
+
+    required = [f"{prefix}{base}_eval.py", f"{prefix}{base}_mutants.py", f"{prefix}tests/test_{base}_offline.py"]
+    fixtures_dir = f"{prefix}fixtures"
+    pattern = f"{base}_*.json"
+    in_commit = set()
+    code, data = _git_bytes(repo_root, "ls-tree", "--name-only", resolved, f"{fixtures_dir}/")
+    if code == 0:
+        for line in data.decode("utf-8", "replace").splitlines():
+            name = line.strip().rsplit("/", 1)[-1]
+            if name and fnmatch.fnmatchcase(name, pattern):
+                in_commit.add(f"{fixtures_dir}/{name}")
+    on_disk = set()
+    disk_dir = qa_dir / "fixtures"
+    if disk_dir.is_dir():
+        for child in disk_dir.iterdir():
+            if child.is_file() and fnmatch.fnmatchcase(child.name.lower(), pattern.lower()):
+                on_disk.add(f"{fixtures_dir}/{child.name}")
+
+    paths = list(required) + sorted((in_commit | on_disk) - set(required))
+    for path in paths:
+        entry = {"path": path, "blob_sha": blob_at(resolved, path), "status": "ok"}
+        disk_file = repo_root / path
+        if entry["blob_sha"] is None:
+            if path in required:
+                entry["status"] = "missing_at_commit"
+            else:
+                entry["status"] = "added"  # fixture del patron en disco y no en el commit
+        elif not disk_file.is_file():
+            entry["status"] = "deleted"
+        else:
+            code, blob = _git_bytes(repo_root, "cat-file", "blob", entry["blob_sha"])
+            if code != 0 or blob != disk_file.read_bytes():
+                entry["status"] = "modified"
+            elif blob_at("HEAD", path) != entry["blob_sha"]:
+                entry["status"] = "head_differs"
+        if entry["status"] != "ok":
+            result["problems"].append(f"{entry['status']}:{path}")
+        result["files"].append(entry)
+    result["ok"] = not result["problems"]
+    return result
 
 
 def git_harness(repo_root=None):
