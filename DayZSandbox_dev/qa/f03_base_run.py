@@ -784,8 +784,8 @@ def _run_probe_budget_part(ctx: f03_common.PartContext) -> None:
             break
         time.sleep(0.1)
 
-    # Margen breve para cerrar conexiones en curso antes de abrir la ventana silenciosa de 20 s.
-    time.sleep(0.25)
+    # La ventana silenciosa de 20 s se abre en cuanto se observa el agotamiento, sin margen: una peticion justo
+    # despues del agotamiento tambien es un fallo (H6 de Sol r1).
     quiet_start_ms = ctx.now_h_ms()
     time.sleep(20.2)
     quiet_end_ms = ctx.now_h_ms()

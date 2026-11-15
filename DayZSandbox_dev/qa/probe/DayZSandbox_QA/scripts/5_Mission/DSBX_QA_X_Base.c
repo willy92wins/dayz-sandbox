@@ -786,6 +786,13 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 			Reject(res, err);
 			return;
 		}
+		// El efecto aplica su hombre muerto en su cadencia (fila blocked_lease antes de terminar), así que el gestor
+		// no lo termina por su cuenta: igual que configure_job_faults(..., ext_handles_deadman=True) del peer falso.
+		DSBX_QA_Job effJob = m_Jobs.GetJob(op.op_id);
+		if (effJob)
+		{
+			effJob.m_ExtHandlesDeadman = true;
+		}
 		string fault = m_Probe.GetOpFault();
 		m_EffectIgnore = fault == "ignore_deadman";
 		m_EffectSkip = fault == "skip_send";

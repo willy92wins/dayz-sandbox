@@ -152,6 +152,9 @@ def _write_synthetic_base_part(
     fail_check: str | None = None,
     missing_check: str | None = None,
     tech_detail: str | None = None,
+    cb_created_before: int = 3,
+    cb_created_after: int | None = None,
+    cb_pooled_after: int = 2,
 ) -> dict:
     """Construye una parte sintetica completa de F0.3-0 (13/13 checks en pass por defecto)."""
     pdir = Path(part_dir)
@@ -561,7 +564,9 @@ def _write_synthetic_base_part(
             wire.empty_payload(),
             "done",
             "",
-            wire.pack_payload(scalars_num={"callbacks_created_n": 3, "callback_budget_n": 2000, "callbacks_inflight_n": 1}),
+            wire.pack_payload(
+                scalars_num={"callbacks_created_n": cb_created_before, "callback_budget_n": 2000, "callbacks_inflight_n": 1, "callbacks_pooled_n": cb_pooled_after}
+            ),
         )
         e12_ids = [_emit_op(peer, "qa_echo", wire.empty_payload(), "done", "", wire.empty_payload()) for _ in range(50)]
         aft12 = _emit_op(
@@ -570,7 +575,14 @@ def _write_synthetic_base_part(
             wire.empty_payload(),
             "done",
             "",
-            wire.pack_payload(scalars_num={"callbacks_created_n": 3, "callback_budget_n": 2000, "callbacks_inflight_n": 1}),
+            wire.pack_payload(
+                scalars_num={
+                    "callbacks_created_n": cb_created_before if cb_created_after is None else cb_created_after,
+                    "callback_budget_n": 2000,
+                    "callbacks_inflight_n": 1,
+                    "callbacks_pooled_n": cb_pooled_after,
+                }
+            ),
         )
         scen_rows.append(
             {"after_op_id": aft12, "before_op_id": bef12, "check": "BASE-12", "echo_op_ids": e12_ids, "peer": peer, "t_ms": _t()}
@@ -847,6 +859,7 @@ def _write_synthetic_probe_budget_part(
     git_dirty: bool = False,
     pbo_sha256: str | None = None,
     leak_request_after: bool = False,
+    leak_ev: str = "hello",
 ) -> None:
     pdir = Path(part_dir)
     samples = pdir / "samples"
@@ -866,7 +879,9 @@ def _write_synthetic_probe_budget_part(
             }
         )
     if leak_request_after:
-        bridge_rows.append({"ev": "hello", "http": 503, "inst": "srv-inst-b", "peer": "server", "t_ms": 5000.0})
+        # Una peticion HTTP dentro de la ventana silenciosa; con leak_ev="auth_reject", un 401 (H6 de Sol r1).
+        leak_http = 401 if leak_ev == "auth_reject" else 503
+        bridge_rows.append({"ev": leak_ev, "http": leak_http, "inst": "srv-inst-b", "peer": "server", "t_ms": 5000.0})
     _write_jsonl(samples / "bridge.jsonl", bridge_rows)
     _write_jsonl(samples / "scenario.jsonl", [{"check": "BASE-12", "quiet_end_ms": 22000.0, "quiet_start_ms": 1000.0, "t_ms": 22001.0}])
     _write_jsonl(
@@ -1282,11 +1297,33 @@ class FakePeerF03Tests(unittest.TestCase):
         self.assertFalse(fake_peer._valid_result_resp(200, {"ok": False}))
         self.assertTrue(fake_peer._valid_result_resp(200, {"ok": True}))
 
+    def test_config_url_validated_like_probe_url_usable_h1(self):
+        # H1 de Sol r1: el peer falso acepta exactamente las URL que acepta UrlUsable() de la sonda real.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "dsbx_qa.json"
+            cfg.write_bytes(b'{"key":"k","retry_ms":200,"url":"http://127.0.0.1:9/"}\n')
+            peer = fake_peer.Peer(str(cfg), "server", _free_udp_port(), 60.0, None)
+            try:
+                for url, ok in (
+                    ("http://127.0.0.1:2302/", True),
+                    ("http://127.0.0.1:65535/", True),
+                    ("http://127.0.0.1:2302", False),
+                    ("http://127.0.0.1:0/", False),
+                    ("http://127.0.0.1:123456/", False),
+                    ("http://localhost:2302/", False),
+                    ("https://127.0.0.1:2302/", False),
+                    ("http://127.0.0.1:2302/poll", False),
+                ):
+                    cfg.write_bytes(json.dumps({"key": "k", "retry_ms": 100, "url": url}).encode("utf-8"))
+                    self.assertEqual(peer._read_config() is not None, ok, url)
+            finally:
+                peer.shutdown()
+
     def test_legacy_f02_verbs_preserve_exact_contract(self):
         self.assertTrue(hasattr(fake_peer, "JobMgr"), "JobMgr missing in fake_peer")
         with tempfile.TemporaryDirectory() as tmp:
             cfg = Path(tmp) / "dsbx_qa.json"
-            cfg.write_bytes(b'{"key":"k","retry_ms":200,"url":"http://127.0.0.1:9"}\n')
+            cfg.write_bytes(b'{"key":"k","retry_ms":200,"url":"http://127.0.0.1:9/"}\n')
             srv = fake_peer.Peer(str(cfg), "server", _free_udp_port(), 60.0, None)
             cli = fake_peer.Peer(str(cfg), "client", _free_udp_port(), 60.0, None)
             srv.last_ok = time.monotonic()
@@ -1343,7 +1380,7 @@ class FakePeerF03Tests(unittest.TestCase):
         self.assertIsNotNone(wire, "wire.py missing")
         with tempfile.TemporaryDirectory() as tmp:
             cfg = Path(tmp) / "dsbx_qa.json"
-            cfg.write_bytes(b'{"key":"k","retry_ms":200,"url":"http://127.0.0.1:9"}\n')
+            cfg.write_bytes(b'{"key":"k","retry_ms":200,"url":"http://127.0.0.1:9/"}\n')
             srv = fake_peer.Peer(str(cfg), "server", _free_udp_port(), 60.0, None)
             cli = fake_peer.Peer(str(cfg), "client", _free_udp_port(), 60.0, None)
             srv.last_ok = time.monotonic()
@@ -1419,7 +1456,7 @@ class FakePeerF03Tests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             cfg = Path(tmp) / "dsbx_qa.json"
-            cfg.write_bytes(b'{"key":"k","retry_ms":200,"url":"http://127.0.0.1:9"}\n')
+            cfg.write_bytes(b'{"key":"k","retry_ms":200,"url":"http://127.0.0.1:9/"}\n')
             srv = fake_peer.Peer(str(cfg), "server", _free_udp_port(), 60.0, None, clock_ms_fn=_advancing_clock)
             srv.hello_ok = False
             base_ext = srv.exts[8]
@@ -1496,7 +1533,7 @@ class FakePeerF03Tests(unittest.TestCase):
             rpc_port = _free_udp_port()
             for role, key in (("server", "k-srv"), ("client", "k-cli")):
                 cpath = Path(tmp) / f"{role}.json"
-                cpath.write_bytes(json.dumps({"callback_budget": 2000, "key": key, "retry_ms": 150, "url": f"http://127.0.0.1:{b.port}"}).encode("utf-8"))
+                cpath.write_bytes(json.dumps({"callback_budget": 2000, "key": key, "retry_ms": 150, "url": f"http://127.0.0.1:{b.port}/"}).encode("utf-8"))
                 p = subprocess.Popen(
                     [sys.executable, str(QA_DIR / "fake_peer.py"), "--peer", role, "--config", str(cpath), "--rpc-port", str(rpc_port)],
                     stdout=subprocess.DEVNULL,
@@ -1564,6 +1601,28 @@ class FakePeerF03Tests(unittest.TestCase):
                 ]
                 self.assertEqual(ka_during_p6, [])
                 del ka_before
+
+                # H4 de Sol r1: un corte breve (800 ms) a mitad de una rafaga no corta las renovaciones del
+                # mantenimiento; al volver el keepalive renueva el lease y la rafaga termina done, como en la sonda.
+                b._poll = orig_poll
+                burst3 = b.enqueue(
+                    "server",
+                    "rpc_burst",
+                    {"client_inst": b.registered("client"), "count": 20, "interval_ms": 300, "pos": [1, 2, 3], "seq0": 500, "ypr": [0, 0, 0]},
+                    b.registered("server"),
+                    20000,
+                )
+                self.assertIsNotNone(b.wait_event(lambda e, oid=burst3: e.get("ev") == "deliver" and e.get("op_id") == oid, 5000))
+                time.sleep(1.0)
+                cut_mark = b.now_ms()
+                b.cut("server", 800)
+                res3 = b.wait_result(burst3, 0.0, 15000)
+                self.assertIsNotNone(res3, "rpc_burst con corte breve sin resultado")
+                self.assertEqual(res3["status"], "done")
+                ka_after_cut = [
+                    r for r in rows if r.get("ev") == "keepalive" and r.get("peer") == "server" and r["t_ms"] > cut_mark + 800.0
+                ]
+                self.assertGreaterEqual(len(ka_after_cut), 1)
             finally:
                 for p in procs:
                     p.terminate()
@@ -1610,7 +1669,7 @@ class FakePeerF03Tests(unittest.TestCase):
             th.start()
             cfg_no_ok = Path(tmp) / "no_ok.json"
             log_no_ok = Path(tmp) / "no_ok.log"
-            cfg_no_ok.write_bytes(json.dumps({"callback_budget": 4, "key": "k-srv", "retry_ms": 80, "url": f"http://127.0.0.1:{bad_port}"}).encode("utf-8"))
+            cfg_no_ok.write_bytes(json.dumps({"callback_budget": 4, "key": "k-srv", "retry_ms": 80, "url": f"http://127.0.0.1:{bad_port}/"}).encode("utf-8"))
             log_fh = log_no_ok.open("w", encoding="utf-8", newline="\n")
             p1 = subprocess.Popen(
                 [sys.executable, str(QA_DIR / "fake_peer.py"), "--peer", "server", "--config", str(cfg_no_ok), "--rpc-port", str(_free_udp_port())],
@@ -1766,7 +1825,7 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             b1 = bridge_qa.QABridge(300, 3000, b1_rows.append)
             b1.set_peer_key("server", "k1")
             b1.start()
-            cfg_path.write_bytes(json.dumps({"callback_budget": 2000, "key": "k1", "retry_ms": 120, "url": f"http://127.0.0.1:{b1.port}"}).encode("utf-8"))
+            cfg_path.write_bytes(json.dumps({"callback_budget": 2000, "key": "k1", "retry_ms": 120, "url": f"http://127.0.0.1:{b1.port}/"}).encode("utf-8"))
             peer_proc = subprocess.Popen(
                 [sys.executable, str(QA_DIR / "fake_peer.py"), "--peer", "server", "--config", str(cfg_path), "--rpc-port", str(rpc_port)],
                 stdout=subprocess.DEVNULL,
@@ -1792,7 +1851,7 @@ class CommonAndEvalF03Tests(unittest.TestCase):
                 b2.set_peer_key("server", "k2")
                 b2.start()
                 try:
-                    cfg_path.write_bytes(json.dumps({"callback_budget": 2000, "key": "k2", "retry_ms": 120, "url": f"http://127.0.0.1:{b2.port}"}).encode("utf-8"))
+                    cfg_path.write_bytes(json.dumps({"callback_budget": 2000, "key": "k2", "retry_ms": 120, "url": f"http://127.0.0.1:{b2.port}/"}).encode("utf-8"))
                     deadline = time.monotonic() + 5.0
                     while time.monotonic() < deadline and b2.registered("server") is None:
                         time.sleep(0.03)
@@ -2030,6 +2089,37 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             self.assertEqual(v_hf["exit_code"], 1)
             self.assertEqual(v_hf["reasons"], ["harness_test_failed:probe-budget"])
 
+            # H6 de Sol r1: un 401 (auth_reject) dentro de la ventana silenciosa tambien es una peticion
+            b_hfail401 = _clone_base("b_hfail401")
+            _write_synthetic_probe_budget_part(
+                b_hfail401 / "probe-budget", git_head=head1, probe_stamp=stamp1, leak_request_after=True, leak_ev="auth_reject"
+            )
+            gate_core.write_json(b_hfail401 / "probe-budget" / "verdict.json", f03_base_eval.evaluate(b_hfail401 / "probe-budget", repo_root=root))
+            v_hf401 = f03_common.aggregate_spike(b_hfail401, "F0.3-0", repo_root=root)
+            self.assertEqual(v_hf401["exit_code"], 1)
+            self.assertEqual(v_hf401["reasons"], ["harness_test_failed:probe-budget"])
+
+            # H2 de Sol r1: con historia previa de fallos (contador de toda la vida, D5), BASE-12 en run/ acredita
+            # crecimiento cero durante las 50 ordenes y el pool en su tope, no un valor absoluto bajo.
+            def _base12(created_before, created_after, pooled):
+                b_h2 = _clone_base(f"b_h2_{created_before}_{created_after}_{pooled}")
+                _write_synthetic_base_part(
+                    b_h2 / "run",
+                    git_head=head1,
+                    probe_stamp=stamp1,
+                    cb_created_before=created_before,
+                    cb_created_after=created_after,
+                    cb_pooled_after=pooled,
+                )
+                v_run = f03_base_eval.evaluate(b_h2 / "run", repo_root=root)
+                return next(c for c in v_run["checks"] if c["id"] == "BASE-12")
+
+            self.assertEqual(_base12(50, 50, 4)["status"], "pass")
+            c_grew = _base12(50, 51, 4)
+            self.assertEqual((c_grew["status"], c_grew["detail"]), ("fail", "callbacks_grew:50->51"))
+            c_pool = _base12(50, 50, 9)
+            self.assertEqual((c_pool["status"], c_pool["detail"]), ("fail", "pool_out_of_bounds:9"))
+
             b_run_exh = _clone_base("b_run_exh")
             _write_jsonl(
                 b_run_exh / "run" / "samples" / "probe_log.jsonl",
@@ -2123,7 +2213,7 @@ class SPuenteF02H1H3Tests(unittest.TestCase):
             rpc_port = _free_udp_port()
             # Precrear dsbx_qa.json inicial (en puerto cerrado hasta que arranque la 1.a corrida)
             for prof in (srv_prof, cli_prof):
-                (prof / "dsbx_qa.json").write_bytes(b'{"key":"init","retry_ms":150,"url":"http://127.0.0.1:9"}\n')
+                (prof / "dsbx_qa.json").write_bytes(b'{"key":"init","retry_ms":150,"url":"http://127.0.0.1:9/"}\n')
 
             procs = []
             for role, prof in (("server", srv_prof), ("client", cli_prof)):

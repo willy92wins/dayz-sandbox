@@ -20,9 +20,11 @@ HTTP_BRIDGE_EVENTS = frozenset(
         "result",
         "ack_reject",
         "result_drop",
-        "auth_fail",
+        # Nombre real del 401 que emite bridge_qa._dispatch (antes "auth_fail", que no existe: H6 de Sol r1).
+        "auth_reject",
         "inst_reject",
         "bad_body",
+        "wire_cap_exceeded",
     }
 )
 
@@ -789,12 +791,17 @@ def _eval_base_12(
         a_unp = _unpack_result_read(aev["result"])
         created_before = int(b_unp["num"].get("callbacks_created_n", -1))
         created_after = int(a_unp["num"].get("callbacks_created_n", -2))
-        inflight_after = int(a_unp["num"].get("callbacks_inflight_n", 0))
+        pooled_after = int(a_unp["num"].get("callbacks_pooled_n", -1))
         budget_n = int(a_unp["num"].get("callback_budget_n", 0))
         if budget_n != 2000:
             return _chk("BASE-12", "fail", f"unexpected_budget:{budget_n}")
-        if created_after != created_before or created_after > CALLBACK_POOL_MAX + inflight_after:
+        # callbacks_created_n cuenta toda la vida del proceso (§11 D5): tras S-puente con cortes ya trae historia.
+        # Lo que acredita la reutilizacion es el crecimiento CERO durante las 50 ordenes sanas, con el pool dentro de
+        # su tope; acotar el contador absoluto suspendia una mision sana (H2 de Sol r1).
+        if created_after != created_before:
             return _chk("BASE-12", "fail", f"callbacks_grew:{created_before}->{created_after}")
+        if not (0 <= pooled_after <= CALLBACK_POOL_MAX):
+            return _chk("BASE-12", "fail", f"pool_out_of_bounds:{pooled_after}")
     return _chk("BASE-12", "pass", "ok")
 
 

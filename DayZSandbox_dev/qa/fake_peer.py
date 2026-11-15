@@ -10,6 +10,7 @@ import importlib
 import json
 import math
 import queue
+import re
 import secrets
 import socket
 import sys
@@ -1092,6 +1093,11 @@ class Peer:
             if item[0] <= self.frame:
                 if item[1] == "fog":
                     self.fog = item[2]
+                elif item[1] == "rpc_pose":
+                    # Igual que DSBX_QA_Probe.ApplyPendingPose: sin lease vigente en este frame, la pose se descarta
+                    # (F02-H3; el registro P7 no cambia; H5 de Sol r1).
+                    if self.lease_valid():
+                        self.pose = item[2]
                 else:
                     self.pose = item[2]
             else:
@@ -1144,7 +1150,8 @@ class Peer:
             self.last_seq = int(msg.get("seq") or 0)
             pos = [float(v) for v in msg.get("pos") or [0, 0, 0]]
             ypr = [float(v) for v in msg.get("ypr") or [0, 0, 0]]
-            self.effects.append((self.frame + 1, "pose", (pos, ypr)))
+            # Pose diferida al frame siguiente, como m_HasPendingPose de la sonda: se vuelve a mirar el lease al aplicarla.
+            self.effects.append((self.frame + 1, "rpc_pose", (pos, ypr)))
         self.rpc_log.append(
             {
                 "decision": decision,
@@ -1261,8 +1268,9 @@ class Peer:
                     self.last_ok = time.monotonic()
                     self.last_ok_ms = self.local_ms()
                     last_ka_ms = self.last_ok_ms
-                else:
-                    self.hello_ok = False
+                # Un keepalive fallido no cambia el estado del transporte (igual que DSBX_QA_Probe.OnHttpDone,
+                # rama KIND_KEEPALIVE): se reintenta a los 500 ms mientras dure la orden; el poll normal posterior
+                # gestiona el fallo. Antes ponia hello_ok = False y cortaba las renovaciones (H4 de Sol r1).
             self._send_results(cfg, bucket)
 
     def _hello(self, cfg):
@@ -1348,16 +1356,13 @@ class Peer:
         if not isinstance(data, dict):
             return None
         url = data.get("url")
-        if not isinstance(url, str) or not url:
+        # Misma validacion que UrlUsable() de la sonda: exactamente "http://127.0.0.1:<1..5 digitos>/" con puerto
+        # 1..65535. Si el peer falso fuera mas permisivo, el gate offline aprobaria configuraciones que la sonda real
+        # rechaza (H1 de Sol r1).
+        if not isinstance(url, str):
             return None
-        parsed = urllib.parse.urlparse(url)
-        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1":
-            return None
-        try:
-            port = parsed.port
-        except ValueError:
-            return None
-        if port is None or not (1 <= port <= 65535):
+        url_m = re.fullmatch(r"http://127\.0\.0\.1:([0-9]{1,5})/", url)
+        if url_m is None or not (1 <= int(url_m.group(1)) <= 65535):
             return None
         key = data.get("key")
         if not isinstance(key, str) or not key:

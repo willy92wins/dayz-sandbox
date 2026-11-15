@@ -65,6 +65,7 @@ class DSBX_QA_Job : Managed
 	bool m_Released;
 	bool m_FreezeOnWait;
 	bool m_DeferCleanup;
+	bool m_ExtHandlesDeadman;
 
 	void DSBX_QA_Job()
 	{
@@ -91,6 +92,7 @@ class DSBX_QA_Job : Managed
 		m_Released = false;
 		m_FreezeOnWait = false;
 		m_DeferCleanup = false;
+		m_ExtHandlesDeadman = false;
 	}
 }
 
@@ -468,7 +470,14 @@ class DSBX_QA_JobMgr : Managed
 				if (!frozen)
 				{
 					live.m_ElapsedDtsumMs = live.m_ElapsedDtsumMs + timeslice * 1000.0;
-					if (now_ms - live.m_StartTickMs > live.m_MaxDurationMs)
+					// F02-H3 (§14.0): un trabajo "stop" sin lease vigente termina en failed/lease_expired por la
+					// transición única, como tick_jobs de qa/fake_peer.py. Un dueño que necesita registrar su propia
+					// fila antes (el efecto de BASE-11, blocked_lease) lo declara con m_ExtHandlesDeadman (H3 de Sol r1).
+					if (live.m_Deadman == "stop" && !live.m_ExtHandlesDeadman && m_Probe && !m_Probe.LeaseOk())
+					{
+						EndJob(jobId, "failed", "lease_expired");
+					}
+					else if (now_ms - live.m_StartTickMs > live.m_MaxDurationMs)
 					{
 						EndJob(jobId, "expired", "job_timeout");
 					}

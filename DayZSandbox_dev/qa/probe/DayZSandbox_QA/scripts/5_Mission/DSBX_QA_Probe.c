@@ -2202,6 +2202,12 @@ class DSBX_QA_Probe : Managed
 		{
 			return;
 		}
+		// F02-H3: el lease se comprueba justo antes del efecto (crear o mover la cámara), no solo al recibir el RPC.
+		// Si caducó entre la recepción y este frame, la pose se descarta; el registro P7 no cambia (H5 de Sol r1).
+		if (!LeaseOk())
+		{
+			return;
+		}
 		vector pos;
 		pos[0] = m_PendingPos.Get(0);
 		pos[1] = m_PendingPos.Get(1);

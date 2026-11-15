@@ -852,12 +852,28 @@ def check_5_key_containment(probe_dir):
     total_keyquery_calls = 0
     total_loadfile_calls = 0
 
+    # 5h (H7 de Sol r1): el flujo de la clave solo puede ir al RestContext nativo. Se recogen los identificadores
+    # declarados como RestContext en toda la sonda; un .GET/.POST con KeyQuery() sobre otro receptor es violacion,
+    # y la sonda no puede definir metodos propios GET/POST (un envoltorio podria registrar la peticion con la clave).
+    restcontext_decl_re = re.compile(r"\bRestContext\s+([A-Za-z_][A-Za-z0-9_]*)\s*[;=]")
+    http_method_def_re = re.compile(r"(?<![.\w])(GET|POST)\s*\([^;{}()]*\)\s*\{")
+    restcontext_ids = set()
+    for _rel_rc, path_rc in c_files:
+        code_rc = _strip_comments(path_rc.read_text(encoding="utf-8", errors="replace"), blank_strings=True)
+        restcontext_ids.update(restcontext_decl_re.findall(code_rc))
+
     for rel, path in c_files:
         text = path.read_text(encoding="utf-8", errors="replace")
         code_with_str = _strip_comments(text, blank_strings=False)
         code_no_str = _strip_comments(text, blank_strings=True)
         lines_no_str = code_no_str.splitlines()
         lines_with_str = code_with_str.splitlines()
+
+        for hm in http_method_def_re.finditer(code_no_str):
+            violations.append(
+                f"{rel}:{_line_no(code_no_str, hm.start())}: la sonda no puede definir un metodo propio {hm.group(1)}() "
+                "(un envoltorio de RestContext podria registrar la peticion con la clave)"
+            )
 
         log_defs = _find_methods_in_c(code_no_str, "Log")
         loadconfig_defs = _find_methods_in_c(code_no_str, "LoadConfig")
@@ -1153,6 +1169,15 @@ def check_5_key_containment(probe_dir):
             if len(hc["arg_spans"]) != expected_arity:
                 violations.append(
                     f"{rel}:{lineno}: KeyQuery() dentro de .{hc['method']}() con aridad invalida ({len(hc['arg_spans'])})"
+                )
+                continue
+
+            # 5h: el receptor tiene que ser una variable declarada RestContext (no un envoltorio con GET/POST propio)
+            recv_txt = re.sub(r"\s+", "", code_no_str[hc["call_span"][0] : hc["paren_span"][0]])
+            recv_id = recv_txt.rsplit(".", 1)[0]
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", recv_id) or recv_id not in restcontext_ids:
+                violations.append(
+                    f"{rel}:{lineno}: KeyQuery() en .{hc['method']}() sobre {recv_id!r}, que no es una variable RestContext declarada"
                 )
                 continue
 
@@ -2711,6 +2736,36 @@ class ProbeStaticTests(unittest.TestCase):
             )
 
         self._assert_mutation_caught_by(mut_nested_in_request, check_5_key_containment)
+
+    def test_neg_check5_wrapper_get_that_logs_the_request(self):
+        # H7 de Sol r1: SendPoll llama a un envoltorio con metodo GET propio que registra la peticion (con la clave)
+        # y la reenvia al RestContext. KeyQuery() sigue en el 2o argumento, pero el receptor no es RestContext.
+        wrapper = (
+            b"class DSBX_QA_HttpWrap\n"
+            b"{\n"
+            b"    DSBX_QA_Probe m_P;\n"
+            b"    RestContext m_Inner;\n"
+            b"    void GET(DSBX_QA_Callback cb, string request)\n"
+            b"    {\n"
+            b"        m_P.Log(request);\n"
+            b"        m_Inner.GET(cb, request);\n"
+            b"    }\n"
+            b"}\n\n"
+        )
+
+        def mut_wrapper(files):
+            src = files["scripts/5_Mission/DSBX_QA_Probe.c"]
+            old_call = b'        m_Ctx.GET(cb, "poll?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&frame=" + m_Frame.ToString() + "&tick_s=" + tick_s.ToString());'
+            assert old_call in src
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = wrapper + src.replace(old_call, old_call.replace(b"m_Ctx.GET(", b"m_Wrap.GET("))
+
+        self._assert_mutation_caught_by(mut_wrapper, check_5_key_containment)
+
+        # Solo el metodo GET propio, aunque la llamada siga yendo a m_Ctx: tambien es violacion
+        def mut_def_only(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = wrapper + files["scripts/5_Mission/DSBX_QA_Probe.c"]
+
+        self._assert_mutation_caught_by(mut_def_only, check_5_key_containment)
 
     def test_neg_check5_log_err_inside_load_config(self):
         def mut(files):

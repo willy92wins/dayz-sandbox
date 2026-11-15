@@ -529,7 +529,8 @@ class PartContext:
         eff_budget = self.initial_callback_budget if callback_budget is None else int(callback_budget)
         eff_retry = self.retry_ms if retry_ms is None else int(retry_ms)
         eff_key = self.keys.get(peer, "") if key is None else str(key)
-        eff_url = f"http://127.0.0.1:{self.bridge.port}" if url is None else str(url)
+        # Con "/" final: UrlUsable() de la sonda la exige (DSBX_QA_Probe.c), igual que s_puente_run.py (H1 de Sol r1).
+        eff_url = f"http://127.0.0.1:{self.bridge.port}/" if url is None else str(url)
         body = {
             "callback_budget": eff_budget,
             "key": eff_key,
@@ -1125,6 +1126,9 @@ def await_operator(
 
     await_path = ctx.part_dir / "AWAITING_OPERATOR.json"
     done_path = ctx.part_dir / "OPERATOR_DONE"
+    # Una confirmacion vale para un solo paso: se descarta la de un paso anterior antes de publicar este y se
+    # consume al usarla (H9 de Sol r1).
+    done_path.unlink(missing_ok=True)
     gate_core.write_json(
         await_path,
         {
@@ -1139,6 +1143,7 @@ def await_operator(
     scan_idx = 0
     while time.monotonic() < deadline:
         if done_path.exists():
+            done_path.unlink(missing_ok=True)
             await_path.unlink(missing_ok=True)
             ctx.record_scenario({"action": action, "ev": "operator_done", "mode": "file", "step": step})
             return {"action": action, "mode": "file", "ok": True, "step": step}
