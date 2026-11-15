@@ -173,12 +173,18 @@ def _job_free(ctx, job_id):
     )
 
 
-def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, qa_fault=None, defer_free=False):
-    area = fixture["areas"][area_id]
-    tag = f"{stage}:{area_id}"
-    cx = float(area["center_x_m"])
-    cz = float(area["center_z_m"])
-    rad = float(area["radius_m"])
+def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy_fault=None, qa_fault=None, defer_free=False, center_override=None):
+    if center_override is None:
+        area = fixture["areas"][area_id]
+        tag = f"{stage}:{area_id}"
+        cx = float(area["center_x_m"])
+        cz = float(area["center_z_m"])
+        rad = float(area["radius_m"])
+    else:
+        tag = area_id
+        cx = float(center_override[0])
+        cz = float(center_override[1])
+        rad = 60.0
     payload = wire.pack_payload(
         scalars_str={"area_tag": tag},
         scalars_num={
@@ -220,7 +226,7 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, qa_f
                 "include_director_b": 0.0,
             },
         )
-        probe = f03_common.issue_one(ctx, "server", "per_census_start", probe_payload)
+        probe = f03_common.issue_one(ctx, "server", "per_census_start", probe_payload, qa_fault=busy_fault)
         ctx.record_scenario({
             "ev": "census_busy_probe",
             "area_id": area_id,
@@ -228,6 +234,29 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, qa_f
             "reason": probe.reason,
             "op_id": probe.op_id,
         })
+        # Mutante census_resource_bypass: el recurso no protege y el segundo censo se acepta.
+        # Hay que consumirlo (paginas + job_free) para no dejar un trabajo vivo colgado.
+        if probe.status == "done" and probe.payload:
+            probe_jid = str(probe.payload["str"].get("job") or probe.op_id)
+            probe_state = ""
+            probe_deadline = time.monotonic() + 60.0
+            while time.monotonic() < probe_deadline:
+                probe_page = f03_common.issue_one(
+                    ctx, "server", "job_read",
+                    wire.pack_payload(scalars_str={"job": probe_jid}, scalars_num={"page_n": 0.0}),
+                )
+                if probe_page.status != "done" or not probe_page.payload:
+                    break
+                probe_state = str(probe_page.payload["str"].get("state") or "")
+                if probe_state in TERMINAL_STATES:
+                    break
+                time.sleep(0.02)
+            if probe_state == "done":
+                try:
+                    f03_common.read_job_pages(ctx, "server", probe_jid, timeout_ms=30000)
+                except Exception:
+                    pass
+            _job_free(ctx, probe_jid)
 
     state = ""
     deadline = time.monotonic() + 60.0
@@ -262,15 +291,44 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, qa_f
     return rec
 
 
+def _collect_creature_tracks(rec, lids, tracks):
+    for row in rec.get("rows") or []:
+        lid = str(row.get("own_logical_id") or "")
+        if lid not in lids:
+            continue
+        tracks.append({
+            "logical_id": lid,
+            "stage": rec.get("stage"),
+            "x_m": float(row.get("pos_x_m", 0.0)),
+            "z_m": float(row.get("pos_z_m", 0.0)),
+        })
+
+
 def _restart_server(ctx, old_epoch):
     proc = ctx.procs.get("server")
     if proc is not None and proc.poll() is None:
+        # N49: deja al peer viejo sondear una vez mas tras su ultima lectura (keepalive observable)
+        # y deja que el bridge drene las peticiones en vuelo antes de matarlo, para que no quede
+        # ninguna peticion del epoch viejo que el bridge procese despues del hello nuevo.
+        time.sleep(0.25)
         proc.terminate()
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+        # Deja que el handler del bridge termine su long-poll en vuelo del peer viejo
+        # (hold_ms como maximo) y escriba su 200 antes de registrar el hello del epoch nuevo;
+        # si no, el handler viejo ve el hello nuevo y emite un 409 tardio (N49: ningun evento
+        # del epoch viejo despues del hello nuevo) contra un socket ya cerrado.
+        drain_s = float(getattr(ctx.bridge, "hold_ms", 2000)) / 1000.0 + 0.2
+        time.sleep(drain_s)
+        # El 200 del ultimo long-poll del peer viejo se escribe contra un socket ya cerrado
+        # (ConnectionResetError) y el bridge lo guarda como fallo; es esperado al matar el peer
+        # y no debe tumbar las ordenes del epoch nuevo.
+        fail = getattr(ctx.bridge, "failure", None)
+        if isinstance(fail, (ConnectionResetError, ConnectionAbortedError)):
+            ctx.bridge.failure = None
     cfg_path = ctx.profiles["server"] / "dsbx_qa.json"
     log_path = ctx.peer_logs["server"]
     log_fh = log_path.open("a", encoding="utf-8", newline="\n")
@@ -289,6 +347,17 @@ def _restart_server(ctx, old_epoch):
     new_proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT)
     ctx.procs["server"] = new_proc
     ctx.fake_peer_pids["server"] = new_proc.pid
+    # El testigo comun (E9) solo aprende los PIDs en PartContext._spawn_peers; el reinicio de mundo
+    # lanza un proceso nuevo fuera de esa ruta. Si el testigo esta activo, se le registra el PID real.
+    try:
+        from tests import e2e_witness as _witness
+        _active = getattr(_witness, "_ACTIVE", None)
+        if _active is not None:
+            _rec = _active._rec_for(ctx)
+            if _rec is not None:
+                _rec.pids.setdefault("server", set()).add(new_proc.pid)
+    except Exception:
+        pass
     deadline = time.monotonic() + 30.0
     while time.monotonic() < deadline:
         reg = ctx.bridge.registered("server")
@@ -467,9 +536,10 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
         for idx, area_id in enumerate(cfg["base_areas"]):
             include_dir = 1 if area_id == "area_a" else 0
             if idx == 0 and cfg["bypass_contention"]:
-                rec = _census(ctx, fixture, "t0_baseline_census", area_id, include_dir, defer_free=True)
-                _census(ctx, fixture, "contention_probe", area_id, 0)
-                _job_free(ctx, rec["job_id"])
+                rec = _census(
+                    ctx, fixture, "t0_baseline_census", area_id, include_dir,
+                    busy_probe=True, busy_fault="census_resource_bypass",
+                )
             else:
                 rec = _census(ctx, fixture, "t0_baseline_census", area_id, include_dir, busy_probe=(idx == 0))
             if include_dir == 1:
@@ -566,13 +636,17 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             _census(ctx, fixture, "t1_post_transition_census", area_id, 1 if area_id in ("area_a", "area_b") else 0)
         ctx.record_scenario({"ev": "storage_snapshot_t1", "files": _snapshot_dir(sim_storage)})
 
+        creature_lids = {f"{cfg['pfx']}_inf_1", f"{cfg['pfx']}_ani_1", "b_inf_1", "b_ani_1"}
+        creature_tracks = []
         for area_id in cfg["creature_areas"]:
-            _census(ctx, fixture, "t2_census_10min", area_id, 0)
+            rec_t2 = _census(ctx, fixture, "t2_census_10min", area_id, 0)
+            _collect_creature_tracks(rec_t2, creature_lids, creature_tracks)
         ctx.record_scenario({"ev": "storage_snapshot_t2", "files": _snapshot_dir(sim_storage)})
 
         t3_director_areas = {cfg["retained_area"], "area_a", "area_b"}
         for area_id in cfg["base_areas"]:
-            _census(ctx, fixture, "t3_pre_reset_census", area_id, 1 if area_id in t3_director_areas else 0)
+            rec_t3p = _census(ctx, fixture, "t3_pre_reset_census", area_id, 1 if area_id in t3_director_areas else 0)
+            _collect_creature_tracks(rec_t3p, creature_lids, creature_tracks)
 
         for attempt in (1, 2):
             rc_op = ctx.peek_next_op_id()
@@ -596,7 +670,8 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
         })
 
         for area_id in cfg["base_areas"]:
-            _census(ctx, fixture, "t3_post_reset_census", area_id, 1 if area_id in t3_director_areas else 0)
+            rec_t3q = _census(ctx, fixture, "t3_post_reset_census", area_id, 1 if area_id in t3_director_areas else 0)
+            _collect_creature_tracks(rec_t3q, creature_lids, creature_tracks)
 
         if drop_control_pre_restart:
             _census(ctx, fixture, "t3_post_reset_census", "area_c", 0, qa_fault="drop_ctrl_pre_restart")
@@ -620,8 +695,32 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
         })
 
         t5_director_areas = {cfg["retained_area"], "area_a", "area_b"}
+        base_discs = []
         for area_id in cfg["base_areas"]:
             _census(ctx, fixture, "t5_post_restart_census", area_id, 1 if area_id in t5_director_areas else 0)
+            ainfo = fixture["areas"][area_id]
+            base_discs.append((float(ainfo["center_x_m"]), float(ainfo["center_z_m"])))
+
+        # N39/N49: discos de seguimiento t5 para toda posicion alcanzada por una criatura que quede a mas
+        # de 15 m del centro de todos los discos ya censados; asi la ausencia post-reinicio queda cubierta
+        # con el margen que exige la cota de 6 m/s.
+        for trk in creature_tracks:
+            near = any(
+                math.hypot(trk["x_m"] - cx, trk["z_m"] - cz) <= 15.0
+                for cx, cz in base_discs
+            )
+            if near:
+                continue
+            track_tag = f"t5_track_{trk['logical_id']}_{trk['stage']}"
+            _census(ctx, fixture, "t5_post_restart_census", track_tag, 0, center_override=(trk["x_m"], trk["z_m"]))
+            ctx.record_scenario({
+                "ev": "t5_track_disc",
+                "area_tag": track_tag,
+                "logical_id": trk["logical_id"],
+                "stage": trk["stage"],
+                "center_x_m": trk["x_m"],
+                "center_z_m": trk["z_m"],
+            })
 
         witness_rows, _ = _build_scene_rows(fixture, "scene_b")
         w_op_id = ctx.peek_next_op_id()

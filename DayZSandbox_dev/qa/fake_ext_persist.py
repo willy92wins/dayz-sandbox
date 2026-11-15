@@ -954,6 +954,10 @@ class PersistFakeExt(FakeExt):
                 if ent["class_name"] == "Barrel_Yellow" and ent["area_id"] == "area_c":
                     self._delete_entity(ent)
         job_id = op["op_id"]
+        # Mutante census_resource_bypass: el recurso per_census no protege; el segundo censo se
+        # acepta aunque el primero siga activo. El runner pasa este qa_fault solo en esa parte.
+        if fault == "census_resource_bypass":
+            self.jobs.held_resources.pop("per_census", None)
         err = self.jobs.start_job(
             self,
             job_id,
