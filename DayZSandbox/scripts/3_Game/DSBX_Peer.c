@@ -91,6 +91,7 @@ class DSBX_Peer
 	string m_Session;
 	string m_CatSession;
 	string m_HelloEpoch;
+	string m_CatSendSession;
 	int m_Conn;
 	int m_State;
 
@@ -743,6 +744,10 @@ class DSBX_Peer
 		}
 		if (kind == DSBX_Const.KIND_CATALOG)
 		{
+			if (m_CatSendSession != m_CatSession)
+			{
+				return;
+			}
 			m_CatFailures = m_CatFailures + 1;
 			if (m_CatFailures >= m_RMaxFailures)
 			{
@@ -940,6 +945,10 @@ class DSBX_Peer
 		}
 		if (kind == DSBX_Const.KIND_CATALOG)
 		{
+			if (m_CatSendSession != m_CatSession)
+			{
+				return;
+			}
 			m_CatFailures = 0;
 			m_CatNextTryMs = 0.0;
 			m_CatPageIdx = m_CatPageIdx + 1;
@@ -1369,6 +1378,7 @@ class DSBX_Peer
 			}
 			string pageBody = m_Catalog.GetPage(m_CatPageIdx);
 			m_NextKindR = DSBX_Const.KIND_CATALOG;
+			m_CatSendSession = m_CatSession;
 			int catRc = Send(DSBX_Const.CH_R, "catalog?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&session=" + m_Session, pageBody);
 			if (catRc != 0)
 			{

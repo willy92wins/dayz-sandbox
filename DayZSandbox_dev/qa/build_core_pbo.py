@@ -90,7 +90,10 @@ def read_pbo(path):
     for name, size in entries:
         if data + size > len(pbo):
             raise ValueError("PBO truncado en %s" % name)
-        files[name.replace("\\", "/")] = pbo[data:data + size]
+        key = name.replace("\\", "/")
+        if key in files:
+            raise ValueError("entrada duplicada en el PBO: %s" % key)
+        files[key] = pbo[data:data + size]
         data += size
     return props.get("prefix", ""), files
 

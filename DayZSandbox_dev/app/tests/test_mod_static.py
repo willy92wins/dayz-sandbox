@@ -486,6 +486,18 @@ def check_m5_wire_cap_y_send(mod_dir: Path) -> list[str]:
     return violations
 
 
+REQUIRED_GUARDS = {
+    "ValidHello": ["!resp", "!resp.ok", "!IsHex(resp.session,16)", "resp.conn<1", "resp.lease_ms<=0",
+                   "resp.hold_ms<=0", "resp.wire_cap<1024"],
+    "ValidOrder": ["!order", 'order.op_id==""', "!IsHex(order.session,16)", "order.conn<0",
+                   "!IsHex(order.epoch,32)", "!IsHex(order.inst,32)", 'order.verb==""', "!order.args",
+                   "order.issued_ms<0", "order.ttl_ms<=0"],
+    "ValidPoll": ["!resp", "!resp.ok", "resp.now_ms<0", "!resp.ops", "resp.ops.Count()>1",
+                  "resp.ops.Count()==1&&!ValidOrder(resp.ops.Get(0))"],
+    "ValidAck": ["!resp", "!resp.ok"],
+}
+
+
 def check_m6_validadores(mod_dir: Path) -> list[str]:
     violations = []
     c_files = _read_stripped_c_files(mod_dir)
@@ -496,6 +508,17 @@ def check_m6_validadores(mod_dir: Path) -> list[str]:
     vo = _find_method_body(msg_code, "ValidOrder")
     vp = _find_method_body(msg_code, "ValidPoll")
     va = _find_method_body(msg_code, "ValidAck")
+
+    # Cada guarda de §3.5 tal cual, con su salida: if (<condicion>) { return false; }
+    for vname, vbody in (("ValidHello", vh), ("ValidOrder", vo), ("ValidPoll", vp), ("ValidAck", va)):
+        if not vbody:
+            continue
+        have = {re.sub(r"\s+", "", c) for c in re.findall(r"if\s*\((.*?)\)\s*\{\s*return\s+false\s*;\s*\}", vbody, re.S)}
+        for need in REQUIRED_GUARDS[vname]:
+            if need not in have:
+                violations.append(f"M6: {vname} no tiene la guarda if ({need}) {{ return false; }}")
+        if len(re.findall(r"\breturn\s+true\s*;", vbody)) != 1:
+            violations.append(f"M6: {vname} debe tener un solo return true, al final")
 
     if not vh:
         violations.append("M6: falta ValidHello")
@@ -660,6 +683,19 @@ def check_m9_contrato_cable(mod_dir: Path) -> list[str]:
         if len(params) != 1:
             violations.append(f"M9: WireText debe tener exactamente 1 parametro, tiene {params}")
 
+    wt_body = _find_method_body(wire_code, "WireText")
+    if wt_body:
+        if "int n = s.Length();" not in wt_body or len(re.findall(r"\bn\s*=(?!=)", wt_body)) != 1:
+            violations.append("M9: WireText debe recorrer la cadena entera: int n = s.Length(); y n no se toca")
+        m_wl = re.search(r"while\s*\(\s*i\s*<\s*n\s*\)\s*\{", wt_body)
+        if not m_wl:
+            violations.append("M9: WireText debe recorrer con while (i < n)")
+        elif re.search(r"\b(?:break|return)\b", _extract_block(wt_body, wt_body.find("{", m_wl.start()))):
+            violations.append("M9: el bucle de WireText no puede cortar (break/return): nada se recorta")
+        subs = re.findall(r"\.\s*Substring\s*\([^)]*\)", wt_body)
+        if re.search(r"\bs\s*=(?!=)", wt_body) or any(re.sub(r"\s+", "", x) != ".Substring(i,1)" for x in subs):
+            violations.append("M9: WireText no puede reasignar ni cortar la cadena de entrada")
+
     if "hello_modset_truncated" in all_code:
         violations.append("M9: hello_modset_truncated no debe aparecer")
     if '"hello_too_large bytes="' not in peer_code:
@@ -804,6 +840,11 @@ def check_m11_errores(mod_dir: Path) -> list[str]:
             or not re.search(r"\bm_RMaxFailures\s*=\s*DSBX_Const\.R_MAX_FAILURES\s*;", peer_code):
         violations.append("M11: R_MAX_FAILURES debe valer 4 y asignarse a m_RMaxFailures")
 
+    ok_body = _find_method_body(peer_code, "HandleChannelRSuccess")
+    stale = "if (m_CatSendSession != m_CatSession)"
+    if stale not in ok_body or stale not in r_err_body or "m_CatSendSession = m_CatSession;" not in peer_code:
+        violations.append("M11: el acuse y el error de una pagina de otra sesion se descartan (m_CatSendSession)")
+
     if not lease_body:
         violations.append("M11: falta CheckLeaseTimeout en DSBX_Peer.c")
     else:
@@ -891,7 +932,7 @@ class TestModStatic(unittest.TestCase):
             shutil.copytree(REAL_MOD_DIR, copy_dir)
             target = copy_dir / rel_file
             content = target.read_bytes().decode("utf-8")
-            self.assertIn(old, content, f"No se encontro el fragmento a mutar en {rel_file}")
+            self.assertEqual(content.count(old), 1, f"El fragmento a mutar no es unico en {rel_file}: {old[:60]!r}")
             mutated = content.replace(old, new, 1)
             target.write_bytes(mutated.encode("utf-8"))
             failed = [name for name, fn in ALL_CHECKS.items() if fn(copy_dir)]
@@ -973,11 +1014,11 @@ class TestModStatic(unittest.TestCase):
                 'm_Ctx.POST( null, "hello", body ); int rc = Send(DSBX_Const.CH_P, "hello?" + KeyQuery(), body);',
                 "M5",
             ),
-            # (k) M6: quitar la comprobacion de ok en ValidHello
+            # (k) M6: quitar la comprobacion de ok en ValidHello (ancla unica: la guarda que la sigue)
             (
                 "scripts/3_Game/DSBX_Messages.c",
-                "if (!resp.ok)\n\t\t{\n\t\t\treturn false;\n\t\t}",
-                "",
+                "if (!resp.ok)\n\t\t{\n\t\t\treturn false;\n\t\t}\n\t\tif (!IsHex(resp.session, 16))",
+                "if (!IsHex(resp.session, 16))",
                 "M6",
             ),
             # (l) M6: float now_ms en DSBX_PollResp
@@ -1111,6 +1152,41 @@ class TestModStatic(unittest.TestCase):
                 "scripts/3_Game/DSBX_Peer.c",
                 "\t\t\tm_FailCountP = 0;\n\t\t\tm_HelloTooLargeLogged = false;\n",
                 "\t\t\tm_FailCountP = 0;\n\t\t\tm_ClientErrCountP = 0;\n\t\t\tm_HelloTooLargeLogged = false;\n",
+                "M11",
+            ),
+            # Sol C-02: WireText recorta en silencio
+            (
+                "scripts/3_Game/DSBX_Wire.c",
+                "\t\tint n = s.Length();\n\t\tint i = 0;\n\t\twhile (i < n)\n\t\t{\n\t\t\tstring ch = s.Substring(i, 1);\n\t\t\tint c = ch.ToAscii();\n\t\t\tif (c == 34)",
+                "\t\tint n = s.Length();\n\t\tif (n > 100) { n = 100; }\n\t\tint i = 0;\n\t\twhile (i < n)\n\t\t{\n\t\t\tstring ch = s.Substring(i, 1);\n\t\t\tint c = ch.ToAscii();\n\t\t\tif (c == 34)",
+                "M9",
+            ),
+            # Del orquestador: WireText corta la cadena antes de recorrerla
+            (
+                "scripts/3_Game/DSBX_Wire.c",
+                "static string WireText(string s)\n\t{\n",
+                "static string WireText(string s)\n\t{\n\t\tif (s.Length() > 100) { s = s.Substring(0, 100); }\n",
+                "M9",
+            ),
+            # Sol C-03: ValidHello con la condicion de ok invertida
+            (
+                "scripts/3_Game/DSBX_Messages.c",
+                "\t\tif (!resp.ok)\n\t\t{\n\t\t\treturn false;\n\t\t}\n\t\tif (!IsHex(resp.session, 16))",
+                "\t\tif (resp.ok)\n\t\t{\n\t\t\treturn false;\n\t\t}\n\t\tif (!IsHex(resp.session, 16))",
+                "M6",
+            ),
+            # Sol C-03: ValidPoll sin rechazar mas de una orden
+            (
+                "scripts/3_Game/DSBX_Messages.c",
+                "if (resp.ops.Count() > 1)",
+                "if (false)",
+                "M6",
+            ),
+            # C-01: el acuse de una pagina de otra sesion ya no se descarta
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "\t\t{\n\t\t\tif (m_CatSendSession != m_CatSession)\n\t\t\t{\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tm_CatFailures = 0;\n",
+                "\t\t{\n\t\t\tm_CatFailures = 0;\n",
                 "M11",
             ),
         ]

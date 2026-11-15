@@ -61,6 +61,8 @@ class LeerPbo(unittest.TestCase):
             "comprimido": make_pbo("DayZSandbox", [("config.cpp", b"x")], method=0x43707273),
             "cabecera sin terminar": b"config.cpp",
             "cabecera corta": b"config.cpp\x00" + b"\x00" * 7,
+            "nombre duplicado": make_pbo("DayZSandbox", [("config.cpp", b"malo"), ("config.cpp", b"x")]),
+            "duplicado tras normalizar": make_pbo("DayZSandbox", [("scripts\\A.c", b"a"), ("scripts/A.c", b"a")]),
         }
         for nombre, raw in casos.items():
             with self.subTest(nombre):
