@@ -169,6 +169,38 @@ MAP_OBJECT_SPECS = (
     ("1:64", "Rag", "1:61", "Cargo:0:0:2", 6165.0, 7635.0, False),
 )
 
+# El testigo del .c se engancha en EEInit de RAICES DE SCRIPT (EntityAI es del motor y no se puede modar): ItemBase,
+# ZombieBase, AnimalBase, CarScript y BuildingBase (+ 4 clases vanilla que cortan la cadena por debajo de una raiz).
+# El fake solo captura lo que en el .c derivaria de una de ellas; lo demas (jugadores, barcos, clases desconocidas)
+# no se ve, como en el motor. Prefijos y clases tomados de la config vanilla (DZ/...) y de los scripts.
+HOOK_ROOT_PREFIX = (
+    ("Land_", "BuildingBase"),   # House > BuildingBase
+    ("Zmb", "ZombieBase"),
+    ("Animal_", "AnimalBase"),
+    ("Offroad", "CarScript"),
+    ("Barrel_", "ItemBase"),
+)
+HOOK_ROOT_CLASSES = {
+    "WoodenCrate": "ItemBase", "SeaChest": "ItemBase", "FirstAidKit": "ItemBase", "Pot": "ItemBase",
+    "Rag": "ItemBase", "Apple": "ItemBase", "HatchbackWheel": "ItemBase", "LargeTent": "ItemBase",
+    "MediumTent": "ItemBase", "CarTent": "ItemBase", "CamoNet": "ItemBase", "Fireplace": "ItemBase",
+    "Spotlight": "ItemBase", "PowerGenerator": "ItemBase", "Jeans_Blue": "ItemBase",
+    "ChristmasTree": "ChristmasTree",  # vanilla corta la cadena: lo cubre su propio modded class
+}
+
+
+def hook_root(class_name):
+    """Raiz enganchada que cubre esta clase en el .c, o None si el testigo no la ve."""
+    root = HOOK_ROOT_CLASSES.get(class_name)
+    if root is not None:
+        return root
+    low = class_name.lower()
+    for prefix, root in HOOK_ROOT_PREFIX:
+        if low.startswith(prefix.lower()):
+            return root
+    return None
+
+
 CENSUS_PAGE_SIZE = 5
 CENSUS_MAX_ROWS = 4096
 CENSUS_MAX_MS = 900000.0
@@ -1292,6 +1324,8 @@ class PersistFakeExt(FakeExt):
         now_ms = float(self.peer.local_ms())
         if now_ms > wit["end_ms"]:
             return
+        if hook_root(ent["class_name"]) is None:
+            return  # no deriva de ninguna raiz enganchada: el .c no la ve
         if len(wit["buf"]) >= WITNESS_MAX_ROWS + 1:
             return
         if _dist2(ent["pos"][0], ent["pos"][2], wit["cx"], wit["cz"]) > wit["radius"]:

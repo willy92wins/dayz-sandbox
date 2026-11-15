@@ -16,14 +16,9 @@ class CfgMods
 		dir = "DayZSandbox_QA";
 		name = "DayZSandbox_QA";
 		type = "mod";
-		dependencies[] = {"Game", "World", "Mission"};
+		dependencies[] = {"World", "Mission"};
 		class defs
 		{
-			class gameScriptModule
-			{
-				value = "";
-				files[] = {"DayZSandbox_QA/scripts/3_Game"};
-			};
 			class worldScriptModule
 			{
 				value = "";

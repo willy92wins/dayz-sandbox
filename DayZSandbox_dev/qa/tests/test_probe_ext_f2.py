@@ -32,8 +32,8 @@ from . import test_probe_static as tps
 QA_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = QA_DIR.parent
 PERSIST_C = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "5_Mission" / "DSBX_QA_X_Persist.c"
-WITNESS_C = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "3_Game" / "DSBX_QA_G_Witness.c"  # gancho y bufer
-WITNESS_W_C = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "4_World" / "DSBX_QA_W_Witness.c"  # cobertura 4_World
+WITNESS_C = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "4_World" / "DSBX_QA_W_Witness.c"  # bufer y ganchos
+WITNESS_W_C = WITNESS_C
 PROBE_SCRIPTS = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts"
 VANILLA_ROOTS = (Path("P:/scripts"), Path("C:/Users/guill/OneDrive/Documentos/DayZ Projects/scripts"))
 BASELINE_COMMIT = "6a7bd7a"  # implementacion de S-persist (rama claude/s-persist-impl-e9), de donde sale este PR
@@ -446,7 +446,9 @@ class WitnessE2E(_E2EBase):
         ground = _spawn(self.ctx, "wg", "foreign_ground", "Barrel_Yellow", 6180.0, 7650.0)
         boxed = _spawn(self.ctx, "wb", "foreign_in_container", "Rag", target_net_id="1:50")
         outside = _spawn(self.ctx, "wo", "foreign_ground", "Barrel_Blue", 6500.0, 7643.0)
-        for r in (ground, boxed, outside):
+        # Una clase que no deriva de ninguna raiz enganchada (un jugador) nace dentro del radio y el testigo no la ve.
+        uncovered = _spawn(self.ctx, "wu", "foreign_ground", "SurvivorM_Mirek", 6181.0, 7651.0)
+        for r in (ground, boxed, outside, uncovered):
             self.assertEqual(r.status, "done", r)
 
         state, pages = self._finish(start)
@@ -462,6 +464,7 @@ class WitnessE2E(_E2EBase):
         for row in rows:
             by_net.setdefault(row["net_id"], []).append(row)
         self.assertEqual(set(by_net), {ground.payload["str"]["net_id"], boxed.payload["str"]["net_id"]})
+        self.assertNotIn(uncovered.payload["str"]["net_id"], by_net)
         for net_id, samples in by_net.items():
             self.assertEqual([r["sample_idx"] for r in samples], [0.0, 1.0, 2.0, 3.0], net_id)
             self.assertEqual({r["alive_b"] for r in samples}, {1.0})
@@ -684,6 +687,21 @@ class WitnessInProcess(unittest.TestCase):
         self.assertEqual({(r["pos_x_m"], r["pos_z_m"]) for r in rows}, {(6180.0, 7650.0)})  # ultima posicion conocida
         self.assertEqual([r["frame"] for r in rows], [rows[0]["frame"] + i for i in range(4)])  # 0, 1, 2, 3 consecutivos
         self.assertIsNone(self.ext.witness)
+
+    def test_class_without_hooked_root_is_not_seen(self):
+        job_id = self._start(window_ms=200.0, k=1)
+        self._new("SurvivorM_Mirek")  # jugador: ManBase no esta enganchado
+        self._new("UnknownModdedThing")
+        covered = self._new("Zmbf_PoliceCopBlue")  # ZombieBase
+        self._new("Land_Mil_Barracks1", 6181.0, 7651.0)  # House > BuildingBase
+        _tick(self.peer, self.jobs, self.ext)
+        rows = _job_rows(self.jobs, job_id)
+        self.assertEqual(sorted({r["class_name"] for r in rows}), ["Land_Mil_Barracks1", "Zmbf_PoliceCopBlue"])
+        self.assertEqual(len(rows), 4)  # una sola fila por entidad y muestra: sin doble captura
+        self.assertEqual(sum(1 for r in rows if r["sample_idx"] == 0.0), 2)
+        self.assertEqual(fake_ext_persist.hook_root("Barrel_Yellow"), "ItemBase")
+        self.assertIsNone(fake_ext_persist.hook_root("SurvivorM_Mirek"))
+        self.assertIsNotNone(covered)
 
     def test_first_follow_sample_is_the_frame_after_eeinit(self):
         # Q-01: un desplazamiento del mod entre EEInit y el primer tick se ve en sample_idx 1, no un tick despues.
@@ -1003,16 +1021,26 @@ class StaticWitnessHookTests(unittest.TestCase):
         self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
         raw.decode("utf-8")
 
-    def test_modded_entityai_eeinit_super_first_then_bool_check(self):
-        self.assertEqual(len(re.findall(r"\bmodded\s+class\s+EntityAI\b", self.code)), 1)
-        body = _block_after(self.code, r"override\s+void\s+EEInit\s*\(\s*\)\s*\{")
-        self.assertIsNotNone(body)
-        stmts = _statements(body)
-        self.assertEqual(stmts[0], "super.EEInit();")
-        # Segunda sentencia: comprobar el bool estatico y salir si esta apagado.
-        self.assertRegex(stmts[1], r"^if \(!DSBX_QA_Witness\.s_On\) return;$")
-        self.assertEqual(stmts[2], "DSBX_QA_Witness.Capture(this);")
-        self.assertEqual(len(stmts), 3)
+    def test_every_modded_class_calls_super_first_then_checks_the_bool(self):
+        names = re.findall(r"\bmodded\s+class\s+(\w+)", self.code)
+        self.assertEqual(sorted(names), sorted(HOOK_ROOTS + HOOK_EXTRAS))  # lista cerrada: la que se valida en partida
+        for cls in names:
+            body = _block_after(self.code, r"modded\s+class\s+%s\s*\{" % cls)
+            eeinit = _block_after(body, r"override\s+void\s+EEInit\s*\(\s*\)\s*\{")
+            stmts = _statements(eeinit)
+            self.assertEqual(stmts[0], "super.EEInit();", cls)
+            self.assertRegex(stmts[1], r"^if \(!DSBX_QA_Witness\.s_On\) return;$", cls)
+            self.assertEqual(stmts[2], "DSBX_QA_Witness.Capture(this);", cls)
+            self.assertEqual(len(stmts), 3, cls)
+
+    def test_no_engine_class_is_modded(self):
+        # EntityAI y compania son clases del motor ("Engine class 'EntityAI' cannot be modded"): solo raices de script.
+        names = set(re.findall(r"\bmodded\s+class\s+(\w+)", self.code))
+        self.assertEqual(names & ENGINE_CLASSES, set())
+        for _t, code in (_code(p) for p in sorted(PROBE_SCRIPTS.rglob("*.c"))):
+            self.assertEqual(set(re.findall(r"\bmodded\s+class\s+(\w+)", code)) & ENGINE_CLASSES, set())
+        # y la prueba no es vacua: detecta un modded class de EntityAI.
+        self.assertEqual({"EntityAI"} & ENGINE_CLASSES, {"EntityAI"})
 
     def test_switch_is_static_and_off_by_default(self):
         self.assertRegex(self.code, r"static\s+bool\s+s_On\s*=\s*false\s*;")
@@ -1103,12 +1131,111 @@ class StaticModdedClassModuleTests(unittest.TestCase):
         self.assertEqual(len(got), 1, got)
         self.assertIn("bad.c", got[0])
 
-    def test_hook_files_are_in_the_expected_modules(self):
-        self.assertEqual(WITNESS_C.parent.name, "3_Game")
-        self.assertEqual(WITNESS_W_C.parent.name, "4_World")
+    def test_hook_file_is_in_4_world_and_there_is_no_3_game(self):
+        self.assertEqual(WITNESS_C.parent.name, "4_World")
+        self.assertFalse((PROBE_SCRIPTS / "3_Game").exists())
         cfg = (QA_DIR / "probe" / "DayZSandbox_QA" / "config.cpp").read_bytes().decode("utf-8")
-        self.assertIn('files[] = {"DayZSandbox_QA/scripts/3_Game"};', cfg)
-        self.assertRegex(cfg, r'dependencies\[\]\s*=\s*\{"Game",\s*"World",\s*"Mission"\};')
+        self.assertNotIn("gameScriptModule", cfg)
+        self.assertRegex(cfg, r'dependencies\[\]\s*=\s*\{"World",\s*"Mission"\};')
+
+
+# Raices de script moddables (todas de 4_world) en las que se engancha el testigo, y las 4 clases vanilla que cortan
+# la cadena de EEInit por debajo de una raiz. Es la lista que se valida en partida.
+HOOK_ROOTS = ("ItemBase", "ZombieBase", "AnimalBase", "CarScript", "BuildingBase")
+HOOK_EXTRAS = ("ContaminatedArea_Local", "ChristmasTree", "Animal_CapraHircus_Spooky", "ZmbM_Mummy")
+# Clases del motor (o de 3_game con metodos proto) citadas: no se pueden modar. entityai.c:115 (proto native
+# GetHierarchyParent :885), object.c, entity.c:1, inventoryitem.c:1, building.c:17, man.c:13, transport.c:68,
+# dayzanimal.c:24/:191/:655, dayzinfected.c:104, pawn.c:191, gameplay.c:1531.
+ENGINE_CLASSES = frozenset({
+    "EntityAI", "Object", "Entity", "ObjectTyped", "InventoryItem", "Building", "Transport", "Car", "Boat",
+    "Helicopter", "Motorbike", "Man", "Person", "Human", "DayZPlayer", "DayZCreature", "DayZCreatureAI",
+    "DayZAnimal", "DayZInfected", "Pawn", "Static", "ScriptedEntity", "EffecterBase",
+})
+# Cobertura de la escena de F2 (fixtures/escena-sin-actores.json, 33 raices): clase de script que crea el producto
+# (la primera de la cadena de la clase de config que existe en scripts) -> raiz enganchada que la cubre.
+F2_COVERAGE = {
+    "House": "BuildingBase",  # Land_Wreck_Ikarus, _Volha_Police, _V3S, _Volha_Blue, Land_Container_1Bo, _1Aoh (HouseNoDestruct > House)
+    "LargeTent": "ItemBase", "MediumTent": "ItemBase", "CarTent": "ItemBase", "CamoNet": "ItemBase",
+    "Fireplace": "ItemBase", "Barrel_Red": "ItemBase", "Barrel_Blue": "ItemBase", "Barrel_Green": "ItemBase",
+    "Barrel_Yellow": "ItemBase", "WoodenCrate": "ItemBase", "SeaChest": "ItemBase", "Spotlight": "ItemBase",
+    "PowerGenerator": "ItemBase",
+    "ZmbM_FarmerFat_Base": "ZombieBase", "ZmbM_HermitSkinny_Base": "ZombieBase", "ZmbF_CitizenANormal_Base": "ZombieBase",
+    "ZmbM_CitizenASkinny_Base": "ZombieBase", "ZmbM_PatrolNormal_Base": "ZombieBase", "ZmbF_VillagerOld_Base": "ZombieBase",
+    "ZmbM_Jacket_Base": "ZombieBase", "ZmbF_Runner_Base": "ZombieBase", "ZmbM_HunterOld_Base": "ZombieBase",
+    "ZmbM_MotobikerFat_Base": "ZombieBase",
+    "Animal_CervusElaphus": "AnimalBase", "Animal_CapreolusCapreolus": "AnimalBase",
+    "Animal_GallusGallusDomesticus": "AnimalBase",
+}
+
+
+def _script_parents(root):
+    parents = {}
+    modules = {}
+    for mod in ("3_game", "4_world", "5_mission"):
+        for path in (Path(root) / mod).rglob("*.c"):
+            text = path.read_bytes().decode("utf-8", "replace")
+            for m in re.finditer(r"^[ \t]*class[ \t]+(\w+)[ \t]*(?:extends|:)[ \t]*(\w+)", text, re.M):
+                parents.setdefault(m.group(1), m.group(2))
+                modules.setdefault(m.group(1), mod)
+    return parents, modules
+
+
+def _chain(parents, name):
+    out, seen = [], set()
+    while name in parents and name not in seen:
+        seen.add(name)
+        out.append(name)
+        name = parents[name]
+    out.append(name)
+    return out
+
+
+class StaticHookRootsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        roots = [r for r in VANILLA_ROOTS if (r / "3_game").is_dir() and (r / "4_world").is_dir()]
+        if not roots:
+            raise unittest.SkipTest("no hay scripts vanilla (P:\\scripts ni la copia de OneDrive)")
+        cls.root = roots[0]
+        cls.parents, cls.modules = _script_parents(cls.root)
+
+    def test_roots_are_script_classes_of_4_world_and_derive_from_entityai(self):
+        for cls in HOOK_ROOTS + HOOK_EXTRAS:
+            self.assertEqual(self.modules.get(cls), "4_world", cls)
+            self.assertIn("EntityAI", _chain(self.parents, cls), cls)
+            self.assertNotIn(cls, ENGINE_CLASSES)
+
+    def test_no_double_capture(self):
+        # Ninguna raiz es ascendiente de otra: una entidad pasa por un solo gancho de raiz.
+        for a in HOOK_ROOTS:
+            chain = _chain(self.parents, a)[1:]
+            self.assertEqual([b for b in HOOK_ROOTS if b in chain], [], a)
+        cut = {c for _f, c in _eeinit_without_super(self.root)}
+        for extra in HOOK_EXTRAS:
+            chain = _chain(self.parents, extra)[1:]
+            # Deriva de exactamente una raiz enganchada (si no, el modded class sobra) ...
+            self.assertEqual(len([b for b in HOOK_ROOTS if b in chain]), 1, extra)
+            # ... y su EEInit vanilla corta la cadena (si llamara a super habria raiz mas extra = dos filas).
+            self.assertIn(extra, cut, extra)
+        # Toda clase vanilla que corta la cadena por debajo de una raiz esta cubierta; ninguna otra se mada.
+        for cls in cut:
+            chain = _chain(self.parents, cls)
+            if any(b in chain for b in HOOK_ROOTS):
+                self.assertIn(cls, HOOK_EXTRAS, cls)
+        # Un extra no es ascendiente de otro extra.
+        for a in HOOK_EXTRAS:
+            for b in HOOK_EXTRAS:
+                if a != b:
+                    self.assertNotIn(a, _chain(self.parents, b)[1:])
+
+    def test_f2_scene_classes_are_covered_by_exactly_one_hooked_root(self):
+        for cls, root in F2_COVERAGE.items():
+            chain = _chain(self.parents, cls)
+            self.assertIn(cls, self.parents, cls)  # la clase de script existe en vanilla
+            hit = [b for b in HOOK_ROOTS if b in chain]
+            self.assertEqual(hit, [root], cls)
+            self.assertFalse(set(chain) & set(HOOK_EXTRAS), cls)  # ninguna cae en una clase que corta la cadena
+        self.assertEqual(len(F2_COVERAGE), 27)  # 1 House (6 edificios) + 13 items + 10 infectados + 3 animales: 33 raices
 
 
 class StaticEEInitCoverageTests(unittest.TestCase):
