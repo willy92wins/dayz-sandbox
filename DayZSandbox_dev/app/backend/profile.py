@@ -4,6 +4,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 
 from app.backend.validate import (
     DEFAULT_EMOTES,
@@ -18,6 +19,23 @@ MAX_PROFILE_BYTES = 65536
 MAX_KEYMAP_ENTRIES = 64
 _KEY_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 _LOCK = threading.Lock()
+
+# En Windows, os.replace falla con PermissionError (WinError 5) si otro tiene el perfil abierto en
+# ese instante: un antivirus, un indexador o cualquier lector. Es pasajero, así que se reintenta un
+# rato corto; cualquier otro OSError (disco lleno) falla a la primera.
+REPLACE_RETRIES = 10
+REPLACE_WAIT_S = 0.05
+
+
+def _replace_with_retry(src, dst):
+    for attempt in range(REPLACE_RETRIES):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == REPLACE_RETRIES - 1:
+                raise
+            time.sleep(REPLACE_WAIT_S)
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _DEFAULT_SCHEMA = os.path.join(_ROOT, "schemas", "scene.schema.json")
 
@@ -192,7 +210,7 @@ class Profile:
                     f.write("\n")
                     f.flush()
                     os.fsync(f.fileno())
-                os.replace(tmp, self.path)
+                _replace_with_retry(tmp, self.path)
                 tmp = None
             finally:
                 if tmp is not None and os.path.exists(tmp):

@@ -430,6 +430,43 @@ class T8Atomico(ProfileBase):
         self.assertIn("replace", calls)
         self.assertLess(calls.index("fsync"), calls.index("replace"))
 
+    def test_replace_ocupado_un_momento_se_reintenta_y_guarda(self):
+        # En Windows, os.replace da PermissionError si otro tiene el perfil abierto en ese instante
+        # (un antivirus, un indexador o el profile_read del arnés del E2E): se reintenta y se guarda.
+        real_replace = profile_mod.os.replace
+        pending = {"n": 2}
+
+        def busy_then_ok(src, dst):
+            if pending["n"] > 0:
+                pending["n"] -= 1
+                raise PermissionError(13, "en uso")
+            return real_replace(src, dst)
+
+        replacement = valid_profile(keymap={"aplicar": "Shift+F8"})
+        with mock.patch.object(profile_mod.os, "replace", side_effect=busy_then_ok), \
+                mock.patch.object(profile_mod.time, "sleep"):
+            st, _ = self.env.req("POST", "/api/profile", replacement, key=HK)
+        self.assertEqual(st, 200)
+        self.assertEqual(pending["n"], 0)
+        saved = json.loads(self.profile_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["keymap"], {"aplicar": "Shift+F8"})
+
+    def test_replace_ocupado_siempre_responde_500_conserva_anterior_y_limpia_tmp(self):
+        initial = valid_profile(keymap={"aplicar": "Ctrl+Enter"})
+        st, _ = self.env.req("POST", "/api/profile", initial, key=HK)
+        self.assertEqual(st, 200)
+        before_bytes = self.profile_path.read_bytes()
+        before_files = set(os.listdir(self.env.dir))
+
+        replacement = valid_profile(keymap={"aplicar": "Shift+F8"})
+        with mock.patch.object(profile_mod.os, "replace", side_effect=PermissionError(13, "en uso")) as rep, \
+                mock.patch.object(profile_mod.time, "sleep"):
+            st, r = self.env.req("POST", "/api/profile", replacement, key=HK)
+        self.assertEqual((st, r.get("code")), (500, "internal"))
+        self.assertEqual(rep.call_count, profile_mod.REPLACE_RETRIES)
+        self.assertEqual(self.profile_path.read_bytes(), before_bytes)
+        self.assertEqual(set(os.listdir(self.env.dir)), before_files)
+
 
 class T9Secretos(ProfileBase):
     def test_sin_secretos_en_log_ni_en_profile_json(self):
