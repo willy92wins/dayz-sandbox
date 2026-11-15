@@ -851,9 +851,8 @@ def _parse_bridge_timeline(
                         and abs(jmeta["start_tick_ms"] - snap_tick_ms) <= 50.0
                     ):
                         released_tick_ms = jmeta["released_tick_ms"]
-                        # Check E9 resource contention: no other per_census_start in c_epoch may overlap
-                        # Use a 10s threshold to distinguish true resource contention from restart timeline gaps
-                        OVERLAP_THRESHOLD_MS = 10000.0
+                        # Check E9 resource contention: no other per_census_start in c_epoch may overlap,
+                        # ni por orden del bridge ni por ticks (sin umbral: cualquier solape cuenta).
                         prev_windows = active_census_windows_by_inst.setdefault(c_epoch, [])
                         for p_start_seq, p_done_seq, _p_start_t, p_rel_t in prev_windows:
                             if bop.seq_idx < p_done_seq or snap_tick_ms < p_rel_t - 1e-6:

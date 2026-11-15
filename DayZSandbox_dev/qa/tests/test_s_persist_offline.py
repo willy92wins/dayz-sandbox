@@ -55,6 +55,124 @@ def _checks_by_id(verdict: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {c["id"]: c for c in verdict["checks"]}
 
 
+def _shift_epoch_chronology_from_t5(
+    events: list[dict[str, Any]],
+    server_epoch_new: str,
+    delta_ms: float,
+) -> None:
+    """
+    Shift all time fields for all operations in server_epoch_new from the first
+    t5_post_restart_census onwards by delta_ms. Modifies events in place.
+
+    This ensures coherent chronology: when t5_post_restart_census is delayed,
+    all subsequent censuses and operations in the same epoch shift together,
+    preventing false resource overlap detections.
+    """
+    t5_started = False
+    for ev in events:
+        if ev.get("ev") == "result":
+            inst = ev.get("inst")
+            if inst != server_epoch_new:
+                continue
+            for res in ev.get("results") or []:
+                verb = res.get("verb")
+                if verb == "per_census_start":
+                    try:
+                        u_s, u_n, u_r = _unpack(res["read"])
+                        area_tag = u_s.get("area_tag", "")
+                        if area_tag.startswith("t5_post_restart_census:"):
+                            t5_started = True
+                    except (ValueError, KeyError):
+                        pass
+                if t5_started:
+                    _shift_result_time_fields(res, delta_ms)
+            if t5_started and "h_ms" in ev:
+                ev["h_ms"] = float(ev["h_ms"]) + delta_ms
+        elif ev.get("ev") in ("enq", "poll"):
+            if ev.get("inst") == server_epoch_new and t5_started:
+                if "h_ms" in ev:
+                    ev["h_ms"] = float(ev["h_ms"]) + delta_ms
+
+
+def _shift_result_time_fields(res: dict[str, Any], delta_ms: float) -> None:
+    """Shift all *_tick_ms fields in a result's read payload by delta_ms."""
+    verb = res.get("verb")
+    if "read" not in res:
+        return
+    try:
+        u_s, u_n, u_r = _unpack(res["read"])
+    except (ValueError, KeyError):
+        return
+    shifted = False
+    if verb == "per_census_start":
+        if "snap_tick_ms" in u_n:
+            u_n["snap_tick_ms"] = float(u_n["snap_tick_ms"]) + delta_ms
+            shifted = True
+        if "snap_frame" in u_n:
+            pass
+    elif verb == "job_read":
+        for tk in ("start_tick_ms", "end_tick_ms", "onjobend_tick_ms", "released_tick_ms", "elapsed_dtsum_ms"):
+            if tk in u_n:
+                u_n[tk] = float(u_n[tk]) + delta_ms
+                shifted = True
+    elif verb == "job_free":
+        pass
+    elif verb == "per_status":
+        if "tick_ms" in u_n:
+            u_n["tick_ms"] = float(u_n["tick_ms"]) + delta_ms
+            shifted = True
+        if "frame" in u_n:
+            pass
+    elif verb == "per_cleanup_qa":
+        if "tick_ms" in u_n:
+            u_n["tick_ms"] = float(u_n["tick_ms"]) + delta_ms
+            shifted = True
+        if "frame" in u_n:
+            pass
+    elif verb == "per_apply_scene":
+        if "q9_tick_ms" in u_n:
+            u_n["q9_tick_ms"] = float(u_n["q9_tick_ms"]) + delta_ms
+            shifted = True
+        if "q9_frame" in u_n:
+            pass
+    elif verb == "per_reset_scene":
+        if "tick_ms" in u_n:
+            u_n["tick_ms"] = float(u_n["tick_ms"]) + delta_ms
+            shifted = True
+        if "frame" in u_n:
+            pass
+    elif verb == "per_child_transition":
+        if "tick_ms" in u_n:
+            u_n["tick_ms"] = float(u_n["tick_ms"]) + delta_ms
+            shifted = True
+        if "frame" in u_n:
+            pass
+    elif verb == "per_spawn_raw":
+        if "tick_ms" in u_n:
+            u_n["tick_ms"] = float(u_n["tick_ms"]) + delta_ms
+            shifted = True
+        if "frame" in u_n:
+            pass
+    if shifted:
+        res["read"] = _repack_read(u_s, u_n, u_r, res["read"])
+
+
+def _repack_read(
+    strings: dict[str, str],
+    numbers: dict[str, float],
+    rows: list[dict[str, Any]],
+    original_read: dict[str, Any],
+) -> dict[str, Any]:
+    """Repack a read payload preserving ncol/scol from original."""
+    return wire.pack_payload(
+        scalars_str=strings,
+        scalars_num=numbers,
+        num_cols=original_read.get("ncol"),
+        str_cols=original_read.get("scol"),
+        row_dicts=rows,
+    )
+
+
 class _SyntheticPartBuilder:
     """Builds realistic raw bridge.jsonl and scenario.jsonl samples for S-persist."""
 
@@ -2682,28 +2800,17 @@ class TestSPersistOracleOffline(unittest.TestCase):
             bpath = part_dir / "samples" / "bridge.jsonl"
             events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
             # MEN 11: Use contractual job_free and shift chronology coherently by 12s
+            # Shift entire epoch chronology from first t5_post_restart_census to avoid false resource overlaps
+            _shift_epoch_chronology_from_t5(events, builder.server_epoch_new, 12000.0)
+            # Ensure contractual job_free responses for t5 jobs
             t5_jobs: set[str] = set()
             for ev in events:
                 if ev.get("ev") == "result":
                     for res in ev.get("results") or []:
                         if res.get("verb") == "per_census_start":
-                            u_s, u_n, u_r = _unpack(res["read"])
+                            u_s, _, _ = _unpack(res["read"])
                             if u_s.get("area_tag", "").startswith("t5_post_restart_census:"):
                                 t5_jobs.add(u_s["job"])
-                                u_n["snap_tick_ms"] = float(u_n["snap_tick_ms"]) + 12000.0
-                                res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
-                        elif res.get("verb") == "job_read":
-                            u_s, u_n, u_r = _unpack(res["read"])
-                            if u_s.get("job") in t5_jobs:
-                                for tk in ("start_tick_ms", "end_tick_ms", "onjobend_tick_ms", "released_tick_ms"):
-                                    u_n[tk] = float(u_n[tk]) + 12000.0
-                                res["read"] = builder._pack_ext_read(
-                                    strings=u_s,
-                                    numbers=u_n,
-                                    ncol=res["read"]["ncol"],
-                                    scol=res["read"]["scol"],
-                                    rows=u_r,
-                                )
                         elif res.get("verb") == "job_free":
                             u_s, _, _ = _unpack(res["read"])
                             if u_s.get("job") in t5_jobs:
@@ -2716,6 +2823,10 @@ class TestSPersistOracleOffline(unittest.TestCase):
             c_map = _checks_by_id(verdict)
             self.assertEqual(c_map["PER-08"]["status"], "missing")
             self.assertIn("post_restart_creature_coverage_missing", c_map["PER-08"]["detail"])
+            # No other check should fail
+            for cid, check in c_map.items():
+                if cid not in ("PER-07", "PER-08"):
+                    self.assertNotEqual(check["status"], "fail", msg=f"{cid} failed: {check['detail']}")
 
     def test_neg_bloq08_per10_source_omission_and_substitution(self) -> None:
         """BLOQ 8: Substituting DSBX_QA_X_Persist.c with DSBX_QA_Stamp.c in persist_files is rejected."""
@@ -2981,28 +3092,8 @@ class TestSPersistOracleOffline(unittest.TestCase):
             events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
             # Advance t5 censuses by 60000 ms (60s) - exceeds 60m disk at 6m/s = 360m
             # Also ensure no explicit shutdown/startup markers exist (default)
-            t5_jobs: set[str] = set()
-            for ev in events:
-                if ev.get("ev") == "result":
-                    for res in ev.get("results") or []:
-                        if res.get("verb") == "per_census_start":
-                            u_s, u_n, u_r = _unpack(res["read"])
-                            if u_s.get("area_tag", "").startswith("t5_post_restart_census:"):
-                                t5_jobs.add(u_s["job"])
-                                u_n["snap_tick_ms"] = float(u_n["snap_tick_ms"]) + 60000.0
-                                res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
-                        elif res.get("verb") == "job_read":
-                            u_s, u_n, u_r = _unpack(res["read"])
-                            if u_s.get("job") in t5_jobs:
-                                for tk in ("start_tick_ms", "end_tick_ms", "onjobend_tick_ms", "released_tick_ms"):
-                                    u_n[tk] = float(u_n[tk]) + 60000.0
-                                res["read"] = builder._pack_ext_read(
-                                    strings=u_s,
-                                    numbers=u_n,
-                                    ncol=res["read"]["ncol"],
-                                    scol=res["read"]["scol"],
-                                    rows=u_r,
-                                )
+            # Shift entire epoch chronology from first t5_post_restart_census to avoid false resource overlaps
+            _shift_epoch_chronology_from_t5(events, builder.server_epoch_new, 60000.0)
             bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
             verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
             self.assertEqual(verdict["exit_code"], 2)
@@ -3010,6 +3101,10 @@ class TestSPersistOracleOffline(unittest.TestCase):
             # PER-07 or PER-08 should be missing due to N49 extremes unaccredited
             self.assertIn(c_map["PER-07"]["status"], ("missing", "fail"))
             self.assertIn(c_map["PER-08"]["status"], ("missing", "fail"))
+            # No other check should fail
+            for cid, check in c_map.items():
+                if cid not in ("PER-07", "PER-08"):
+                    self.assertNotEqual(check["status"], "fail", msg=f"{cid} failed: {check['detail']}")
 
     def test_sol2_04_ids_reused_across_epochs_passes(self) -> None:
         """Sol r2 Nuevo 4: IDs reused across epochs (honest variant) -> PASA."""
@@ -3363,30 +3458,17 @@ class TestSPersistOracleOffline(unittest.TestCase):
                     continue
                 filtered_events.append(ev)
             events = filtered_events
-            # Add proper job_free with contractual minimal response and shift chronology by 12s
-            # This should make only PER-08 missing (N49) while other checks pass
+            # Shift entire epoch chronology from first t5_post_restart_census to avoid false resource overlaps
+            _shift_epoch_chronology_from_t5(events, builder.server_epoch_new, 12000.0)
+            # Ensure contractual job_free responses for t5 jobs
             t5_jobs: set[str] = set()
             for ev in events:
                 if ev.get("ev") == "result":
                     for res in ev.get("results") or []:
                         if res.get("verb") == "per_census_start":
-                            u_s, u_n, u_r = _unpack(res["read"])
+                            u_s, _, _ = _unpack(res["read"])
                             if u_s.get("area_tag", "").startswith("t5_post_restart_census:"):
                                 t5_jobs.add(u_s["job"])
-                                u_n["snap_tick_ms"] = float(u_n["snap_tick_ms"]) + 12000.0
-                                res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
-                        elif res.get("verb") == "job_read":
-                            u_s, u_n, u_r = _unpack(res["read"])
-                            if u_s.get("job") in t5_jobs:
-                                for tk in ("start_tick_ms", "end_tick_ms", "onjobend_tick_ms", "released_tick_ms"):
-                                    u_n[tk] = float(u_n[tk]) + 12000.0
-                                res["read"] = builder._pack_ext_read(
-                                    strings=u_s,
-                                    numbers=u_n,
-                                    ncol=res["read"]["ncol"],
-                                    scol=res["read"]["scol"],
-                                    rows=u_r,
-                                )
                         elif res.get("verb") == "job_free":
                             u_s, _, _ = _unpack(res["read"])
                             if u_s.get("job") in t5_jobs:
@@ -3405,6 +3487,10 @@ class TestSPersistOracleOffline(unittest.TestCase):
             # Other checks should pass
             for cid in ("PER-01", "PER-02", "PER-03", "PER-04", "PER-05", "PER-06", "PER-09", "PER-10"):
                 self.assertEqual(c_map[cid]["status"], "pass", msg=f"{cid}: {c_map[cid]['detail']}")
+            # No other check should fail
+            for cid, check in c_map.items():
+                if cid not in ("PER-07", "PER-08"):
+                    self.assertNotEqual(check["status"], "fail", msg=f"{cid} failed: {check['detail']}")
 
     def test_e2e_12_e2e_orders_complete_valid_lease_then_block(self) -> None:
         """Sol r2 MEN 12: E2E orders complete/valid - effect with valid lease, then block on expiry. Requires implementation."""
