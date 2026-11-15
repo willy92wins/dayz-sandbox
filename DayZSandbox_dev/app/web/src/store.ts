@@ -992,6 +992,30 @@ export function commitSceneOps(
   return run;
 }
 
+// Solo una respuesta terminal dice qué pasó con una tanda: un 5xx o un cuerpo ilegible no lo dicen
+// (pudo aplicarse o no), así que la tanda sigue en duda (revisión de Sol, SEG-02).
+function isTerminalOpsResponse(res: Response, data: unknown): boolean {
+  return res.status < 500 && data !== null && typeof data === 'object';
+}
+
+function markUncertain(
+  body: string,
+  docId: string,
+  context: OpsContext | undefined,
+  genAtSend: number,
+  sessionAt: number
+): void {
+  uncertain = { body, docId, context, genAtSend, sessionAt };
+  resyncNeeded = true;
+  setState({
+    notice: {
+      kind: 'sin-respuesta',
+      message:
+        'El backend no respondió a tiempo: el cambio puede haberse aplicado o no. Se comprueba antes del siguiente.',
+    },
+  });
+}
+
 // Vuelve a mandar la tanda en duda, tal cual. Devuelve si ya se sabe qué pasó con ella.
 async function resolveUncertain(): Promise<boolean> {
   const u = uncertain;
@@ -1000,6 +1024,7 @@ async function resolveUncertain(): Promise<boolean> {
     const { res, data } = await fetchJsonWithTimeout('/api/scene/ops', opsPostInit(u.body));
     if (u.sessionAt !== sessionGen) return false;
     markBackendAlive();
+    if (!isTerminalOpsResponse(res, data)) return false;
     uncertain = null;
     // Su efecto tiene que leerse antes de construir la tanda siguiente.
     resyncNeeded = true;
@@ -1060,6 +1085,11 @@ async function commitSceneOpsNow(
   }
   if (stale()) return false;
   if (state.sinBackend || !state.docInfo) return false;
+  // Tras las esperas (la tanda en duda y la lectura), el borrador pudo quedar confirmado o descartado:
+  // se vuelve a comprobar antes de construir (revisión de Sol, pasada del seguimiento).
+  if (fieldKey && (draftGen[fieldKey] ?? 0) !== genAtEnqueue && state.drafts[fieldKey] === undefined) {
+    return true;
+  }
   const built = typeof opsOrBuilder === 'function' ? opsOrBuilder() : opsOrBuilder;
   if (built === NO_CHANGE) {
     // El valor ya es el del documento releído: no se manda nada (R2-05).
@@ -1084,21 +1114,18 @@ async function commitSceneOpsNow(
     const { res, data } = await fetchJsonWithTimeout('/api/scene/ops', opsPostInit(body));
     if (stale()) return false;
     markBackendAlive();
+    // Un 5xx o un cuerpo ilegible no dicen si se aplicó: en duda, como sin respuesta (SEG-02).
+    if (!isTerminalOpsResponse(res, data)) {
+      markUncertain(body, docIdAtSend, context, genAtSend, sessionAt);
+      return false;
+    }
     return await handleOpsResponse(res, data as OpsResponse | null, context, genAtSend, docIdAtSend);
   } catch (err) {
     if (stale()) return false;
     // Sin respuesta en el plazo: el backend pudo aplicarla o no. El borrador se queda en su campo y,
     // antes de la tanda siguiente, se vuelve a mandar esta tal cual para saberlo (SEG-02).
     if (isAbortError(err)) {
-      uncertain = { body, docId: docIdAtSend, context, genAtSend, sessionAt };
-      resyncNeeded = true;
-      setState({
-        notice: {
-          kind: 'sin-respuesta',
-          message:
-            'El backend no respondió a tiempo: el cambio puede haberse aplicado o no. Se comprueba antes del siguiente.',
-        },
-      });
+      markUncertain(body, docIdAtSend, context, genAtSend, sessionAt);
       return false;
     }
     markBackendDown();
