@@ -513,6 +513,20 @@ class SceneLive:
             return False
         return True
 
+    def valid_state_read_locked(self, order, read):
+        """T-01: un `state.read` con `args.f2 == 1` solo reconcilia con su bloque `scene` valido.
+
+        Lo llama el bridge antes de dar la lectura por buena (§3.6, §3.9 e). No convierte
+        `state.read` en una orden F2 (P-01): su resultado sigue el camino comun de lecturas.
+        Un `state.read` sin la marca (F1, peer sin escena) no se valida aqui.
+        """
+        args = order.get("args") if isinstance(order, dict) else None
+        if not (isinstance(args, dict) and _is_int(args.get("f2")) and args["f2"] == 1):
+            return True
+        if not _valid_read_compat(read, require_obs=None, world_size=self._world_size_locked()):
+            return False
+        return read["scene"].get("doc_id") == args.get("doc_id")
+
     # --- Resultados directos (§4.4) ---------------------------------------
 
     def on_result_locked(self, order, status, reason, read):

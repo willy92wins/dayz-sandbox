@@ -1467,7 +1467,10 @@ class F2PContratoV13(LiveBase):
         fake = self.start(env, world=FakeWorld())
         doc = _doc_without_actors()
         plan = build_plan(doc, rev=1, hash=hash_doc(doc))
+        # T-02: con la marca `f2: 1` explicita para que llegue al parser F2 del mod falso;
+        # sin ella iria por el camino F1 (lo cubre T02MarcaF2 en test_fake_mod_world.py).
         legacy = {
+            "f2": 1,
             "doc_id": plan["doc_id"], "rev": plan["rev"], "hash": plan["hash"],
             "plan_sha256": plan["plan_sha256"],
             "caps": {"objeto": 20, "infectado": 10, "animal": 3},

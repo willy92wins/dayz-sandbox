@@ -1070,6 +1070,59 @@ class ContratoV13(SceneLiveBase):
         self.assertEqual(len(internals), 1)
         self.assertEqual(internals[0]["args"], {"f2": 1, "doc_id": env.doc_id, "at": "checkpoint"})
 
+    def _poll(self, env):
+        srv = env.bridge.peers["server"]
+        return env.bridge.handle_poll({"peer": "server", "inst": srv["inst"],
+                                       "session": env.bridge.session, "conn": str(srv["conn"]),
+                                       "deliver": "1"})
+
+    def test_t01_state_read_con_f2_y_escena_invalida_no_reconcilia_ni_entrega(self):
+        # T-01 (Sol sobre T1): un state.read marcado cuya escena no vale (un float en una
+        # fila `now`) no reconcilia y no abre la entrega del apply encolado.
+        env = self.ready()
+        _res, apply_order = env.apply(op_id="op-1")
+        self.assertEqual(apply_order["bstate"], "pendiente")
+        self.assertFalse(env.bridge.reconciled)
+        with env.bridge.cond:
+            rd = env.bridge._trigger_state_read_locked()
+        env.deliver(rd)
+        epoch = env.bridge.peers["server"]["epoch"]
+        read = env.scene_read(epoch, env.doc_id, None, None, None, 0)
+        read["obs"] = {"at": "now", "rows": [["obj-01", 6100000.0, 0, 7600000, 0, 1000, 0, 0]]}
+        st, resp = self._result(env, rd, read)
+        self.assertEqual(st, 200, resp)
+        self.assertFalse(env.bridge.reconciled)
+        st, resp = self._poll(env)
+        self.assertEqual(st, 200, resp)
+        self.assertEqual([o["op_id"] for o in resp["ops"] if o.get("verb") == "scene.apply"], [])
+        self.assertEqual(apply_order["bstate"], "pendiente")
+
+    def test_t01_state_read_con_f2_y_escena_valida_reconcilia_y_entrega(self):
+        # Positiva de T-01: la misma lectura, con la fila en enteros, reconcilia y entrega.
+        env = self.ready()
+        _res, apply_order = env.apply(op_id="op-1")
+        with env.bridge.cond:
+            rd = env.bridge._trigger_state_read_locked()
+        env.deliver(rd)
+        epoch = env.bridge.peers["server"]["epoch"]
+        read = env.scene_read(epoch, env.doc_id, None, None, None, 0)
+        read["obs"] = {"at": "now", "rows": [["obj-01", 6100000, 0, 7600000, 0, 1000, 0, 0]]}
+        st, resp = self._result(env, rd, read)
+        self.assertEqual(st, 200, resp)
+        self.assertTrue(env.bridge.reconciled)
+        st, resp = self._poll(env)
+        self.assertEqual(st, 200, resp)
+        self.assertEqual([o["op_id"] for o in resp["ops"] if o.get("verb") == "scene.apply"], ["op-1"])
+
+    def test_t01_state_read_f1_sin_marca_no_exige_escena(self):
+        # Un state.read sin `f2` (peer F1) se juzga como en F1b-bridge: sin bloque scene.
+        env = self.ready()
+        read = {"epoch": "e" * 32, "generation": None, "registry_n": 0, "registry_sha256": "0" * 64}
+        with env.bridge.cond:
+            self.assertTrue(env.live.valid_state_read_locked({"args": {}, "verb": "state.read"}, read))
+            self.assertFalse(env.live.valid_state_read_locked(
+                {"args": {"f2": 1, "doc_id": env.doc_id}, "verb": "state.read"}, read))
+
     def test_c_enqueue_no_manda_un_plan_sin_alguna_clave(self):
         env = self.ready()
         res = env.prepare()

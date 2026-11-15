@@ -50,6 +50,15 @@ def _truncate_strings(obj, limit=MAX_STRING_CHARS):
     return obj
 
 
+def _is_f2_marked(args):
+    """DP-5 (contrato v1.3): el mod trata una orden como F2 solo con el entero `args.f2 == 1`.
+
+    Ni ausente, ni 0, ni `true`, ni `1.0`: el mod real no distingue un campo ausente
+    de un 0 y solo lee miembros tipados. Sin la marca, la orden sigue el camino F1.
+    """
+    return isinstance(args, dict) and type(args.get("f2")) is int and args["f2"] == 1
+
+
 def cut_engine_strings(obj, cap=ENGINE_STR_CAP):
     """Corta cada cadena de una respuesta leida como la corta el motor (bytes UTF-8)."""
     if isinstance(obj, str):
@@ -470,7 +479,9 @@ class _Peer:
         order = entry.order
         verb = order["verb"]
         if self.fake.world is not None and verb in (
-                "state.read", "scene.apply", "scene.reset", "scene.observe"):
+                "state.read", "scene.apply", "scene.reset", "scene.observe") \
+                and _is_f2_marked(order.get("args")):
+            # T-02 (DP-5, §3.5): el camino F2 lo elige la marca de la orden, no tener mundo.
             self._execute_world(entry, verb)
             return
         if verb == "state.read":

@@ -686,10 +686,13 @@ class Bridge:
 
     def _handle_read_result_locked(self, order, status, read):
         srv = self.peers.get("server")
+        sl_check = getattr(self.backend, "scene_live", None)
         reconciles = False
         if status == "done" and srv and not srv.get("lost") \
                 and order["conn"] == int(srv["conn"]) and order["delivered_inst"] == srv["inst"] \
-                and valid_world_read(read) and read.get("epoch") == srv["epoch"]:
+                and valid_world_read(read) and read.get("epoch") == srv["epoch"] \
+                and (sl_check is None or sl_check.valid_state_read_locked(order, read)):
+            # T-01 (contrato v1.3): un state.read con `f2` reconcilia solo con su `scene` valido.
             reconciles = True
         if reconciles:
             self.world = copy.deepcopy(read)
