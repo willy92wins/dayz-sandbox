@@ -49,14 +49,32 @@ CLIENT_VAL = {
 # (p. ej. la de S-perf). Si no se puede saber el estado del lease, tampoco se sube. La decision queda escrita
 # en `<evidencia>/priority_boost.json`.
 _HIGH_PRIORITY_CLASS = 0x00000080  # HIGH_PRIORITY_CLASS; REALTIME_PRIORITY_CLASS (0x100) no se usa nunca
+_NORMAL_PRIORITY_CLASS = 0x00000020
+_REALTIME_PRIORITY_CLASS = 0x00000100
+_PROCESS_SET_INFORMATION = 0x0200
+_PROCESS_QUERY_INFORMATION = 0x0400
+_PRIORITY_CLASS_NAMES = {
+    _NORMAL_PRIORITY_CLASS: "NORMAL",
+    _HIGH_PRIORITY_CLASS: "HIGH",
+    _REALTIME_PRIORITY_CLASS: "REALTIME",
+    0x00000040: "IDLE",
+    0x00004000: "BELOW_NORMAL",
+    0x00008000: "ABOVE_NORMAL",
+}
 _CFG_REPLACE_TRIES = 40
 _CFG_REPLACE_PAUSE_S = 0.05
 _GPU_LEASE_SCRIPT_ENV = "DSBX_GPU_LEASE_SCRIPT"
 _GPU_LEASE_DEFAULT = Path.home() / ".claude" / "tools" / "gpu_lease.py"
+_LEASE_RECHECK_S = 2.0
 
 
 def _gpu_lease_busy():
-    """True si una partida tiene el lease de la GPU; False si esta libre; None si no se puede saber."""
+    """False solo si `comprobar` responde LIBRE de forma inequivoca; True si ocupada; None si no se sabe.
+
+    Solo cuenta como libre un codigo 0 con stdout exactamente `LIBRE` (sin espacios alrededor) y stderr
+    vacio. Cualquier otra respuesta (otro texto, contradiccion, codigo distinto de 0, script ausente,
+    error o timeout) no autoriza la subida.
+    """
     script = os.environ.get(_GPU_LEASE_SCRIPT_ENV) or str(_GPU_LEASE_DEFAULT)
     if not Path(script).is_file():
         return None
@@ -69,10 +87,13 @@ def _gpu_lease_busy():
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    out = (proc.stdout or "") + (proc.stderr or "")
-    if proc.returncode == 0 and "LIBRE" in out:
+    out = proc.stdout or ""
+    err = proc.stderr or ""
+    if proc.returncode == 0 and out.strip() == "LIBRE" and not err.strip():
         return False
-    if proc.returncode != 0 or "OCUPADA" in out:
+    if proc.returncode != 0:
+        return True
+    if "OCUPADA" in (out + err):
         return True
     return None
 
@@ -91,28 +112,133 @@ def _priority_decision(build):
     return "applied"
 
 
-def _raise_priority():
-    """Sube este proceso a prioridad alta mientras dure la corrida; devuelve la funcion que la restaura."""
-    if os.name != "nt":
-        return lambda: None
+def _priority_name(value):
+    return _PRIORITY_CLASS_NAMES.get(int(value or 0), "unknown")
+
+
+def _priority_api():
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel32.GetPriorityClass.argtypes = [ctypes.c_void_p]
+    kernel32.GetPriorityClass.restype = ctypes.c_uint32
+    kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel32.SetPriorityClass.restype = ctypes.c_int
+    kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_int
+    return kernel32
+
+
+def _read_priority(api, handle):
     try:
-        import ctypes
+        return int(api.GetPriorityClass(handle) or 0)
+    except (OSError, AttributeError, TypeError, ValueError):
+        return 0
 
-        kernel32 = ctypes.windll.kernel32
-        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
-        kernel32.GetPriorityClass.argtypes = [ctypes.c_void_p]
-        kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-        handle = kernel32.GetCurrentProcess()
-        previous = kernel32.GetPriorityClass(handle)
-        if not previous or not kernel32.SetPriorityClass(handle, _HIGH_PRIORITY_CLASS):
-            return lambda: None
+
+def _set_priority(api, handle, priority_class):
+    """Aplica y lee de vuelta. Devuelve la clase observada, o 0 si SetPriorityClass la rechaza."""
+    try:
+        ok = api.SetPriorityClass(handle, priority_class)
     except (OSError, AttributeError):
-        return lambda: None
+        return 0
+    if not ok:
+        return 0
+    return _read_priority(api, handle)
 
-    def restore():
-        kernel32.SetPriorityClass(handle, previous)
 
-    return restore
+def _process_handle(api, proc):
+    """Handle del Popen si lo expone, o uno abierto por pid. Devuelve (handle, hay_que_cerrarlo)."""
+    handle = getattr(proc, "_handle", None)
+    if handle:
+        return handle, False
+    try:
+        handle = api.OpenProcess(_PROCESS_SET_INFORMATION | _PROCESS_QUERY_INFORMATION, False, int(proc.pid))
+    except (OSError, AttributeError, TypeError, ValueError):
+        return None, False
+    if not handle:
+        return None, False
+    return handle, True
+
+
+def _observed_priority(api, proc):
+    if api is None:
+        return 0
+    handle, owned = _process_handle(api, proc)
+    if handle is None:
+        return 0
+    try:
+        return _read_priority(api, handle)
+    finally:
+        if owned:
+            try:
+                api.CloseHandle(handle)
+            except (OSError, AttributeError):
+                pass
+
+
+def _lower_process_priority(api, proc):
+    """Baja un peer a NORMAL. Devuelve la clase observada, o 0 si no se pudo."""
+    if proc.poll() is not None:
+        return 0
+    handle, owned = _process_handle(api, proc)
+    if handle is None:
+        return 0
+    try:
+        return _set_priority(api, handle, _NORMAL_PRIORITY_CLASS)
+    finally:
+        if owned:
+            try:
+                api.CloseHandle(handle)
+            except (OSError, AttributeError):
+                pass
+
+
+class _PriorityBoost:
+    """Sube el runner a HIGH y lo restaura verificando SetPriorityClass y GetPriorityClass."""
+
+    def __init__(self, api=None):
+        self.api = api if api is not None else (_priority_api() if os.name == "nt" else None)
+        self.handle = None
+        self.previous = 0
+        self.observed = 0
+        self.applied = False
+        self.error = None
+
+    def apply(self):
+        if self.api is None:
+            return False
+        try:
+            self.handle = self.api.GetCurrentProcess()
+            self.previous = int(self.api.GetPriorityClass(self.handle) or 0)
+        except (OSError, AttributeError, TypeError, ValueError):
+            self.error = "GetCurrentProcess/GetPriorityClass fallo"
+            return False
+        if not self.previous:
+            self.error = "GetPriorityClass devolvio 0"
+            return False
+        observed = _set_priority(self.api, self.handle, _HIGH_PRIORITY_CLASS)
+        self.observed = observed
+        if not observed:
+            self.error = "SetPriorityClass rechazo la subida"
+            return False
+        self.applied = True
+        return True
+
+    def lower(self):
+        if not self.applied:
+            return 0
+        return _set_priority(self.api, self.handle, _NORMAL_PRIORITY_CLASS)
+
+    def restore(self):
+        """Restaura la clase previa y la verifica. Devuelve (ok, clase observada)."""
+        if not self.applied or self.handle is None or not self.previous:
+            return True, self.previous
+        observed = _set_priority(self.api, self.handle, self.previous)
+        return bool(observed) and observed == self.previous, observed
 
 
 def run(args, evidence, argv=None):
@@ -156,12 +282,98 @@ def run(args, evidence, argv=None):
 
     ready = False
     priority = _priority_decision(args.build)
-    gate_core.write_json(
-        evidence / "priority_boost.json",
-        {"decision": priority, "priority_class": "HIGH" if priority == "applied" else "unchanged"},
-    )
-    peer_creationflags = _HIGH_PRIORITY_CLASS if priority == "applied" else 0
-    restore_priority = _raise_priority() if priority == "applied" else (lambda: None)
+    boost = _PriorityBoost() if priority == "applied" else None
+    boost_applied = bool(boost is not None and boost.apply())
+    boost_lock = threading.Lock()
+    boost_state = {"active": boost_applied, "lowered": False}
+    note_lock = threading.Lock()
+    peer_roles = {}
+    priority_note = {
+        "decision": priority,
+        "priority_class": "HIGH" if boost_applied else "unchanged",
+        "apply": {
+            "runner": {
+                "requested": "HIGH" if priority == "applied" else "unchanged",
+                "observed": _priority_name(boost.observed) if boost is not None else "unchanged",
+                "ok": boost_applied if priority == "applied" else None,
+                "error": boost.error if boost is not None else None,
+            },
+            "peers": {},
+        },
+        "lease_lowered": [],
+        "restore": {"done": False, "ok": None, "observed": "unknown"},
+    }
+
+    def write_priority_note():
+        with note_lock:
+            gate_core.write_json(evidence / "priority_boost.json", priority_note)
+
+    write_priority_note()
+
+    watch_stop = threading.Event()
+    watcher = None
+
+    def lease_watch():
+        while not watch_stop.wait(_LEASE_RECHECK_S):
+            try:
+                busy = _gpu_lease_busy()
+            except Exception:
+                busy = None
+            if watch_stop.is_set():
+                return
+            if busy is False:
+                continue
+            with boost_lock:
+                if boost_state["lowered"]:
+                    return
+                boost_state["active"] = False
+                boost_state["lowered"] = True
+                snapshot = list(procs)
+                roles = dict(peer_roles)
+            runner_observed = boost.lower() if boost is not None else 0
+            peers_lowered = {}
+            for proc in snapshot:
+                observed = _lower_process_priority(boost.api if boost is not None else None, proc)
+                role = next((name for name, peer in roles.items() if peer is proc), f"pid:{proc.pid}")
+                if observed:
+                    peers_lowered[role] = _priority_name(observed)
+            with note_lock:
+                priority_note["lease_lowered"].append(
+                    {
+                        "at": gate_core.utc_now(),
+                        "reason": "gpu_lease_busy" if busy is True else "gpu_lease_unknown",
+                        "runner": _priority_name(runner_observed),
+                        "peers": peers_lowered,
+                    }
+                )
+                for role, observed in peers_lowered.items():
+                    entry = priority_note["apply"]["peers"].get(role)
+                    if isinstance(entry, dict):
+                        entry["observed"] = observed
+                        entry["lowered"] = True
+            write_priority_note()
+            return
+
+    if boost_applied:
+        watcher = threading.Thread(target=lease_watch, name="dsbx-lease-watch", daemon=True)
+        watcher.start()
+
+    def peer_creationflags():
+        with boost_lock:
+            return _HIGH_PRIORITY_CLASS if boost_state["active"] else 0
+
+    def record_peer_priority(role, proc, requested_flags):
+        observed = _observed_priority(boost.api if boost is not None else None, proc)
+        with note_lock:
+            priority_note["apply"]["peers"][role] = {
+                "requested": "HIGH" if requested_flags else "unchanged",
+                "observed": _priority_name(observed) if observed else "unknown",
+                "ok": (observed == requested_flags)
+                if requested_flags
+                else (observed in (0, _NORMAL_PRIORITY_CLASS)),
+            }
+        write_priority_note()
+
     try:
         bridge = QABridge(hold, lease, sink, port=0)
         bridge_port_box["port"] = None
@@ -225,15 +437,28 @@ def run(args, evidence, argv=None):
                     cmd.extend(["--fault", fault])
                 if clock_offset_ms != 0.0:
                     cmd.extend(["--clock-offset-ms", str(clock_offset_ms)])
-                procs.append(
-                    subprocess.Popen(
-                        cmd,
-                        cwd=str(ROOT),
-                        stdout=log,
-                        stderr=subprocess.STDOUT,
-                        creationflags=peer_creationflags,
-                    )
+                flags = peer_creationflags()
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(ROOT),
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    creationflags=flags,
                 )
+                with boost_lock:
+                    procs.append(proc)
+                    peer_roles[role] = proc
+                    active_now = boost_state["active"]
+                record_peer_priority(role, proc, flags)
+                if flags and not active_now:
+                    observed = _lower_process_priority(boost.api, proc)
+                    if observed:
+                        with note_lock:
+                            entry = priority_note["apply"]["peers"].get(role)
+                            if isinstance(entry, dict):
+                                entry["observed"] = _priority_name(observed)
+                                entry["lowered"] = True
+                        write_priority_note()
 
         def prepare_live():
             for role, folder in (("server", Path(args.server_profile)), ("client", Path(args.client_profile))):
@@ -291,16 +516,50 @@ def run(args, evidence, argv=None):
         _raise_if_bridge_failed(bridge)
         ready = True
     finally:
+        watch_stop.set()
+        if watcher is not None:
+            watcher.join()
         try:
             if bridge is not None:
                 bridge.stop()
         finally:
-            _stop_peers(procs)
-            for handle in files:
-                handle.close()
-            for folder in profiles:
-                shutil.rmtree(folder, ignore_errors=True)
-            restore_priority()
+            try:
+                _stop_peers(procs)
+            finally:
+                close_error = None
+                for handle in files:
+                    try:
+                        handle.close()
+                    except Exception as exc:
+                        if close_error is None:
+                            close_error = exc
+                for folder in profiles:
+                    shutil.rmtree(folder, ignore_errors=True)
+                restore_error = None
+                if priority == "applied" and boost is not None:
+                    ok, observed = boost.restore()
+                    with note_lock:
+                        priority_note["restore"] = {
+                            "done": True,
+                            "ok": ok,
+                            "observed": _priority_name(observed) if observed else "unknown",
+                        }
+                        if not ok:
+                            priority_note["priority_class"] = "unchanged"
+                    write_priority_note()
+                    if not ok:
+                        restore_error = RuntimeError(
+                            "no se pudo restaurar la prioridad del runner "
+                            f"(clase observada: {_priority_name(observed)})"
+                        )
+                else:
+                    with note_lock:
+                        priority_note["restore"] = {"done": True, "ok": True, "observed": "unchanged"}
+                    write_priority_note()
+                if restore_error is not None:
+                    raise restore_error from close_error
+                if close_error is not None:
+                    raise close_error
     if bridge is not None and bridge.failure is not None:
         _raise_if_bridge_failed(bridge)
     if ready:

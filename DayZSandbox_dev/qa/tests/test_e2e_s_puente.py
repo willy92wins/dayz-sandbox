@@ -160,15 +160,98 @@ def _tree_bytes(root):
     return blob
 
 
+class _FakeKernel32:
+    """API de prioridad simulada: registra llamadas y aplica o rechaza SetPriorityClass."""
+
+    def __init__(self, current=0x20, reject=False):
+        self.current = int(current)
+        self.reject = reject
+        self.handles = {}
+        self.next_handle = 5000
+        self.calls = []
+
+    def GetCurrentProcess(self):
+        return 1
+
+    def GetPriorityClass(self, handle):
+        self.calls.append(("get", int(handle)))
+        if int(handle) == 1:
+            return self.current
+        return self.handles.get(int(handle), self.current)
+
+    def SetPriorityClass(self, handle, priority_class):
+        self.calls.append(("set", int(handle), int(priority_class)))
+        if self.reject:
+            return 0
+        if int(handle) == 1:
+            self.current = int(priority_class)
+        else:
+            self.handles[int(handle)] = int(priority_class)
+        return 1
+
+    def OpenProcess(self, access, inherit, pid):
+        handle = self.next_handle
+        self.next_handle += 1
+        self.handles[handle] = self.current
+        return handle
+
+    def CloseHandle(self, handle):
+        return 1
+
+    def new_handle(self, priority_class):
+        handle = self.next_handle
+        self.next_handle += 1
+        self.handles[handle] = int(priority_class)
+        return handle
+
+
+class _FakeProc:
+    def __init__(self, pid, handle, exit_code=None):
+        self.pid = pid
+        self._handle = handle
+        self._exit_code = exit_code
+        self.terminated = False
+        self.killed = False
+        self.waited = False
+
+    def poll(self):
+        return self._exit_code
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        self.waited = True
+        return 0
+
+    def kill(self):
+        self.killed = True
+
+
+def _fake_popen_factory(api, captured, real_popen=None):
+    next_pid = [7000]
+
+    def factory(cmd, **kwargs):
+        if "--peer" not in cmd:
+            return real_popen(cmd, **kwargs)
+        role = cmd[cmd.index("--peer") + 1]
+        flags = kwargs.get("creationflags", 0)
+        captured[role] = flags
+        next_pid[0] += 1
+        handle = api.new_handle(flags or api.current)
+        return _FakeProc(next_pid[0], handle)
+
+    return factory
+
+
 @contextlib.contextmanager
 def _cpu_load():
     """Satura la CPU con procesos de prioridad normal (el caso de varias suites a la vez)."""
     spin = "while True: pass"
-    burners = [
-        subprocess.Popen([PY, "-c", spin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        for _ in range(max(8, 2 * (os.cpu_count() or 4)))
-    ]
+    burners = []
     try:
+        for _ in range(max(8, 2 * (os.cpu_count() or 4))):
+            burners.append(subprocess.Popen([PY, "-c", spin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
         yield len(burners)
     finally:
         for proc in burners:
@@ -269,11 +352,8 @@ class E2ESpuenteTests(unittest.TestCase):
 
     def test_point7_rows_hold_under_cpu_load(self):
         # Sin el arreglo (peers y bridge a prioridad normal) esta carga da 1 en vez de 0 (M2 p95, N5 "d not done").
-        import s_puente_run
-
-        decision = s_puente_run._priority_decision("offline")
-        if decision != "applied":
-            self.skipTest(f"sin subida de prioridad en esta maquina ahora: {decision}")
+        if os.environ.get("DSBX_STRESS") != "1":
+            self.skipTest("prueba de carga: solo con DSBX_STRESS=1 (fuera del gate determinista)")
         with _cpu_load():
             for fault, expected in (("none", 0), ("wrong_build", 2)):
                 with self.subTest(fault=fault, expected=expected):
@@ -284,22 +364,16 @@ class E2ESpuenteTests(unittest.TestCase):
         import s_puente_run
 
         if os.name != "nt":
-            self.skipTest("solo Windows")
-        if s_puente_run._gpu_lease_busy() is not False:
-            self.skipTest("lease de la GPU ocupado o desconocido: no se sube la prioridad")
-        import ctypes
-
-        kernel32 = ctypes.windll.kernel32
-        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
-        kernel32.GetPriorityClass.argtypes = [ctypes.c_void_p]
-        me = kernel32.GetCurrentProcess()
-        before = kernel32.GetPriorityClass(me)
-        restore = s_puente_run._raise_priority()
-        try:
-            self.assertEqual(kernel32.GetPriorityClass(me), s_puente_run._HIGH_PRIORITY_CLASS)
-        finally:
-            restore()
-        self.assertEqual(kernel32.GetPriorityClass(me), before)
+            self.skipTest("integracion real con ctypes: solo Windows")
+        boost = s_puente_run._PriorityBoost()
+        me = boost.api.GetCurrentProcess()
+        before = int(boost.api.GetPriorityClass(me))
+        self.assertTrue(boost.apply(), boost.error)
+        self.assertEqual(int(boost.api.GetPriorityClass(me)), s_puente_run._HIGH_PRIORITY_CLASS)
+        ok, observed = boost.restore()
+        self.assertTrue(ok)
+        self.assertEqual(observed, before)
+        self.assertEqual(int(boost.api.GetPriorityClass(me)), before)
         # como mucho HIGH: nunca REALTIME_PRIORITY_CLASS (0x100)
         self.assertEqual(s_puente_run._HIGH_PRIORITY_CLASS, 0x80)
 
@@ -340,7 +414,7 @@ class E2ESpuenteTests(unittest.TestCase):
             evidence = Path(tmp) / "run"
             evidence.mkdir()
             with mock.patch.object(s_puente_run, "_gpu_lease_busy", return_value=True), mock.patch.object(
-                s_puente_run, "_raise_priority", must_not_boost
+                s_puente_run._PriorityBoost, "apply", side_effect=must_not_boost
             ):
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
@@ -349,6 +423,143 @@ class E2ESpuenteTests(unittest.TestCase):
             expected = "skipped_gpu_lease_busy" if os.name == "nt" else "not_windows"
             self.assertEqual(note["decision"], expected)
             self.assertEqual(note["priority_class"], "unchanged")
+
+    def test_peer_creationflags_high_only_when_applied(self):
+        import s_puente_run
+
+        for reject, expected_flags in ((False, s_puente_run._HIGH_PRIORITY_CLASS), (True, 0)):
+            with self.subTest(reject=reject):
+                api = _FakeKernel32(reject=reject)
+                captured = {}
+                real_popen = subprocess.Popen
+                with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+                    evidence = Path(tmp) / "run"
+                    evidence.mkdir()
+                    with mock.patch.object(s_puente_run, "_priority_decision", return_value="applied"), mock.patch.object(
+                        s_puente_run, "_priority_api", return_value=api
+                    ), mock.patch.object(
+                        s_puente_run, "_gpu_lease_busy", return_value=False
+                    ), mock.patch.object(
+                        s_puente_run.subprocess, "Popen", side_effect=_fake_popen_factory(api, captured, real_popen)
+                    ):
+                        s_puente_run.run(_args(peer_timeout=0.2), evidence, [])
+                    note = json.loads((evidence / "priority_boost.json").read_text(encoding="utf-8"))
+                self.assertEqual(captured.get("server"), expected_flags)
+                self.assertEqual(captured.get("client"), expected_flags)
+                if reject:
+                    self.assertFalse(note["apply"]["runner"]["ok"])
+                    self.assertEqual(note["priority_class"], "unchanged")
+                else:
+                    self.assertTrue(note["apply"]["runner"]["ok"])
+                    self.assertEqual(note["apply"]["runner"]["observed"], "HIGH")
+                    self.assertEqual(note["apply"]["peers"]["server"]["observed"], "HIGH")
+                    self.assertEqual(note["apply"]["peers"]["client"]["observed"], "HIGH")
+
+    def test_lease_transition_lowers_runner_and_peers(self):
+        import s_puente_run
+
+        api = _FakeKernel32()
+        captured = {}
+        lease_calls = {"n": 0}
+
+        def lease():
+            lease_calls["n"] += 1
+            return False if lease_calls["n"] == 1 else True
+
+        real_popen = subprocess.Popen
+        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+            evidence = Path(tmp) / "run"
+            evidence.mkdir()
+            with mock.patch.object(s_puente_run, "_priority_decision", return_value="applied"), mock.patch.object(
+                s_puente_run, "_priority_api", return_value=api
+            ), mock.patch.object(
+                s_puente_run, "_gpu_lease_busy", side_effect=lease
+            ), mock.patch.object(
+                s_puente_run, "_LEASE_RECHECK_S", 0.01
+            ), mock.patch.object(
+                s_puente_run.subprocess, "Popen", side_effect=_fake_popen_factory(api, captured, real_popen)
+            ):
+                s_puente_run.run(_args(peer_timeout=1.0), evidence, [])
+            note = json.loads((evidence / "priority_boost.json").read_text(encoding="utf-8"))
+        self.assertEqual(captured.get("server"), s_puente_run._HIGH_PRIORITY_CLASS)
+        self.assertEqual(captured.get("client"), s_puente_run._HIGH_PRIORITY_CLASS)
+        self.assertTrue(note["lease_lowered"], note)
+        self.assertEqual(note["lease_lowered"][0]["reason"], "gpu_lease_busy")
+        self.assertEqual(note["lease_lowered"][0]["runner"], "NORMAL")
+        self.assertEqual(note["apply"]["peers"]["server"]["observed"], "NORMAL")
+        self.assertEqual(note["apply"]["peers"]["client"]["observed"], "NORMAL")
+        self.assertTrue(note["restore"]["ok"])
+        peer_normal_sets = [c for c in api.calls if c[0] == "set" and c[1] != 1 and c[2] == s_puente_run._NORMAL_PRIORITY_CLASS]
+        self.assertGreaterEqual(len(peer_normal_sets), 2, api.calls)
+
+    def test_cleanup_failure_still_restores_priority(self):
+        import s_puente_run
+
+        api = _FakeKernel32()
+
+        def stop_raises(procs):
+            raise RuntimeError("stop de peers fallo")
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "c").mkdir()
+            evidence = root / "run"
+            evidence.mkdir()
+            args = _args(build="retail", peer_timeout=0.2, server_profile=str(root / "s"), client_profile=str(root / "c"))
+            with mock.patch.object(s_puente_run, "_priority_decision", return_value="applied"), mock.patch.object(
+                s_puente_run, "_priority_api", return_value=api
+            ), mock.patch.object(s_puente_run, "_gpu_lease_busy", return_value=False), mock.patch.object(
+                s_puente_run, "_stop_peers", side_effect=stop_raises
+            ):
+                with self.assertRaises(RuntimeError):
+                    s_puente_run.run(args, evidence, [])
+            note = json.loads((evidence / "priority_boost.json").read_text(encoding="utf-8"))
+        self.assertTrue(note["restore"]["done"])
+        self.assertTrue(note["restore"]["ok"])
+        self.assertEqual(api.current, s_puente_run._NORMAL_PRIORITY_CLASS)
+        self.assertIn(("set", 1, s_puente_run._HIGH_PRIORITY_CLASS), api.calls)
+        self.assertIn(("set", 1, s_puente_run._NORMAL_PRIORITY_CLASS), api.calls)
+
+    def test_ambiguous_lease_outputs_do_not_boost(self):
+        import s_puente_run
+
+        cases = (
+            ("NO LIBRE", "", 0, None),
+            ("OCUPADA\nLIBRE", "", 0, True),
+            ("", "", 0, None),
+            ("LISTO", "", 0, None),
+            ("LIBRE", "", 1, True),
+            ("LIBRE", "aviso", 0, None),
+        )
+        with tempfile.TemporaryDirectory(prefix="dsbx-lease-") as tmp:
+            script = Path(tmp) / "lease.py"
+            script.write_text("print('LIBRE')\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {s_puente_run._GPU_LEASE_SCRIPT_ENV: str(script)}):
+                for stdout, stderr, code, expected in cases:
+                    with self.subTest(stdout=stdout, stderr=stderr, code=code):
+                        completed = subprocess.CompletedProcess(["lease"], code, stdout, stderr)
+                        with mock.patch.object(s_puente_run.subprocess, "run", return_value=completed):
+                            self.assertIs(s_puente_run._gpu_lease_busy(), expected)
+                            if os.name == "nt":
+                                self.assertNotEqual(s_puente_run._priority_decision("offline"), "applied")
+
+    def test_cpu_load_kills_partially_created_burners(self):
+        created = []
+
+        def factory(*args, **kwargs):
+            if len(created) >= 2:
+                raise OSError("no se pudo crear el burner")
+            proc = _FakeProc(len(created), None)
+            created.append(proc)
+            return proc
+
+        with mock.patch.object(subprocess, "Popen", side_effect=factory):
+            with self.assertRaises(OSError):
+                with _cpu_load():
+                    self.fail("no deberia entrar al bloque protegido")
+        self.assertEqual(len(created), 2)
+        self.assertTrue(all(proc.killed and proc.waited for proc in created))
 
     def test_write_cfg_retries_a_busy_file(self):
         import s_puente_run
