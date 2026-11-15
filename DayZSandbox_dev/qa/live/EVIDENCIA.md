@@ -1,6 +1,6 @@
 # Evidencia de F1b-peers en partida
 
-Contrato entre `f1bp_live.py` (la escribe) y `f1bp_eval.py` (la juzga, sin efectos). Lo exige el brief `plans/2026-11-15-m1-f1b-peers-partida-brief.md` (v1.2), §5 y §6.
+Contrato entre `f1bp_live.py` (la escribe) y `f1bp_eval.py` (la juzga, sin efectos). Lo exige el brief `plans/2026-11-15-m1-f1b-peers-partida-brief.md` (v1.3), §5 y §6.
 
 ## Carpeta
 `DayZSandbox_dev/evidence/m1/F1b-peers/<build>-<UTC>/`, nueva y vacía en cada corrida:
@@ -61,8 +61,15 @@ lease lost age_ms=<n> tick_ms=<n>
 clock tick_ms=<n>
 config qa_step_gap_ms=<n>
 hello accepted session=<s> conn=<n>
+shutdown role=<server|client> created_n=<n> inflight_p=<0|1> inflight_r=<0|1>
 ```
-Las líneas `SCRIPT (E)` o `Can't compile` que mencionan `DSBX_` cuentan como errores de script, también en el RPT.
+Las líneas `SCRIPT (E)` o `Can't compile` que mencionan `DSBX_` cuentan como errores de script, también en el RPT. El motor rellena con espacios (`SCRIPT    (E):`).
+
+**Excepción, el informe de cierre del motor** (brief v1.3, §10, H-03). `Leaked 'DSBX_Callback' script instance (Nx)!` no cuenta como error si 0 < N ≤ cota:
+- en un script log, la cota es la suma de `created_n` de las líneas `shutdown` anteriores del mismo fichero;
+- en un RPT, es la de todo el script log del mismo peer (el RPT del cliente no lleva las líneas `[DSBX]`).
+
+Sin `shutdown`, con N fuera de la cota o con cualquier otra clase `DSBX_`, cuenta como error. El motor retiene todo `RestCallback` que recibe, así que N = `created_n` es lo esperado.
 
 ## `verdict.json`
 ```json
@@ -76,7 +83,7 @@ Las líneas `SCRIPT (E)` o `Can't compile` que mencionan `DSBX_` cuentan como er
 
 ## Criterios por fila
 Son los del brief, §5. «Recuperación» quiere decir un `recovery` cuya op llega a `observado` en 60 s desde el evento anterior del caso.
-- **G1:** `connected` de los dos peers; ningún error de script de `DSBX_` en los logs ni en el RPT; en retail, `client_alive.connected`. Con `fake: true`, G1 no se evalúa (INCONCLUSO).
+- **G1:** `connected` de los dos peers; ningún error de script de `DSBX_` en los logs ni en el RPT (con la excepción del informe de cierre de arriba, anotado en `metrics.exit_leak_cb` con `file`, `n` y `bound`); en retail, `client_alive.connected`. Con `fake: true`, G1 no se evalúa (INCONCLUSO).
 - **G2:** foto `bridge` con el epoch del cliente igual al del servidor y `catalog.complete` con `n_classes > 0`; la mayor `req_bytes` de `route: catalog` en el proxy, con `upstream_status` 200, está entre 3000 y 3499 (con `fake: true` este criterio no aplica y se anota); el `req_bytes` del hello del servidor es < 3500.
 - **G3:**
   - a y b: `observado`, con exactamente una `effect retirar` y una `effect anotar` cada una (por `session` y `op`).

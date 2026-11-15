@@ -17,6 +17,10 @@ SCRIPT_LOGS = ("server_script.log", "client_script.log")
 RPT_LOGS = ("server.RPT", "client.RPT")
 # El motor rellena con espacios: "SCRIPT    (E): Leaked 'DSBX_Callback' ..." (RPT y script_*.log).
 _SCRIPT_ERROR = re.compile(r"SCRIPT\s+\(E\)")
+# Informe de cierre del motor. El motor retiene todo RestCallback que recibe: medido en partida
+# el 15-nov, N = created_n del peer (5 = 2 + 3 fallos inyectados). Brief v1.3, sec. 10.
+_EXIT_LEAK = re.compile(r"Leaked '(DSBX_\w+)' script instance \((-?\d+)x\)!")
+TOLERATED_EXIT_LEAK = "DSBX_Callback"
 PEER_LOG = {"server": "server_script.log", "client": "client_script.log"}
 EXIT = {"PASA": 0, "FALLA": 1, "INCONCLUSO": 2}
 RECOVERY_LIMIT_MS = 60000.0
@@ -175,11 +179,35 @@ def _all_lines(ctx):
     return lines
 
 
-def _script_errors(ctx):
+def _script_errors(ctx, tolerated=None):
+    """Errores de script DSBX_ de los logs y los RPT.
+
+    El informe de cierre `Leaked 'DSBX_Callback' script instance (Nx)!` solo se tolera con
+    0 < N <= cota. En el script log, la cota es la suma de `created_n` de las lineas `shutdown`
+    anteriores. En el RPT es la de todo el script log del mismo peer, porque el RPT del cliente
+    no lleva las lineas [DSBX]. Sin `shutdown`, con N fuera de la cota o con otra clase, es un error.
+    """
     errors = []
     for name in SCRIPT_LOGS + RPT_LOGS:
+        rpt_bound = None
+        if name in RPT_LOGS:
+            peer_log = PEER_LOG["server" if name.startswith("server") else "client"]
+            rpt_bound = sum(max(0, ev.get("created_n", 0)) for ev in (_log(ctx, peer_log) or [])
+                            if ev.get("kind") == "shutdown")
+        created = 0  # sin linea shutdown previa la cota es 0 y nada se tolera
         for ev in _log(ctx, name) or []:
-            if ev.get("kind") == "script_error":
+            kind = ev.get("kind")
+            if kind == "shutdown":
+                created += max(0, ev.get("created_n", 0))
+            elif kind == "exit_leak":
+                n = ev.get("n", 0)
+                bound = created if rpt_bound is None else rpt_bound
+                if ev.get("cls") == TOLERATED_EXIT_LEAK and 0 < n <= bound:
+                    if tolerated is not None:
+                        tolerated.append({"file": name, "n": n, "bound": bound})
+                else:
+                    errors.append(ev)
+            elif kind == "script_error":
                 errors.append(ev)
     return errors
 
@@ -250,11 +278,12 @@ def _g1(ctx):
     missing = _missing_logs(ctx, SCRIPT_LOGS + RPT_LOGS)
     if missing:
         return "INCONCLUSO", "log ausente: " + ", ".join(missing), {}
-    errors = _script_errors(ctx)
+    tolerated = []
+    errors = _script_errors(ctx, tolerated)
     connected = sorted(
         {ev.get("peer") for ev in _events(ctx, "connected") if ev.get("peer") in PEER_LOG}
     )
-    metrics = {"connected": connected, "script_errors": len(errors)}
+    metrics = {"connected": connected, "script_errors": len(errors), "exit_leak_cb": tolerated}
     if errors:
         return "FALLA", "error de script DSBX_ en logs/RPT", metrics
     if len(connected) != 2:
@@ -953,6 +982,10 @@ def parse_script_log(path):
             if event is not None:
                 events.append(event)
             continue
+        leak = _EXIT_LEAK.search(line) if _SCRIPT_ERROR.search(line) else None
+        if leak is not None:
+            events.append({"kind": "exit_leak", "cls": leak.group(1), "n": int(leak.group(2)), "text": line})
+            continue
         if (_SCRIPT_ERROR.search(line) or "Can't compile" in line) and "DSBX_" in line:
             events.append({"kind": "script_error", "text": line})
     return events
@@ -1049,6 +1082,11 @@ def _parse_line(payload):
         if conn is None:
             return None
         return {"kind": "hello_accepted", "session": fields.get("session"), "conn": conn}
+    if payload.startswith("shutdown "):
+        created = _as_int(fields.get("created_n"))
+        if created is None:
+            return None
+        return {"kind": "shutdown", "role": fields.get("role"), "created_n": created}
     return None
 
 

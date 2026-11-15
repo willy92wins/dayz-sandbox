@@ -1,6 +1,6 @@
 # F1b-peers en partida: arnés G1-G9 y partidas
 
-2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.2, `48452b7`). **v1.2, congelada: ronda 1 de Sol aplicada y ronda 2 arbitrada por el orquestador, con el tope cumplido (§10).**
+2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.2, `48452b7`). **v1.3, congelada: ronda 1 de Sol aplicada, ronda 2 arbitrada por el orquestador con el tope cumplido, y arbitraje tras los humos de G1 en partida (§10).**
 
 **Por qué ahora.** F0.3-0 pasó su gate en partida en diag y en retail (`origin/main` `4f18c62`): `WIRE_CAP = 3500` está validado (G10 cumplido). La sesión principal ordenó arrancar las partidas el 2026-11-15. El PR de F1b-peers no se mergea hasta que G1-G9 pasen, porque toca el PBO.
 
@@ -65,6 +65,7 @@
   - `rest repeat ch=<P|R> kind=<n> via=<success|error|timeout> tick_ms=<n>`: en el propio callback, cuando el motor lo invoca otra vez después de cerrado (`m_Done`, también tras `Retire`). Antes, ese descarte era invisible (L-15).
   - `lease lost age_ms=<n> tick_ms=<n>`: en `CheckLeaseTimeout`, con la edad desde el último poll válido.
   - `clock tick_ms=<n>`: cada 5000 ms de su propio reloj.
+  - `shutdown role=<server|client> created_n=<n> inflight_p=<0|1> inflight_r=<0|1>`: al cerrar el peer. `created_n` acota el informe de fuga del motor (v1.3, §10).
 
   Ninguna línea lleva la ruta, la clave ni un cuerpo; M4 ya lo exige para todo `Log`. `session` y `op` no son secretos.
 - **D-P5. Reloj.**
@@ -143,7 +144,7 @@ Cada escenario escribe `samples/<G>.jsonl` (sus pasos, las versiones de reglas c
 
 | # | Build | Procedimiento | PASA si |
 |---|---|---|---|
-| G1 carga | diag y retail | Lanzar servidor y cliente con `@DayZSandbox`; esperar el hello de los dos (proxy), hasta 300 s | Los dos peers se presentan. Ningún error de script de `DSBX_` en el script log ni en el RPT de la sesión. En retail, el cliente sigue conectado a los 120 s |
+| G1 carga | diag y retail | Lanzar servidor y cliente con `@DayZSandbox`; esperar el hello de los dos (proxy), hasta 300 s | Los dos peers se presentan. Ningún error de script de `DSBX_` en el script log ni en el RPT de la sesión; el informe de cierre de `DSBX_Callback` solo se admite dentro de su cota (v1.3, §10). En retail, el cliente sigue conectado a los 120 s |
 | G2 handshake | diag | Tras G1 | El cliente lleva el epoch del servidor; catálogo `complete` con `n_classes > 0`; la mayor página de catálogo mide ≥ 3000 B y < 3500 (`req_bytes`) y fue aceptada; el hello del servidor mide < 3500 |
 | G3 D2 | diag | (a) `apply` → `pendiente → ejecutando → aplicado → observado`; (b) un segundo `apply` (supersesión); (c) negativo de D-P2 | (a)(b) las dos `observado`, con una `retirar` y una `anotar` cada una. (c) `fallido/lectura_no_cumple`, nunca `observado`. Recuperación |
 | G4 E1 | **retail** | (a) Clave mala pero válida de forma: se escribe en `dsbx_peer.json` y se fuerza un hello con un 409 al siguiente poll; 60 s con una orden de TTL 2000 ms encolada al principio (el TTL, por los `bridge_kwargs` del backend en proceso); después, la clave buena. (b) Backend reiniciado con una orden en vuelo; tras recuperar la sesión nueva, el proxy entrega (`rewrite` de un poll) una orden con la sesión vieja. (c) Corte de polls de 4500 ms con `abort_inflight`, y una orden de TTL 30000 ms encolada durante el corte, todavía vigente al recuperar | (a) Hellos rechazados por el bridge (401 en el proxy), 0 `effect` durante la ventana, y la orden encolada nunca tiene `effect`, tampoco tras recuperar. (b) La orden vieja da `rejected/stale_session` sin `effect`. (c) El backend da la orden por perdida con la conexión (`fallido/conexion_perdida` en sus eventos) y la orden nunca tiene `effect`, ni durante su vigencia ni después de recuperar. **En los tres, recuperación.** La clave no aparece en ningún `script*.log` ni `.RPT` de servidor o cliente, leídos tras cerrar |
@@ -225,3 +226,11 @@ Cada tanda trabaja en una copia del commit congelado. El orquestador revisa, cor
 | L-09 · G6 fechaba los efectos con el reloj en duda | Veredicto solo con referencias independientes (`T_d`, `T_s`, `T_e`, `D`, `T_r`), con efecto pendiente demostrado y la discontinuidad de `tick_ms` como medida (D-P5) |
 | L-14 · en G4 (c) el TTL corto hacía caducar la orden antes de perder la conexión | TTL de 30000 ms, todavía vigente al recuperar; se exige `fallido/conexion_perdida` y ningún `effect` |
 | L-03 y L-15 · un callback tardío puede no llegar nunca, y su descarte por `m_Done` era invisible | `rest repeat` en el propio callback (D-P4); el caso del callback tardío exige `rest late` o `rest repeat` sin cambios si hay invocación, y queda INCONCLUSO si no la hay |
+
+**v1.3: humos de G1 en DayZDiag** (15-nov, sin escenarios, con un orquestador mínimo de G1). El orquestador arbitra con esta evidencia:
+
+| Hallazgo | Arbitraje |
+|---|---|
+| H-01 · el evaluador buscaba el literal `SCRIPT (E)`, pero el motor escribe `SCRIPT    (E):` con relleno; G1 daba PASA en falso | Regex `SCRIPT\s+\(E\)` y pruebas con el formato real (`5bf25cc`) |
+| H-02 · el lanzador perdía su `-Root`, porque `probe-lib.ps1` fija `$script:Root` | El parámetro pasa a llamarse `-WorkRoot` y el evaluador se lanza con ruta absoluta (`5bf25cc`) |
+| H-03 · al cerrar, el motor informa `Leaked 'DSBX_Callback' script instance (Nx)!` (2x en el servidor y 1x en el cliente), con `Shutdown()` ya ejecutado | **Medido: el motor retiene todo `RestCallback` que recibe**, no solo los que están en vuelo. Con 3 respuestas 500 inyectadas a los polls del servidor, el servidor registra `created_n=5 inflight_p=1 inflight_r=0` y el motor informa 5x. El cliente, `created_n=1` y 1x. Siguen vivos los 3 retirados tras su `OnError` y el de R, ocioso en el pool. `RestContext.reset()` no cambia nada (probado en partida, `a4ea40a`). El cierre es limpio: sin volcados y con `Termination successfully completed`. El mod ya acota la retención: el pool reutiliza y solo se crea un callback tras un fallo, con presupuesto de 2000. Reutilizar uno tras su `OnError` rompería la defensa contra `OnError` repetidos. **Regla:** la línea `shutdown` lleva `created_n` (`e566fa0`). El informe de `DSBX_Callback` no cuenta como error de script si 0 < N ≤ la suma de `created_n` de las líneas `shutdown` anteriores del mismo script log; para el RPT, la de todo el script log del mismo peer, porque el RPT del cliente no lleva las líneas `[DSBX]`. Sin `shutdown`, con N fuera de la cota o con otra clase `DSBX_`, sigue siendo error. G1 anota cada informe tolerado en `exit_leak_cb` |

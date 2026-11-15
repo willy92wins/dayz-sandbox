@@ -657,8 +657,79 @@ class TestG1(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = _g1(tmp)
             _append(Path(root) / "logs" / "server_script.log",
+                    ["12:25:27.801   SCRIPT    (E): NULL pointer to instance DSBX_Peer.c(412)"])
+            verdict = EVAL.evaluate(root)
+            self.assertEqual(verdict["rows"]["G1"]["verdict"], "FALLA")
+
+    def test_fail_exit_leak_sin_shutdown(self):
+        # Sin linea shutdown previa no hay cota: la fuga cuenta como error.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _g1(tmp)
+            _append(Path(root) / "logs" / "server_script.log",
                     ["12:25:27.801   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (2x)!"])
             verdict = EVAL.evaluate(root)
+            self.assertEqual(verdict["rows"]["G1"]["verdict"], "FALLA")
+
+    def _leak(self, tmp, lines, rpt=False):
+        root = _g1(tmp)
+        _append(Path(root) / "logs" / "server_script.log", lines)
+        if rpt:
+            _append(Path(root) / "logs" / "server.RPT", lines)
+        return EVAL.evaluate(root)
+
+    SHUTDOWN5 = "12:50:01.008  SCRIPT       : [DSBX] shutdown role=server created_n=5 inflight_p=1 inflight_r=0"
+
+    def test_pass_exit_leak_dentro_de_cota(self):
+        # Medido en partida (15-nov): el motor retiene todo RestCallback; N = created_n.
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = self._leak(tmp, [self.SHUTDOWN5,
+                                       "12:50:02.841   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (5x)!"], rpt=True)
+            self.assertEqual(verdict["rows"]["G1"]["verdict"], "PASA")
+            self.assertEqual(len(verdict["rows"]["G1"]["metrics"]["exit_leak_cb"]), 2)
+
+    def test_pass_exit_leak_rpt_cliente_sin_lineas_dsbx(self):
+        # Como en partida: el RPT del cliente trae la fuga pero no las lineas [DSBX]; la cota sale del script log.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _g1(tmp)
+            leak = "12:49:58.991   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (1x)!"
+            _append(Path(root) / "logs" / "client_script.log",
+                    ["12:49:58.168  SCRIPT       : [DSBX] shutdown role=client created_n=1 inflight_p=1 inflight_r=0", leak])
+            _append(Path(root) / "logs" / "client.RPT", [leak])
+            verdict = EVAL.evaluate(root)
+            self.assertEqual(verdict["rows"]["G1"]["verdict"], "PASA")
+
+    def test_fail_exit_leak_rpt_sobre_cota_del_peer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _g1(tmp)
+            _append(Path(root) / "logs" / "client_script.log",
+                    ["12:49:58.168  SCRIPT       : [DSBX] shutdown role=client created_n=1 inflight_p=1 inflight_r=0"])
+            _append(Path(root) / "logs" / "client.RPT",
+                    ["12:49:58.991   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (2x)!"])
+            verdict = EVAL.evaluate(root)
+            self.assertEqual(verdict["rows"]["G1"]["verdict"], "FALLA")
+
+    def test_fail_exit_leak_sobre_cota(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = self._leak(tmp, [self.SHUTDOWN5,
+                                       "12:50:02.841   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (6x)!"])
+            self.assertEqual(verdict["rows"]["G1"]["verdict"], "FALLA")
+
+    def test_fail_exit_leak_otra_clase(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = self._leak(tmp, [self.SHUTDOWN5,
+                                       "12:50:02.841   SCRIPT    (E): Leaked 'DSBX_Peer' script instance (1x)!"])
+            self.assertEqual(verdict["rows"]["G1"]["verdict"], "FALLA")
+
+    def test_fail_exit_leak_antes_del_shutdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = self._leak(tmp, ["12:50:00.000   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (1x)!",
+                                       self.SHUTDOWN5])
+            self.assertEqual(verdict["rows"]["G1"]["verdict"], "FALLA")
+
+    def test_fail_exit_leak_negativo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = self._leak(tmp, [self.SHUTDOWN5,
+                                       "12:50:02.841   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (-2x)!"])
             self.assertEqual(verdict["rows"]["G1"]["verdict"], "FALLA")
 
     def test_pass_error_ajeno_formato_real(self):
