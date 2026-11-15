@@ -105,24 +105,48 @@ WITNESS_TAIL_MS = 5000.0
 WITNESS_K_DEFAULT = 3
 WITNESS_K_MAX = 5
 
-# Huecos de cargo de cada clase en el mundo simulado (lo que no esta aqui no tiene cargo).
-CARGO_CAPACITY = {
-    "Barrel_Blue": 8,
-    "Barrel_Green": 8,
-    "Barrel_Red": 8,
-    "Barrel_Yellow": 8,
-    "WoodenCrate": 6,
-    "SeaChest": 10,
-    "Pot": 2,
-    "FirstAidKit": 3,
+# Dimensiones (ancho, alto) de cada clase segun su config vanilla (DZ/...): itemSize[] y itemsCargoSize[].
+#   WoodenCrate  DZ/gear/camping/config.cpp:10074 (itemSize 10,5; cargo :10180 = 10,5)
+#   SeaChest     DZ/gear/camping/config.cpp:9820  (itemSize 10,10; cargo :9846 = 10,10)
+#   Barrel_*     DZ/gear/containers/config.cpp:19 Barrel_ColorBase (itemSize 10,15; cargo :95 = 10,15)
+#   FirstAidKit  DZ/gear/containers/config.cpp:454 (itemSize 3,3; cargo 3,3)
+#   Pot          DZ/gear/cooking/config.cpp:1106 (itemSize 4,3; cargo 4,3)
+#   Rag          DZ/gear/consumables/config.cpp:494 (itemSize 1,3; sin cargo)
+#   Apple        DZ/gear/food/config.cpp:4302 (itemSize 1,1; sin cargo: ni Edible_Base ni Inventory_Base, DZ/data/config.cpp:3332 y :3145, lo declaran)
+#   OffroadHatchback DZ/vehicles/wheeled/config.cpp:1242 (cargo 10,30, :1495)
+# Lo que no esta en CARGO_SIZE no tiene cargo; lo que no esta en ITEM_SIZE ocupa 1x1.
+ITEM_SIZE = {
+    "WoodenCrate": (10, 5),
+    "SeaChest": (10, 10),
+    "Barrel_Blue": (10, 15),
+    "Barrel_Green": (10, 15),
+    "Barrel_Red": (10, 15),
+    "Barrel_Yellow": (10, 15),
+    "FirstAidKit": (3, 3),
+    "Pot": (4, 3),
+    "Rag": (1, 3),
+    "Apple": (1, 1),
+}
+CARGO_SIZE = {
+    "WoodenCrate": (10, 5),
+    "SeaChest": (10, 10),
+    "Barrel_Blue": (10, 15),
+    "Barrel_Green": (10, 15),
+    "Barrel_Red": (10, 15),
+    "Barrel_Yellow": (10, 15),
+    "FirstAidKit": (3, 3),
+    "Pot": (4, 3),
+    "OffroadHatchback": (10, 30),
 }
 
 # Objetos del mapa simulado (no los crea S-persist ni los toca cleanup/reinicio): solo los ve el censo con
-# select_all_entityai_b = 1. net_id "0:0" es el de los edificios estaticos (GetObjectByNetworkId no los resuelve).
+# select_all_entityai_b = 1. net_id "0:0" es el de un edificio estatico (GetObjectByNetworkId no lo resuelve).
+# El slot "Cargo:idx:fila:col" coloca el hijo en la rejilla del padre (fila y columna de su esquina).
 # (net_id, class_name, parent_net_id, slot_name, x, z, ai_agent)
 MAP_OBJECT_SPECS = (
     ("0:0", "Land_Mil_Barracks1", "", "", 6170.0, 7643.0, False),
-    ("0:0", "Land_Garage_Row", "", "", 6120.0, 7600.0, False),
+    ("1:65", "Rag", "0:0", "Cargo:2:1:3", 6170.0, 7643.0, False),  # cargo proxy del edificio (PROXYCARGO)
+    ("1:49", "Land_Garage_Row", "", "", 6120.0, 7600.0, False),
     ("1:50", "Barrel_Blue", "", "", 6190.0, 7650.0, False),
     ("1:51", "Rag", "1:50", "Cargo:0:0:0", 6190.0, 7650.0, False),
     ("1:52", "WoodenCrate", "", "", 6150.0, 7620.0, False),
@@ -131,8 +155,18 @@ MAP_OBJECT_SPECS = (
     ("1:55", "OffroadHatchback", "", "", 6200.0, 7700.0, False),
     ("1:56", "HatchbackWheel", "1:55", "Wheel_1_1", 6200.0, 7700.0, False),
     ("1:57", "Zmbf_PoliceCopBlue", "", "", 6140.0, 7680.0, True),
-    ("1:58", "Barrel_Green", "", "", 6290.0, 7643.0, False),
+    ("1:58", "Barrel_Green", "", "", 6288.0, 7643.0, False),
     ("1:59", "Barrel_Red", "", "", 6500.0, 7643.0, False),
+    # Pot lleno de verdad para un Rag (1x3): la manzana ocupa (0,0) y el botiquin 3x3 las columnas 1-3; el botiquin
+    # tiene hueco libre, pero no es el objetivo (el padre de la ubicacion encontrada no seria el Pot).
+    ("1:66", "Pot", "", "", 6160.0, 7640.0, False),
+    ("1:67", "Apple", "1:66", "Cargo:0:0:0", 6160.0, 7640.0, False),
+    ("1:60", "FirstAidKit", "1:66", "Cargo:0:0:1", 6160.0, 7640.0, False),
+    # Botiquin 3x3 lleno con tres Rag 1x3 y sin subcontenedores.
+    ("1:61", "FirstAidKit", "", "", 6165.0, 7635.0, False),
+    ("1:62", "Rag", "1:61", "Cargo:0:0:0", 6165.0, 7635.0, False),
+    ("1:63", "Rag", "1:61", "Cargo:0:0:1", 6165.0, 7635.0, False),
+    ("1:64", "Rag", "1:61", "Cargo:0:0:2", 6165.0, 7635.0, False),
 )
 
 CENSUS_PAGE_SIZE = 5
@@ -411,6 +445,47 @@ class PersistFakeExt(FakeExt):
                 out.append(ent)
         return out
 
+    @staticmethod
+    def _slot_rc(slot_name):
+        parts = str(slot_name).split(":")
+        if len(parts) == 4 and parts[0] == "Cargo":
+            try:
+                return int(parts[2]), int(parts[3])
+            except ValueError:
+                return None
+        return None
+
+    def _first_fit(self, parent, item_class):
+        """Primer hueco (fila y columna de la esquina) en la rejilla de cargo de parent, o None."""
+        dims = CARGO_SIZE.get(parent["class_name"])
+        if dims is None:
+            return None
+        cols, rows = dims
+        iw, ih = ITEM_SIZE.get(item_class, (1, 1))
+        used = set()
+        for child in self._cargo_children(parent["net_id"]):
+            rc = self._slot_rc(child["slot_name"])
+            if rc is None:
+                continue
+            cw, ch = ITEM_SIZE.get(child["class_name"], (1, 1))
+            for r in range(rc[0], rc[0] + ch):
+                for c in range(rc[1], rc[1] + cw):
+                    used.add((r, c))
+        for r in range(0, rows - ih + 1):
+            for c in range(0, cols - iw + 1):
+                if all((rr, cc) not in used for rr in range(r, r + ih) for cc in range(c, c + iw)):
+                    return r, c
+        return None
+
+    def _find_free_location(self, target, item_class):
+        """FindFirstFreeLocationForNewEntity(CARGO): primero el cargo del objetivo y despues el de sus descendientes
+        en PREORDER (vanilla puede devolver el hueco de un subcontenedor, inventory.c:879). Devuelve (padre, slot)."""
+        for cand in [target] + self._preorder_children(target["net_id"]):
+            fit = self._first_fit(cand, item_class)
+            if fit is not None:
+                return cand, "Cargo:0:%d:%d" % fit
+        return None
+
     def _preorder_children(self, net_id):
         # Hijos de net_id en PREORDER (mundo y mapa), como EnumerateInventory(PREORDER) menos la raiz.
         out = []
@@ -461,7 +536,7 @@ class PersistFakeExt(FakeExt):
             if rec in self.records:
                 self.records.remove(rec)
 
-    def _census_row(self, ent, in_radius):
+    def _census_row(self, ent, in_radius, deep=False):
         return {
             "class_name": ent["class_name"],
             "loc_kind": ent["loc_kind"],
@@ -484,7 +559,9 @@ class PersistFakeExt(FakeExt):
             "roll_deg": float(ent["ori"][2]),
             "max_hp": float(ent["max_hp"]),
             "health_hp": float(ent["health_hp"]),
-            "inv_children_n": float(self._children_count(ent["net_id"])),
+            # El .c cuenta con EnumerateInventory(PREORDER): todos los descendientes. El modo 0 del fake sigue
+            # contando hijos directos (S-persist); el modo 1 cuenta como el .c.
+            "inv_children_n": float(len(self._preorder_children(ent["net_id"])) if deep else self._children_count(ent["net_id"])),
             "spawn_tick_ms": float(ent["spawn_tick_ms"]),
             "surface_y_m": float(_surface_y(ent["pos"][0], ent["pos"][2])),
         }
@@ -986,14 +1063,15 @@ class PersistFakeExt(FakeExt):
             tgt_ent = self._find_by_net_id(target_net)
             if tgt_ent is None:
                 return ("rejected", "target_not_found", wire.empty_payload())
-            capacity = CARGO_CAPACITY.get(tgt_ent["class_name"], 0)
-            used = len(self._cargo_children(tgt_ent["net_id"]))
-            if used >= capacity:
+            # El hueco tiene que ser CARGO y su padre exactamente el objetivo (como el .c con GetParent()); si el
+            # unico hueco esta en un subcontenedor, rechazo sin efectos.
+            found = self._find_free_location(tgt_ent, cname)
+            if found is None or found[0] is not tgt_ent:
                 return ("rejected", "no_cargo_space", wire.empty_payload())
             loc_kind = "cargo"
             parent_net = tgt_ent["net_id"]
             parent_class = tgt_ent["class_name"]
-            slot_name = "Cargo:0:0:%d" % used
+            slot_name = found[1]
             pos = tgt_ent["pos"]
             ori = tgt_ent["ori"]
             area_id = tgt_ent["area_id"]
@@ -1137,18 +1215,26 @@ class PersistFakeExt(FakeExt):
         if select_all == 1:
             # Todo lo del disco (mundo S-persist y mapa simulado): cada raiz seguida de su inventario en PREORDER.
             # El director no es raiz del censo; su inventario solo entra con include_director_b = 1.
+            # Seleccion como el .c: esfera de GetObjectsAtPosition3D centrada en (cx, SurfaceY(cx, cz), cz), sin filtro
+            # horizontal (HandleCensusStart: centerPos). Una raiz 116 m por encima del centro queda fuera con r = 115.
+            center_y = _surface_y(center_x, center_z)
             for ent in list(self.world.values()) + self.map_objects:
                 if not ent["alive"] or ent["parent_net_id"] != "" or ent["owner_uid"] == self.director_uid:
                     continue
-                if _dist2(ent["pos"][0], ent["pos"][2], center_x, center_z) > radius:
+                d3 = math.sqrt(
+                    (float(ent["pos"][0]) - center_x) ** 2
+                    + (float(ent["pos"][1]) - center_y) ** 2
+                    + (float(ent["pos"][2]) - center_z) ** 2
+                )
+                if d3 > radius:
                     continue
-                rows.append(self._census_row(ent, 1))
+                rows.append(self._census_row(ent, 1, deep=True))
                 for sub in self._preorder_children(ent["net_id"]):
-                    rows.append(self._census_row(sub, 1))
+                    rows.append(self._census_row(sub, 1, deep=True))
             if include_dir == 1:
                 for ent in self.world.values():
                     if ent["alive"] and ent["owner_uid"] == self.director_uid:
-                        rows.append(self._census_row(ent, 1))
+                        rows.append(self._census_row(ent, 1, deep=True))
         else:
             for ent in self.world.values():
                 if not ent["alive"]:
@@ -1318,7 +1404,27 @@ class PersistFakeExt(FakeExt):
         now_ms = float(self.peer.local_ms())
         frame = int(self.peer.frame)
         wit["frame"] = frame
-        # 1) muestras de seguimiento (sample_idx 1..K) de lo capturado en ticks anteriores
+        # 1) capturas de EEInit acumuladas desde el tick anterior (sample_idx 0); van ANTES del seguimiento: su
+        #    sample_idx 1 sale en este mismo tick, el frame siguiente (frames consecutivos 0, 1, ..., K)
+        for cap in wit["buf"]:
+            row = self._witness_row(
+                0, cap["class_name"], cap["net_id"], cap["parent_net_id"],
+                cap["pos"], cap["yaw"], cap["tick_ms"], cap["frame"], cap["ai"], True,
+            )
+            if not self._witness_append(jid, row):
+                return
+            wit["follow"].append({
+                "ent": cap["ent"],
+                "class_name": cap["class_name"],
+                "net_id": cap["net_id"],
+                "parent_net_id": cap["parent_net_id"],
+                "pos": cap["pos"],
+                "yaw": cap["yaw"],
+                "ai": cap["ai"],
+                "next": 1,
+            })
+        wit["buf"] = []
+        # 2) muestras de seguimiento (sample_idx 1..K), incluidas las recien capturadas
         keep = []
         for fol in list(wit["follow"]):
             ent = fol["ent"]
@@ -1339,25 +1445,6 @@ class PersistFakeExt(FakeExt):
             if fol["next"] <= wit["k"]:
                 keep.append(fol)
         wit["follow"] = keep
-        # 2) capturas de EEInit acumuladas desde el tick anterior (sample_idx 0)
-        for cap in wit["buf"]:
-            row = self._witness_row(
-                0, cap["class_name"], cap["net_id"], cap["parent_net_id"],
-                cap["pos"], cap["yaw"], cap["tick_ms"], cap["frame"], cap["ai"], True,
-            )
-            if not self._witness_append(jid, row):
-                return
-            wit["follow"].append({
-                "ent": cap["ent"],
-                "class_name": cap["class_name"],
-                "net_id": cap["net_id"],
-                "parent_net_id": cap["parent_net_id"],
-                "pos": cap["pos"],
-                "yaw": cap["yaw"],
-                "ai": cap["ai"],
-                "next": 1,
-            })
-        wit["buf"] = []
         # 3) vencida la ventana se deja de capturar; acaba cuando no queda seguimiento pendiente
         if not wit["closed"] and now_ms >= wit["end_ms"]:
             wit["closed"] = True

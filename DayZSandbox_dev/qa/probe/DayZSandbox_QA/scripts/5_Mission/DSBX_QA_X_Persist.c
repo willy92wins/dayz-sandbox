@@ -507,7 +507,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		return dir;
 	}
 
-	protected void ReadRealLocation(Object obj, Man director, string directorUid, out string locKind, out string parentClass, out string parentNetId, out string slotName, out string ownerUid, out int invChildrenN)
+	protected void ReadRealLocation(Object obj, Man director, string directorUid, out string locKind, out string parentClass, out string parentNetId, out string slotName, out string ownerUid, out int invChildrenN, bool proxyAsCargo = false)
 	{
 		locKind = "ground";
 		parentClass = "";
@@ -552,6 +552,15 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				}
 				else if (locType == InventoryLocationType.CARGO && parObj)
 				{
+					locKind = "cargo";
+					parentClass = parObj.GetType();
+					parentNetId = FormatNetId(parObj);
+					slotName = "Cargo:" + curLoc.GetIdx().ToString() + ":" + curLoc.GetRow().ToString() + ":" + curLoc.GetCol().ToString();
+				}
+				else if (proxyAsCargo && locType == InventoryLocationType.PROXYCARGO && parObj)
+				{
+					// Cargo de un objeto grande (edificio): inventorylocation.c:10. Solo en el modo select_all_entityai_b;
+					// el modo de S-persist lo sigue viendo como antes. Idx/Row/Col valen tambien en PROXYCARGO (:61-:78).
 					locKind = "cargo";
 					parentClass = parObj.GetType();
 					parentNetId = FormatNetId(parObj);
@@ -1460,6 +1469,15 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				res.reason = "no_cargo_space";
 				return;
 			}
+			// La busqueda puede dar hueco en el cargo de un descendiente (vanilla usa el padre devuelto, inventory.c:879):
+			// el hueco tiene que ser CARGO y el padre de la ubicacion exactamente el objetivo; si no, sin efectos.
+			// InventoryLocation.GetType/GetParent: inventorylocation.c:43 y :52.
+			if (netLoc.GetType() != InventoryLocationType.CARGO || netLoc.GetParent() != netParEnt)
+			{
+				res.status = "rejected";
+				res.reason = "no_cargo_space";
+				return;
+			}
 			createdObj = GameInventory.LocationCreateEntity(netLoc, className, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
 		}
 		else if (mode == "foreign_in_container")
@@ -1597,7 +1615,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		string slotName = "";
 		string ownerUid = "";
 		int invChildrenN = 0;
-		ReadRealLocation(obj, director, directorUid, locKind, parentClass, parentNetId, slotName, ownerUid, invChildrenN);
+		ReadRealLocation(obj, director, directorUid, locKind, parentClass, parentNetId, slotName, ownerUid, invChildrenN, withSurface);
 
 		int ownB = 0;
 		string ownLogicalId = "";
@@ -1940,7 +1958,31 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		// Frame que se apunta en las capturas de EEInit del proximo intervalo.
 		DSBX_QA_Witness.s_Frame = frame;
 
-		// 1) Muestras de seguimiento de las entidades capturadas en ticks anteriores (sample_idx 1..K).
+		// 1) Capturas de EEInit acumuladas desde el tick anterior (sample_idx 0). Se incorporan ANTES del seguimiento: su
+		//    sample_idx 1 sale en este mismo tick, el frame siguiente al de EEInit (frames consecutivos 0, 1, ..., K).
+		int capN = DSBX_QA_Witness.s_Buf.Count();
+		for (int c = 0; c < capN; c++)
+		{
+			DSBX_QA_WitnessCapture cap = DSBX_QA_Witness.s_Buf.Get(c);
+			if (!cap)
+				continue;
+			if (!AppendWitnessRow(jid, 0, cap.m_ClassName, cap.m_NetId, cap.m_ParentNetId, cap.m_PosX, cap.m_PosY, cap.m_PosZ, cap.m_YawDeg, cap.m_TickMs, cap.m_Frame, cap.m_AiAgentB, 1))
+				return;
+			DSBX_QA_PersistWitnessFollow nf = new DSBX_QA_PersistWitnessFollow();
+			nf.m_Ent = cap.m_Ent;
+			nf.m_ClassName = cap.m_ClassName;
+			nf.m_NetId = cap.m_NetId;
+			nf.m_ParentNetId = cap.m_ParentNetId;
+			nf.m_LastX = cap.m_PosX;
+			nf.m_LastY = cap.m_PosY;
+			nf.m_LastZ = cap.m_PosZ;
+			nf.m_LastYawDeg = cap.m_YawDeg;
+			nf.m_NextSample = 1;
+			m_WitnessFollow.Insert(nf);
+		}
+		DSBX_QA_Witness.s_Buf.Clear();
+
+		// 2) Muestras de seguimiento (sample_idx 1..K), incluidas las recien capturadas.
 		//    Si un AppendRow falla, el trabajo ya acabo (failed/rows_cap) y OnJobEnd limpio el estado: salir sin tocar nada.
 		array<ref DSBX_QA_PersistWitnessFollow> keep = new array<ref DSBX_QA_PersistWitnessFollow>();
 		int fCount = m_WitnessFollow.Count();
@@ -1978,29 +2020,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				keep.Insert(fol);
 		}
 		m_WitnessFollow = keep;
-
-		// 2) Capturas de EEInit acumuladas desde el tick anterior (sample_idx 0). Su seguimiento empieza en el tick siguiente.
-		int capN = DSBX_QA_Witness.s_Buf.Count();
-		for (int c = 0; c < capN; c++)
-		{
-			DSBX_QA_WitnessCapture cap = DSBX_QA_Witness.s_Buf.Get(c);
-			if (!cap)
-				continue;
-			if (!AppendWitnessRow(jid, 0, cap.m_ClassName, cap.m_NetId, cap.m_ParentNetId, cap.m_PosX, cap.m_PosY, cap.m_PosZ, cap.m_YawDeg, cap.m_TickMs, cap.m_Frame, cap.m_AiAgentB, 1))
-				return;
-			DSBX_QA_PersistWitnessFollow nf = new DSBX_QA_PersistWitnessFollow();
-			nf.m_Ent = cap.m_Ent;
-			nf.m_ClassName = cap.m_ClassName;
-			nf.m_NetId = cap.m_NetId;
-			nf.m_ParentNetId = cap.m_ParentNetId;
-			nf.m_LastX = cap.m_PosX;
-			nf.m_LastY = cap.m_PosY;
-			nf.m_LastZ = cap.m_PosZ;
-			nf.m_LastYawDeg = cap.m_YawDeg;
-			nf.m_NextSample = 1;
-			m_WitnessFollow.Insert(nf);
-		}
-		DSBX_QA_Witness.s_Buf.Clear();
 
 		// 3) Vencida la ventana se deja de capturar; el trabajo acaba cuando ya no queda seguimiento pendiente.
 		if (!m_WitnessWindowClosed && now >= m_WitnessEndMs)

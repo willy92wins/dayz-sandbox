@@ -249,15 +249,30 @@ class CensusSelectAllE2E(_E2EBase):
         self.assertEqual(new_rag["parent_net_id"], "1:50")
         self.assertEqual(new_rag["loc_kind"], "cargo")
         self.assertEqual(new_rag["own_b"], 0.0)
-        apple = by_class["Apple"][0]  # anidado: Apple dentro de Pot dentro de WoodenCrate
+        by_net = {r["net_id"]: r for r in pages["rows"] if r["net_id"] != "0:0"}
+        apple = by_net["1:54"]  # anidado: Apple dentro de Pot dentro de WoodenCrate
         self.assertEqual(apple["parent_net_id"], "1:53")
         self.assertEqual(apple["parent_class"], "Pot")
-        self.assertEqual(by_class["Pot"][0]["parent_net_id"], "1:52")
+        self.assertEqual(by_net["1:53"]["parent_net_id"], "1:52")
+        # inv_children_n cuenta TODOS los descendientes (EnumerateInventory PREORDER), no solo los directos.
+        # Expectativa independiente, a mano: WoodenCrate -> Pot -> Apple = 2; Pot -> Apple = 1; Apple = 0; el Pot 1:66
+        # lleva una manzana y un botiquin vacio = 2; el botiquin 1:61 lleva tres Rag = 3.
+        self.assertEqual(by_net["1:52"]["inv_children_n"], 2.0)
+        self.assertEqual(by_net["1:53"]["inv_children_n"], 1.0)
+        self.assertEqual(by_net["1:54"]["inv_children_n"], 0.0)
+        self.assertEqual(by_net["1:66"]["inv_children_n"], 2.0)
+        self.assertEqual(by_net["1:61"]["inv_children_n"], 3.0)
+        # Cargo proxy de un edificio (PROXYCARGO): cargo con su padre y sus coordenadas reales, no suelo.
+        proxy = by_net["1:65"]
+        self.assertEqual(
+            (proxy["loc_kind"], proxy["parent_net_id"], proxy["parent_class"], proxy["slot_name"]),
+            ("cargo", "0:0", "Land_Mil_Barracks1", "Cargo:2:1:3"),
+        )
         wheel = by_class["HatchbackWheel"][0]
         self.assertEqual(wheel["loc_kind"], "attachment")
         self.assertEqual(wheel["slot_name"], "Wheel_1_1")
         self.assertEqual(wheel["parent_net_id"], "1:55")
-        # El barril a 120 m queda fuera de un disco de 115 m; el lejano tambien.
+        # El barril a 118 m queda fuera de un disco de 115 m; el lejano tambien.
         self.assertNotIn("Barrel_Green", by_class)
         self.assertNotIn("Barrel_Red", by_class)
         # surface_y_m es SurfaceY(pos_x_m, pos_z_m) en todas las filas y no es constante.
@@ -369,17 +384,27 @@ class SpawnTargetNetIdE2E(_E2EBase):
             self.assertEqual((res.status, res.reason), ("rejected", "bad_args"), bad)
 
     def test_no_cargo_space_has_no_effect(self):
-        # Sin cargo (un coche) y con el cargo lleno (Pot: 2 huecos, ya lleva una manzana).
-        res = _spawn(self.ctx, "nc1", "foreign_in_container", "Rag", target_net_id="1:55")
-        self.assertEqual((res.status, res.reason), ("rejected", "no_cargo_space"))
-        ok = _spawn(self.ctx, "fill", "foreign_in_container", "Rag", target_net_id="1:53")
+        # Destinos que de verdad no aceptan el Rag (1x3) en SU cargo, con la config vanilla como referencia:
+        #  * Apple 1:54: sin cargo (DZ/gear/food/config.cpp:4302; ni Edible_Base ni Inventory_Base lo declaran);
+        #  * FirstAidKit 1:61: 3x3 lleno con tres Rag 1x3 y sin subcontenedores;
+        #  * Pot 1:66: 4x3 lleno para un Rag (manzana en (0,0) y botiquin 3x3 en las columnas 1-3), pero el
+        #    botiquin tiene hueco: FindFirstFree podria devolver el cargo del botiquin y el padre no seria el Pot.
+        for target in ("1:54", "1:61", "1:66"):
+            kids_before, pages_before = self._children_of(target)
+            res = _spawn(self.ctx, "nc" + target, "foreign_in_container", "Rag", target_net_id=target)
+            self.assertEqual((res.status, res.reason), ("rejected", "no_cargo_space"), target)
+            kids_after, pages_after = self._children_of(target)
+            self.assertEqual(pages_before["rows_total_n"], pages_after["rows_total_n"], target)
+            self.assertEqual(sorted(k["net_id"] for k in kids_before), sorted(k["net_id"] for k in kids_after), target)
+        # El subcontenedor libre del Pot 1:66 sigue vacio (no se creo nada bajo otro padre).
+        self.assertEqual(self._children_of("1:60")[0], [])
+        # El Pot 1:53 (solo la manzana en (0,0)) si tiene hueco: columna 1.
+        ok = _spawn(self.ctx, "fits", "foreign_in_container", "Rag", target_net_id="1:53")
         self.assertEqual(ok.status, "done", ok)
-        kids_before, pages_before = self._children_of("1:53")
-        res = _spawn(self.ctx, "nc2", "foreign_in_container", "Rag", target_net_id="1:53")
-        self.assertEqual((res.status, res.reason), ("rejected", "no_cargo_space"))
-        kids_after, pages_after = self._children_of("1:53")
-        self.assertEqual(pages_before["rows_total_n"], pages_after["rows_total_n"])
-        self.assertEqual(sorted(k["net_id"] for k in kids_before), sorted(k["net_id"] for k in kids_after))
+        self.assertEqual(ok.payload["str"]["obs_slot_name"], "Cargo:0:0:1")
+        # El coche si tiene cargo en vanilla (10x30, DZ/vehicles/wheeled/config.cpp:1495).
+        car = _spawn(self.ctx, "car", "foreign_in_container", "Rag", target_net_id="1:55")
+        self.assertEqual(car.status, "done", car)
 
     def test_old_path_by_scene_and_empty_target_unchanged(self):
         res = _spawn(self.ctx, "old", "foreign_in_container", "Rag", target_scene="nope", target_parent="nope")
@@ -442,8 +467,8 @@ class WitnessE2E(_E2EBase):
             frames = [r["frame"] for r in samples]
             self.assertEqual(ticks, sorted(ticks))
             self.assertEqual(frames, sorted(frames))
-            self.assertEqual(len(set(frames[1:])), 3)  # cada muestra de seguimiento es un tick de servidor distinto
-            self.assertLess(frames[0], frames[1])
+            # Frames consecutivos 0, 1, ..., K: sample_idx 1 es el frame siguiente al de EEInit.
+            self.assertEqual(frames, [frames[0] + i for i in range(4)], net_id)
             self.assertEqual(len({r["pos_x_m"] for r in samples}), 1)
         g = by_net[ground.payload["str"]["net_id"]]
         self.assertEqual(g[0]["class_name"], "Barrel_Yellow")
@@ -641,8 +666,7 @@ class WitnessInProcess(unittest.TestCase):
         job_id = self._start(window_ms=200.0, k=3)
         t0 = self.peer.now
         ent = self._new()
-        _tick(self.peer, self.jobs, self.ext)  # sample 0
-        _tick(self.peer, self.jobs, self.ext)  # sample 1 (vivo)
+        _tick(self.peer, self.jobs, self.ext)  # sample 0 (EEInit) y sample 1 (este tick), vivo
         self.ext._delete_entity(ent)
         _tick(self.peer, self.jobs, self.ext)  # sample 2 (ya no existe)
         # La ventana vence, pero falta la muestra 3 de la ultima entidad capturada: sigue running.
@@ -655,17 +679,26 @@ class WitnessInProcess(unittest.TestCase):
         self.assertEqual([r["alive_b"] for r in rows], [1.0, 1.0, 0.0, 0.0])
         self.assertEqual({r["class_name"] for r in rows}, {"Barrel_Yellow"})
         self.assertEqual({(r["pos_x_m"], r["pos_z_m"]) for r in rows}, {(6180.0, 7650.0)})  # ultima posicion conocida
+        self.assertEqual([r["frame"] for r in rows], [rows[0]["frame"] + i for i in range(4)])  # 0, 1, 2, 3 consecutivos
         self.assertIsNone(self.ext.witness)
 
-    def test_follow_row_takes_position_of_that_tick(self):
+    def test_first_follow_sample_is_the_frame_after_eeinit(self):
+        # Q-01: un desplazamiento del mod entre EEInit y el primer tick se ve en sample_idx 1, no un tick despues.
         job_id = self._start(window_ms=500.0, k=2)
         ent = self._new()
-        _tick(self.peer, self.jobs, self.ext)
-        ent["pos"] = (6181.5, 100.0, 7651.5)  # el mod la desplaza antes del tick 1
+        f_create = self.peer.frame
+        ent["pos"] = (6181.5, 100.0, 7651.5)  # el mod lo desplaza antes del primer tick de servidor
         _tick(self.peer, self.jobs, self.ext)
         rows = _job_rows(self.jobs, job_id)
+        self.assertEqual([r["sample_idx"] for r in rows], [0.0, 1.0])
         self.assertEqual((rows[0]["pos_x_m"], rows[1]["pos_x_m"]), (6180.0, 6181.5))
-        self.assertEqual((rows[0]["sample_idx"], rows[1]["sample_idx"]), (0.0, 1.0))
+        self.assertEqual((rows[0]["frame"], rows[1]["frame"]), (float(f_create), float(f_create + 1)))
+        ent["pos"] = (6183.0, 100.0, 7651.5)
+        _tick(self.peer, self.jobs, self.ext)
+        rows = _job_rows(self.jobs, job_id)
+        self.assertEqual([r["sample_idx"] for r in rows], [0.0, 1.0, 2.0])
+        self.assertEqual(rows[2]["pos_x_m"], 6183.0)
+        self.assertEqual(rows[2]["frame"], float(f_create + 2))
 
     def test_capture_after_window_end_and_outside_radius_are_ignored(self):
         job_id = self._start(window_ms=100.0, k=1)
@@ -732,6 +765,41 @@ class CensusCapInProcess(unittest.TestCase):
             self.assertEqual(self._census(ext, "r%s" % radius, radius=radius)[:2], ("rejected", "bad_args"))
         self.assertEqual(jobs.jobs_by_id, {})
         self.assertEqual(jobs.held_resources, {})
+
+
+class CensusSpatialInProcess(unittest.TestCase):
+    """Modo 1: la seleccion es la esfera de GetObjectsAtPosition3D centrada en (cx, SurfaceY(cx, cz), cz)."""
+
+    def _classes(self, ext, jobs, op_id, radius):
+        nums = {"center_x_m": CENTER[0], "center_z_m": CENTER[1], "radius_m": radius, "select_all_entityai_b": 1.0}
+        status, reason, _p = _call(ext, "per_census_start", {"area_tag": "t"}, nums, op_id=op_id)
+        self.assertEqual((status, reason), ("done", ""))
+        return {r["class_name"] for r in _job_rows(jobs, op_id)}
+
+    def test_elevated_roots_use_3d_distance(self):
+        cy = fake_ext_persist._surface_y(*CENTER)
+        for r, expect_in in ((115.0, False), (120.0, True)):
+            peer, jobs, ext = _make_ext()
+            ext._add_entity(net_id="9:1", class_name="High116", cat="raw", pos=(CENTER[0], cy + 116.0, CENTER[1]))
+            ext._add_entity(net_id="9:2", class_name="Flat100", cat="raw", pos=(CENTER[0] + 100.0, cy, CENTER[1]))
+            # 100 m en horizontal y 60 m de altura: 116,6 m en 3D (fuera con 115, dentro con 120)
+            ext._add_entity(net_id="9:3", class_name="Raised100", cat="raw", pos=(CENTER[0] + 100.0, cy + 60.0, CENTER[1]))
+            # 100 m en horizontal y 40 m de altura: 107,7 m en 3D (dentro con los dos radios)
+            ext._add_entity(net_id="9:4", class_name="Raised40", cat="raw", pos=(CENTER[0] + 100.0, cy + 40.0, CENTER[1]))
+            got = self._classes(ext, jobs, "e%d" % int(r), r)
+            self.assertEqual("High116" in got, expect_in, r)
+            self.assertEqual("Raised100" in got, expect_in, r)
+            self.assertIn("Flat100", got)
+            self.assertIn("Raised40", got)
+
+    def test_mode0_keeps_its_horizontal_disc(self):
+        # El modo de S-persist no cambia: distancia horizontal, sin altura.
+        peer, jobs, ext = _make_ext()
+        cy = fake_ext_persist._surface_y(*CENTER)
+        ext._add_entity(net_id="9:1", class_name="High116", cat="raw", pos=(CENTER[0], cy + 116.0, CENTER[1]))
+        nums = {"center_x_m": CENTER[0], "center_z_m": CENTER[1], "radius_m": 115.0}
+        _call(ext, "per_census_start", {"area_tag": "t"}, nums, op_id="m0")
+        self.assertIn("High116", {r["class_name"] for r in _job_rows(jobs, "m0")})
 
 
 class Mode0IdentityInProcess(unittest.TestCase):
@@ -963,6 +1031,66 @@ class StaticWitnessHookTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r"\bEnable\s*\(", self.code)), 1)  # solo la definicion en el fichero de 4_World
 
 
+def _eeinit_without_super(root):
+    """(fichero, clase) de cada override void EEInit() de root cuyo cuerpo no llama a super.EEInit()."""
+    out = []
+    for path in sorted(Path(root).rglob("*.c")):
+        text = path.read_bytes().decode("utf-8", "replace")
+        for m in re.finditer(r"\boverride\s+void\s+EEInit\s*\(\s*\)\s*\{", text):
+            depth, j = 1, m.end()
+            while j < len(text) and depth:
+                depth += {"{": 1, "}": -1}.get(text[j], 0)
+                j += 1
+            body = re.sub(r"//[^\n]*", "", text[m.end():j])
+            if "super.EEInit" in body:
+                continue
+            cls = None
+            for cm in re.finditer(r"\bclass\s+(\w+)\s*(?:extends|:)\s*\w+", text[:m.start()]):
+                cls = cm.group(1)
+            out.append((path.name, cls))
+    return out
+
+
+class StaticEEInitCoverageTests(unittest.TestCase):
+    VANILLA_ROOTS = (Path("P:/scripts"), Path("C:/Users/guill/OneDrive/Documentos/DayZ Projects/scripts"))
+
+    def test_scanner_detects_a_class_that_cuts_the_chain(self):
+        tmp = Path(tempfile.mkdtemp(prefix="dsbx-eeinit-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "a.c").write_bytes(
+            b"class Cut extends House\n{\n\toverride void EEInit()\n\t{\n\t\tFoo();\n\t}\n}\n"
+            b"class Ok extends House\n{\n\toverride void EEInit()\n\t{\n\t\tsuper.EEInit();\n\t}\n}\n"
+        )
+        self.assertEqual(_eeinit_without_super(tmp), [("a.c", "Cut")])
+
+    def test_every_vanilla_class_that_cuts_the_chain_is_covered(self):
+        roots = [r for r in self.VANILLA_ROOTS if r.is_dir()]
+        if not roots:
+            self.skipTest("no hay scripts vanilla (P:\\scripts) en esta maquina")
+        witness = WITNESS_C.read_bytes().decode("utf-8")
+        for root in roots:
+            found = _eeinit_without_super(root)
+            self.assertGreater(len(found), 0)  # el escaner ve al menos los cuatro conocidos
+            for fname, cls in found:
+                self.assertRegex(
+                    witness, r"modded\s+class\s+%s\b" % re.escape(cls),
+                    "%s (%s) corta la cadena de EEInit y no esta cubierta en DSBX_QA_W_Witness.c" % (cls, fname),
+                )
+
+    def test_covered_classes_repeat_the_guard_and_limitation_is_written(self):
+        _t, code = _code(WITNESS_C)
+        raw = WITNESS_C.read_bytes().decode("utf-8")
+        for cm in re.finditer(r"modded\s+class\s+(\w+)", code):
+            cls = cm.group(1)
+            body = _block_after(code, r"modded\s+class\s+%s\s*\{" % cls)
+            stmts = _statements(_block_after(body, r"override\s+void\s+EEInit\s*\(\s*\)\s*\{"))
+            self.assertEqual(stmts[0], "super.EEInit();", cls)
+            self.assertRegex(stmts[1], r"^if \(!DSBX_QA_Witness\.s_On\) return;$", cls)
+            self.assertEqual(stmts[2], "DSBX_QA_Witness.Capture(this);", cls)
+        self.assertIn("LIMITACION CONOCIDA", raw)
+        self.assertIn("mods de terceros", raw)
+
+
 class StaticPersistExtensionTests(unittest.TestCase):
     def setUp(self):
         self.text, self.code = _code(PERSIST_C)
@@ -1040,6 +1168,26 @@ class StaticPersistExtensionTests(unittest.TestCase):
         row = _block_after(self.code, r"protected\s+void\s+AppendEntityCensusRow\s*\([^)]*\)\s*\{")
         self.assertRegex(row, r"if\s*\(withSurface\)\s*\{[^}]*g_Game\.SurfaceY\(pos\[0\],\s*pos\[2\]\)")
         self.assertIn("ReadRealLocation(obj,", row)  # parent_net_id, parent_class, slot_name y loc_kind reales
+
+    def test_follow_after_capture_order_in_tick(self):
+        tick = _block_after(self.code, r"protected\s+void\s+TickWitness\s*\(\s*\)\s*\{")
+        self.assertLess(tick.index("for (int c = 0"), tick.index("for (int f = 0"))  # capturas antes que seguimiento
+        self.assertLess(tick.index("m_WitnessFollow.Insert(nf)"), tick.index("int fCount = m_WitnessFollow.Count()"))
+
+    def test_proxycargo_only_in_mode1(self):
+        sig = re.search(r"protected\s+void\s+ReadRealLocation\s*\([^)]*\)", self.code).group(0)
+        self.assertIn("bool proxyAsCargo = false", sig)  # por defecto apagado: los demas llamadores no cambian
+        body = _block_after(self.code, r"protected\s+void\s+ReadRealLocation\s*\([^)]*\)\s*\{")
+        self.assertRegex(body, r"proxyAsCargo\s*&&\s*locType\s*==\s*InventoryLocationType\.PROXYCARGO\s*&&\s*parObj")
+        calls = re.findall(r"ReadRealLocation\(([^;]*)\);", self.code)
+        flagged = [c for c in calls if c.rstrip().endswith("withSurface")]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(len(calls), 5)  # 4 llamadores previos sin tocar y el del censo
+
+    def test_spawn_parent_of_location_must_be_the_target(self):
+        body = _block_after(self.code, r"protected\s+void\s+HandleSpawnRaw\s*\([^)]*\)\s*\{")
+        self.assertRegex(body, r"netLoc\.GetType\(\)\s*!=\s*InventoryLocationType\.CARGO\s*\|\|\s*netLoc\.GetParent\(\)\s*!=\s*netParEnt")
+        self.assertLess(body.index("netLoc.GetParent() != netParEnt"), body.index("GameInventory.LocationCreateEntity(netLoc"))
 
     def test_spawn_target_net_id(self):
         body = _block_after(self.code, r"protected\s+void\s+HandleSpawnRaw\s*\([^)]*\)\s*\{")
