@@ -12,6 +12,7 @@ CHECK_IDS = tuple(f"BASE-{i:02d}" for i in range(1, 14))
 CACHE_CAP = 1024
 RPCLOG_CAP = 512
 CALLBACK_POOL_MAX = 8
+CUT_MARGIN_MS = 250.0
 HTTP_BRIDGE_EVENTS = frozenset(
     {
         "hello",
@@ -99,6 +100,32 @@ def _find_reconnect_tick_ms(bridge_rows: list[dict], peer: str, cut_start_ms: fl
             and float(ev.get("t_ms", 0.0)) >= cut_end_t
         ):
             return float(ev.get("tick_s", 0.0)) * 1000.0
+    return None
+
+
+def _find_pre_cut_poll(bridge_rows: list[dict], peer: str, cut_start_ms: float) -> dict | None:
+    best = None
+    for ev in bridge_rows:
+        if ev.get("ev") != "poll" or ev.get("http") != 200 or ev.get("peer") != peer:
+            continue
+        t_ms = float(ev.get("t_ms", 0.0))
+        if t_ms > cut_start_ms:
+            continue
+        if best is None or t_ms > float(best.get("t_ms", 0.0)):
+            best = ev
+    return best
+
+
+def _enq_num_arg(idx: dict, op_id, name: str) -> float | None:
+    if not isinstance(op_id, str):
+        return None
+    enq = idx["enq_by_op"].get(op_id) or {}
+    args = enq.get("args") or {}
+    nk = args.get("nk") or []
+    nv = args.get("nv") or []
+    for pos, key in enumerate(nk):
+        if key == name and pos < len(nv):
+            return float(nv[pos])
     return None
 
 
@@ -420,6 +447,26 @@ def _eval_base_08(scen_rows: list[dict], bridge_rows: list[dict], idx: dict, req
             return _chk("BASE-08", "missing", perr.split(":", 1)[1])
         if meta_a is None or perr:
             return _chk("BASE-08", "fail", perr or "bad_job_a_pages")
+
+        # D8: anclar el corte al reloj del peer con el ultimo poll 200 previo al corte (cota baja).
+        pre_poll = _find_pre_cut_poll(bridge_rows, peer, cut_start_ms)
+        if pre_poll is None:
+            return _chk("BASE-08", "missing", "no_pre_cut_poll")
+        cut_start_peer = float(pre_poll.get("tick_s", 0.0)) * 1000.0 + (cut_start_ms - float(pre_poll.get("t_ms", 0.0)))
+
+        start_t = float(meta_a["num"].get("start_tick_ms", 0.0))
+        end_t = float(meta_a["num"].get("end_tick_ms", 0.0))
+        if not (end_t > cut_start_peer + CUT_MARGIN_MS):
+            max_duration_ms = _enq_num_arg(idx, row.get("start_op_id"), "max_duration_ms")
+            if (
+                meta_a["str"].get("reason") == "job_timeout"
+                and max_duration_ms is not None
+                and abs((end_t - start_t) - max_duration_ms) <= 150.0
+            ):
+                return _chk("BASE-08", "missing", "witness_window_missed")
+            return _chk("BASE-08", "fail", "job_a_ended_before_cut")
+        if not any(cut_start_peer + CUT_MARGIN_MS < float(r.get("tick_ms", 0.0)) <= end_t for r in rows_a):
+            return _chk("BASE-08", "fail", "no_progress_in_cut")
 
         echo_ev, t_echo = _resolve_op(idx, echo_id)
         if echo_ev is None:

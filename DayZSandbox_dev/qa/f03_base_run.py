@@ -504,9 +504,20 @@ def _run_base_12_healthy(ctx: f03_common.PartContext) -> None:
         )
 
 
+def _cut_end_ms_for(ctx: f03_common.PartContext, peer: str, cut_start_ms: float) -> float | None:
+    with ctx.bridge.cv:
+        for ev in ctx.bridge.events:
+            if ev.get("ev") == "cut_end" and ev.get("peer") == peer and float(ev.get("t_ms", 0.0)) >= cut_start_ms:
+                return float(ev["t_ms"])
+    return None
+
+
 def _run_base_08(ctx: f03_common.PartContext, timer_fault: str | None) -> None:
     start_a = {}
     inj_when = ctx.now_h_ms()
+    obs_effects = {}
+    # D7: por peer y en secuencia. El corte se abre en cuanto vuelve el resultado del arranque de ESE peer,
+    # sin esperar al otro, para que A no haya podido caducar por la espera del segundo antes del corte.
     for peer in PEERS:
         start_a[peer] = f03_common.issue_one(
             ctx,
@@ -522,16 +533,11 @@ def _run_base_08(ctx: f03_common.PartContext, timer_fault: str | None) -> None:
             ),
             qa_fault=timer_fault,
         )
-
-    cut_start_ms = ctx.now_h_ms()
-    for peer in PEERS:
+        cut_start_ms = ctx.now_h_ms()
         ctx.bridge.cut(peer, 3500)
-
-    for peer in PEERS:
         _wait_cut_and_reconnect_poll(ctx, peer, cut_start_ms, timeout_s=15.0)
+        cut_end_ms = _cut_end_ms_for(ctx, peer, cut_start_ms)
 
-    obs_effects = {}
-    for peer in PEERS:
         jid_a = start_a[peer].op_id
         p0 = f03_common.issue_one(
             ctx,
@@ -583,6 +589,7 @@ def _run_base_08(ctx: f03_common.PartContext, timer_fault: str | None) -> None:
             {
                 "a_read_op_ids": a_read_ids,
                 "check": "BASE-08",
+                "cut_end_ms": cut_end_ms,
                 "cut_start_ms": cut_start_ms,
                 "echo_op_id": echo_out.op_id,
                 "peer": peer,
@@ -748,6 +755,8 @@ def _run_standard_part(ctx: f03_common.PartContext, part_name: str) -> None:
         timer_fault = "freeze_on_wait"
     elif part_name == "mut-defer_cleanup":
         timer_fault = "defer_cleanup"
+    elif part_name == "mut-early_end":
+        timer_fault = "early_end"
 
     effect_fault = None
     if part_name == "mut-ignore_deadman":

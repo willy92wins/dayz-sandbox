@@ -849,6 +849,154 @@ def _write_synthetic_base_part(
     return manifest
 
 
+def _set_base08_trace(
+    part_dir: Path,
+    *,
+    peer: str,
+    peer_clock_offset_ms: float = 0.0,
+    a_start_offset_ms: float = -800.0,
+    a_end_offset_ms: float = 400.0,
+    a_state: str = "expired",
+    a_reason: str = "job_timeout",
+    max_duration_ms: float = 1200.0,
+    witness_after_release_ms: float = 16.0,
+    witness_attempts_n: int = 20,
+    rows_n: int = 12,
+) -> None:
+    """Reescribe la traza de BASE-08 de un peer con tiempos controlados en el reloj del peer."""
+    pdir = Path(part_dir)
+    bridge_path = pdir / "samples" / "bridge.jsonl"
+    scen_path = pdir / "samples" / "scenario.jsonl"
+    bridge_rows = f03_common.read_jsonl(bridge_path)
+    scen_rows = f03_common.read_jsonl(scen_path)
+
+    all_t = [float(r.get("t_ms", 0.0)) for r in bridge_rows] + [float(r.get("t_ms", 0.0)) for r in scen_rows]
+    cut_start_ms = round(max(all_t + [0.0]) + 1000.0, 3)
+    cut_end_ms = round(cut_start_ms + 3500.0, 3)
+    reconnect_t_ms = round(cut_end_ms + 50.0, 3)
+    cut_start_peer = cut_start_ms + peer_clock_offset_ms
+    a_start_ms = round(cut_start_peer + a_start_offset_ms, 3)
+    a_end_ms = round(cut_start_peer + a_end_offset_ms, 3)
+    released_ms = a_end_ms
+    witness_started_ms = round(released_ms + witness_after_release_ms, 3)
+    reconnect_tick_ms = round(reconnect_t_ms + peer_clock_offset_ms, 3)
+
+    if peer_clock_offset_ms:
+        for ev in bridge_rows:
+            if ev.get("ev") == "poll" and ev.get("peer") == peer:
+                ev["tick_s"] = round(float(ev.get("tick_s", 0.0)) + peer_clock_offset_ms / 1000.0, 3)
+
+    inst = "srv-inst-1" if peer == "server" else "cli-inst-1"
+    nonce = secrets.token_hex(4)
+    start_id = f"{nonce}-b8-start-{peer}"
+    a_id = f"{nonce}-b8-a-{peer}"
+    echo_id = f"{nonce}-b8-echo-{peer}"
+    w_id = f"{nonce}-b8-w-{peer}"
+
+    bridge_rows.append(
+        {
+            "args": wire.pack_payload(
+                scalars_num={
+                    "duration_ms": 8000,
+                    "max_duration_ms": max_duration_ms,
+                    "sample_step_ms": 50,
+                    "witness_b": 1,
+                }
+            ),
+            "ev": "enq",
+            "inst": inst,
+            "op_id": start_id,
+            "peer": peer,
+            "t_ms": round(cut_start_ms - 200.0, 3),
+            "verb": "qa_timer_start",
+        }
+    )
+    bridge_rows.append({"ev": "cut_start", "peer": peer, "t_ms": cut_start_ms})
+    bridge_rows.append({"ev": "cut_end", "peer": peer, "t_ms": cut_end_ms})
+    bridge_rows.append(
+        {
+            "body_len": 25,
+            "ev": "poll",
+            "frame": 900,
+            "held_ms": 0.0,
+            "http": 200,
+            "inst": inst,
+            "n_ops": 0,
+            "now_ms": reconnect_t_ms,
+            "op_ids": [],
+            "peer": peer,
+            "t_ms": reconnect_t_ms,
+            "tick_s": round(reconnect_tick_ms / 1000.0, 3),
+        }
+    )
+
+    step = (a_end_ms - a_start_ms) / max(1, rows_n - 1)
+    ticks = [round(a_start_ms + step * i, 3) for i in range(rows_n)]
+    dtsums = [round(50.0 + 50.0 * i, 3) for i in range(rows_n)]
+    a_payload = wire.pack_payload(
+        scalars_str={"state": a_state, "reason": a_reason},
+        scalars_num={
+            "page_n": 0,
+            "pages_n": 1,
+            "rows_total_n": rows_n,
+            "start_tick_ms": a_start_ms,
+            "end_tick_ms": a_end_ms,
+            "onjobend_tick_ms": released_ms,
+            "released_tick_ms": released_ms,
+        },
+        num_cols=["seq_n", "frame", "tick_ms", "dtsum_ms"],
+        row_dicts=[{"seq_n": i, "frame": i, "tick_ms": ticks[i], "dtsum_ms": dtsums[i]} for i in range(rows_n)],
+    )
+    echo_payload = wire.pack_payload(
+        scalars_num={"witness_attempts_n": witness_attempts_n, "witness_started_tick_ms": witness_started_ms}
+    )
+    w_payload = wire.pack_payload(
+        scalars_str={"state": "done"},
+        scalars_num={"page_n": 0, "pages_n": 0, "rows_total_n": 0, "start_tick_ms": witness_started_ms},
+    )
+
+    def _result(oid: str, payload: dict) -> dict:
+        return {
+            "body_len": 340,
+            "ev": "result",
+            "http": 200,
+            "op_id": oid,
+            "peer": peer,
+            "result": {
+                "done_ms": reconnect_t_ms,
+                "dup": False,
+                "frame_done": 901,
+                "frame_recv": 900,
+                "op_id": oid,
+                "read": _make_read_payload(payload),
+                "reason": "",
+                "recv_ms": reconnect_t_ms,
+                "status": "done",
+            },
+            "t_ms": reconnect_t_ms,
+        }
+
+    bridge_rows.append(_result(a_id, a_payload))
+    bridge_rows.append(_result(echo_id, echo_payload))
+    bridge_rows.append(_result(w_id, w_payload))
+
+    scen_rows.append(
+        {
+            "a_read_op_ids": [a_id],
+            "check": "BASE-08",
+            "cut_end_ms": cut_end_ms,
+            "cut_start_ms": cut_start_ms,
+            "echo_op_id": echo_id,
+            "peer": peer,
+            "start_op_id": start_id,
+            "t_ms": round(reconnect_t_ms + 1.0, 3),
+            "witness_read_op_id": w_id,
+        }
+    )
+    _write_jsonl(bridge_path, bridge_rows)
+    _write_jsonl(scen_path, scen_rows)
+
+
 def _write_synthetic_probe_budget_part(
     part_dir: Path,
     *,
@@ -1698,6 +1846,45 @@ class FakePeerF03Tests(unittest.TestCase):
                 srv_sock.close()
                 b.stop()
 
+    def test_fake_ext_base_early_end_stops_a_after_100ms_dtsum(self):
+        # (e) early_end: A termina en el primer tick con dtsum >= 100 ms y reason job_timeout.
+        self.assertIsNotNone(wire, "wire.py missing")
+        self.assertIsNotNone(fake_ext_base, "fake_ext_base.py missing")
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "dsbx_qa.json"
+            cfg.write_bytes(b'{"key":"k","retry_ms":200,"url":"http://127.0.0.1:9/"}\n')
+            srv = fake_peer.Peer(str(cfg), "server", _free_udp_port(), 60.0, None)
+            try:
+                op = {
+                    "args": wire.pack_payload(
+                        scalars_str={"qa_fault": wire.format_qa_fault("early_end")},
+                        scalars_num={
+                            "duration_ms": 8000,
+                            "max_duration_ms": 1200,
+                            "sample_step_ms": 50,
+                            "witness_b": 0,
+                        },
+                    ),
+                    "inst": srv.inst,
+                    "issued_ms": 0.0,
+                    "op_id": "jobE",
+                    "ttl_ms": 5000,
+                    "verb": "qa_timer_start",
+                }
+                srv._start_op(op, 10.0, time.monotonic(), [])
+                for _ in range(200):
+                    srv.frame += 1
+                    srv._step_extensions_and_jobs(0.02)
+                    if srv.job_mgr.get_state("jobE") != "running":
+                        break
+                job = srv.job_mgr.jobs_by_id["jobE"]
+                self.assertEqual(job["state"], "expired")
+                self.assertEqual(job["reason"], "job_timeout")
+                self.assertGreaterEqual(job["elapsed_dtsum_ms"], 100.0)
+                self.assertLess(job["elapsed_dtsum_ms"], 1200.0)
+            finally:
+                srv.shutdown()
+
 
 # ============================================================================
 # GRUPO 4: wire.py, stamp_probe.py y sello historico en git_head
@@ -1923,6 +2110,7 @@ class CommonAndEvalF03Tests(unittest.TestCase):
                 "ignore_stop": "BASE-03",
                 "freeze_on_wait": "BASE-08",
                 "defer_cleanup": "BASE-08",
+                "early_end": "BASE-08",
                 "ignore_deadman": "BASE-11",
                 "skip_send": "BASE-11",
             }
@@ -1948,6 +2136,11 @@ class CommonAndEvalF03Tests(unittest.TestCase):
 
             agg_ok = f03_common.aggregate_spike(base, "F0.3-0", repo_root=root)
             self.assertEqual(agg_ok["exit_code"], 0, agg_ok)
+            # (f) mut-early_end se detecta justo en BASE-08 y la agregacion sigue dando 0 PASA.
+            v_early = gate_core.read_json(base / "mut-early_end" / "verdict.json")
+            self.assertEqual(v_early["exit_code"], 1)
+            c_early = next(c for c in v_early["checks"] if c["id"] == "BASE-08")
+            self.assertEqual(c_early["status"], "fail")
 
             # A3 + N5: avanzar repo con nuevas fuentes de sonda y WIRE_CAP distinto (2800); --evaluate-only conserva 0 PASA
             (root / "DayZSandbox_dev" / "qa" / "probe" / "DayZSandbox_QA" / "scripts" / "5_Mission" / "DSBX_QA_Probe.c").write_bytes(b"class Changed {}\n")
@@ -2128,6 +2321,74 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             gate_core.write_json(b_run_exh / "run" / "verdict.json", f03_base_eval.evaluate(b_run_exh / "run", repo_root=root))
             v_rexh = f03_common.aggregate_spike(b_run_exh, "F0.3-0", repo_root=root)
             self.assertEqual(v_rexh["exit_code"], 2)
+
+    def test_base08_job_a_ended_before_cut_fails(self):
+        # (a) H8: A termino antes del corte (numeros de Sol: corte 3000..6500) -> fail job_a_ended_before_cut.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            head = _init_temp_git_repo(root)
+            stamp = f03_common.compute_probe_stamp_at_commit(head, repo_root=root)
+            part = Path(tmp) / "case_a"
+            _write_synthetic_base_part(part, git_head=head, probe_stamp=stamp)
+            _set_base08_trace(part, peer="server", a_start_offset_ms=-1200.0, a_end_offset_ms=-500.0)
+            verdict = f03_base_eval.evaluate(part, repo_root=root)
+            self.assertEqual(verdict["exit_code"], 1)
+            c8 = next(c for c in verdict["checks"] if c["id"] == "BASE-08")
+            self.assertEqual((c8["status"], c8["detail"]), ("fail", "job_a_ended_before_cut"))
+
+    def test_base08_job_a_own_timeout_before_late_cut_is_inconclusive(self):
+        # (b) A caduco por su propio timeout antes de un corte tardio: BASE-08 missing y la parte da 2.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            head = _init_temp_git_repo(root)
+            stamp = f03_common.compute_probe_stamp_at_commit(head, repo_root=root)
+            part = Path(tmp) / "case_b"
+            _write_synthetic_base_part(part, git_head=head, probe_stamp=stamp)
+            _set_base08_trace(part, peer="server", a_start_offset_ms=-1500.0, a_end_offset_ms=-300.0)
+            verdict = f03_base_eval.evaluate(part, repo_root=root)
+            self.assertEqual(verdict["exit_code"], 2)
+            c8 = next(c for c in verdict["checks"] if c["id"] == "BASE-08")
+            self.assertEqual((c8["status"], c8["detail"]), ("missing", "witness_window_missed"))
+
+    def test_base08_job_a_alive_and_progressing_inside_cut_passes(self):
+        # (c) A vivo que expira dentro del corte con filas en el -> pass.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            head = _init_temp_git_repo(root)
+            stamp = f03_common.compute_probe_stamp_at_commit(head, repo_root=root)
+            part = Path(tmp) / "case_c"
+            _write_synthetic_base_part(part, git_head=head, probe_stamp=stamp)
+            _set_base08_trace(part, peer="server")
+            verdict = f03_base_eval.evaluate(part, repo_root=root)
+            self.assertEqual(verdict["exit_code"], 0)
+            c8 = next(c for c in verdict["checks"] if c["id"] == "BASE-08")
+            self.assertEqual(c8["status"], "pass")
+
+    def test_base08_constant_clock_offset_does_not_change_verdict(self):
+        # (d) Un desfase constante de reloj entre arnes y peer no cambia el veredicto.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            head = _init_temp_git_repo(root)
+            stamp = f03_common.compute_probe_stamp_at_commit(head, repo_root=root)
+            base = Path(tmp) / "case_c"
+            _write_synthetic_base_part(base, git_head=head, probe_stamp=stamp)
+            _set_base08_trace(base, peer="server")
+            shifted = Path(tmp) / "case_d"
+            _write_synthetic_base_part(shifted, git_head=head, probe_stamp=stamp)
+            _set_base08_trace(shifted, peer="server", peer_clock_offset_ms=5000.0)
+            v_base = f03_base_eval.evaluate(base, repo_root=root)
+            v_shift = f03_base_eval.evaluate(shifted, repo_root=root)
+            self.assertEqual(v_base["exit_code"], 0)
+            self.assertEqual(v_shift["exit_code"], 0)
+            self.assertEqual(v_shift, v_base)
 
     def test_check_12_evaluators_are_blind_to_mutants_and_faults(self):
         self._require_f03()

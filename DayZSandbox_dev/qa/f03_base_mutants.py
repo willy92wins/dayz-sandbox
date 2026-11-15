@@ -16,6 +16,11 @@ EXPECTED_MUTANTS = {
         "must_fail_checks": ["BASE-08"],
         "allowed_non_pass": {},
     },
+    "early_end": {
+        "expected_exit_code": 1,
+        "must_fail_checks": ["BASE-08"],
+        "allowed_non_pass": {},
+    },
     "ignore_deadman": {
         "expected_exit_code": 1,
         "must_fail_checks": ["BASE-11"],

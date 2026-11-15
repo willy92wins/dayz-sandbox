@@ -207,11 +207,13 @@ class BaseFakeExt(FakeExt):
         fault = op.get("qa_fault", "")
         freeze_wait = fault == "freeze_on_wait"
         defer_clean = fault == "defer_cleanup"
+        early_end = fault == "early_end"
         self.jobs.configure_job_faults(op_id, freeze_on_wait=freeze_wait, defer_cleanup=defer_clean)
 
         self.active_timers[op_id] = {
             "dtsum_ms": 0.0,
             "duration_ms": duration_ms,
+            "early_end": early_end,
             "freeze_on_wait": freeze_wait,
             "next_sample_ms": 0.0,
             "sample_step_ms": sample_step_ms,
@@ -490,6 +492,10 @@ class BaseFakeExt(FakeExt):
             if timer["freeze_on_wait"] and not self.peer.is_transport_connected():
                 continue
             timer["dtsum_ms"] += dt_ms
+            # Igual que la sonda: el final temprano se comprueba antes que duration_ms y antes del muestreo.
+            if timer.get("early_end") and timer["dtsum_ms"] >= 100.0:
+                self.jobs.end_job(jid, "expired", "job_timeout")
+                continue
             if timer["dtsum_ms"] >= timer["duration_ms"]:
                 seq = timer["seq_n"]
                 timer["seq_n"] = seq + 1
