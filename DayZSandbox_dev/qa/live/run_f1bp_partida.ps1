@@ -128,28 +128,28 @@ try {
     $bepid = Start-ExeViaWmi (Join-Path $GameDir 'DayZ_BE.exe') $GameDir "0 1 1 -exe DayZ_x64.exe `"-mod=$Mod`" -connect=127.0.0.1 -port=$Port `"-profiles=$C`" -name=DSBXQA -window -x=1280 -y=720 -noPause"
     $beOwn = Own 'battleye_launcher' $bepid
     $own += $beOwn; L "lanzador BattlEye pid=$bepid"
-    # R14. Bajo BattlEye la linea de ordenes de DayZ_x64 sale vacia (F0.3-0), asi que la procedencia es:
-    # un DayZ_x64 que no estaba antes, creado despues del lanzador; si alguno es hijo del lanzador, solo esos.
-    # Un candidato exacto se adopta; cero o varios: no se adopta ni se cierra ninguno y no se suelta el lease.
-    $beStart = $null; if ($beOwn.start_time) { $beStart = [datetime]::Parse($beOwn.start_time).ToUniversalTime() }
+    # R14 y R16 (Z-01 de Sol). Bajo BattlEye la linea de ordenes de DayZ_x64 sale vacia (F0.3-0). La unica
+    # procedencia que se acepta es descender del lanzador BattlEye: la cadena de ParentProcessId (hasta 3
+    # niveles) llega a su PID. Sin adopcion por tiempo. Un candidato exacto se adopta; cero o varios: no se
+    # adopta ni se cierra ninguno y no se suelta el lease.
     $adopted = $false
     for ($i = 0; $i -lt 120; $i++) {
       Start-Sleep -Milliseconds 500
-      $nuevos = @(Get-CimInstance Win32_Process -Filter "Name='DayZ_x64.exe'" -ErrorAction SilentlyContinue | Where-Object {
-          ($antes -notcontains [int]$_.ProcessId) -and $beStart -and $_.CreationDate -and ($_.CreationDate.ToUniversalTime() -ge $beStart.AddSeconds(-1)) })
-      if ($nuevos.Count -eq 0) { continue }
-      $hijos = @($nuevos | Where-Object { [int]$_.ParentProcessId -eq $bepid })
-      $cands = $nuevos; $via = 'nuevo tras el lanzador'
-      if ($hijos.Count -gt 0) { $cands = $hijos; $via = 'hijo del lanzador BattlEye' }
+      $todos = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+      $padre = @{}; foreach ($p in $todos) { $padre[[int]$p.ProcessId] = [int]$p.ParentProcessId }
+      $cands = @($todos | Where-Object { $_.Name -eq 'DayZ_x64.exe' -and ($antes -notcontains [int]$_.ProcessId) } | Where-Object {
+          $x = [int]$_.ParentProcessId; $hit = $false
+          for ($n = 0; $n -lt 3 -and $x -gt 0; $n++) { if ($x -eq $bepid) { $hit = $true; break }; if ($padre.ContainsKey($x)) { $x = $padre[$x] } else { break } }
+          $hit })
+      if ($cands.Count -eq 0) { continue }
       if ($cands.Count -eq 1) {
         $cli = Own 'client' ([int]$cands[0].ProcessId)
         if (-not $cli.start_time) { $identityProblem = $true; L "cliente retail pid=$($cli.pid) sin instante de creacion: identidad sin acreditar" }
-        $own = @($cli) + $own; $adopted = $true; L "cliente retail (juego) pid=$($cli.pid) ($via)"; break
+        $own = @($cli) + $own; $adopted = $true; L "cliente retail (juego) pid=$($cli.pid): desciende del lanzador BattlEye"; break
       }
-      $identityProblem = $true; L "hay $($cands.Count) DayZ_x64 candidatos ($via): no adopto ninguno"; break
+      $identityProblem = $true; L "hay $($cands.Count) DayZ_x64 que descienden del lanzador: no adopto ninguno"; break
     }
-    if (-not $beStart) { $identityProblem = $true; L "lanzador BattlEye sin instante de creacion: identidad sin acreditar" }
-    if (-not $adopted -and -not $identityProblem) { $identityProblem = $true; L "ningun DayZ_x64 nuevo en 60 s: identidad sin acreditar" }
+    if (-not $adopted -and -not $identityProblem) { $identityProblem = $true; L "ningun DayZ_x64 desciende del lanzador BattlEye en 60 s: identidad sin acreditar, no cierro ni adopto nada" }
   }
   foreach ($o in $own) { if (-not $o.start_time) { $identityProblem = $true; L "$($o.role) pid $($o.pid) sin instante de creacion: identidad sin acreditar" } }
   WriteJson $pidsFile @{ processes = $own }
