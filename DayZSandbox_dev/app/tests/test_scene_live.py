@@ -494,6 +494,16 @@ class Reconciliacion(SceneLiveBase):
         self.assertEqual(env.backend.ops["op-1"]["reason"], "lectura_no_cumple")
         self.assertEqual(env.f2_internals(), [])
 
+    def test_v2_otro_plan_sha256_fallido_sin_interna(self):
+        env = self.ready()
+        order = self.partial_apply(env)
+        gen = env.apply_gen(order)
+        gen["plan_sha256"] = "e" * 64
+        env.world(env.scene_read(order["epoch"], env.doc_id, gen, None, None, 33))
+        op = env.backend.ops["op-1"]
+        self.assertEqual((op["state"], op["reason"]), ("fallido", "lectura_no_cumple"))
+        self.assertEqual(env.f2_internals(), [])
+
     def test_pending_encola_compensacion_y_compensada(self):
         env = self.ready()
         order = self.partial_apply(env)
@@ -639,6 +649,30 @@ class Reconciliacion(SceneLiveBase):
         op = env.backend.ops["op-1"]
         self.assertEqual((op["state"], op["reason"]), ("fallido", "lectura_no_cumple"))
 
+    def test_ak2_apply_detenido_retained_con_lista_vacia_fallido(self):
+        env = self.ready()
+        order = self.partial_apply(env)
+        last = {"session": order["session"], "op_id": "op-1",
+                "verb": "scene.apply", "outcome": "retained"}
+        env.world(env.scene_read(order["epoch"], env.doc_id, None, None, last, 33, 1, []))
+        op = env.backend.ops["op-1"]
+        self.assertEqual((op["state"], op["reason"]), ("fallido", "lectura_no_cumple"))
+
+    def test_ag2_reset_sin_resultado_con_last_done(self):
+        for n, expected in ((1, ("fallido", "lectura_no_cumple")),
+                            (0, ("observado", "reconciliada"))):
+            with self.subTest(n=n):
+                env = self.ready()
+                ok, order = env.live.enqueue_reset_locked("op-2", env.doc_id)
+                self.assertTrue(ok, order)
+                env.deliver(order)
+                with env.bridge.cond:
+                    env.backend.set_op_state("op-2", "parcial", "backend", "sin_resultado")
+                    order["bstate"] = "parcial"
+                env.world(env.reset_read(order, outcome="done", n=n))
+                op = env.backend.ops["op-2"]
+                self.assertEqual((op["state"], op["reason"]), expected)
+
     def test_apply_detenido_interrumpido(self):
         env = self.ready()
         order = self.partial_apply(env)
@@ -693,6 +727,28 @@ class D1SinEscena(SceneLiveBase):
         env.world(read)
         self.assertEqual(env.backend.ops["op-1"]["state"], "parcial")
         self.assertEqual(env.f2_internals(), [])
+
+    def test_aa1_scene_apply_con_plan_sin_marca_f2_es_f2(self):
+        env = self.ready()
+        res = env.prepare()
+        self.assertTrue(res["ok"], res)
+        ok, order = env.bridge.enqueue_order(
+            "scene.apply", res["plan"], op_id="op-5", internal=False
+        )
+        self.assertTrue(ok, order)
+        self.assertNotIn("f2", order)
+        self.assertTrue(env.live.is_f2_order(order))
+
+    def test_aa3_orden_f2_parcial_sigue_siendo_f2_sin_scene_y_se_juzga(self):
+        env = self.ready()
+        order = self.partial_apply(env)
+        epoch = env.bridge.peers["server"]["epoch"]
+        env.hello(epoch=epoch, scene=0)
+        self.assertTrue(env.live.is_f2_order(order))
+        handled = env.send(order, "done", None, env.world_read(order["epoch"]))
+        self.assertTrue(handled, "on_result_locked no la trata como F2")
+        op = env.backend.ops["op-1"]
+        self.assertEqual((op["state"], op["reason"]), ("fallido", "lectura_no_cumple"))
 
     def test_capacidad_scene_es_el_entero_1_a7(self):
         for value, expected in ((True, False), (1.0, False), (1, True), ("1", False)):

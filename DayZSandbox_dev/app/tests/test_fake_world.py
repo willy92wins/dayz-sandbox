@@ -1891,6 +1891,10 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
         world = FakeWorld(ground=_custom_ground)
         self._apply_main(world)
         world.barrier_after(8)
+        reached = world._barrier_reached
+        release = world._barrier_release
+        self.assertIsNotNone(reached)
+        self.assertIsNotNone(release)
         result: dict = {}
 
         def run() -> None:
@@ -1898,11 +1902,15 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
 
         th = threading.Thread(target=run, daemon=True)
         th.start()
-        self.assertTrue(world.wait_barrier_reached(5.0))
+        self.assertTrue(reached.wait(5.0), "la barrera no se alcanzo en 5 s")
+        got_lock = world._lock.acquire(timeout=1.0)
+        if got_lock:
+            world._lock.release()
+        self.assertTrue(got_lock, "el verbo retuvo el cerrojo durante la barrera")
         f_eid = world.spawn_foreign("AmmoBox", 6140.0, 7676.0, 0.0, inside="obj-17")
-        world.release_barrier()
+        release.set()
         th.join(10.0)
-        self.assertFalse(th.is_alive(), "el verbo retuvo el cerrojo durante la barrera")
+        self.assertFalse(th.is_alive(), "el verbo no termino tras liberar la barrera")
 
         st, rsn, rd = result["r"]
         self.assertEqual(st, "done")
@@ -1920,6 +1928,10 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
         self._apply_main(world, rev=1, op_id="op-m9-gen1")
         world.barrier_after(1)
         plan2 = build_plan(self.doc, rev=2, catalog=self.catalog)
+        reached = world._barrier_reached
+        release = world._barrier_release
+        self.assertIsNotNone(reached)
+        self.assertIsNotNone(release)
         result: dict = {}
 
         def run() -> None:
@@ -1927,13 +1939,17 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
 
         th = threading.Thread(target=run, daemon=True)
         th.start()
-        self.assertTrue(world.wait_barrier_reached(5.0))
+        self.assertTrue(reached.wait(5.0), "la barrera no se alcanzo en 5 s")
+        got_lock = world._lock.acquire(timeout=1.0)
+        if got_lock:
+            world._lock.release()
+        self.assertTrue(got_lock, "el verbo retuvo el cerrojo durante la barrera")
         child_eid = world.spawn_own_child(
             self.doc["doc_id"], "obj-07", "FirstAidKit", "obj-91"
         )
-        world.release_barrier()
+        release.set()
         th.join(10.0)
-        self.assertFalse(th.is_alive())
+        self.assertFalse(th.is_alive(), "el verbo no termino tras liberar la barrera")
 
         st, rsn, rd = result["r"]
         self.assertEqual(st, "error")
@@ -2148,6 +2164,10 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
             self.doc["doc_id"], "obj-15", "CourierBag", "obj-81"
         )
         world.barrier_after(8)
+        reached = world._barrier_reached
+        release = world._barrier_release
+        self.assertIsNotNone(reached)
+        self.assertIsNotNone(release)
         state: dict = {"foreign": None, "ticks": 0}
 
         def tick_m19() -> None:
@@ -2162,13 +2182,17 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
 
         th = threading.Thread(target=run, daemon=True)
         th.start()
-        self.assertTrue(world.wait_barrier_reached(5.0))
+        self.assertTrue(reached.wait(5.0), "la barrera no se alcanzo en 5 s")
+        got_lock = world._lock.acquire(timeout=1.0)
+        if got_lock:
+            world._lock.release()
+        self.assertTrue(got_lock, "el verbo retuvo el cerrojo durante la barrera")
         state["foreign"] = world.spawn_foreign(
             "AmmoBox", 6163.0, 7663.0, 0.0, inside=inner_eid
         )
-        world.release_barrier()
+        release.set()
         th.join(10.0)
-        self.assertFalse(th.is_alive())
+        self.assertFalse(th.is_alive(), "el verbo no termino tras liberar la barrera")
 
         st, rsn, rd = result["r"]
         self.assertEqual(st, "done")
@@ -2493,6 +2517,80 @@ class TestCase10Vuelta4(TestFakeWorldBaseMixin, unittest.TestCase):
         self.assertIsNotNone(box["eid"])
         self.assertIn(box["eid"], {c["eid"] for c in world.census()})
         self.assertIsNotNone(self._reg(world, doc_id, "obj-30"))
+
+    def test_o1_r1_if_pending_con_registro_de_otra_orden_queda_compensada(self) -> None:
+        world = FakeWorld(ground=_custom_ground)
+        doc_id = self.doc["doc_id"]
+        plan = build_plan(self.doc, rev=1, catalog=self.catalog)
+        calls = 0
+
+        def cut5():
+            nonlocal calls
+            calls += 1
+            return "lease_expired" if calls > 5 else None
+
+        st_a, _, _ = self._apply(world, plan, "op-a", check=cut5)
+        self.assertEqual(st_a, "error")
+        e30 = world.seed_record(
+            doc_id, "obj-30", "WoodenCrate", 6100.0, 7600.0, SESS_B, "op-otra"
+        )
+        world.spawn_foreign(
+            "AmmoBox", 6100.0, 7600.0, 0.0, inside=(doc_id, "obj-30")
+        )
+        st, rsn, rd = self._reset(
+            world,
+            "rst-comp",
+            args={
+                "doc_id": doc_id,
+                "if_pending": {"session": SESS_A, "op_id": "op-a"},
+            },
+            session=SESS_B,
+        )
+        self.assertEqual((st, rsn), ("done", None))
+        self.assertEqual(world.effects(SESS_B, "rst-comp"), {"created": 0, "deleted": 5})
+        self.assertEqual(rd["scene"]["last"]["outcome"], "compensated")
+        self.assertEqual(rd["scene"]["retained"], [])
+        self.assertEqual(rd["scene"]["retained_n"], 0)
+        self.assertIn(e30, {c["eid"] for c in world.census()})
+
+    def test_o2_r1_registro_de_otra_orden_en_el_primer_check_rechaza_sin_last(self) -> None:
+        world = FakeWorld(ground=_custom_ground)
+        doc_id = self.doc["doc_id"]
+        world.fail_create("obj-01")
+        plan = build_plan(self.doc, rev=1, catalog=self.catalog)
+        box = {"n": 0, "eid": None}
+
+        def check():
+            box["n"] += 1
+            if box["n"] == 1:
+                box["eid"] = world.seed_record(
+                    doc_id, "obj-30", "WoodenCrate", 6100.0, 7600.0, SESS_B, "op-otra"
+                )
+            return None
+
+        st, rsn, rd = self._apply(world, plan, "op-m12", check=check)
+        self.assertEqual((st, rsn), ("rejected", "create_failed"))
+        self.assertEqual(world.effects(SESS_A, "op-m12"), {"created": 0, "deleted": 0})
+        self.assertIsNone(rd["scene"]["last"])
+        self.assertIn(box["eid"], {c["eid"] for c in world.census()})
+
+    def test_m3b2_restart_en_el_ultimo_tick_de_un_reset_no_escribe_last(self) -> None:
+        world = FakeWorld(ground=_custom_ground)
+        doc_id = self.doc["doc_id"]
+        self._apply_main(world)
+        ticks = 0
+
+        def tick():
+            nonlocal ticks
+            ticks += 1
+            if ticks == 5:
+                world.restart()
+
+        st, rsn, rd = self._reset(world, "rst-ult", tick=tick)
+        self.assertEqual((st, rsn), ("error", "stale_epoch"))
+        self.assertEqual(world.effects(SESS_A, "rst-ult"), {"created": 0, "deleted": 33})
+        self.assertIsNone(rd["scene"]["last"])
+        self.assertIsNone(world.read(doc_id)["scene"]["last"])
 
     def test_m8_barrera_falla_rapido_si_el_verbo_retiene_el_cerrojo(self) -> None:
         world = FakeWorld(ground=_custom_ground)

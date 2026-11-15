@@ -7,6 +7,7 @@ D11, D12 y §13 (A2, A3, A6).
 import copy
 import hashlib
 import json
+import math
 import unittest
 from pathlib import Path
 
@@ -264,6 +265,32 @@ class TestPlan(unittest.TestCase):
             row[2] = row[2] + 2.0
         self.assertFalse(sp.plan_matches_expectation(shifted, exp))
 
+    def test_plan_with_repeated_row_does_not_match_expectation(self):
+        doc = _doc_without_actors()
+        cat = _catalog()
+        plan = sp.build_plan(doc, 1, HASH, cat)
+        exp = sp.extract_expectation(doc)
+        plan["rows"][1] = copy.deepcopy(plan["rows"][0])
+        self.assertFalse(sp.plan_matches_expectation(plan, exp))
+
+    def test_plan_with_ci_of_another_class_does_not_match_expectation(self):
+        doc = _doc_without_actors()
+        cat = _catalog()
+        plan = sp.build_plan(doc, 1, HASH, cat)
+        exp = sp.extract_expectation(doc)
+        lid = plan["rows"][0][0]
+        other = next(i for i, cls in enumerate(plan["classes"]) if cls != exp[lid][0])
+        plan["rows"][0][1] = other
+        self.assertFalse(sp.plan_matches_expectation(plan, exp))
+
+    def test_plan_negative_zero_yaw_becomes_positive_zero(self):
+        doc = _doc_without_actors()
+        doc["entities"][0]["yaw"] = -0.0
+        plan = sp.build_plan(doc, 1, HASH, _catalog())
+        yaw = plan["rows"][0][4]
+        self.assertEqual(yaw, 0.0)
+        self.assertEqual(math.copysign(1.0, yaw), 1.0)
+
 
 class TestValidation(unittest.TestCase):
     def _validate(self, doc, store_catalog=None, world_catalog=None,
@@ -370,6 +397,20 @@ class TestValidation(unittest.TestCase):
         self.assertEqual(res["http"], 422)
         self.assertEqual(res["pointer"], "/entities/0/id")
 
+    def test_plan_too_large_class_1024_pointer(self):
+        doc = _doc_without_actors()
+        long_cls = "C" * 1024
+        doc["entities"][0]["cls"] = long_cls
+        cat = _catalog()
+        cat["classes"]["objeto"] = cat["classes"]["objeto"] + [long_cls]
+        world_catalog = _world_catalog(cat)
+        res = self._validate(doc, store_catalog=cat, world_catalog=world_catalog,
+                             op_id="op-1", conn=1)
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["code"], "plan_too_large")
+        self.assertEqual(res["http"], 422)
+        self.assertEqual(res["pointer"], "/entities/0/cls")
+
     def test_plan_too_large_rev_and_op_id(self):
         doc = _doc_without_actors()
         res = self._validate(doc, rev=1234567890)
@@ -466,6 +507,12 @@ class TestApplyPredicate(unittest.TestCase):
     def test_repeated_row(self):
         rows = copy.deepcopy(self.rows)
         rows[1][0] = rows[0][0]
+        read = _apply_read(self.order, rows)
+        self.assertFalse(sp.check_apply_predicate(self.order, read))
+
+    def test_repeated_row_exact_same_lid_and_count(self):
+        rows = copy.deepcopy(self.rows)
+        rows[1] = copy.deepcopy(rows[0])
         read = _apply_read(self.order, rows)
         self.assertFalse(sp.check_apply_predicate(self.order, read))
 
@@ -712,6 +759,11 @@ class TestCompensationPredicate(unittest.TestCase):
 
     def test_retained_empty(self):
         read = self._read("retained", n=0, retained_n=0, retained=[])
+        self.assertEqual(sp.evaluate_compensation_predicate(self.order, read),
+                         ("fallido", "lectura_no_cumple"))
+
+    def test_retained_n_one_with_empty_retained_list(self):
+        read = self._read("retained", n=1, retained_n=1, retained=[])
         self.assertEqual(sp.evaluate_compensation_predicate(self.order, read),
                          ("fallido", "lectura_no_cumple"))
 
