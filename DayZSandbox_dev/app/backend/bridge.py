@@ -427,6 +427,10 @@ class Bridge:
                 "last_poll_mono": self._now(), "inflight": 0, "lost": False,
             }
             if peer == "server":
+                # C-03: un hello nuevo invalida los intentos de catalogo a medias.
+                # Las paginas tienen que llegar dentro de la presentacion vigente;
+                # el catalogo completo anterior lo invalida SceneLive (D4).
+                self._catalog_attempts = {}
                 self.reconciled = False
                 self.world = None
                 self._read_backoff = 0

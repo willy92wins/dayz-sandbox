@@ -12,6 +12,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -309,6 +310,34 @@ class CatalogD4(SceneLiveBase):
         self.assertTrue(env.catalog(inst, build="otra-build"))
         self.assertTrue(env.live.catalog_ok_locked())
 
+    def test_c03_paginas_de_presentaciones_distintas_no_certifican(self):
+        # A manda la pagina 1/2; B se presenta y manda solo la 2/2 con el mismo
+        # catalog_id, build y modset_hash. Sin el arreglo, el intento de A se
+        # reutiliza y responde complete=true con clases que B nunca envio.
+        env = self.make_env()
+        inst_a, _epoch = env.hello()
+        catalog_id = "a" * 16
+        modset_hash = "c" * 64
+        body1 = {"catalog_id": catalog_id, "page": 1, "pages": 2,
+                 "build": "fake-1", "modset_hash": modset_hash,
+                 "classes": [["ClaseA", "BaseA"]]}
+        query_a = {"peer": "server", "inst": inst_a, "session": env.bridge.session}
+        st, resp = env.bridge.handle_catalog(query_a, body1)
+        self.assertEqual(st, 200, resp)
+        self.assertFalse(resp.get("complete"))
+
+        inst_b, _ = env.hello()
+        self.assertNotEqual(inst_b, inst_a)
+        body2 = {"catalog_id": catalog_id, "page": 2, "pages": 2,
+                 "build": "fake-1", "modset_hash": modset_hash,
+                 "classes": [["ClaseB", "BaseB"]]}
+        query_b = {"peer": "server", "inst": inst_b, "session": env.bridge.session}
+        st, resp = env.bridge.handle_catalog(query_b, body2)
+        self.assertEqual(st, 200, resp)
+        self.assertFalse(resp.get("complete"))
+        self.assertEqual((resp.get("have"), resp.get("pages")), (1, 2))
+        self.assertFalse(env.live.catalog_ok_locked())
+
 class ApplyDirecto(SceneLiveBase):
     def test_rev_de_nueve_digitos_vale_a2(self):
         env = self.ready()
@@ -565,6 +594,126 @@ class Reconciliacion(SceneLiveBase):
                          ("parcial", "interrumpida", "backend"))
         self.assertEqual(len([o for o in env.f2_internals()
                               if o.get("purpose") == "compensate"]), 3)
+
+    def _lost_compensation(self, env, order, n, delivered=True):
+        pending = {"session": order["session"], "op_id": order["op_id"], "n": n}
+        read = env.scene_read(order["epoch"], env.doc_id, None, pending, None, n)
+        env.world(read)
+        comps = [o for o in env.f2_internals()
+                 if o.get("purpose") == "compensate" and o["bstate"] == "pendiente"]
+        self.assertEqual(len(comps), 1)
+        comp = comps[0]
+        if delivered:
+            env.deliver(comp)
+        comp["bstate"] = "descartada"  # resultado perdido y caducidad
+        return comp, read
+
+    def test_c01_compensacion_entregada_con_resultado_perdido_cuenta(self):
+        env = self.ready()
+        order = self.partial_apply(env)
+        self._lost_compensation(env, order, 10, delivered=True)
+        env.world(env.scene_read(order["epoch"], env.doc_id, None,
+                                 {"session": order["session"], "op_id": order["op_id"], "n": 10},
+                                 None, 10))
+        self.assertEqual(order.get("compensations"), 1)
+
+    def test_c01_compensacion_no_entregada_no_cuenta(self):
+        env = self.ready()
+        order = self.partial_apply(env)
+        first, read = self._lost_compensation(env, order, 10, delivered=False)
+        env.world(read)
+        self.assertEqual(order.get("compensations"), 0)
+        comps = [o for o in env.f2_internals()
+                 if o.get("purpose") == "compensate" and o["bstate"] == "pendiente"]
+        self.assertEqual(len(comps), 1)
+        self.assertIsNot(comps[0], first)
+
+    def test_c01_sin_progreso_tras_descartada_interrumpida(self):
+        env = self.ready()
+        order = self.partial_apply(env)
+        self._lost_compensation(env, order, 10, delivered=True)
+        env.world(env.scene_read(order["epoch"], env.doc_id, None,
+                                 {"session": order["session"], "op_id": order["op_id"], "n": 10},
+                                 None, 10))
+        op = env.backend.ops["op-1"]
+        self.assertEqual((op["state"], op["reason"], op["origin"]),
+                         ("parcial", "interrumpida", "backend"))
+        self.assertEqual(order["bstate"], "terminal")
+
+    def test_c01_con_progreso_a_la_cuarta_interrumpida_por_limite(self):
+        env = self.ready()
+        order = self.partial_apply(env)
+        for n in (40, 30, 20):
+            self._lost_compensation(env, order, n, delivered=True)
+        self.assertEqual(order.get("compensations"), 2)
+        env.world(env.scene_read(order["epoch"], env.doc_id, None,
+                                 {"session": order["session"], "op_id": order["op_id"], "n": 10},
+                                 None, 10))
+        self.assertEqual(order.get("compensations"), 3)
+        op = env.backend.ops["op-1"]
+        self.assertEqual((op["state"], op["reason"], op["origin"]),
+                         ("parcial", "interrumpida", "backend"))
+        self.assertEqual(order["bstate"], "terminal")
+        self.assertEqual(len([o for o in env.f2_internals()
+                              if o.get("purpose") == "compensate"]), 3)
+
+    def test_c01_compensacion_en_vuelo_no_se_juzga(self):
+        # Una lectura que llega con la compensacion entregada y todavia en vuelo
+        # (p. ej. entre lotes) ensena el mismo pending.n: no es "sin progreso".
+        env = self.ready()
+        order = self.partial_apply(env)
+        before = dict(env.backend.ops["op-1"])
+        pending = {"session": order["session"], "op_id": order["op_id"], "n": 10}
+        read = env.scene_read(order["epoch"], env.doc_id, None, pending, None, 10)
+        env.world(read)
+        comps = [o for o in env.f2_internals()
+                 if o.get("purpose") == "compensate" and o["bstate"] == "pendiente"]
+        self.assertEqual(len(comps), 1)
+        comp = comps[0]
+        env.deliver(comp)  # entregada y en vuelo: ejecutando, con delivered_inst
+        env.world(read)
+        op = env.backend.ops["op-1"]
+        self.assertEqual((op["state"], op["reason"]), (before["state"], before["reason"]))
+        self.assertNotEqual(order["bstate"], "terminal")
+        self.assertEqual(len([o for o in env.f2_internals()
+                              if o.get("purpose") == "compensate"]), 1)
+        # cuando termina sin progreso (resultado perdido y caducidad), la lectura
+        # siguiente si juzga: parcial/interrumpida
+        comp["bstate"] = "descartada"
+        env.world(read)
+        op = env.backend.ops["op-1"]
+        self.assertEqual((op["state"], op["reason"], op["origin"]),
+                         ("parcial", "interrumpida", "backend"))
+        self.assertEqual(order["bstate"], "terminal")
+
+    def test_c02_compensacion_fallida_cierra_la_orden_del_bridge(self):
+        env = self.ready()
+        order = self.partial_apply(env)
+        pending = {"session": order["session"], "op_id": order["op_id"], "n": 10}
+        env.world(env.scene_read(order["epoch"], env.doc_id, None, pending, None, 10))
+        comp = self.compensation(env)
+        self.assertIsNotNone(comp)
+        env.deliver(comp)
+        other_last = {"session": order["session"], "op_id": "op-99",
+                      "verb": "scene.apply", "outcome": "done"}
+        read = env.scene_read(order["epoch"], env.doc_id, None, None, other_last, 0)
+        env.send(comp, "done", None, read)
+        op = env.backend.ops["op-1"]
+        self.assertEqual((op["state"], op["reason"]), ("fallido", "lectura_no_cumple"))
+        self.assertEqual(order["bstate"], "terminal")
+        self.assertFalse(env.bridge._has_live_parcial_locked())
+        # el calendario no pide otra lectura
+        env.bridge.reconciled = True
+        env.bridge._read_next_at = 0
+        before = len([o for o in env.orders("state.read")
+                      if o["bstate"] in ("pendiente", "ejecutando")])
+        env.bridge.sweep()
+        after = len([o for o in env.orders("state.read")
+                     if o["bstate"] in ("pendiente", "ejecutando")])
+        self.assertEqual(after, before)
+        time.sleep(0.5)
+        self.assertEqual(len([o for o in env.orders("state.read")
+                              if o["bstate"] in ("pendiente", "ejecutando")]), before)
 
     def test_orden_de_conn_anterior_mismo_epoch_cuenta_y_se_resuelve(self):
         env = self.ready()
@@ -837,6 +986,26 @@ class FallaCerradoA6(SceneLiveBase):
         ok, err = env.live.enqueue_apply_locked("op-8", res["plan"], None)
         self.assertFalse(ok)
         self.assertEqual(err["code"], "bad_args")
+        self.assertEqual(env.orders("scene.apply"), [])
+
+    def test_c07_expansion_unavailable_antes_que_los_topes(self):
+        # §4.1: la secuencia manda. Sin topes validos, el primer error sigue
+        # siendo el primer actor del documento (no budget_exceeded).
+        env = self.ready()
+        with open(FIXTURES / "escena-basica-cine.json", encoding="utf-8") as fh:
+            doc = json.load(fh)
+        idx = next(i for i, ent in enumerate(doc["entities"])
+                   if ent.get("kind") == "actor")
+        saved = env.store.catalog
+        try:
+            env.store.catalog = dict(saved, caps={})
+            res = env.prepare(doc=doc)
+        finally:
+            env.store.catalog = saved
+        self.assertFalse(res["ok"], res)
+        self.assertEqual(res["code"], "expansion_unavailable")
+        self.assertEqual(res["http"], 422)
+        self.assertEqual(res["pointer"], "/entities/%d" % idx)
         self.assertEqual(env.orders("scene.apply"), [])
 
 

@@ -6,6 +6,7 @@ D11, D12 y §13 (A2, A3, A6).
 """
 import copy
 import hashlib
+import itertools
 import json
 import math
 import unittest
@@ -913,6 +914,30 @@ class TestReadShape(unittest.TestCase):
             row[idx] = value
             read["obs"] = {"at": "now", "rows": [row]}
             self.assertFalse(sp.valid_scene_read(read, require_obs="now"), field)
+
+    def test_obs_now_row_dead_root_m15(self):
+        # M15: la raiz muerta da nulos en x, y, z, yaw y hp, y contadores a 0.
+        read = _scene_read()
+        read["obs"] = {"at": "now",
+                       "rows": [["obj-05", None, None, None, None, None, 0, 0]]}
+        self.assertTrue(sp.valid_scene_read(read, require_obs="now"))
+        # Cualquier combinacion con solo algunos nulos se rechaza.
+        base = ["obj-05", 1.0, 2.0, 3.0, 0.0, 1.0, 0, 0]
+        for r in range(1, 5):
+            for idxs in itertools.combinations(range(1, 6), r):
+                row = list(base)
+                for idx in idxs:
+                    row[idx] = None
+                read = _scene_read()
+                read["obs"] = {"at": "now", "rows": [row]}
+                self.assertFalse(sp.valid_scene_read(read, require_obs="now"), idxs)
+        # Todos nulos pero con contadores distintos de 0 tampoco vale.
+        for n_own, n_foreign in ((1, 0), (0, 1)):
+            read = _scene_read()
+            read["obs"] = {"at": "now",
+                           "rows": [["obj-05", None, None, None, None, None,
+                                     n_own, n_foreign]]}
+            self.assertFalse(sp.valid_scene_read(read, require_obs="now"))
 
     def test_lid_ascii_digits_and_length(self):
         self.assertTrue(sp.valid_lid("obj-01"))

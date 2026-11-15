@@ -619,11 +619,22 @@ def valid_obs_checkpoint_row(row, world_size=_MAX_WORLD_SIZE):
 
 
 def valid_obs_now_row(row, world_size=_MAX_WORLD_SIZE):
-    """Valida una fila de obs now: [lid, x, y, z, yaw, hp, n_own, n_foreign] (§3.5 y §3.6)."""
+    """Valida una fila de obs now: [lid, x, y, z, yaw, hp, n_own, n_foreign] (§3.5 y §3.6).
+
+    M15: una raiz muerta da `x`, `y`, `z`, `yaw` y `hp` a `None` y los dos
+    contadores a 0. Se acepta esa variante exacta; cualquier combinacion con solo
+    algunos nulos se rechaza.
+    """
     if not isinstance(row, list) or len(row) != 8:
         return False
     lid, x, y, z, yaw, hp, n_own, n_foreign = row
     if not valid_lid(lid):
+        return False
+    values = (x, y, z, yaw, hp)
+    nulls = [val is None for val in values]
+    if all(nulls):
+        return _is_count(n_own) and _is_count(n_foreign) and n_own == 0 and n_foreign == 0
+    if any(nulls):
         return False
     if not _valid_coord_x_z(x, world_size):
         return False

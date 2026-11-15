@@ -70,11 +70,19 @@ Decisiones de hilo (documentadas por el hallazgo 13 de RONDA2):
   `on_result_locked`; si lo es para la reconciliacion (§4.4).
 - A9: un unico observe `now` en vuelo; las peticiones de mas reciben el mismo
   `read_id`.
-- Compensacion (§4.5 / A13): toda compensacion entregada cuenta para el limite
-  de 3, tambien una `rejected`; «sin progreso» se mira en la lectura que sigue
-  a cada compensacion (mismo `pending.n`). Sin progreso, la orden pasa a
-  `parcial/interrumpida`, terminal, con `origin` `backend`; nunca a `fallido`
-  (hallazgo 2).
+- Compensacion (§4.5 / A13): cuenta toda compensacion entregada (la interna con
+  `delivered_inst` puesto), tambien una `rejected` y tambien una cuyo resultado
+  se pierde y termina en `descartada` por caducidad. Al encolar una compensacion
+  se guarda en la orden objetivo la clave de la interna en `bridge.orders`
+  (`(session, op_id)`) y su `comp_request_n`. En la lectura: si la ultima
+  entregada sigue en vuelo (`pendiente` o `ejecutando`) no se juzga; si hay
+  `MAX_COMPENSATIONS` entregadas o mas -> `parcial/interrumpida`; si la ultima
+  entregada ya termino (resultado, caducidad o descarte) y `pending.n` es igual
+  a su `comp_request_n` -> sin progreso -> `parcial/interrumpida`; si no, se
+  encola otra. `target["compensations"]` es el numero de entregadas. Sin
+  progreso, la orden pasa a `parcial/interrumpida`, terminal, con `origin`
+  `backend`; nunca a `fallido` (hallazgo 2). Una compensacion que sale `fallido`
+  deja la orden del bridge en `terminal` (C-02).
 """
 import copy
 import time
@@ -83,7 +91,6 @@ from app.backend.scene_plan import (
     check_apply_predicate,
     evaluate_compensation_predicate,
     evaluate_reset_predicate,
-    extract_caps,
     valid_scene_read,
     validate_for_apply,
 )
@@ -304,13 +311,17 @@ class SceneLive:
         }
 
     def prepare_apply_locked(self, doc, rev, hash_):
-        """Valida el documento congelado (§4.1) y devuelve el plan + expectativa o el error."""
+        """Valida el documento congelado (§4.1) y devuelve el plan + expectativa o el error.
+
+        Pasa a `validate_for_apply` el `op_id` que asignara `_new_api_op` y la `conn`
+        del servidor presentado (C-06). La secuencia de errores es la de §4.1: los
+        topes los valida `validate_for_apply` en su paso 5 (C-07).
+        """
         if not self.server_has_scene_locked():
             return self._error("scene_unsupported", 409, "El servidor presentado no soporta escena F2")
         catalog_valid = self.catalog_ok_locked()
-        if catalog_valid and extract_caps(self.backend.store.catalog) is None:
-            # A6: falla cerrado. Sin topes validos no se aplica nada.
-            return self._error("budget_exceeded", 422, "Sin topes validos en la biblioteca de M1", "/entities")
+        srv = self.bridge.peers.get("server")
+        conn = srv.get("conn") if isinstance(srv, dict) else None
         return validate_for_apply(
             doc=doc,
             rev=rev,
@@ -319,6 +330,8 @@ class SceneLive:
             world_catalog=self.bridge.catalog,
             catalog_valid=catalog_valid,
             world_size=self._world_size_locked(),
+            op_id="op-%d" % (self.backend._op_n + 1),
+            conn=conn,
         )
 
     def _new_api_op(self, op_id, rev, hash_, verb=None):
@@ -576,14 +589,17 @@ class SceneLive:
             return
 
         if verb == "scene.reset" and "if_pending" in args:
-            # A13: toda compensacion entregada cuenta, tambien una rejected.
+            # A13: el conteo de compensaciones entregadas se hace en la lectura
+            # (§4.5), no aqui. C-02: una compensacion que resuelve en `fallido`
+            # tambien deja la orden del bridge en `terminal`.
             target = self._find_unresolved_order_locked(
                 order.get("target_op_id") or (args.get("if_pending") or {}).get("op_id")
             )
             if target is None or target.get("verb") != "scene.apply":
                 return
-            target["compensations"] = target.get("compensations", 0) + 1
-            target["last_comp_n"] = order.get("comp_request_n")
+            # A13: `compensations` es el numero de entregadas; se refresca al
+            # llegar el resultado (entregada ya, con o sin resultado util).
+            self._compensation_attempts_locked(target)
             if status != "done":
                 return
             if not self.valid_read(order, read) or read.get("epoch") != order.get("epoch"):
@@ -593,8 +609,7 @@ class SceneLive:
             st, rsn = _stopped_apply_predicate(target, read, wsize)
             if st in ("parcial", "fallido"):
                 self.backend.set_op_state(target["op_id"], st, "servidor", rsn)
-                if st == "parcial":
-                    target["bstate"] = "terminal"
+                target["bstate"] = "terminal"
 
     # --- Reconciliacion y compensacion (§4.5) -----------------------------
 
@@ -653,6 +668,23 @@ class SceneLive:
                 return o
         return None
 
+    def _compensation_attempts_locked(self, order):
+        """Compensaciones entregadas de la orden, en orden de encolado (§4.5 / A13).
+
+        Se guarda en la orden objetivo la clave de la interna en `bridge.orders`
+        (`(session, op_id)`) junto con su `comp_request_n`. Cuenta si la interna
+        tiene `delivered_inst` (la puso la entrega en `bridge.py`), aunque su
+        resultado se pierda y termine en `descartada`. `compensations` queda como
+        el numero de entregadas.
+        """
+        delivered = []
+        for att in order.get("comp_attempts") or ():
+            internal = self.bridge.orders.get((att.get("session"), att.get("op_id")))
+            if internal is not None and internal.get("delivered_inst") is not None:
+                delivered.append((att, internal))
+        order["compensations"] = len(delivered)
+        return delivered
+
     def _mark(self, order, state, reason, origin="servidor", terminal=True):
         self.backend.set_op_state(order["op_id"], state, origin, reason)
         if terminal:
@@ -689,6 +721,7 @@ class SceneLive:
             op_id = order["op_id"]
             sess = order["session"]
             verb = order.get("verb")
+            delivered_comps = self._compensation_attempts_locked(order)
 
             # 1. apply cuya (session, op_id) esta en generation (§4.5)
             if (
@@ -724,16 +757,21 @@ class SceneLive:
                 and pending.get("session") == sess
                 and pending.get("op_id") == op_id
             ):
-                comps = order.get("compensations", 0)
                 pn = pending.get("n")
-                if comps >= MAX_COMPENSATIONS:
-                    # A13: limite de compensaciones; no hay mas intentos.
-                    self._mark(order, "parcial", "interrumpida", origin="backend")
-                    continue
-                if order.get("last_comp_n") is not None and pn == order.get("last_comp_n"):
-                    # A13: sin progreso tras la ultima compensacion entregada.
-                    self._mark(order, "parcial", "interrumpida", origin="backend")
-                    continue
+                if delivered_comps:
+                    _last_att, last_internal = delivered_comps[-1]
+                    if last_internal.get("bstate") in ("pendiente", "ejecutando"):
+                        # A13: la ultima entregada sigue en vuelo; no se juzga aqui.
+                        continue
+                    if len(delivered_comps) >= MAX_COMPENSATIONS:
+                        # A13: limite de compensaciones; no hay mas intentos.
+                        self._mark(order, "parcial", "interrumpida", origin="backend")
+                        continue
+                    if pn == _last_att.get("comp_request_n"):
+                        # A13: sin progreso tras la ultima compensacion entregada,
+                        # terminara por resultado, caducidad o descarte.
+                        self._mark(order, "parcial", "interrumpida", origin="backend")
+                        continue
                 if self._active_internal_reconcile_locked() is None:
                     ok, internal_order = self.bridge.enqueue_order(
                         "scene.reset",
@@ -748,6 +786,11 @@ class SceneLive:
                         internal_order["purpose"] = "compensate"
                         internal_order["target_op_id"] = op_id
                         internal_order["comp_request_n"] = pn
+                        order.setdefault("comp_attempts", []).append({
+                            "session": internal_order["session"],
+                            "op_id": internal_order["op_id"],
+                            "comp_request_n": pn,
+                        })
                 continue
 
             # 3. apply o reset con scene.last de esa orden

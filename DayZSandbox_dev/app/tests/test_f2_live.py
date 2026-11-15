@@ -390,6 +390,23 @@ class F2A1Plan(LiveBase):
         env.wait_state(r["op_id"], "observado")
 
 
+    def test_c06_op_id_real_de_siete_cifras_no_crea_fila_ni_evento(self):
+        env = self.make_env()
+        self.start(env, world=FakeWorld())
+        env.backend._op_n = 999999
+        before_orders = len(env.bridge.orders)
+        before_seq = env.backend.seq
+        before_ops = set(env.backend.ops)
+        r = env.apply()
+        self.assertFalse(r.get("ok"), r)
+        self.assertEqual(r.get("code"), "plan_too_large", r)
+        self.assertEqual(r.get("pointer"), "", r)
+        self.assertEqual(len(env.bridge.orders), before_orders)
+        self.assertEqual(env.backend.seq, before_seq)
+        self.assertEqual(set(env.backend.ops), before_ops)
+        self.assertNotIn("op-1000000", env.backend.ops)
+
+
 class F2A6Caps(LiveBase):
     def test_topos_exactos_observado(self):
         env = self.make_env()
@@ -969,6 +986,36 @@ class F2CCompensation(LiveBase):
         self.assertEqual(own, [])
         self.assertEqual(world.effects(fake.server.session, op_id)["created"], 5)
 
+    def test_compensaciones_con_resultado_perdido_cuentan_y_terminan_interrumpida(self):
+        # C-01 / escenario de Sol: A cortado tras 5 creaciones, fail_delete en el
+        # primer borrado, resultados de las compensaciones perdidos y TTL corto.
+        env = self.make_env(bridge_kwargs={"ttl_ms": 1200,
+                                           "enable_sweeper": True, "sweep_ms": 25})
+        world = FakeWorld()
+        fake = self.start(env, world=world)
+        world.barrier_after(5)
+        r = env.apply()
+        op_id = r["op_id"]
+        self.assertTrue(world.wait_barrier_reached(8))
+        fake.server.drop_results_for_verb.add("scene.reset")
+        world.fail_delete("obj-01")
+        fake.cut_polls("server", 1500)
+        self.assertTrue(wait_until(lambda: (fake.server.lease_age_ms() or 0) > 700, 5))
+        world.release_barrier()
+        env.wait_state(op_id, "parcial", timeout=12)
+        self.assertTrue(wait_until(
+            lambda: (env.op(op_id)["state"], env.op(op_id)["reason"])
+            == ("parcial", "interrumpida"), 25), env.op(op_id))
+        self.assertEqual(env.op(op_id)["origin"], "backend")
+        order = env.bridge.orders.get((env.bridge.session, op_id))
+        self.assertGreaterEqual(order.get("compensations", 0), 1)
+        self.assertLessEqual(order.get("compensations", 0), 3)
+        n_internal = len(env.f2_internals())
+        time.sleep(0.6)
+        self.assertEqual(len(env.f2_internals()), n_internal)
+        self.assertEqual([o["op_id"] for o in env.f2_internals()
+                          if o["bstate"] in ("pendiente", "ejecutando")], [])
+
     def test_fail_delete_permanente_limite_de_compensaciones(self):
         # con el barrido en marcha, como en produccion: la lectura que sigue a una
         # compensacion fallida la pide el calendario de F1b-bridge §4 (§4.5)
@@ -1264,6 +1311,26 @@ class F2OObserve(LiveBase):
             lambda: (getattr(env.backend, "observation", None) or {}).get("read_id") == read_id2, 10))
         rows2 = {row[0]: row for row in env.backend.observation["rows"]}
         self.assertAlmostEqual(rows2["obj-01"][1] - x_before, 2.0, places=2)
+
+    def test_c04_observe_acepta_fila_nula_de_raiz_muerta(self):
+        env = self.make_env()
+        world = FakeWorld()
+        self.start(env, world=world)
+        world.suppress_create("obj-05")
+        r = env.apply()
+        self.assertTrue(r.get("ok"), r)
+        env.wait_state(r["op_id"], "fallido")
+        st, resp = env.http("POST", "/api/observe", {"doc_id": DOC_ID})
+        self.assertEqual(st, 200, resp)
+        self.assertTrue(resp.get("ok"), resp)
+        read_id = resp["read_id"]
+        self.assertTrue(wait_until(
+            lambda: (getattr(env.backend, "observation", None) or {}).get("read_id") == read_id, 10),
+            env.backend.observation)
+        rows = {row[0]: row for row in env.backend.observation["rows"]}
+        self.assertIn("obj-05", rows)
+        self.assertEqual(rows["obj-05"],
+                         ["obj-05", None, None, None, None, None, 0, 0])
 
     def test_sin_peer_con_escena_409_y_sin_ordenes(self):
         env = self.make_env()

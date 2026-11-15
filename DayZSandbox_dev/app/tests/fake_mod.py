@@ -144,6 +144,8 @@ class _Peer:
         self.drop_all_results = False
         # solo pruebas: op_id cuyos resultados se pierden siempre (las lecturas no)
         self.drop_results_for = set()
+        # solo pruebas: verbos cuyos resultados se pierden siempre (C-01)
+        self.drop_results_for_verb = set()
         self._drop_next_result = False
         self._lose_next_ack = False
         self._cut_until = 0.0
@@ -551,6 +553,8 @@ class _Peer:
         if self.drop_all_results:
             return "fail"
         if entry.order["op_id"] in self.drop_results_for:
+            return "fail"
+        if entry.order["verb"] in self.drop_results_for_verb:
             return "fail"
         if self._drop_next_result:
             self._drop_next_result = False
