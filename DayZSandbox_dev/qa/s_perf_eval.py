@@ -1340,16 +1340,14 @@ def evaluate(
                 "rows": raw_rows_list,
                 "freed": (job_id in job_frees_by_id)
                 or (float(terminal_num.get("released_tick_ms", 0.0)) > 0.0),
-                "h_span_ms": poll_h_span_ms
-                if poll_h_span_ms is not None
-                else max(0.0, last_poll_h_ms - first_poll_h_ms),
+                "h_span_ms": poll_h_span_ms,
                 "is_neg_probe": bool(
                     w_op["raw"].get("subcase") == "N1a"
                     or step_id not in STEP_SPEC
                     or (
-                        step_id in step_windows
-                        and len(raw_rows_list) == 1
-                        and int(terminal_num.get("rows_total_n", len(raw_rows_list))) == 1
+                        int(p_num.get("expected_rows_n", 61)) == 1
+                        and float(p_num.get("warmup_ms", req_num.get("warmup_ms", 0.0))) == 0
+                        and float(p_num.get("duration_ms", req_num.get("duration_ms", 0.0))) <= 1000
                     )
                 ),
             }
@@ -1363,7 +1361,30 @@ def evaluate(
     # PRF-03: warmup_and_window_completeness
     # -----------------------------------------------------------------------
     valid_prf03_steps: set[str] = set()
+    prf03_technical = False
 
+    # Check for multiple concurrent perf_sampler jobs (E9: resource conflict)
+    active_sampler_jobs: dict[str, list[dict[str, Any]]] = {}
+    for step_id, start_ops in step_window_starts.items():
+        for w_op in start_ops:
+            if w_op["status"] == "done":
+                resource = w_op["payload"]["str"].get("resource")
+                if resource == "perf_sampler":
+                    job_id = w_op["payload"]["str"].get("job", "")
+                    active_sampler_jobs.setdefault(resource, []).append({
+                        "job_id": job_id,
+                        "op_id": w_op["op_id"],
+                        "step_id": step_id,
+                    })
+    for resource, jobs in active_sampler_jobs.items():
+        if len(jobs) > 1:
+            # Multiple active perf_sampler jobs without freeing - resource conflict
+            for job in jobs[1:]:
+                prf03_violations.append(
+                    f"op {job['op_id']} ({job['step_id']}): concurrent perf_sampler job without freeing previous (job={job['job_id']})"
+                )
+
+    # Check regular step windows
     for step_id, w_info in step_windows.items():
         t_state = w_info["terminal_state"]
         rows = w_info["rows"]
@@ -1372,7 +1393,7 @@ def evaluate(
 
         # Non-done terminal states (stopped, failed, expired) are technical failures -> INCONCLUSO (Arbitraje N2, §4.2 N12)
         if t_state in ("stopped", "failed", "expired", "running"):
-            technical_window_missing = True
+            prf03_technical = True
             reasons.append(
                 f"PRF-03 technical: step {step_id!r} job {w_info['job_id']!r} ended in state={t_state!r}"
             )
@@ -1477,10 +1498,20 @@ def evaluate(
         if step_id not in [v.split(":")[0].replace("step ", "") for v in prf03_violations]:
             valid_prf03_steps.add(step_id)
 
+    # Check N1a negative probe windows (single sample) - must fail with insufficient_samples
+    for nw in n1a_brief_windows:
+        t_state = nw["terminal_state"]
+        t_num = nw["terminal_num"]
+        rows_total_n = int(t_num.get("rows_total_n", len(nw["rows"])))
+        if t_state == "done" and rows_total_n == 1:
+            prf03_violations.append(
+                f"op {nw['op_id']}: N1a single-sample window (rows_total_n={rows_total_n} < {EXPECTED_WINDOW_ROWS})"
+            )
+
     if prf03_violations:
         checks["PRF-03"] = "fail"
         reasons.extend(f"PRF-03: {v}" for v in prf03_violations)
-    elif valid_prf03_steps and not technical_window_missing:
+    elif valid_prf03_steps and not prf03_technical:
         checks["PRF-03"] = "pass"
     else:
         checks["PRF-03"] = "missing"
@@ -1519,8 +1550,13 @@ def evaluate(
         rel_diff_fps = abs(fps_window_mean - fps_frame_counter) / fps_frame_counter
         dtsum_drift = abs(span_dtsum_ms - span_tick_ms) / span_tick_ms
 
-        h_span_ms = float(w_info.get("h_span_ms", span_tick_ms))
-        h_drift = abs(h_span_ms - span_tick_ms) / span_tick_ms if h_span_ms > 0.0 else 0.0
+        # Only check harness drift if polls.jsonl provided valid span (optional supplementary file)
+        h_span_ms = w_info.get("h_span_ms")
+        h_drift = 0.0
+        check_harness_drift = False
+        if h_span_ms is not None and h_span_ms > 0.0:
+            h_drift = abs(h_span_ms - span_tick_ms) / span_tick_ms
+            check_harness_drift = True
 
         step_fps_metrics[step_id] = {
             "fps_window_mean": round(fps_window_mean, 4),
@@ -1542,7 +1578,7 @@ def evaluate(
                 f"step {step_id}: dtsum drift {dtsum_drift:.4f} > {DTSUM_DRIFT_TOL}"
             )
             step_failed_04 = True
-        if h_drift > HARNESS_DRIFT_TOL:
+        if check_harness_drift and h_drift > HARNESS_DRIFT_TOL:
             prf04_violations.append(
                 f"step {step_id}: harness clock drift {h_drift:.4f} > {HARNESS_DRIFT_TOL}"
             )
@@ -1557,7 +1593,7 @@ def evaluate(
     if prf04_violations:
         checks["PRF-04"] = "fail"
         reasons.extend(f"PRF-04: {v}" for v in prf04_violations)
-    elif valid_prf04_steps and not technical_window_missing:
+    elif valid_prf04_steps and not prf03_technical:
         checks["PRF-04"] = "pass"
     else:
         checks["PRF-04"] = "missing"
@@ -1962,129 +1998,142 @@ def evaluate(
     # -----------------------------------------------------------------------
     # PRF-05: floor_and_combined_budget_derivation
     # -----------------------------------------------------------------------
-    # Immediate floor failure rule (S-perf brief §5 PRF-05):
-    # If 'base' or 'fixture' is present and has fps_window_mean <= 35.0 -> immediate 'fail'.
-    for mandatory_step in ("base", "fixture"):
-        if mandatory_step in step_fps_metrics:
-            m_fps = step_fps_metrics[mandatory_step]["fps_window_mean"]
-            c_fps = step_fps_metrics[mandatory_step]["fps_frame_counter"]
-            if m_fps <= FLOOR_FPS or c_fps <= FLOOR_FPS:
-                prf05_violations.append(
-                    f"step {mandatory_step} below floor ({m_fps:.2f} / {c_fps:.2f} <= {FLOOR_FPS} FPS)"
-                )
+    # If there's a technical failure in PRF-03, PRF-05 cannot be evaluated -> missing
+    if prf03_technical:
+        checks["PRF-05"] = "missing"
+    else:
+        # Immediate floor failure rule (S-perf brief §5 PRF-05):
+        # If 'base' or 'fixture' is present and has fps_window_mean <= 35.0 -> immediate 'fail'.
+        for mandatory_step in ("base", "fixture"):
+            if mandatory_step in step_fps_metrics:
+                m_fps = step_fps_metrics[mandatory_step]["fps_window_mean"]
+                c_fps = step_fps_metrics[mandatory_step]["fps_frame_counter"]
+                if m_fps <= FLOOR_FPS or c_fps <= FLOOR_FPS:
+                    prf05_violations.append(
+                        f"step {mandatory_step} below floor ({m_fps:.2f} / {c_fps:.2f} <= {FLOOR_FPS} FPS)"
+                    )
 
-    certified_k: int | None = None
-    certified_step_id: str | None = None
+        certified_k: int | None = None
+        certified_step_id: str | None = None
 
-    all_four_present = all(
-        s in valid_prf02_steps and s in valid_prf03_steps and s in valid_prf04_steps
-        for s in STEP_ORDER
-    )
-
-    if not prf05_violations and all_four_present and checks["PRF-01"] == "pass":
-        # Derive k* = max{k in {1,2,3} | for all j <= k, step j is admissible (fps_window_mean > 35.0)}
-        k_star = 0
+        # Check if we have enough valid steps for k* derivation (S-perf brief §2.1):
+        # k* = max{k in {1,2,3} | for all j <= k, step j is admissible (fps > 35.0 in PRF-03/PRF-04)}
+        # We need PRF-01 pass, and for each step up to k*: PRF-02, PRF-03, PRF-04 pass.
+        steps_up_to_k_valid = {}
         for s_name in ("fixture", "inc1", "inc2"):
             s_k = STEP_SPEC[s_name]["k"]
-            s_mean = step_fps_metrics[s_name]["fps_window_mean"]
-            s_cnt = step_fps_metrics[s_name]["fps_frame_counter"]
-            if s_mean > FLOOR_FPS and s_cnt > FLOOR_FPS:
-                k_star = s_k
+            # A step is admissible if it has valid PRF-02, PRF-03, PRF-04 and FPS > floor
+            admissible = (
+                s_name in valid_prf02_steps
+                and s_name in valid_prf03_steps
+                and s_name in valid_prf04_steps
+                and s_name in step_fps_metrics
+                and step_fps_metrics[s_name]["fps_window_mean"] > FLOOR_FPS
+                and step_fps_metrics[s_name]["fps_frame_counter"] > FLOOR_FPS
+            )
+            steps_up_to_k_valid[s_name] = admissible
+
+        # Derive k* consecutively from fixture
+        if not prf05_violations and checks["PRF-01"] == "pass":
+            k_star = 0
+            for s_name in ("fixture", "inc1", "inc2"):
+                if steps_up_to_k_valid.get(s_name, False):
+                    k_star = STEP_SPEC[s_name]["k"]
+                else:
+                    break
+
+            if k_star < 1:
+                prf05_violations.append("no load step >= fixture met the > 35.0 FPS floor")
             else:
-                break
+                certified_k = k_star
+                certified_step_id = {1: "fixture", 2: "inc1", 3: "inc2"}[k_star]
+                cap_spec = STEP_SPEC[certified_step_id]
 
-        if k_star < 1:
-            prf05_violations.append("no load step >= fixture met the > 35.0 FPS floor")
-        else:
-            certified_k = k_star
-            certified_step_id = {1: "fixture", 2: "inc1", 3: "inc2"}[k_star]
-            cap_spec = STEP_SPEC[certified_step_id]
-
-            # Verify positive perf_budget_check at the certified cap (budget_at_cap)
-            cap_accepted = False
-            for bop in budget_check_ops:
-                req_num = bop["req"]["num"]
-                req_str = bop["req"]["str"]
-                if req_str.get("expected_modset_sig", canonical_modset_sig) != canonical_modset_sig:
-                    continue
-                if (
-                    int(req_num.get("cand_objects_n", -1)) == cap_spec["objects_n"]
-                    and int(req_num.get("cand_infected_n", -1)) == cap_spec["infected_n"]
-                    and int(req_num.get("cand_animals_n", -1)) == cap_spec["animals_n"]
-                    and int(req_num.get("cand_actors_n", -1)) == cap_spec["actors_n"]
-                    and int(req_num.get("cand_wardrobe_max_per_actor_n", -1))
-                    == cap_spec["wardrobe_per_actor_n"]
-                    and int(req_num.get("cand_wardrobe_total_n", -1)) == cap_spec["children_n"]
-                    and int(req_num.get("cand_extra_children_n", -1)) == 0
-                    and int(req_num.get("max_combined_roots_n", -1)) == cap_spec["roots_n"]
-                    and int(req_num.get("max_combined_entities_n", -1)) == cap_spec["entities_n"]
-                ):
-                    if bop["status"] == "done":
-                        bp_str = bop["payload"]["str"]
-                        bp_num = bop["payload"]["num"]
-                        if (
-                            bp_str.get("budget_status") == "accepted"
-                            and bp_str.get("violation_path", "") == ""
-                            and int(bp_num.get("spawned_orders_n", -1)) == 0
-                            and int(bp_num.get("headroom_roots_n", -1)) == 0
-                            and int(bp_num.get("headroom_entities_n", -1)) == 0
-                        ):
-                            cap_accepted = True
+                # Verify positive perf_budget_check at the certified cap (budget_at_cap)
+                cap_accepted = False
+                for bop in budget_check_ops:
+                    req_num = bop["req"]["num"]
+                    req_str = bop["req"]["str"]
+                    if req_str.get("expected_modset_sig", canonical_modset_sig) != canonical_modset_sig:
+                        continue
+                    if (
+                        int(req_num.get("cand_objects_n", -1)) == cap_spec["objects_n"]
+                        and int(req_num.get("cand_infected_n", -1)) == cap_spec["infected_n"]
+                        and int(req_num.get("cand_animals_n", -1)) == cap_spec["animals_n"]
+                        and int(req_num.get("cand_actors_n", -1)) == cap_spec["actors_n"]
+                        and int(req_num.get("cand_wardrobe_max_per_actor_n", -1))
+                        == cap_spec["wardrobe_per_actor_n"]
+                        and int(req_num.get("cand_wardrobe_total_n", -1)) == cap_spec["children_n"]
+                        and int(req_num.get("cand_extra_children_n", -1)) == 0
+                        and int(req_num.get("max_combined_roots_n", -1)) == cap_spec["roots_n"]
+                        and int(req_num.get("max_combined_entities_n", -1)) == cap_spec["entities_n"]
+                    ):
+                        if bop["status"] == "done":
+                            bp_str = bop["payload"]["str"]
+                            bp_num = bop["payload"]["num"]
+                            if (
+                                bp_str.get("budget_status") == "accepted"
+                                and bp_str.get("violation_path", "") == ""
+                                and int(bp_num.get("spawned_orders_n", -1)) == 0
+                                and int(bp_num.get("headroom_roots_n", -1)) == 0
+                                and int(bp_num.get("headroom_entities_n", -1)) == 0
+                            ):
+                                cap_accepted = True
+                            else:
+                                prf05_violations.append(
+                                    f"op {bop['op_id']}: budget_at_cap invalid done payload"
+                                )
                         else:
                             prf05_violations.append(
-                                f"op {bop['op_id']}: budget_at_cap invalid done payload"
+                                f"op {bop['op_id']}: budget_at_cap rejected ({bop['reason']})"
                             )
-                    else:
-                        prf05_violations.append(
-                            f"op {bop['op_id']}: budget_at_cap rejected ({bop['reason']})"
-                        )
 
-            if not cap_accepted and not prf05_violations:
-                prf05_violations.append(
-                    f"missing accepted perf_budget_check at certified cap {certified_step_id!r} (k*={k_star})"
-                )
+                if not cap_accepted and not prf05_violations:
+                    prf05_violations.append(
+                        f"missing accepted perf_budget_check at certified cap {certified_step_id!r} (k*={k_star})"
+                    )
 
-            if not prf05_violations:
-                c_fps_info = step_fps_metrics[certified_step_id]
-                metrics["certified_budget"] = {
-                    "certified_step_id": certified_step_id,
-                    "certified_step_index": k_star,
-                    "floor_fps": FLOOR_FPS,
-                    "certified_window_mean_fps": c_fps_info["fps_window_mean"],
-                    "certified_frame_counter_fps": c_fps_info["fps_frame_counter"],
-                    "certified_roll5_min_fps": c_fps_info["fps_roll5_min"],
-                    "max_objects_n": cap_spec["objects_n"],
-                    "max_infected_n": cap_spec["infected_n"],
-                    "max_animals_n": cap_spec["animals_n"],
-                    "max_actors_n": cap_spec["actors_n"],
-                    "max_wardrobe_per_actor_n": cap_spec["wardrobe_per_actor_n"],
-                    "max_combined_roots_n": cap_spec["roots_n"],
-                    "max_children_n": cap_spec["children_n"],
-                    "max_combined_entities_n": cap_spec["entities_n"],
-                    "modset_sig": canonical_modset_sig,
-                    "measured_profile": {
-                        "world": canonical_world,
-                        "center_x_m": CENTER_POS[0],
-                        "center_z_m": CENTER_POS[2],
-                        "director_x_m": DIRECTOR_POS[0],
-                        "director_z_m": DIRECTOR_POS[2],
-                        "clear_radius_m": CLEAR_RADIUS_M,
-                        "classes": modset_fixture.get("required_classes", {}),
-                        "spawn_flags": {
-                            "object_flags": SPAWN_FLAGS_OBJ,
-                            "ai_flags": SPAWN_FLAGS_AI,
+                if not prf05_violations:
+                    c_fps_info = step_fps_metrics[certified_step_id]
+                    metrics["certified_budget"] = {
+                        "certified_step_id": certified_step_id,
+                        "certified_step_index": k_star,
+                        "floor_fps": FLOOR_FPS,
+                        "certified_window_mean_fps": c_fps_info["fps_window_mean"],
+                        "certified_frame_counter_fps": c_fps_info["fps_frame_counter"],
+                        "certified_roll5_min_fps": c_fps_info["fps_roll5_min"],
+                        "max_objects_n": cap_spec["objects_n"],
+                        "max_infected_n": cap_spec["infected_n"],
+                        "max_animals_n": cap_spec["animals_n"],
+                        "max_actors_n": cap_spec["actors_n"],
+                        "max_wardrobe_per_actor_n": cap_spec["wardrobe_per_actor_n"],
+                        "max_combined_roots_n": cap_spec["roots_n"],
+                        "max_children_n": cap_spec["children_n"],
+                        "max_combined_entities_n": cap_spec["entities_n"],
+                        "modset_sig": canonical_modset_sig,
+                        "measured_profile": {
+                            "world": canonical_world,
+                            "center_x_m": CENTER_POS[0],
+                            "center_z_m": CENTER_POS[2],
+                            "director_x_m": DIRECTOR_POS[0],
+                            "director_z_m": DIRECTOR_POS[2],
+                            "clear_radius_m": CLEAR_RADIUS_M,
+                            "classes": modset_fixture.get("required_classes", {}),
+                            "spawn_flags": {
+                                "object_flags": SPAWN_FLAGS_OBJ,
+                                "ai_flags": SPAWN_FLAGS_AI,
+                            },
+                            "ai_regime": "s3_adapter_roam_6m_emote_clap_1101_creature_sway_1p5m",
                         },
-                        "ai_regime": "s3_adapter_roam_6m_emote_clap_1101_creature_sway_1p5m",
-                    },
-                }
+                    }
 
-    if prf05_violations:
-        checks["PRF-05"] = "fail"
-        reasons.extend(f"PRF-05: {v}" for v in prf05_violations)
-    elif "certified_budget" in metrics:
-        checks["PRF-05"] = "pass"
-    else:
-        checks["PRF-05"] = "missing"
+        if prf05_violations:
+            checks["PRF-05"] = "fail"
+            reasons.extend(f"PRF-05: {v}" for v in prf05_violations)
+        elif "certified_budget" in metrics:
+            checks["PRF-05"] = "pass"
+        else:
+            checks["PRF-05"] = "missing"
 
     # -----------------------------------------------------------------------
     # PRF-06: negative_guards_and_clean_teardown
@@ -2431,9 +2480,42 @@ def evaluate(
         and n6_valid
     )
 
-    if prf06_violations:
+    # Individual negative battery violations should cause PRF-06 to fail
+    # (per brief §6: each negative case must be detected)
+    # Only enforce when negative battery elements are actually present in the evidence
+    negative_battery_incomplete = False
+    has_negative_battery_elements = (
+        n1a_brief_windows
+        or n1b_modset_rejects
+        or n2_client_rejects
+        or any(bop["status"] == "rejected" for bop in budget_check_ops)
+        or foreign_inject_ops
+    )
+    if has_negative_battery_elements:
+        if n1a_brief_windows and not n1a_valid:
+            negative_battery_incomplete = True
+        if n1b_modset_rejects and not n1b_valid:
+            negative_battery_incomplete = True
+        if not n2_client_rejects:
+            # Check if any perf_snap on client was expected but not rejected correctly
+            client_perf_ops = [op for op in ops if op["peer"] == "client" and op["verb"] in PERF_VERBS]
+            if client_perf_ops:
+                for op in client_perf_ops:
+                    if op["status"] != "rejected" or op["reason"] != "wrong_role:client":
+                        negative_battery_incomplete = True
+                        break
+        if not all_n5_present:
+            negative_battery_incomplete = True
+        if not pre_post_n5_invariance_ok and (n1b_modset_rejects or n2_client_rejects or any(bop["status"] == "rejected" for bop in budget_check_ops)):
+            negative_battery_incomplete = True
+        if foreign_inject_ops and not n6_valid:
+            negative_battery_incomplete = True
+
+    if prf06_violations or negative_battery_incomplete:
         checks["PRF-06"] = "fail"
         reasons.extend(f"PRF-06: {v}" for v in prf06_violations)
+        if negative_battery_incomplete and not prf06_violations:
+            reasons.append("PRF-06: incomplete or invalid negative battery (N1a, N1b, N2, N4, N5, N6)")
     elif full_prf06_ready:
         checks["PRF-06"] = "pass"
     else:
@@ -2447,7 +2529,7 @@ def evaluate(
     elif (
         transport_failures
         or technical_data is not None
-        or technical_window_missing
+        or prf03_technical
         or actor_driver_missing
         or any(v != "pass" for v in checks.values())
     ):
@@ -2456,6 +2538,8 @@ def evaluate(
             reasons.extend(f"transport: {t}" for t in transport_failures)
         if technical_data is not None:
             reasons.append(f"technical: {technical_data.get('reason', 'blocker')}")
+        if prf03_technical:
+            reasons.append("technical: PRF-03 technical failure")
     else:
         code = PASA
 

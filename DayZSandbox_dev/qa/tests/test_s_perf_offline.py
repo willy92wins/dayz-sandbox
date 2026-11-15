@@ -71,6 +71,8 @@ DIRECTOR_POS = s_perf_eval.DIRECTOR_POS
 CLEAR_RADIUS_M = s_perf_eval.CLEAR_RADIUS_M
 MAX_DIRECTOR_DIST_M = s_perf_eval.MAX_DIRECTOR_DIST_M
 MIN_GROUP_SEP_M = s_perf_eval.MIN_GROUP_SEP_M
+CREATURE_SWAY_RADIUS_M = s_perf_eval.CREATURE_SWAY_RADIUS_M
+ROAM_SQUARE_RADIUS_M = s_perf_eval.ROAM_SQUARE_RADIUS_M
 
 # Load canonical fixture
 with FIXTURE_PATH.open("r", encoding="utf-8") as f:
@@ -517,8 +519,8 @@ def _job_read_done(
     return _bridge_record(
         verb="job_read",
         peer="server",
-        status="done" if state == "done" else "rejected" if state in ("stopped", "failed", "expired") else "error",
-        reason=reason if state != "done" else "",
+        status="done",
+        reason="",
         op_id=op_id,
         req_payload=req,
         res_payload=res,
@@ -694,26 +696,35 @@ def _build_window_rows(
     fps_counter: float = 51.0,
     roam_min_step: float = ROAM_MIN_STEP_M,
     creatures_min_step: float = CREATURES_MIN_STEP_M,
-    emote_active: int = 1,
-    emote_cb1101: int = 1,
-    creatures_moved: int = 13,
+    emote_active: int | None = None,
+    emote_cb1101: int | None = None,
+    creatures_moved: int | None = None,
     with_dtsum: bool = True,
     with_harness_drift: bool = False,
 ) -> list:
     spec = STEP_SPEC.get(step_id, STEP_SPEC["fixture"])
+    # Default emote_active and emote_cb1101 to number of emote actors (actors_n // 2)
+    if emote_active is None:
+        emote_active = spec["actors_n"] // 2
+    if emote_cb1101 is None:
+        emote_cb1101 = spec["actors_n"] // 2
+    # Default creatures_moved to total creatures (infected + animals)
+    if creatures_moved is None:
+        creatures_moved = spec["infected_n"] + spec["animals_n"]
     rows = []
     tick = start_tick_ms
-    frame = start_frame
+    frame = float(start_frame)
     dtsum = 0.0
+    frame_increment = fps_counter * SAMPLE_STEP_MS / 1000.0
     for i in range(n_rows):
         dt = SAMPLE_STEP_MS
         tick += dt
-        frame += 1
+        frame += frame_increment
         if with_dtsum:
             dtsum += dt
         row = {
             "seq_n": i,
-            "frame": frame,
+            "frame": int(round(frame)),
             "tick_ms": round(tick, 1),
             "dtsum_ms": round(dtsum, 1) if with_dtsum else round(tick - start_tick_ms, 1),
             "avg_fps": round(fps_mean + (i % 5 - 2) * 0.5, 2),
@@ -735,6 +746,8 @@ def _build_snap_rows(
     *,
     foreign_content_b: int = 0,
     actor_foreign_idx: int | None = None,
+    cp_index: int = 0,
+    total_cps: int = EXPECTED_SNAP_CHECKPOINTS,
 ) -> list:
     spec = STEP_SPEC.get(step_id, STEP_SPEC["fixture"])
     rows = []
@@ -766,6 +779,10 @@ def _build_snap_rows(
     # Infected
     for i in range(spec["infected_n"]):
         x, _, z = s_perf_eval.spawn_pos_infected(i)
+        # Sway ±1.5m over 60s, 13 checkpoints (5s intervals)
+        sway_amplitude = CREATURE_SWAY_RADIUS_M
+        phase = (cp_index / total_cps) * 2 * math.pi
+        sway_x = sway_amplitude * math.sin(phase)
         rows.append({
             "entity_idx_n": e_idx,
             "kind_code_n": 2,
@@ -773,10 +790,10 @@ def _build_snap_rows(
             "alive_b": 1,
             "wardrobe_n": 0,
             "ai_agent_b": 1,
-            "pos_x_m": float(x),
+            "pos_x_m": float(x + sway_x),
             "pos_y_m": 300.0,
             "pos_z_m": float(z),
-            "cum_disp_m": 0.0,
+            "cum_disp_m": abs(sway_x) * 2 * cp_index,  # cumulative
             "wp_legs_n": 0,
             "emote_playing_b": 0,
             "emote_pending_b": 0,
@@ -790,6 +807,9 @@ def _build_snap_rows(
     # Animals
     for i in range(spec["animals_n"]):
         x, _, z = s_perf_eval.spawn_pos_animal(i)
+        sway_amplitude = CREATURE_SWAY_RADIUS_M
+        phase = (cp_index / total_cps) * 2 * math.pi
+        sway_x = sway_amplitude * math.sin(phase)
         rows.append({
             "entity_idx_n": e_idx,
             "kind_code_n": 3,
@@ -797,10 +817,10 @@ def _build_snap_rows(
             "alive_b": 1,
             "wardrobe_n": 0,
             "ai_agent_b": 1,
-            "pos_x_m": float(x),
+            "pos_x_m": float(x + sway_x),
             "pos_y_m": 300.0,
             "pos_z_m": float(z),
-            "cum_disp_m": 0.0,
+            "cum_disp_m": abs(sway_x) * 2 * cp_index,
             "wp_legs_n": 0,
             "emote_playing_b": 0,
             "emote_pending_b": 0,
@@ -816,6 +836,48 @@ def _build_snap_rows(
         ax, _, az = s_perf_eval.spawn_pos_actor(a)
         role = 1 if (a % 2 == 0) else 2
         is_foreign_actor = (foreign_content_b and actor_foreign_idx is not None and e_idx == actor_foreign_idx)
+        if role == 1:
+            # Roam actor: patrol square of radius 6m over 60s (48m perimeter)
+            # 13 checkpoints (0-12) at 5s intervals
+            # Each side = 12m, 4 sides = 48m total. Speed = 48m/60s = 0.8 m/s
+            # Per 5s checkpoint: 4m displacement
+            # Complete 1 leg (12m) every 3 checkpoints
+            perimeter = 48.0
+            speed = perimeter / 60.0  # 0.8 m/s
+            dist_per_cp = speed * 5.0  # 4.0 m per checkpoint
+            total_dist = cp_index * dist_per_cp
+            # wp_legs: increments every 3 checkpoints (12m per leg)
+            wp_legs = cp_index // 3
+            # Position along square path
+            side_len = 12.0
+            path_pos = (cp_index * dist_per_cp) % perimeter
+            side = int(path_pos / side_len)
+            side_progress = (path_pos % side_len) / side_len
+            radius = ROAM_SQUARE_RADIUS_M
+            # Square centered at (ax, az) with radius 6m
+            # Start at right side center: (ax + radius, az)
+            if side == 0:
+                # Right side: moving +Z (up)
+                pos_x = ax + radius
+                pos_z = az - radius + side_progress * 2 * radius
+            elif side == 1:
+                # Top side: moving -X (left)
+                pos_x = ax + radius - side_progress * 2 * radius
+                pos_z = az + radius
+            elif side == 2:
+                # Left side: moving -Z (down)
+                pos_x = ax - radius
+                pos_z = az + radius - side_progress * 2 * radius
+            else:
+                # Bottom side: moving +X (right)
+                pos_x = ax - radius + side_progress * 2 * radius
+                pos_z = az - radius
+        else:
+            # Emote actor: stationary
+            pos_x = ax
+            pos_z = az
+            wp_legs = 0
+            total_dist = 0.0
         rows.append({
             "entity_idx_n": e_idx,
             "kind_code_n": 4,
@@ -823,17 +885,17 @@ def _build_snap_rows(
             "alive_b": 1,
             "wardrobe_n": spec["wardrobe_per_actor_n"],
             "ai_agent_b": 1 if role == 1 else 0,
-            "pos_x_m": float(ax),
+            "pos_x_m": float(pos_x),
             "pos_y_m": 300.0,
-            "pos_z_m": float(az),
-            "cum_disp_m": 0.0,
-            "wp_legs_n": 0,
+            "pos_z_m": float(pos_z),
+            "cum_disp_m": total_dist,
+            "wp_legs_n": wp_legs,
             "emote_playing_b": 1 if role == 2 else 0,
             "emote_pending_b": 0,
             "emote_cb_id_n": EMOTE_CB_CMD_CLAP if role == 2 else 0,
             "emote_cb_state_n": 1 if role == 2 else 0,
-            "emote_active_ticks_n": 300 if role == 2 else 0,
-            "emote_completions_n": 0,
+            "emote_active_ticks_n": cp_index * 30 if role == 2 else 0,
+            "emote_completions_n": cp_index // 3 if role == 2 else 0,
             "foreign_content_b": 1 if is_foreign_actor else 0,
         })
         e_idx += 1
@@ -1137,7 +1199,33 @@ class TestSPerfOffline(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             part = Path(td) / "part"
             ws = _window_start_done("fixture", job_id="job-1", start_tick_ms=40000.0, warmup_ms=30000.0)
-            rows = _build_window_rows("fixture", start_tick_ms=70000.0, n_rows=30)  # span ~30s
+            # Build 61 rows with 800ms intervals -> span = 48000ms < 60000ms
+            rows = []
+            tick = 70000.0
+            frame = 4000.0
+            dtsum = 0.0
+            frame_increment = 51.0 * 0.8  # fps_counter * dt/1000
+            for i in range(EXPECTED_WINDOW_ROWS):
+                dt = 800.0
+                tick += dt
+                frame += frame_increment
+                dtsum += dt
+                spec = STEP_SPEC["fixture"]
+                rows.append({
+                    "seq_n": i,
+                    "frame": int(round(frame)),
+                    "tick_ms": round(tick, 1),
+                    "dtsum_ms": round(dtsum, 1),
+                    "avg_fps": 51.0,
+                    "alive_roots_n": spec["roots_n"],
+                    "alive_wardrobe_n": spec["children_n"],
+                    "roam_disp_step_m": 0.07,
+                    "roam_min_step_m": 0.07 if i >= 1 else 0.0,
+                    "emote_active_actors_n": 1,
+                    "emote_cb_cmd1101_actors_n": 1,
+                    "creatures_moved_step_n": 13,
+                    "creatures_min_step_m": 0.02 if i >= 1 else 0.0,
+                })
             bridge = [
                 _preflight_done(),
                 _step_apply_done("fixture"),
@@ -1365,7 +1453,7 @@ class TestSPerfOffline(unittest.TestCase):
             ]
             # 13 checkpoints (each is a separate checkpoint operation, not paginated)
             for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                snap_rows = _build_snap_rows("fixture")
+                snap_rows = _build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)
                 bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=snap_rows))
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
@@ -1428,7 +1516,7 @@ class TestSPerfOffline(unittest.TestCase):
                 _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
             ]
             for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture")))
+                bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
             self.assertEqual(verdict["checks"]["PRF-02"], "fail")
@@ -1446,7 +1534,7 @@ class TestSPerfOffline(unittest.TestCase):
                 _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
             ]
             for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture")))
+                bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
             self.assertEqual(verdict["checks"]["PRF-02"], "fail")
@@ -1482,7 +1570,7 @@ class TestSPerfOffline(unittest.TestCase):
                 _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
             ]
             for cp in range(5):  # only 5 checkpoints
-                bridge.append(_snap_done("fixture", page_n=cp, pages_n=5, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture")))
+                bridge.append(_snap_done("fixture", page_n=cp, pages_n=5, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture", cp_index=cp, total_cps=5)))
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
             self.assertEqual(verdict["checks"]["PRF-02"], "fail")
@@ -1501,7 +1589,7 @@ class TestSPerfOffline(unittest.TestCase):
             ]
             # Build snapshots where roam actor barely moves
             for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                snap_rows = _build_snap_rows("fixture")
+                snap_rows = _build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)
                 # Modify roam actor position to be nearly stationary
                 for r in snap_rows:
                     if r["kind_code_n"] == 4 and r["role_code_n"] == 1:
@@ -1527,7 +1615,7 @@ class TestSPerfOffline(unittest.TestCase):
                 _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
             ]
             for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                snap_rows = _build_snap_rows("fixture")
+                snap_rows = _build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)
                 for r in snap_rows:
                     if r["kind_code_n"] == 4 and r["role_code_n"] == 2:
                         r["emote_completions_n"] = 0  # no completions
@@ -1549,7 +1637,7 @@ class TestSPerfOffline(unittest.TestCase):
                 _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
             ]
             for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                snap_rows = _build_snap_rows("fixture")
+                snap_rows = _build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)
                 bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, census_dynamic_n=999, rows=snap_rows))  # mismatch
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
@@ -1572,7 +1660,7 @@ class TestSPerfOffline(unittest.TestCase):
                 _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
             ]
             for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture")))
+                bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
             self.assertEqual(verdict["checks"]["PRF-05"], "fail")
@@ -1591,7 +1679,7 @@ class TestSPerfOffline(unittest.TestCase):
                 _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
             ]
             for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                bridge.append(_snap_done("base", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("base")))
+                bridge.append(_snap_done("base", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("base", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
             self.assertEqual(verdict["checks"]["PRF-05"], "fail")
@@ -1612,7 +1700,7 @@ class TestSPerfOffline(unittest.TestCase):
                     _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
                 ])
                 for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s)))
+                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
             # Budget check at fixture cap (k*=1)
             bridge.append(_budget_check_done(accepted=True, max_vals=STEP_SPEC["fixture"], cand_vals=STEP_SPEC["fixture"]))
             # Filter None
@@ -1641,7 +1729,7 @@ class TestSPerfOffline(unittest.TestCase):
                     _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
                 ])
                 for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s)))
+                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
             bridge.append(_budget_check_done(accepted=True, max_vals=STEP_SPEC["inc1"], cand_vals=STEP_SPEC["inc1"]))
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
@@ -1664,7 +1752,7 @@ class TestSPerfOffline(unittest.TestCase):
                     _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
                 ])
                 for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s)))
+                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
             # NO budget check at cap
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
