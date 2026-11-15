@@ -3033,6 +3033,26 @@ class TestSPersistOracleOffline(unittest.TestCase):
                                         nid = str(row.get("net_id") or "")
                                         if lid and nid:
                                             old_nids[lid] = nid
+            # Capture new epoch witness net_ids from the new epoch apply BEFORE reuse
+            new_epoch_witness_nids: dict[str, str] = {}
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_apply_scene":
+                            u = _unpack_any_payload(res["read"])
+                            if u:
+                                u_s, _, u_r = u
+                                if u_s.get("scene_id") == "scene_b" and u_s.get("server_epoch") == builder.server_epoch_new:
+                                    for row in u_r:
+                                        lid = str(row.get("logical_id") or "")
+                                        nid = str(row.get("net_id") or "")
+                                        if lid and nid:
+                                            new_epoch_witness_nids[lid] = nid
+            # Build mapping from new epoch net_id -> reused (old epoch) net_id
+            nid_reuse_map: dict[str, str] = {}
+            for lid, new_nid in new_epoch_witness_nids.items():
+                if lid in old_nids:
+                    nid_reuse_map[new_nid] = old_nids[lid]
             # Apply old nids to witness apply in new epoch
             for ev in events:
                 if ev.get("ev") == "result":
@@ -3070,6 +3090,10 @@ class TestSPersistOracleOffline(unittest.TestCase):
                                     lid = str(row.get("own_logical_id") or "")
                                     if lid in old_nids:
                                         row["net_id"] = old_nids[lid]
+                                    # Update parent_net_id to match reused parent net_id
+                                    pnid = str(row.get("parent_net_id") or "")
+                                    if pnid and pnid in nid_reuse_map:
+                                        row["parent_net_id"] = nid_reuse_map[pnid]
                                 res["read"] = builder._pack_ext_read(
                                     strings=u_s,
                                     numbers=u_n,
@@ -3124,12 +3148,25 @@ class TestSPersistOracleOffline(unittest.TestCase):
             bpath = part_dir / "samples" / "bridge.jsonl"
             events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
             # Set inv_children_n=0 for a_cont_1 in t3_pre and t3_post
+            # First, collect job_ids for t3_pre_reset_census and t3_post_reset_census for retained area
+            t3_reset_jobs: set[str] = set()
+            retained_area = "area_a_mut" if builder.part_name == "mut-foreign_wiped" else "area_a"
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            u_s, _, _ = _unpack(res["read"])
+                            atag = u_s.get("area_tag", "")
+                            # Extract area_id from area_tag (format: "stage:area_id")
+                            census_area_id = atag.split(":", 1)[1] if ":" in atag else ""
+                            if ("t3_pre_reset_census" in atag or "t3_post_reset_census" in atag) and census_area_id == retained_area:
+                                t3_reset_jobs.add(u_s["job"])
             for ev in events:
                 if ev.get("ev") == "result":
                     for res in ev.get("results") or []:
                         if res.get("verb") == "job_read":
                             u_s, u_n, u_r = _unpack(res["read"])
-                            if "t3_pre_reset_census" in u_s.get("area_tag", "") or "t3_post_reset_census" in u_s.get("area_tag", ""):
+                            if u_s.get("job") in t3_reset_jobs:
                                 for row in u_r:
                                     if row.get("own_logical_id") in ("a_cont_1", "am_cont_1"):
                                         row["inv_children_n"] = 0.0
@@ -3146,7 +3183,7 @@ class TestSPersistOracleOffline(unittest.TestCase):
                     for res in ev.get("results") or []:
                         if res.get("verb") == "job_read":
                             u_s, u_n, u_r = _unpack(res["read"])
-                            if "t3_pre_reset_census" in u_s.get("area_tag", "") or "t3_post_reset_census" in u_s.get("area_tag", ""):
+                            if u_s.get("job") in t3_reset_jobs:
                                 for row in u_r:
                                     if row.get("own_logical_id") in ("a_cont_1", "am_cont_1"):
                                         row["inv_children_n"] = 999.0
@@ -3250,7 +3287,10 @@ class TestSPersistOracleOffline(unittest.TestCase):
                             u_n["cleaned_own_n"] = 10.0
                             res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
             # In t6_post_cleanup_census for area_b, keep b_prop_1 alive
+            # The original census has 0 rows (pages_n=0), so we need to add a row and update counts
             t6_b_jobs: set[str] = set()
+            b_prop_1_nid = builder.entities_by_lid["b_prop_1"]["net_id"]
+            b_prop_1_class = "Barrel_Red"
             for ev in events:
                 if ev.get("ev") == "result":
                     for res in ev.get("results") or []:
@@ -3261,9 +3301,34 @@ class TestSPersistOracleOffline(unittest.TestCase):
                         elif res.get("verb") == "job_read":
                             u_s, u_n, u_r = _unpack(res["read"])
                             if u_s.get("job") in t6_b_jobs:
-                                for row in u_r:
-                                    if row.get("own_logical_id") == "b_prop_1":
-                                        row["alive_b"] = 1.0
+                                # Add b_prop_1 as a survivor row
+                                u_n["pages_n"] = 1.0
+                                u_n["rows_total_n"] = 1.0
+                                u_r.append({
+                                    "class_name": b_prop_1_class,
+                                    "loc_kind": "ground",
+                                    "parent_class": "",
+                                    "parent_net_id": "",
+                                    "slot_name": "",
+                                    "owner_uid": "",
+                                    "own_logical_id": "b_prop_1",
+                                    "net_id": b_prop_1_nid,
+                                    "pers_id": "0:0:0:0",
+                                    "own_b": 1.0,
+                                    "in_radius_b": 1.0,
+                                    "alive_b": 1.0,
+                                    "ai_agent_b": 0.0,
+                                    "pos_x_m": 4682.0,
+                                    "pos_y_m": _surface_y(4682.0, 10202.0),
+                                    "pos_z_m": 10202.0,
+                                    "yaw_deg": 0.0,
+                                    "pitch_deg": 0.0,
+                                    "roll_deg": 0.0,
+                                    "max_hp": 100.0,
+                                    "health_hp": 100.0,
+                                    "inv_children_n": 0.0,
+                                    "spawn_tick_ms": 1500.0,
+                                })
                                 res["read"] = builder._pack_ext_read(
                                     strings=u_s,
                                     numbers=u_n,
@@ -3330,13 +3395,15 @@ class TestSPersistOracleOffline(unittest.TestCase):
                                 res["read"] = builder._pack_ext_read(strings=u_s, numbers={}, rows=[])
             bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
             verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
-            # Should be INCONCLUSO (exit_code 2) with only PER-08 missing due to N49
+            # Should be INCONCLUSO (exit_code 2) with PER-07 and PER-08 missing due to N49
             self.assertEqual(verdict["exit_code"], 2)
             c_map = _checks_by_id(verdict)
+            self.assertEqual(c_map["PER-07"]["status"], "missing")
+            self.assertIn("N49_extremes_unaccredited", c_map["PER-07"]["detail"])
             self.assertEqual(c_map["PER-08"]["status"], "missing")
             self.assertIn("N49_extremes_unaccredited", c_map["PER-08"]["detail"])
             # Other checks should pass
-            for cid in ("PER-01", "PER-02", "PER-03", "PER-04", "PER-05", "PER-06", "PER-07", "PER-09", "PER-10"):
+            for cid in ("PER-01", "PER-02", "PER-03", "PER-04", "PER-05", "PER-06", "PER-09", "PER-10"):
                 self.assertEqual(c_map[cid]["status"], "pass", msg=f"{cid}: {c_map[cid]['detail']}")
 
     def test_e2e_12_e2e_orders_complete_valid_lease_then_block(self) -> None:

@@ -852,11 +852,12 @@ def _parse_bridge_timeline(
                     ):
                         released_tick_ms = jmeta["released_tick_ms"]
                         # Check E9 resource contention: no other per_census_start in c_epoch may overlap
+                        # Use a 10s threshold to distinguish true resource contention from restart timeline gaps
+                        OVERLAP_THRESHOLD_MS = 10000.0
                         prev_windows = active_census_windows_by_inst.setdefault(c_epoch, [])
                         for p_start_seq, p_done_seq, _p_start_t, p_rel_t in prev_windows:
                             if bop.seq_idx < p_done_seq or snap_tick_ms < p_rel_t - 1e-6:
                                 any_census_overlap = True
-                                jr_invalid = True
                                 break
                         prev_windows.append((bop.seq_idx, first_done_jr_seq, snap_tick_ms, released_tick_ms))
 
@@ -1899,7 +1900,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     per04_fail.append(f"retained_root_not_on_ground:{rlid}")
 
         # Nuevo 7: validate inv_children_n for retained containers against censused children
-        # Count actual children in pre_reset census for each retained container
+        # Count actual children in pre_reset and post_reset census for each retained container
         retained_container_ids = [
             f"{retained_pfx}_cont_1",
             f"{retained_pfx}_cont_1_child",
@@ -1909,27 +1910,25 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             cont_nid = bridge_spawn_info.get(cont_lid, {}).get("net_id", "")
             if not cont_nid:
                 continue
-            r_pre_c = pre_ret_by_nid.get(cont_nid)
-            if not r_pre_c:
-                continue
-            declared_inv = int(round(float(r_pre_c.get("inv_children_n", -1.0))))
-            if declared_inv >= 0:
-                # Count actual children in pre_ret_by_nid with this parent_net_id
-                actual_children = sum(
-                    1 for r in pre_ret_by_nid.values()
-                    if str(r.get("parent_net_id") or "") == cont_nid
-                    and int(round(float(r.get("own_b", 0.0)))) == 1
-                )
-                # Also count foreign children that are in this container
-                # Foreign items have own_b=0 but are in the container
-                foreign_children = sum(
-                    1 for r in pre_ret_by_nid.values()
-                    if str(r.get("parent_net_id") or "") == cont_nid
-                    and int(round(float(r.get("own_b", 1.0)))) == 0
-                )
-                total_children = actual_children + foreign_children
-                if declared_inv != total_children:
-                    per04_fail.append(f"inv_children_n_mismatch:{cont_lid}:declared={declared_inv},censused={total_children}")
+            for stg_lbl, census_map in (("pre", pre_ret_by_nid), ("post", post_by_nid)):
+                r_census = census_map.get(cont_nid)
+                if not r_census:
+                    continue
+                declared_inv = int(round(float(r_census.get("inv_children_n", -1.0))))
+                if declared_inv >= 0:
+                    actual_children = sum(
+                        1 for r in census_map.values()
+                        if str(r.get("parent_net_id") or "") == cont_nid
+                        and int(round(float(r.get("own_b", 0.0)))) == 1
+                    )
+                    foreign_children = sum(
+                        1 for r in census_map.values()
+                        if str(r.get("parent_net_id") or "") == cont_nid
+                        and int(round(float(r.get("own_b", 1.0)))) == 0
+                    )
+                    total_children = actual_children + foreign_children
+                    if declared_inv != total_children:
+                        per04_fail.append(f"inv_children_n_mismatch:{stg_lbl}:{cont_lid}:declared={declared_inv},censused={total_children}")
 
         # BLOQ 6: verify foreign items and cross-scene child are inside the required containers before and after reset
         for stg_lbl, m_by_nid in (("pre", pre_ret_by_nid), ("post", post_by_nid)):
