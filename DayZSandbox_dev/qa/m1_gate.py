@@ -197,11 +197,10 @@ def _spike(args, evidence, argv):
     if args.id == "F0.3-0" and not args.both and not args.evaluate_only:
         _write_run(evidence, "spike", args.id, args, argv, 2, ["requires_both"])
         return 2
-    if args.id not in gate_core.SPIKE_REGISTRY or args.id not in gate_core.IMPLEMENTED_SPIKES:
-        if args.id in gate_core.SPIKE_REGISTRY and not args.evaluate_only:
-            run_mod_name, _eval_mod_name, _mut_mod_name = gate_core.SPIKE_REGISTRY[args.id]
-            run_fn = importlib.import_module(run_mod_name).run
-            return int(run_fn(args, evidence, argv))
+    # Brief F0.3-0 §5.1: todo spike de SPIKE_REGISTRY se despacha a SU run y, con --evaluate-only, a SU evaluate y a
+    # su EXPECTED_MUTANTS. Los esqueletos responden ellos mismos not_implemented (exit 2), asi que un spike se activa
+    # desde su propio write-set sin tocar el nucleo. Solo un id fuera del registro cae aqui en not_implemented.
+    if args.id not in gate_core.SPIKE_REGISTRY:
         return _not_implemented(args, evidence, argv, "spike", args.id)
 
     run_mod_name, eval_mod_name, _mut_mod_name = gate_core.SPIKE_REGISTRY[args.id]

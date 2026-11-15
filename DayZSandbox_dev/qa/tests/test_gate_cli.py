@@ -145,6 +145,24 @@ class GateCliTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 2, proc.stderr)
             self.assertFalse(unknown.exists())
 
+    def test_registered_skeleton_spike_evaluate_only_reaches_its_own_evaluate(self):
+        # Brief F0.3-0 §5.1: --evaluate-only llama al evaluate del spike registrado (aqui el esqueleto de S3), no a un
+        # not_implemented del nucleo. Asi cada spike se activa desde su write-set sin tocar gate_core.IMPLEMENTED_SPIKES.
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp) / "ev"
+            run_dir = evidence / "run"
+            (run_dir / "samples").mkdir(parents=True)
+            (run_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+            proc = _run(["spike", "S3", "--build", "offline", "--evidence", str(evidence), "--evaluate-only"])
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            part_verdict = run_dir / "verdict.json"
+            self.assertTrue(part_verdict.is_file(), "el evaluate de S3 no llego a correr sobre run/")
+            pv = json.loads(part_verdict.read_text(encoding="utf-8"))
+            self.assertEqual(pv["id"], "S3")
+            self.assertEqual(pv["exit_code"], 2)
+            self.assertEqual(pv["reasons"], ["not_implemented"])
+            self.assertTrue(gate_core.IMPLEMENTED_SPIKES >= set(gate_core.SPIKE_REGISTRY))
+
     def test_rule4_usage_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             evidence = Path(tmp) / "ev"

@@ -25,7 +25,9 @@ SPIKE_REGISTRY = {
 }
 
 SPIKES = tuple(SPIKE_REGISTRY.keys())
-IMPLEMENTED_SPIKES = frozenset({"S-puente", "F0.3-0"})
+# Informativo: m1_gate despacha cualquier spike registrado a sus modulos (brief F0.3-0 §5.1); los esqueletos
+# responden not_implemented (exit 2). Activar un spike no exige tocar esta linea.
+IMPLEMENTED_SPIKES = frozenset(SPIKE_REGISTRY)
 
 
 def known_spikes():
