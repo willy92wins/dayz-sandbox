@@ -93,6 +93,26 @@ Evidence contract consumed by ``evaluate(part_dir)``
    - ``ledger_entry``: expected scene and raw-spawn entities for the part.
    - ``ledger_spawn_recorded``: ``logical_id`` / ``tag``, ``net_id_t1``,
      ``pers_id_t1``, ``init_max_hp``, ``init_health_hp``.
+
+Every bridge event carries ``t_ms`` (bridge clock, written by the core, monotonic across epochs); the peers'
+``tick_ms`` restart with each process.
+
+What is evaluated per build (MEN-5)
+-----------------------------------
+``manifest["build"] == "offline"``: PER-01..PER-09 on the bridge evidence; PER-10 is the static scan of the
+``DSBX_QA_X_Persist*.c`` sources at ``git_head`` plus the stamp/hello identity. The ``storage_*`` scenario
+events are NOT required (if both ``storage_snapshot_t0`` and ``storage_restore_result`` are present they are
+still validated) and PER-02 does NOT require the 10 minutes of hold (``snap - spawn >= 600000``): an offline
+implementation does not have to fabricate storage files or 10 minutes of time.
+``"diag"`` / ``"retail"``: additionally PER-10 requires ``storage_snapshot_t0`` and ``storage_restore_result``
+(equal sha256 maps, ``restore_ok_b == 1``) and PER-02 requires the 600 s hold.
+
+Expectations come from the frozen fixture, never from the runner (BLOQ-1): the ledger / apply args may carry
+``req_x_m`` / ``req_z_m`` but they must equal the fixture to 1e-6. The director baseline comes only from the
+t0 census of ``area_a`` (``include_director_b == 1``, MEN-8). N49 (creature coverage after restart) is accredited
+with the peers' own reads and the bridge clock (MEN-4), see the comment above ``n49_extremes_accredited``. The
+census resource is checked for real contention (MEN-6): a second ``per_census_start`` while a census is alive
+must answer ``rejected/busy``, the first census must stay intact and the next one is accepted after the free.
 """
 
 from __future__ import annotations
@@ -109,6 +129,9 @@ import gate_core
 import wire
 
 SPIKE_ID = "S-persist"
+
+# N49: cota del tick_ms (reloj del peer desde el arranque del proceso) en la primera lectura del epoch nuevo.
+N49_MAX_FIRST_NEW_TICK_MS = 600000.0
 
 CHECK_IDS = (
     "PER-01",
@@ -266,8 +289,39 @@ def _strip_c_comments_preserve_strings(source: str) -> str:
     return "".join(out)
 
 
+ORDERED_ARRAY_MEMBERS = ("m_CacheOrder", "m_RpcLog", "m_PingLog", "m_EmitLog")
+
+
+def _blank_string_literals(source: str) -> str:
+    """Replace the content of every "..." literal by spaces (quotes and newlines kept)."""
+    out: list[str] = []
+    i = 0
+    n = len(source)
+    in_str = False
+    while i < n:
+        ch = source[i]
+        if in_str:
+            if ch == "\\" and i + 1 < n:
+                out.append("  ")
+                i += 2
+                continue
+            if ch == '"':
+                in_str = False
+                out.append(ch)
+            else:
+                out.append(ch if ch == chr(10) else " ")
+            i += 1
+            continue
+        if ch == '"':
+            in_str = True
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def scan_persist_enforcescript_sources(persist_files: dict[str, str]) -> list[str]:
-    """Scan Enforce Script sources for forbidden CE/lifetime/storage tokens and .Remove(."""
+    """Scan Enforce Script sources for forbidden CE/lifetime/storage tokens (brief 10.1) and
+    `.Remove(` on the four order-sensitive arrays (m_CacheOrder, m_RpcLog, m_PingLog, m_EmitLog)."""
     if not isinstance(persist_files, dict) or not persist_files:
         return ["empty_persist_files"]
     violations: list[str] = []
@@ -283,8 +337,12 @@ def scan_persist_enforcescript_sources(persist_files: dict[str, str]) -> list[st
         for sub in FORBIDDEN_ENFORCE_SUBSTRINGS:
             if sub in stripped:
                 violations.append(f"{rel_path}:forbidden_path:{sub}")
-        if re.search(r"\.\s*Remove\s*\(", stripped):
-            violations.append(f"{rel_path}:forbidden_unordered_remove:.Remove(")
+        # F0.3-0 F02-H2 (brief :476): `.Remove(` solo se prohibe sobre los cuatro arrays cuyo
+        # orden importa; un `map.Remove(k)` o un literal "a.Remove(b)" no son violacion.
+        code_only = _blank_string_literals(stripped)
+        for member in ORDERED_ARRAY_MEMBERS:
+            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(member)}\s*\.\s*Remove\s*\(", code_only):
+                violations.append(f"{rel_path}:forbidden_unordered_remove:{member}.Remove(")
     return violations
 
 
@@ -482,6 +540,7 @@ class _BridgeOperation:
         self.frame_recv: int = 0
         self.frame_done: int = 0
         self.result_seq_idx: int = seq_idx
+        self.result_t_ms: float | None = None
 
 
 def _parse_bridge_timeline(
@@ -602,6 +661,8 @@ def _parse_bridge_timeline(
                     bop.frame_recv = int(res.get("frame_recv") or 0)
                     bop.frame_done = int(res.get("frame_done") or 0)
                     bop.result_seq_idx = idx
+                    _rt = ev.get("t_ms")
+                    bop.result_t_ms = float(_rt) if _is_finite_num(_rt) else None
                     if res_inst and not bop.inst:
                         bop.inst = res_inst
                     if bop.status in ("lost", "timeout"):
@@ -671,6 +732,49 @@ def _parse_bridge_timeline(
         if len(s_ops) > 1:
             any_reused_census_job_id = True
 
+    # MEN-6: contencion real del recurso `per_census` (F0.3-0 brief :147). Se deduce solo del orden
+    # de las ordenes en el bridge: mientras un censo A esta vivo (desde su start hasta su job_free)
+    # otro per_census_start en el mismo epoch debe responder rejected/busy; uno aceptado es un
+    # solape (el recurso no protege), y un rechazo con otro motivo no prueba la contencion.
+    census_busy_probes: list[dict[str, Any]] = []
+    census_overlap_offenders: set[str] = set()
+    any_census_contention_wrong_reason = False
+    for a_op in ordered_ops:
+        if a_op.verb != "per_census_start" or a_op.status != "done" or a_op.peer != "server":
+            continue
+        a_out = _unpack_any_payload(a_op.read)
+        a_jid = (a_out[0].get("job") if a_out else "") or a_op.op_id
+        a_free_seq = min(
+            (
+                jf.seq_idx
+                for jf in job_free_ops_by_job.get(a_jid, [])
+                if jf.seq_idx > a_op.seq_idx and jf.peer == "server" and jf.inst == a_op.inst
+            ),
+            default=10**9,
+        )
+        for r_op in ordered_ops:
+            if (
+                r_op is a_op
+                or r_op.verb != "per_census_start"
+                or r_op.peer != "server"
+                or r_op.inst != a_op.inst
+                or not (a_op.seq_idx < r_op.seq_idx < a_free_seq)
+            ):
+                continue
+            if r_op.status == "done":
+                census_overlap_offenders.add(r_op.op_id)
+                any_census_overlap = True
+            elif r_op.status == "rejected":
+                if r_op.reason == "busy":
+                    census_busy_probes.append({
+                        "first_op_id": a_op.op_id,
+                        "rejected_op_id": r_op.op_id,
+                        "free_seq": a_free_seq,
+                        "inst": a_op.inst,
+                    })
+                else:
+                    any_census_contention_wrong_reason = True
+
     server_epoch_old = server_epochs[0] if server_epochs else ""
     server_epoch_new = ""
     for ep in server_epochs[1:]:
@@ -737,6 +841,9 @@ def _parse_bridge_timeline(
     for bop in ordered_ops:
         if bop.verb != "per_census_start":
             continue
+        if bop.status == "rejected":
+            # un rechazo (busy) no es un censo: no entra en el reparto por etapas
+            continue
         in_unpacked = _unpack_any_payload(bop.args)
         out_unpacked = _unpack_any_payload(bop.read) if bop.status == "done" else None
         in_s, in_n, _ = in_unpacked if in_unpacked else ({}, {}, [])
@@ -748,6 +855,8 @@ def _parse_bridge_timeline(
         inc_dir = int(round(out_n.get("include_director_b", in_n.get("include_director_b", 0.0))))
         area_id = _infer_area_id(raw_tag, cx, cz, fixture)
         explicit_stage = _extract_stage_from_tag(raw_tag, {**in_s, **out_s})
+        if bop.op_id in census_overlap_offenders:
+            explicit_stage = "contention_overlap_offender"
         if not explicit_stage and bop.op_id in scen_census_stage:
             explicit_stage, scen_area = scen_census_stage[bop.op_id]
             if scen_area and area_id == raw_tag:
@@ -948,6 +1057,8 @@ def _parse_bridge_timeline(
         "any_reused_census_job_id": any_reused_census_job_id,
         "any_invalid_census_resource": any_invalid_census_resource,
         "any_census_overlap": any_census_overlap,
+        "census_busy_probes": census_busy_probes,
+        "any_census_contention_wrong_reason": any_census_contention_wrong_reason,
     }
 
 
@@ -1034,6 +1145,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     census_overlap_detected = timeline["any_census_overlap"]
     if census_overlap_detected:
         reasons.append("unprotected_census_resource_overlap")
+    census_wrong_reason = timeline["any_census_contention_wrong_reason"]
+    if census_wrong_reason:
+        reasons.append("census_contention_wrong_reason")
 
     # Check hello peers (both server and client must have hello 200 with matching build & proto)
     req_peers = ("server", "client") if manifest.get("both", True) else ("server",)
@@ -1068,9 +1182,6 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             if lid:
                 spawn_records[lid] = ev
 
-    baseline_foreign_events = [
-        ev for ev in scenario_events if ev.get("ev") == "baseline_director_foreign"
-    ]
     probe_source_events = [
         ev for ev in scenario_events if ev.get("ev") == "probe_sources_at_commit"
     ]
@@ -1143,6 +1254,10 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 break
             if aid == "area_a" and not director_uid_t0 and c0.get("director_uid"):
                 director_uid_t0 = c0["director_uid"]
+            if aid == "area_a" and (c0["include_director_b"] != 1 or c0["director_inv_readable_b"] != 1):
+                # MEN-8: el inventario basal del director sale del censo t0 de area_a, no del runner
+                reasons.append("t0_director_inventory_not_censused")
+                break
             for row in c0["rows"]:
                 cname = str(row.get("class_name") or "")
                 ouid = str(row.get("owner_uid") or "")
@@ -1153,12 +1268,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if aid == "area_a" and ouid == director_uid_t0:
                     baseline_director_rows.append(row)
 
-    # Also cross-check baseline_director_foreign in scenario.jsonl if provided
-    if baseline_foreign_events:
-        ev_bf = baseline_foreign_events[-1]
-        scen_bf_rows = ev_bf.get("rows")
-        if isinstance(scen_bf_rows, list) and not baseline_director_rows:
-            baseline_director_rows = scen_bf_rows
+    # MEN-8: `baseline_director_foreign` del runner ya NO es una fuente de verdad: la linea base del
+    # director sale solo de las filas del censo t0 de area_a (include_director_b == 1).
 
     # Collect per_apply_scene and per_spawn_raw and ground_query in t1
     ground_queries: list[tuple[float, float, float]] = []
@@ -1388,8 +1499,19 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if parent_id == "":
                     if orow.get("obs_loc_kind") != "ground" or crow.get("loc_kind") != "ground":
                         per01_fail.append(f"{lid}:root_not_on_ground")
-                    req_x = float(lrow.get("req_x_m", irow.get("req_x_m", f_ent["req_x_m"])))
-                    req_z = float(lrow.get("req_z_m", irow.get("req_z_m", f_ent["req_z_m"])))
+                    # BLOQ-1: la posicion esperada sale SOLO de la fixture congelada; el ledger del
+                    # runner (y los args del enq) solo se contrastan contra ella, nunca la definen.
+                    req_x = float(f_ent["req_x_m"])
+                    req_z = float(f_ent["req_z_m"])
+                    for _src_name, _src in (("ledger", lrow), ("apply_args", irow)):
+                        for _k, _exp in (("req_x_m", req_x), ("req_z_m", req_z)):
+                            if _k in _src:
+                                try:
+                                    _v = float(_src[_k])
+                                except (TypeError, ValueError):
+                                    _v = float("nan")
+                                if not (abs(_v - _exp) <= 1e-6):
+                                    per01_fail.append(f"{lid}:{_src_name}_{_k}_differs_from_fixture")
                     gy = _find_ground_y(req_x, req_z)
                     if gy is None:
                         per01_missing.append(f"{lid}:missing_ground_query")
@@ -1554,10 +1676,18 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         expected_nids_by_area.setdefault("area_c", set()).add(str(fp_children[0].get("net_id") or ""))
 
         # BLOQ 4: verify complete row accounting in every area of t1_pre_transition_census (rejects unlabeled duplicates)
+        t0_baseline_unusable = any(
+            r in reasons
+            for r in ("missing_t0_baseline_census", "incomplete_t0_baseline_census", "t0_director_inventory_not_censused")
+        )
         for aid in required_base_areas:
             area_rows_all = t1_pre_rows_by_area.get(aid, [])
             actual_nids = {str(r.get("net_id") or "") for r in area_rows_all}
             exp_nids = expected_nids_by_area.get(aid, set())
+            if t0_baseline_unusable:
+                # sin linea base del director en t0 no se puede contabilizar el inventario ajeno
+                per01_missing.append("t0_baseline_unusable")
+                break
             if len(area_rows_all) != len(exp_nids) or actual_nids != exp_nids:
                 per01_fail.append(f"{aid}:unexpected_or_extra_census_rows:{len(area_rows_all)}!={len(exp_nids)}")
 
@@ -1639,7 +1769,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             snap_t = float(c2["snap_tick_ms"])
             if snap_t < auth_spawn_t:
                 per02_missing.append("negative_hold_elapsed")
-            elif snap_t - auth_spawn_t < 600000.0:
+            elif build_kind in ("diag", "retail") and snap_t - auth_spawn_t < 600000.0:
+                # MEN-5: los 10 min de retencion solo se exigen en diag/retail (brief); en offline no
                 per02_missing.append("hold_under_600s")
 
         if per02_fail:
@@ -2194,62 +2325,125 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     else:
                         checks["PER-06"] = {"status": "pass", "detail": "ok"}
 
-    # Helper for N39 & N49 creature post-restart disk coverage (BLOQ 7: accredits reachable volume until save and first t5 census)
+    # N39 & N49: cobertura de las criaturas tras el reinicio.
     t5_censuses = [
         c for c in censuses_by_stage.get("t5_post_restart_census", [])
         if c["job_complete"] and c["inst"] == server_epoch_new
     ]
 
+    # Ordenes que alteran el mundo (MENOR: las lecturas puras no cuentan). El evaluador es ciego a las
+    # inyecciones, asi que un per_census_start aceptado cuenta como mutador (no puede saber si el peer
+    # lo uso para borrar algo); los rechazados no tuvieron efecto.
+    def _op_is_mutating(op: _BridgeOperation) -> bool:
+        if op.status == "rejected":
+            return False
+        if op.verb in (
+            "per_apply_scene",
+            "per_reset_scene",
+            "per_child_transition",
+            "per_spawn_raw",
+            "per_cleanup_qa",
+            "per_census_start",
+        ):
+            return True
+        if op.verb in ("job_read", "job_free", "job_stop", "per_status", "ground_query"):
+            return False
+        return op.verb.startswith("per_")
+
+    t3_post_max_seq = max(
+        (c["seq_idx"] for c in censuses_by_stage.get("t3_post_reset_census", [])),
+        default=-1,
+    )
+    post_t3_mutating_old_ops = [
+        op
+        for op in ordered_ops
+        if op.inst == server_epoch_old and op.seq_idx > t3_post_max_seq and _op_is_mutating(op)
+    ]
+
     old_epoch_ticks: list[float] = []
-    new_epoch_start_ticks: list[float] = []
-    for h in hellos:
-        raw_h = h.get("raw") if isinstance(h.get("raw"), dict) else {}
-        hms = raw_h.get("h_ms")
-        if _is_finite_num(hms) and float(hms) > 0.0:
-            if h.get("peer") == "server" and h.get("inst") == server_epoch_old:
-                old_epoch_ticks.append(float(hms))
-            elif h.get("peer") == "server" and server_epoch_new and h.get("inst") == server_epoch_new:
-                new_epoch_start_ticks.append(float(hms))
     for bop in ordered_ops:
-        if bop.peer != "server":
-            continue
-        if bop.inst == server_epoch_old:
+        if bop.peer == "server" and bop.inst == server_epoch_old:
             for tval in (bop.recv_ms, bop.done_ms):
                 if tval > 0.0:
                     old_epoch_ticks.append(tval)
-        elif server_epoch_new and bop.inst == server_epoch_new:
-            if bop.recv_ms > 0.0:
-                new_epoch_start_ticks.append(bop.recv_ms)
     for c_item in censuses:
         if c_item["inst"] == server_epoch_old:
             for tk in ("snap_tick_ms", "released_tick_ms", "free_done_ms"):
                 if float(c_item.get(tk, 0.0)) > 0.0:
                     old_epoch_ticks.append(float(c_item[tk]))
-        elif server_epoch_new and c_item["inst"] == server_epoch_new:
-            if float(c_item.get("snap_tick_ms", 0.0)) > 0.0:
-                new_epoch_start_ticks.append(float(c_item["snap_tick_ms"]))
-
     max_old_srv_tick_ms = max(old_epoch_ticks, default=0.0)
-    first_new_epoch_tick_ms = min(new_epoch_start_ticks, default=0.0)
 
-    # N49 accreditation: require explicit last_stop_tick_ms and first_load_tick_ms from peer lifecycle
-    # If not provided by the peer (no explicit shutdown/startup markers), we cannot accredit the
-    # temporal extremes and must return INCONCLUSO for creature coverage checks.
-    # The peer exposes these via per_status.server_epoch lifecycle or dedicated events.
-    # Here we check if we have explicit markers for the transition boundaries.
-    has_explicit_stop_marker = any(
-        bop.verb == "per_status" and bop.status == "done"
-        and str((_unpack_any_payload(bop.read) or ({}, {}, []))[0].get("server_epoch") or "") == server_epoch_old
-        and str((_unpack_any_payload(bop.read) or ({}, {}, []))[0].get("shutdown_marker") or "") == "1"
-        for bop in ordered_ops
+    # MEN-4 / N49: los extremos temporales se acreditan con LECTURAS DEL PROPIO PEER y con el reloj del
+    # bridge (t_ms, lo escribe el nucleo), sin etiquetas del runner:
+    #  - parada: hay un per_status del epoch viejo posterior a t3_post_reset_census (su tick_ms del peer
+    #    >= los ticks de ese censo), sin ordenes mutadoras viejas despues; el tiempo que el peer viejo siguio
+    #    vivo tras esa lectura (ultimo evento del bridge con su inst - t_ms del resultado) cuenta como
+    #    ventana sin muestrear;
+    #  - carga: la primera orden del epoch nuevo es un per_status cuyo tick_ms (del peer) es pequeno
+    #    (<= N49_MAX_FIRST_NEW_TICK_MS) y posterior al hello nuevo; el intervalo hello->lectura cuenta como
+    #    ventana sin muestrear.
+    # Si algo falta (incl. t_ms), N49 queda sin acreditar y PER-07/08 dan INCONCLUSO. Limite: la parada
+    # real del servidor y la carga real solo se acotan por esos testigos; no hay marca del peer en ellas.
+    def _ev_t_ms(ev: dict[str, Any]) -> float | None:
+        v = ev.get("t_ms")
+        return float(v) if _is_finite_num(v) else None
+
+    t3_post_max_tick = max(
+        (
+            max(float(c.get("snap_tick_ms", 0.0)), float(c.get("released_tick_ms", 0.0)), float(c.get("free_done_ms", 0.0)))
+            for c in censuses_by_stage.get("t3_post_reset_census", [])
+            if c["job_complete"]
+        ),
+        default=0.0,
     )
-    has_explicit_start_marker = any(
-        bop.verb == "per_status" and bop.status == "done"
-        and str((_unpack_any_payload(bop.read) or ({}, {}, []))[0].get("server_epoch") or "") == server_epoch_new
-        and str((_unpack_any_payload(bop.read) or ({}, {}, []))[0].get("startup_marker") or "") == "1"
-        for bop in ordered_ops
-    )
-    n49_extremes_accredited = has_explicit_stop_marker and has_explicit_start_marker
+    stop_status: tuple[_BridgeOperation, float] | None = None
+    for s_bop, _s_s, s_n, _s_r in status_ops_old:
+        s_tk = s_n.get("tick_ms")
+        if (
+            s_bop.seq_idx > t3_post_max_seq
+            and t3_post_max_tick > 0.0
+            and _is_finite_num(s_tk)
+            and float(s_tk) >= t3_post_max_tick
+            and (stop_status is None or s_bop.seq_idx > stop_status[0].seq_idx)
+        ):
+            stop_status = (s_bop, float(s_tk))
+    stop_gap_ms: float | None = None
+    if stop_status is not None and not post_t3_mutating_old_ops and stop_status[0].result_t_ms is not None:
+        old_alive_ts = []
+        for ev in bridge_events:
+            if ev.get("peer") == "server" and str(ev.get("inst") or "") == server_epoch_old:
+                tv = _ev_t_ms(ev)
+                if tv is not None:
+                    old_alive_ts.append(tv)
+        if old_alive_ts:
+            stop_gap_ms = max(0.0, max(old_alive_ts) - float(stop_status[0].result_t_ms))
+
+    first_new_epoch_tick_ms = 0.0
+    start_gap_ms: float | None = None
+    new_server_ops = [
+        op for op in ordered_ops if server_epoch_new and op.inst == server_epoch_new and op.peer == "server"
+    ]
+    first_new_op = min(new_server_ops, key=lambda o: o.seq_idx) if new_server_ops else None
+    if first_new_op is not None and first_new_op.verb == "per_status" and first_new_op.status == "done":
+        fn_u = _unpack_any_payload(first_new_op.read)
+        fn_tk = fn_u[1].get("tick_ms") if fn_u else None
+        hello_new_ts = []
+        for h in hellos:
+            if h.get("peer") == "server" and h.get("inst") == server_epoch_new and isinstance(h.get("raw"), dict):
+                tv = _ev_t_ms(h["raw"])
+                if tv is not None:
+                    hello_new_ts.append(tv)
+        if (
+            _is_finite_num(fn_tk)
+            and 0.0 < float(fn_tk) <= N49_MAX_FIRST_NEW_TICK_MS
+            and first_new_op.result_t_ms is not None
+            and hello_new_ts
+            and float(first_new_op.result_t_ms) >= min(hello_new_ts)
+        ):
+            first_new_epoch_tick_ms = float(fn_tk)
+            start_gap_ms = float(first_new_op.result_t_ms) - min(hello_new_ts)
+
+    n49_extremes_accredited = stop_gap_ms is not None and start_gap_ms is not None
 
     def _creature_covered_in_t5(
         creature_lid: str,
@@ -2298,11 +2492,11 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 for r in c_t3_post_ret["rows"]
             ):
                 return False
-            dt_pre_ms = max(0.0, reset_tick_ms - last_obs_tick_ms) + max(0.0, max_old_srv_tick_ms - post_ret_snap_ms)
+            dt_pre_ms = max(0.0, reset_tick_ms - last_obs_tick_ms) + max(0.0, max_old_srv_tick_ms - post_ret_snap_ms) + float(stop_gap_ms or 0.0)
         else:
             if max_old_srv_tick_ms < last_obs_tick_ms:
                 return False
-            dt_pre_ms = max(0.0, max_old_srv_tick_ms - last_obs_tick_ms)
+            dt_pre_ms = max(0.0, max_old_srv_tick_ms - last_obs_tick_ms) + float(stop_gap_ms or 0.0)
 
         v_bound_m_s = 6.0
         for i in range(1, len(stage_obs)):
@@ -2317,7 +2511,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 tc_snap_ms = float(tc.get("snap_tick_ms", 0.0))
                 if tc_snap_ms < first_new_epoch_tick_ms:
                     continue
-                dt_post_ms = max(0.0, tc_snap_ms - first_new_epoch_tick_ms)
+                dt_post_ms = max(0.0, tc_snap_ms - first_new_epoch_tick_ms) + float(start_gap_ms or 0.0)
                 dt_unsampled_s = (dt_pre_ms + dt_post_ms) / 1000.0
                 reach_r_m = max(15.0, v_bound_m_s * dt_unsampled_s)
                 if math.hypot(lx - float(tc["center_x_m"]), lz - float(tc["center_z_m"])) + reach_r_m <= float(tc["radius_m"]) + 1e-6:
@@ -2326,19 +2520,6 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             if not covered:
                 return False
         return True
-
-    # Check N49: t3_post_reset_census must be the final pre-restart snapshot in server_epoch_old
-    t3_post_max_seq = max(
-        (c["seq_idx"] for c in censuses_by_stage.get("t3_post_reset_census", [])),
-        default=-1,
-    )
-    post_t3_mutating_old_ops = [
-        op
-        for op in ordered_ops
-        if op.inst == server_epoch_old
-        and op.seq_idx > t3_post_max_seq
-        and op.verb not in ("job_read", "job_free", "job_stop", "per_status")
-    ]
 
     # =========================================================================
     # PER-07: Non-reappearance after restart in reset branch
@@ -2621,12 +2802,39 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         else:
             checks["PER-08"] = {"status": "pass", "detail": "ok"}
 
+    # MEN-6: prueba de contencion del recurso `per_census` (rechazo busy, primer censo integro,
+    # tercer censo aceptado tras liberar). Sin ella PER-09 no puede pasar.
+    busy_probe_ok = False
+    busy_probe_detail = "census_busy_contention_unobserved"
+    for _pr in timeline["census_busy_probes"]:
+        _first = next((c for c in censuses if c["op_id"] == _pr["first_op_id"]), None)
+        if _first is None or not _first["job_complete"]:
+            busy_probe_detail = "census_first_job_not_intact_after_busy"
+            continue
+        _later = [
+            op
+            for op in ordered_ops
+            if op.verb == "per_census_start"
+            and op.peer == "server"
+            and op.inst == _pr["inst"]
+            and op.seq_idx > _pr["free_seq"]
+        ]
+        _next = min(_later, key=lambda o: o.seq_idx) if _later else None
+        _next_c = next((c for c in censuses if _next is not None and c["op_id"] == _next.op_id), None)
+        if _next is None or _next.status != "done" or _next_c is None or not _next_c["job_complete"]:
+            busy_probe_detail = "census_not_accepted_after_release"
+            continue
+        busy_probe_ok = True
+        break
+
     # =========================================================================
     # PER-09: Epoch change after restart and stale_epoch rejection with witness scene
     # =========================================================================
     # If census resource overlap was already detected, skip witness validation (fabrication takes precedence)
     if census_overlap_detected:
         checks["PER-09"] = {"status": "fail", "detail": "unprotected_census_resource_overlap"}
+    elif census_wrong_reason:
+        checks["PER-09"] = {"status": "fail", "detail": "census_contention_wrong_reason"}
     else:
         c_wit_pre = census_by_stage_area.get(("t5_witness_pre_census", "area_b"))
         c_wit_post = census_by_stage_area.get(("t5_witness_post_census", "area_b"))
@@ -2779,10 +2987,6 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         per09_fail.append(f"t5_director_not_included:{aid}")
                     if c_t5_dir["director_present_b"] != 1 or c_t5_dir["director_inv_readable_b"] != 1:
                         per09_fail.append(f"t5_director_unreadable:{aid}")
-                    # Verificar que el inventario del director tiene las prendas esperadas
-                    dir_inv_count = int(round(c_t5_dir.get("director_inv_count_n", -1.0)))
-                    if dir_inv_count < 2:  # al menos Jeans_Blue + WorkingGloves
-                        per09_fail.append(f"t5_director_inv_underpopulated:{aid}:{dir_inv_count}")
 
                 pre_w_map = {str(r.get("net_id") or ""): r for r in c_wit_pre["rows"]}
                 post_w_map = {str(r.get("net_id") or ""): r for r in c_wit_post["rows"]}
@@ -2932,6 +3136,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     else:
                         checks["PER-09"] = {"status": "pass", "detail": "ok"}
 
+    if checks["PER-09"]["status"] == "pass" and not busy_probe_ok:
+        checks["PER-09"] = {"status": "missing", "detail": busy_probe_detail}
+
     # =========================================================================
     # PER-10: Static non-storage analysis on git_head + cold storage restore
     # =========================================================================
@@ -3004,8 +3211,13 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                             "detail": ";".join(violations[:5]),
                         }
                     else:
-                        # Cold storage snapshot before (t0) and after restore (t6) check
-                        if not storage_t0_events or not storage_restore_events:
+                        # Cold storage snapshot before (t0) and after restore (t6) check.
+                        # MEN-5: solo se exige en diag/retail; en offline sin ninguno de los dos eventos
+                        # PER-10 queda en el analisis estatico + sello (si hay uno solo, o ambos, se valida).
+                        storage_required = build_kind in ("diag", "retail")
+                        if not storage_required and not storage_t0_events and not storage_restore_events:
+                            checks["PER-10"] = {"status": "pass", "detail": "ok"}
+                        elif not storage_t0_events or not storage_restore_events:
                             checks["PER-10"] = {
                                 "status": "missing",
                                 "detail": "storage_restore_incomplete",
