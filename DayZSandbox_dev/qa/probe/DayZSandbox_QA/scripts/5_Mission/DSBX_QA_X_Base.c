@@ -24,6 +24,7 @@ class DSBX_QA_TimerRun : Managed
 	float m_NextMs;
 	int m_Seq;
 	bool m_Freeze;
+	bool m_EarlyEnd;
 
 	void DSBX_QA_TimerRun()
 	{
@@ -35,9 +36,10 @@ class DSBX_QA_TimerRun : Managed
 		m_NextMs = 0.0;
 		m_Seq = 0;
 		m_Freeze = false;
+		m_EarlyEnd = false;
 	}
 
-	void Begin(string jobId, float durationMs, float stepMs, bool freeze)
+	void Begin(string jobId, float durationMs, float stepMs, bool freeze, bool earlyEnd)
 	{
 		m_Active = true;
 		m_JobId = jobId;
@@ -47,6 +49,7 @@ class DSBX_QA_TimerRun : Managed
 		m_NextMs = 0.0;
 		m_Seq = 0;
 		m_Freeze = freeze;
+		m_EarlyEnd = earlyEnd;
 	}
 }
 
@@ -446,13 +449,14 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 		string fault = m_Probe.GetOpFault();
 		bool freezeWait = fault == "freeze_on_wait";
 		bool deferClean = fault == "defer_cleanup";
+		bool earlyEnd = fault == "early_end";
 		DSBX_QA_Job job = m_Jobs.GetJob(op.op_id);
 		if (job)
 		{
 			job.m_FreezeOnWait = freezeWait;
 			job.m_DeferCleanup = deferClean;
 		}
-		m_TimerRun.Begin(op.op_id, durationF, stepF, freezeWait);
+		m_TimerRun.Begin(op.op_id, durationF, stepF, freezeWait, earlyEnd);
 		if (hasWitness && witnessF == 1.0)
 		{
 			ArmWitness(op.op_id, "qa_timer");
@@ -829,6 +833,13 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 			return;
 		}
 		run.m_DtsumMs = run.m_DtsumMs + timeslice * 1000.0;
+		// Mutante early_end (D8 del brief v4.5.2): A termina como si caducara, pero a los 100 ms de dtsum, muy lejos
+		// de su max_duration_ms. BASE-08 tiene que verlo como fin prematuro antes del corte.
+		if (run.m_EarlyEnd && run.m_DtsumMs >= 100.0)
+		{
+			m_Jobs.ExpireAsTimeout(run.m_JobId);
+			return;
+		}
 		if (run.m_DtsumMs >= run.m_DurationMs)
 		{
 			array<float> fvals = new array<float>();
@@ -940,7 +951,7 @@ class DSBX_QA_X_Base : DSBX_QA_Ext
 			m_WitnessStartedTickMs = wjob.m_StartTickMs;
 		}
 		m_WitnessArmed = false;
-		m_WitnessRun.Begin(m_WitnessJobId, 200.0, 50.0, false);
+		m_WitnessRun.Begin(m_WitnessJobId, 200.0, 50.0, false, false);
 	}
 
 	override void OnTick(float timeslice)

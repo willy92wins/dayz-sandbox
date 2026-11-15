@@ -342,6 +342,13 @@ class DSBX_QA_JobMgr : Managed
 		}
 	}
 
+	bool ExpireAsTimeout(string job_id)
+	{
+		// Mismo estado y motivo que la expiración por max_duration_ms de TickJobs; los motivos del gestor viven aquí
+		// y no en las extensiones (regla estática 10). Lo usa el mutante early_end de X_Base.
+		return EndJob(job_id, "expired", "job_timeout");
+	}
+
 	bool IsDeadmanTripped(string job_id)
 	{
 		// Igual que JobMgr.is_deadman_tripped: solo un trabajo "stop" en marcha con el lease del peer caducado.
