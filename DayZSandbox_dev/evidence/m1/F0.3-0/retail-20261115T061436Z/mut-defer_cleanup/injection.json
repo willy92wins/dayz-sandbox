@@ -1,0 +1,21 @@
+{
+  "applied": true,
+  "kind": "qa_fault",
+  "mutant": "defer_cleanup",
+  "observable_effect": {
+    "client": {
+      "end_tick_ms": 558498.0625,
+      "onjobend_tick_ms": 563513.0,
+      "released_tick_ms": 563513.0,
+      "state": "expired"
+    },
+    "server": {
+      "end_tick_ms": 630107.0625,
+      "onjobend_tick_ms": 635306.0,
+      "released_tick_ms": 635306.0,
+      "state": "expired"
+    }
+  },
+  "target": "de47242bf93f2c1c-236",
+  "when_h_ms": 59911.995
+}

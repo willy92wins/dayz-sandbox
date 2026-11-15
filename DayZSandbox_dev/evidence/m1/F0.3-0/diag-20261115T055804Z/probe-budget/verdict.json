@@ -1,0 +1,80 @@
+{
+  "checks": [
+    {
+      "detail": "no_scenario",
+      "id": "BASE-01",
+      "status": "missing"
+    },
+    {
+      "detail": "no_scenario",
+      "id": "BASE-02",
+      "status": "missing"
+    },
+    {
+      "detail": "no_scenario",
+      "id": "BASE-03",
+      "status": "missing"
+    },
+    {
+      "detail": "no_scenario",
+      "id": "BASE-04",
+      "status": "missing"
+    },
+    {
+      "detail": "no_scenario",
+      "id": "BASE-05",
+      "status": "missing"
+    },
+    {
+      "detail": "no_scenario",
+      "id": "BASE-06",
+      "status": "missing"
+    },
+    {
+      "detail": "no_scenario",
+      "id": "BASE-07",
+      "status": "missing"
+    },
+    {
+      "detail": "no_scenario",
+      "id": "BASE-08",
+      "status": "missing"
+    },
+    {
+      "detail": "no_cache_fill",
+      "id": "BASE-09",
+      "status": "missing"
+    },
+    {
+      "detail": "no_scenario",
+      "id": "BASE-10",
+      "status": "missing"
+    },
+    {
+      "detail": "no_scenario",
+      "id": "BASE-11",
+      "status": "missing"
+    },
+    {
+      "detail": "budget_exhaustion_verified",
+      "id": "BASE-12",
+      "status": "pass"
+    },
+    {
+      "detail": "no_scenario",
+      "id": "BASE-13",
+      "status": "missing"
+    }
+  ],
+  "error": null,
+  "exit_code": 2,
+  "id": "F0.3-0",
+  "metrics": {
+    "wire_cap": 3500
+  },
+  "reasons": [
+    "callback_budget_exhausted"
+  ],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "INCONCLUSO"
+}

@@ -1,0 +1,21 @@
+{
+  "applied": true,
+  "kind": "qa_fault",
+  "mutant": "early_end",
+  "observable_effect": {
+    "client": {
+      "end_tick_ms": 631622.0,
+      "onjobend_tick_ms": 631622.0,
+      "released_tick_ms": 631622.0,
+      "state": "expired"
+    },
+    "server": {
+      "end_tick_ms": 684421.0,
+      "onjobend_tick_ms": 684421.0,
+      "released_tick_ms": 684421.0,
+      "state": "expired"
+    }
+  },
+  "target": "d3ed6f6655877ea6-237",
+  "when_h_ms": 60053.782
+}

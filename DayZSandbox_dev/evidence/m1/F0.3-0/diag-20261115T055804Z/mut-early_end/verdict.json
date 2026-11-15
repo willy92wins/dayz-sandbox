@@ -1,0 +1,82 @@
+{
+  "checks": [
+    {
+      "detail": "ok",
+      "id": "BASE-01",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-02",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-03",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-04",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-05",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-06",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-07",
+      "status": "pass"
+    },
+    {
+      "detail": "job_a_ended_before_cut",
+      "id": "BASE-08",
+      "status": "fail"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-09",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-10",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-11",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-12",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-13",
+      "status": "pass"
+    }
+  ],
+  "error": null,
+  "exit_code": 1,
+  "id": "F0.3-0",
+  "metrics": {
+    "drift_client": 9.372188343496951e-05,
+    "drift_server": 0.0,
+    "wire_cap": 3500
+  },
+  "reasons": [
+    "BASE-08"
+  ],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "FALLA"
+}
