@@ -27,15 +27,34 @@ def _write_json(path, data):
     path.write_bytes(text.encode("utf-8"))
 
 
+def _wall(t_ms):
+    """Hora de pared "HH:MM:SS.mmm" de un instante del arnes, con t0_ms = 0 <-> t0_wall = 00:00:00.000."""
+    ms = int(t_ms)
+    return "%02d:%02d:%02d.%03d" % (ms // 3600000 % 24, ms // 60000 % 60, ms // 1000 % 60, ms % 1000)
+
+
+def _stamp(line):
+    """Como el motor: una linea [DSBX] lleva delante su hora de pared. En estas pruebas la hora sale de
+    su tick_ms (tick == reloj del arnes); la prueba del desfase escribe sus lineas ya con hora."""
+    if not line.startswith("[DSBX] "):
+        return line
+    fields = dict(part.split("=", 1) for part in line.split() if "=" in part)
+    tick = fields.get("tick_ms")
+    if tick is None or not tick.lstrip("-").isdigit():
+        return line
+    return _wall(int(tick)) + " SCRIPT       : " + line
+
+
 def _write_text(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
+    text = "".join(_stamp(line) + "\n" for line in text.splitlines()) if text else text
     path.write_bytes(text.encode("utf-8"))
 
 
 def _append(path, lines):
     path = Path(path)
     current = path.read_text(encoding="utf-8")
-    text = current + "".join(line + "\n" for line in lines)
+    text = current + "".join(_stamp(line) + "\n" for line in lines)
     path.write_bytes(text.encode("utf-8"))
 
 
@@ -61,6 +80,7 @@ def _base(root, scenarios, fake=False, build="diag", dirty=False):
         "hold_ms": 2000,
         "scenarios": scenarios,
         "t0_ms": 0.0,
+        "t0_wall": "00:00:00.000",
     }
     _write_json(root / "manifest.json", manifest)
     _write_text(root / "logs" / "server_script.log", "[DSBX] hello accepted session=srv conn=1\n")
@@ -166,7 +186,7 @@ def _g2(root, epoch_mismatch=False, catalog_bytes=3200, aborted=False):
     return root
 
 
-def _g3(root, c_observado=False, no_rules_active=False):
+def _g3(root, c_observado=False, no_rules_active=False, recovery_ab=True, recovery_c=True, c_effects=False):
     root = _base(root, ["G3"])
     events = [
         {"t_ms": 100.0, "ev": "start", "scenario": "G3"},
@@ -177,12 +197,22 @@ def _g3(root, c_observado=False, no_rules_active=False):
     events += [
         {"t_ms": 300.0, "ev": "case", "name": "a", "op_id": "a1"},
         {"t_ms": 400.0, "ev": "op_state", "op_id": "a1", "state": "observado", "reason": ""},
-        {"t_ms": 500.0, "ev": "recovery", "op_id": "ra1"},
-        {"t_ms": 600.0, "ev": "op_state", "op_id": "ra1", "state": "observado", "reason": ""},
+    ]
+    if recovery_ab:
+        events += [
+            {"t_ms": 500.0, "ev": "recovery", "op_id": "ra1"},
+            {"t_ms": 600.0, "ev": "op_state", "op_id": "ra1", "state": "observado", "reason": ""},
+        ]
+    events += [
         {"t_ms": 700.0, "ev": "case", "name": "b", "op_id": "b1"},
         {"t_ms": 800.0, "ev": "op_state", "op_id": "b1", "state": "observado", "reason": ""},
-        {"t_ms": 900.0, "ev": "recovery", "op_id": "rb1"},
-        {"t_ms": 1000.0, "ev": "op_state", "op_id": "rb1", "state": "observado", "reason": ""},
+    ]
+    if recovery_ab:
+        events += [
+            {"t_ms": 900.0, "ev": "recovery", "op_id": "rb1"},
+            {"t_ms": 1000.0, "ev": "op_state", "op_id": "rb1", "state": "observado", "reason": ""},
+        ]
+    events += [
         {"t_ms": 1100.0, "ev": "case", "name": "c", "op_id": "c1"},
         {
             "t_ms": 1200.0,
@@ -196,21 +226,26 @@ def _g3(root, c_observado=False, no_rules_active=False):
         events.append(
             {"t_ms": 1250.0, "ev": "op_state", "op_id": "c1", "state": "observado", "reason": ""}
         )
-    events += [
-        {"t_ms": 1300.0, "ev": "recovery", "op_id": "rc1"},
-        {"t_ms": 1400.0, "ev": "op_state", "op_id": "rc1", "state": "observado", "reason": ""},
-        {"t_ms": 1500.0, "ev": "end", "status": "ok", "reason": ""},
-    ]
+    if recovery_c:
+        events += [
+            {"t_ms": 1300.0, "ev": "recovery", "op_id": "rc1"},
+            {"t_ms": 1400.0, "ev": "op_state", "op_id": "rc1", "state": "observado", "reason": ""},
+        ]
+    events.append({"t_ms": 1500.0, "ev": "end", "status": "ok", "reason": ""})
     _write_jsonl(root / "samples" / "G3.jsonl", events)
-    _append(
-        root / "logs" / "server_script.log",
-        [
-            "[DSBX] effect step=retirar session=s1 op=a1 tick_ms=350",
-            "[DSBX] effect step=anotar session=s1 op=a1 tick_ms=360",
-            "[DSBX] effect step=retirar session=s2 op=b1 tick_ms=750",
-            "[DSBX] effect step=anotar session=s2 op=b1 tick_ms=760",
-        ],
-    )
+    lines = [
+        "[DSBX] effect step=retirar session=s1 op=a1 tick_ms=350",
+        "[DSBX] effect step=anotar session=s1 op=a1 tick_ms=360",
+        "[DSBX] effect step=retirar session=s2 op=b1 tick_ms=750",
+        "[DSBX] effect step=anotar session=s2 op=b1 tick_ms=760",
+    ]
+    if c_effects:
+        # D-P2: el peer anota la revision reescrita; el backend la rechaza despues.
+        lines += [
+            "[DSBX] effect step=retirar session=s2 op=c1 tick_ms=1150",
+            "[DSBX] effect step=anotar session=s2 op=c1 tick_ms=1160",
+        ]
+    _append(root / "logs" / "server_script.log", lines)
     return root
 
 
@@ -401,7 +436,7 @@ def _g6(root, late_done=False, no_result=False):
     return root
 
 
-def _g7(root, r_held_gap=200, drop_client_log=False):
+def _g7(root, r_held_gap=200, drop_client_log=False, tick_offset=0, invalid_wall_t=2100):
     root = _base(root, ["G7"])
     _write_jsonl(
         root / "samples" / "G7.jsonl",
@@ -463,11 +498,12 @@ def _g7(root, r_held_gap=200, drop_client_log=False):
         }
     )
     _write_jsonl(root / "samples" / "proxy.jsonl", proxy)
+    # Como en partida: la hora de pared situa la linea; tick_ms es el reloj del motor (otro origen).
     _append(
         root / "logs" / "server_script.log",
         [
-            "[DSBX] rest invalid ch=P kind=3 tick_ms=2100",
-            "[DSBX] rest late ch=R kind=3 tick_ms=3100",
+            f"{_wall(invalid_wall_t)} SCRIPT       : [DSBX] rest invalid ch=P kind=3 tick_ms={2100 + tick_offset}",
+            f"{_wall(3100)} SCRIPT       : [DSBX] rest late ch=R kind=3 tick_ms={3100 + tick_offset}",
         ],
     )
     if drop_client_log:
@@ -784,6 +820,23 @@ class TestG3(unittest.TestCase):
             verdict = EVAL.evaluate(_g3(tmp, no_rules_active=True))
             self.assertEqual(verdict["rows"]["G3"]["verdict"], "INCONCLUSO")
 
+    def test_pass_c_con_efectos(self):
+        # D-P2: el caso c ejecuta sus efectos con la revision reescrita; el criterio es el estado.
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = EVAL.evaluate(_g3(tmp, c_effects=True))
+            self.assertEqual(verdict["rows"]["G3"]["verdict"], "PASA")
+
+    def test_pass_sin_recuperacion_tras_a_y_b(self):
+        # P-08: la recuperacion va tras la inyeccion (c); a y b no inyectan nada.
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = EVAL.evaluate(_g3(tmp, recovery_ab=False))
+            self.assertEqual(verdict["rows"]["G3"]["verdict"], "PASA")
+
+    def test_fail_sin_recuperacion_tras_c(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = EVAL.evaluate(_g3(tmp, recovery_c=False))
+            self.assertEqual(verdict["rows"]["G3"]["verdict"], "FALLA")
+
 
 class TestG4(unittest.TestCase):
     def test_pass(self):
@@ -851,6 +904,52 @@ class TestG7(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             verdict = EVAL.evaluate(_g7(tmp, drop_client_log=True))
             self.assertEqual(verdict["rows"]["G7"]["verdict"], "INCONCLUSO")
+
+    def test_pass_tick_desfasado_del_reloj_del_arnes(self):
+        # Brief v1.4, H-04: en partida tick_ms (GetTickTime) va por ~2e5 y el arnes por ~8e7.
+        # La ventana se juzga por la hora de pared de la linea, no por su tick_ms.
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = EVAL.evaluate(_g7(tmp, tick_offset=214000))
+            self.assertEqual(verdict["rows"]["G7"]["verdict"], "PASA")
+            self.assertEqual(verdict["rows"]["G7"]["metrics"]["cases"]["invalid_P"]["invalid"], 1)
+
+    def test_fail_linea_fuera_por_hora_aunque_su_tick_caiga_dentro(self):
+        # tick_ms=2100 cae en la ventana de invalid_P [2000, 3000), pero la linea se escribio a t=500.
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = EVAL.evaluate(_g7(tmp, invalid_wall_t=500))
+            self.assertEqual(verdict["rows"]["G7"]["verdict"], "FALLA")
+
+    def test_inconclusive_sin_ancla_de_hora(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _g7(tmp)
+            manifest = json.loads((Path(root) / "manifest.json").read_text(encoding="utf-8"))
+            del manifest["t0_wall"]
+            _write_json(Path(root) / "manifest.json", manifest)
+            verdict = EVAL.evaluate(root)
+            self.assertEqual(verdict["rows"]["G7"]["verdict"], "INCONCLUSO")
+
+
+class TestLineClock(unittest.TestCase):
+    def _ctx(self, fake=False, start_wall=None):
+        scenario = [{"t_ms": 5000.0, "ev": "start", "scenario": "G7"}]
+        if start_wall is not None:
+            scenario[0]["wall"] = start_wall
+        return {"manifest": {"fake": fake, "t0_ms": 1000.0, "t0_wall": "23:59:59.000"}, "scenario": scenario}
+
+    def test_cruce_de_medianoche(self):
+        ev = {"wall_ms": EVAL._wall_ms("00:00:01.000"), "tick_ms": 7}
+        self.assertEqual(EVAL._line_t(self._ctx(), ev), 3000.0)
+
+    def test_ancla_del_start_antes_que_la_del_manifest(self):
+        ev = {"wall_ms": EVAL._wall_ms("12:00:01.500"), "tick_ms": 7}
+        self.assertEqual(EVAL._line_t(self._ctx(start_wall="12:00:00.000"), ev), 6500.0)
+
+    def test_fake_usa_tick(self):
+        ev = {"wall_ms": None, "tick_ms": 4242}
+        self.assertEqual(EVAL._line_t(self._ctx(fake=True), ev), 4242)
+
+    def test_linea_sin_hora(self):
+        self.assertIsNone(EVAL._line_t(self._ctx(), {"wall_ms": None, "tick_ms": 1}))
 
 
 class TestG8(unittest.TestCase):

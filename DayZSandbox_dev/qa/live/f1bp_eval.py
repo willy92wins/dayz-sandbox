@@ -21,6 +21,13 @@ _SCRIPT_ERROR = re.compile(r"SCRIPT\s+\(E\)")
 # el 15-nov, N = created_n del peer (5 = 2 + 3 fallos inyectados). Brief v1.3, sec. 10.
 _EXIT_LEAK = re.compile(r"Leaked '(DSBX_\w+)' script instance \((-?\d+)x\)!")
 TOLERATED_EXIT_LEAK = "DSBX_Callback"
+# Reloj de las lineas del log (brief v1.4, sec. 10, H-04). tick_ms es el reloj del motor
+# (GetTickTime), no el del arnes. Cada linea lleva su hora de pared ("12:49:39.023 ..."), escrita
+# al hacer Print, y el arnes anota una pareja (t_ms, hora de pared) en el `start` de cada
+# escenario y en el manifest (t0_ms, t0_wall). Con eso, una linea se situa en el reloj del arnes.
+DAY_MS = 86400000
+WINDOW_TOL_MS = 250
+_WALL = re.compile(r"\s*(\d{1,2}):(\d{2}):(\d{2})\.(\d{3})")
 PEER_LOG = {"server": "server_script.log", "client": "client_script.log"}
 EXIT = {"PASA": 0, "FALLA": 1, "INCONCLUSO": 2}
 RECOVERY_LIMIT_MS = 60000.0
@@ -156,6 +163,61 @@ def _events(ctx, name):
     return [ev for ev in ctx["scenario"] if ev.get("ev") == name]
 
 
+def _wall_ms(text):
+    """ms desde la medianoche local de una hora "HH:MM:SS.mmm" al principio del texto, o None."""
+    if not isinstance(text, str):
+        return None
+    match = _WALL.match(text)
+    if not match:
+        return None
+    hours, minutes, seconds, millis = (int(part) for part in match.groups())
+    return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis
+
+
+def _anchor(ctx):
+    """(t_ms, wall_ms) del escenario (su `start`) o, si no, del manifest (t0_ms, t0_wall)."""
+    for ev in ctx["scenario"]:
+        if ev.get("ev") == "start" and _num(ev.get("t_ms")):
+            wall = _wall_ms(ev.get("wall"))
+            if wall is not None:
+                return ev["t_ms"], wall
+    manifest = ctx["manifest"]
+    wall = _wall_ms(manifest.get("t0_wall"))
+    if wall is not None and _num(manifest.get("t0_ms")):
+        return manifest["t0_ms"], wall
+    return None
+
+
+def _clock_ok(ctx):
+    return ctx["manifest"].get("fake") is True or _anchor(ctx) is not None
+
+
+def _line_t(ctx, ev):
+    """Instante de una linea del log en el reloj del arnes (ms), o None.
+
+    En el ensayo en seco (fake) el arnes escribe tick_ms con su propio reloj.
+    """
+    if ctx["manifest"].get("fake") is True:
+        tick = ev.get("tick_ms")
+        return tick if _num(tick) else None
+    wall = ev.get("wall_ms")
+    anchor = _anchor(ctx)
+    if wall is None or anchor is None:
+        return None
+    t_anchor, wall_anchor = anchor
+    diff = wall - wall_anchor
+    if diff < -DAY_MS // 2:
+        diff += DAY_MS
+    elif diff > DAY_MS // 2:
+        diff -= DAY_MS
+    return t_anchor + diff
+
+
+def _in_window(ctx, ev, start, end, tol_lo=WINDOW_TOL_MS, tol_hi=WINDOW_TOL_MS):
+    t = _line_t(ctx, ev)
+    return t is not None and start - tol_lo <= t <= end + tol_hi
+
+
 def _effects(ctx):
     seen = set()
     effects = []
@@ -172,10 +234,19 @@ def _effects(ctx):
 
 
 def _all_lines(ctx):
+    """Lineas de los dos script logs ordenadas por su instante en el reloj del arnes.
+
+    Cada peer tiene su propio tick_ms (otro proceso, otro origen): no se mezclan por tick.
+    """
     lines = []
     for name in SCRIPT_LOGS:
         lines.extend(_log(ctx, name) or [])
-    lines.sort(key=lambda ev: ev.get("tick_ms") if _num(ev.get("tick_ms")) else -1)
+
+    def key(ev):
+        t = _line_t(ctx, ev)
+        return t if t is not None else -math.inf
+
+    lines.sort(key=key)
     return lines
 
 
@@ -397,14 +468,16 @@ def _g3(ctx):
                 for ev in states
             ):
                 problems.append("c: sin fallido/lectura_no_cumple")
-            if pairs:
-                problems.append("c: con effects")
+            # D-P2: el peer anota lo que recibe (la revision reescrita) y es el backend quien lo
+            # rechaza; sus efectos son esperables y solo se anotan (pairs).
         else:
             problems.append(f"caso desconocido {name}")
-        ok, latency, why = _recovery(ctx, case, anchors)
-        entry["recovery_ms"] = latency
-        if not ok:
-            problems.append(f"{name}: {why}")
+        if name == "c":
+            # Recuperacion tras la inyeccion (P-08); a y b no inyectan nada.
+            ok, latency, why = _recovery(ctx, case, anchors)
+            entry["recovery_ms"] = latency
+            if not ok:
+                problems.append(f"{name}: {why}")
     if problems:
         return "FALLA", "; ".join(problems), metrics
     return "PASA", "", metrics
@@ -419,6 +492,8 @@ def _g4(ctx):
     cases = _events(ctx, "case")
     if not cases:
         return "INCONCLUSO", "sin casos G4", {}
+    if not _clock_ok(ctx):
+        return "INCONCLUSO", "sin ancla de hora de pared (manifest.t0_wall o start.wall)", {}
     bad = _events(ctx, "bad_key_window")
     stale = _events(ctx, "stale_order")
     anchors = [case.get("t_ms") for case in cases if _num(case.get("t_ms"))]
@@ -461,11 +536,7 @@ def _g4(ctx):
             ]
             if bad_ok:
                 problems.append("a: hello 200 del servidor con clave mala")
-            window_effects = [
-                ev
-                for ev in effects
-                if _num(ev.get("tick_ms")) and start <= ev["tick_ms"] <= end
-            ]
+            window_effects = [ev for ev in effects if _in_window(ctx, ev, start, end)]
             if window_effects:
                 problems.append("a: effect en la ventana")
             if _op_effects(effects, op):
@@ -530,6 +601,8 @@ def _g5(ctx):
     missing = _missing_logs(ctx, SCRIPT_LOGS)
     if missing:
         return "INCONCLUSO", "log ausente: " + ", ".join(missing), {}
+    if not _clock_ok(ctx):
+        return "INCONCLUSO", "sin ancla de hora de pared (manifest.t0_wall o start.wall)", {}
     lease = _manifest_int(ctx, "lease_ms")
     cases = _events(ctx, "case")
     if not cases:
@@ -578,9 +651,7 @@ def _g5(ctx):
             lost = [
                 ev
                 for ev in _log(ctx, PEER_LOG.get(peer, "")) or []
-                if ev.get("kind") == "lease_lost"
-                and _num(ev.get("tick_ms"))
-                and start <= ev["tick_ms"] <= end
+                if ev.get("kind") == "lease_lost" and _in_window(ctx, ev, start, end)
             ]
             if lost:
                 problems.append("a2500: lease lost en la ventana")
@@ -588,12 +659,16 @@ def _g5(ctx):
             log_name = PEER_LOG.get(peer)
             if log_name is None:
                 return "INCONCLUSO", "a4500 sin peer valido", metrics
+            window = _window_for(case, windows)
+            if window is None or not (_num(window.get("t_start_ms")) and _num(window.get("t_end_ms"))):
+                return "INCONCLUSO", "sin window para a4500", metrics
             lost = [
                 ev
                 for ev in _log(ctx, log_name) or []
                 if ev.get("kind") == "lease_lost"
                 and _num(ev.get("age_ms"))
                 and lease <= ev["age_ms"] < lease + 200
+                and _in_window(ctx, ev, window["t_start_ms"], window["t_end_ms"])
             ]
             entry["lease_lost"] = len(lost)
             if not lost:
@@ -704,6 +779,8 @@ def _g7(ctx):
     cases = _events(ctx, "case")
     if not cases:
         return "INCONCLUSO", "sin casos G7", {}
+    if not _clock_ok(ctx):
+        return "INCONCLUSO", "sin ancla de hora de pared (manifest.t0_wall o start.wall)", {}
     lease = _manifest_int(ctx, "lease_ms")
     effects = _effects(ctx)
     lines = _all_lines(ctx)
@@ -756,8 +833,7 @@ def _g7(ctx):
                 for ev in lines
                 if ev.get("kind") == "rest_invalid"
                 and (channel is None or ev.get("ch") == channel)
-                and _num(ev.get("tick_ms"))
-                and start <= ev["tick_ms"] <= window_end
+                and _in_window(ctx, ev, start, window_end, tol_hi=0)
             ]
             rewritten = [
                 ev
@@ -775,9 +851,7 @@ def _g7(ctx):
                     f"{name}: {len(invalid)} rest invalid != {len(rewritten)} reescritas"
                 )
             window_effects = [
-                ev
-                for ev in effects
-                if _num(ev.get("tick_ms")) and start <= ev["tick_ms"] <= window_end
+                ev for ev in effects if _in_window(ctx, ev, start, window_end, tol_hi=0)
             ]
             if window_effects:
                 problems.append(f"{name}: effect en la ventana")
@@ -795,8 +869,7 @@ def _g7(ctx):
                 ev
                 for ev in lines
                 if ev.get("kind") in ("rest_late", "rest_repeat")
-                and _num(ev.get("tick_ms"))
-                and start <= ev["tick_ms"] <= window_end
+                and _in_window(ctx, ev, start, window_end, tol_hi=0)
             ]
             if not late_lines:
                 entry["late_cb"] = "inconcluso (sin rest late/repeat)"
@@ -813,7 +886,15 @@ def _g7(ctx):
         else:
             if name.startswith("status"):
                 channel = name.rsplit("_", 1)[-1]
-                line = _take_measure_line(measure_lines, channel)
+                line = next(
+                    (
+                        ev
+                        for ev in measure_lines
+                        if ev.get("ch") == channel
+                        and _in_window(ctx, ev, start, window_end, tol_hi=0)
+                    ),
+                    None,
+                )
                 if line is None:
                     entry["state"] = None
                 elif line.get("kind") == "rest_invalid":
@@ -821,17 +902,25 @@ def _g7(ctx):
                 else:
                     entry["state"] = line.get("state")
             elif name == "timeout_P":
+                # Plazo efectivo: desde que el proxy recibe la peticion retenida hasta la linea
+                # rest timeout de P dentro del caso (las dos en el reloj del arnes).
                 timeout = next(
                     (
                         ev
                         for ev in lines
-                        if ev.get("kind") == "rest_timeout" and ev.get("ch") == "P"
+                        if ev.get("kind") == "rest_timeout"
+                        and ev.get("ch") == "P"
+                        and _in_window(ctx, ev, start, window_end, tol_hi=0)
                     ),
                     None,
                 )
-                entry["timeout_ms"] = (
-                    timeout["tick_ms"] - start if timeout is not None else None
+                held = next(
+                    (ev for ev in proxy if ev.get("rule_id") == rule and _num(ev.get("t_ms"))),
+                    None,
                 )
+                ref = held["t_ms"] if held is not None else start
+                t_timeout = _line_t(ctx, timeout) if timeout is not None else None
+                entry["timeout_ms"] = t_timeout - ref if t_timeout is not None else None
         ok, latency, why = _recovery(ctx, case, [])
         entry["recovery_ms"] = latency
         if not ok:
@@ -980,6 +1069,7 @@ def parse_script_log(path):
         if marker >= 0:
             event = _parse_line(line[marker + 7 :].strip())
             if event is not None:
+                event["wall_ms"] = _wall_ms(line)
                 events.append(event)
             continue
         leak = _EXIT_LEAK.search(line) if _SCRIPT_ERROR.search(line) else None
@@ -1091,28 +1181,35 @@ def _parse_line(payload):
 
 
 def _clock_metrics(ctx, start, end):
-    clocks = []
-    for name in SCRIPT_LOGS:
-        for ev in _log(ctx, name) or []:
-            if ev.get("kind") == "clock" and _num(ev.get("tick_ms")):
-                clocks.append(ev["tick_ms"])
-    clocks.sort()
-    metrics = {"clock_n": len(clocks)}
-    if len(clocks) >= 2:
-        deltas = [b - a for a, b in zip(clocks, clocks[1:])]
-        metrics["clock_max_step_ms"] = max(deltas)
-        straddle = [
-            delta
-            for a, b, delta in zip(clocks, clocks[1:], deltas)
-            if a <= end and b >= start
-        ]
-        metrics["clock_pause_step_ms"] = max(straddle) if straddle else None
-        count = len(clocks)
-        mean_index = (count - 1) / 2.0
-        mean_tick = sum(clocks) / count
-        numerator = sum((i - mean_index) * (tick - mean_tick) for i, tick in enumerate(clocks))
-        denominator = sum((i - mean_index) ** 2 for i in range(count))
-        metrics["clock_slope_ms_per_line"] = numerator / denominator if denominator else None
+    """Medidas de G6 con las lineas clock del servidor (solo su reloj; el cliente es otro proceso).
+
+    clock_slope: pendiente de tick_ms frente al reloj del arnes (por la hora de pared de cada linea).
+    clock_pause_*: salto entre las dos lineas clock que rodean la pausa [start, end].
+    """
+    points = []
+    for ev in _log(ctx, "server_script.log") or []:
+        if ev.get("kind") == "clock" and _num(ev.get("tick_ms")):
+            t = _line_t(ctx, ev)
+            if t is not None:
+                points.append((t, ev["tick_ms"]))
+    points.sort()
+    metrics = {"clock_n": len(points)}
+    if len(points) >= 2:
+        times = [t for t, _ in points]
+        ticks = [tick for _, tick in points]
+        mean_t = sum(times) / len(times)
+        mean_tick = sum(ticks) / len(ticks)
+        denominator = sum((t - mean_t) ** 2 for t in times)
+        numerator = sum((t - mean_t) * (tick - mean_tick) for t, tick in points)
+        metrics["clock_slope"] = numerator / denominator if denominator else None
+        straddle = [(a, b) for a, b in zip(points, points[1:]) if a[0] <= start and b[0] >= end]
+        if straddle:
+            a, b = straddle[0]
+            metrics["clock_pause_t_step_ms"] = b[0] - a[0]
+            metrics["clock_pause_tick_step_ms"] = b[1] - a[1]
+        else:
+            metrics["clock_pause_t_step_ms"] = None
+            metrics["clock_pause_tick_step_ms"] = None
     return metrics
 
 
@@ -1131,13 +1228,6 @@ def _window_for(case, windows):
     return best
 
 
-def _take_measure_line(lines, channel):
-    for index, ev in enumerate(lines):
-        if ev.get("ch") == channel:
-            return lines.pop(index)
-    return None
-
-
 def _first_recovery_after(ctx, moment):
     times = [
         ev["t_ms"]
@@ -1150,11 +1240,7 @@ def _first_recovery_after(ctx, moment):
 def _any_lease_lost(ctx, start, end):
     for name in SCRIPT_LOGS:
         for ev in _log(ctx, name) or []:
-            if (
-                ev.get("kind") == "lease_lost"
-                and _num(ev.get("tick_ms"))
-                and start <= ev["tick_ms"] <= end
-            ):
+            if ev.get("kind") == "lease_lost" and _in_window(ctx, ev, start, end):
                 return True
     return False
 

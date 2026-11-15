@@ -1,6 +1,6 @@
 # Evidencia de F1b-peers en partida
 
-Contrato entre `f1bp_live.py` (la escribe) y `f1bp_eval.py` (la juzga, sin efectos). Lo exige el brief `plans/2026-11-15-m1-f1b-peers-partida-brief.md` (v1.3), §5 y §6.
+Contrato entre `f1bp_live.py` (la escribe) y `f1bp_eval.py` (la juzga, sin efectos). Lo exige el brief `plans/2026-11-15-m1-f1b-peers-partida-brief.md` (v1.4), §5 y §6.
 
 ## Carpeta
 `DayZSandbox_dev/evidence/m1/F1b-peers/<build>-<UTC>/`, nueva y vacía en cada corrida:
@@ -17,15 +17,16 @@ Todos los JSON van con claves ordenadas, en UTF-8 y con LF. **Ningún fichero ll
 {"build": "diag|retail|fake", "fake": false, "git_head": "<sha>", "git_dirty": false, "pbo_sha256": "<hex>",
  "dayz_version": "<texto o null>", "ports": {"web": 0, "bridge": 0, "proxy": 0},
  "key_sha256": ["<hex>", "..."], "lease_ms": 3000, "hold_ms": 2000,
- "scenarios": ["G1", "G2"], "t0_ms": 0.0}
+ "scenarios": ["G1", "G2"], "t0_ms": 0.0, "t0_wall": "HH:MM:SS.mmm"}
 ```
+`t0_wall` es la hora de pared local en el mismo instante que `t0_ms`, con el formato de las líneas del log.
 `fake: true` (con `build: "fake"`) marca el ensayo en seco con el mod falso (brief §7). Ahí los logs de `logs/` los escribe el orquestador a partir del registro de efectos del falso, y no hay RPT. `t0_ms` es el monotónico del arnés al empezar. **Todos los `t_ms` de la carpeta (`samples/*.jsonl` y `proxy.jsonl`) están en ese mismo reloj**, en ms. El backend corre en el mismo proceso, así que su monotónico es ese.
 
 ## `samples/G<n>.jsonl`
 Una línea por evento: `{"t_ms": <float>, "ev": "<tipo>", ...}`.
 
 **Comunes:**
-- `start` `{scenario}` y `end` `{status: "ok"|"aborted", reason}`.
+- `start` `{scenario, wall}` y `end` `{status: "ok"|"aborted", reason}`. `wall` es la hora de pared local (`HH:MM:SS.mmm`) en el instante del `t_ms` del `start`: es el ancla para situar las líneas del log en el reloj del arnés.
 - `rules` `{version, rule_ids}` cuando se escribe una versión, y `rules_active` `{version}` cuando `rules_active.json` la confirma. **Una inyección solo cuenta tras su `rules_active`.**
 - `apply` `{op_id, http_status, ttl_ms}`: cada `POST /api/apply`.
 - `op_state` `{op_id, state, reason}`: cada transición de una op, leída de los eventos del backend.
@@ -44,12 +45,20 @@ Una línea por evento: `{"t_ms": <float>, "ev": "<tipo>", ...}`.
 - **G4:** `case` `{name: "a"|"b"|"c", op_id}`. En el caso b, `stale_order` `{op_id, old_session}`. En el caso a, `bad_key_window` `{t_start_ms, t_end_ms}`.
 - **G5:** `case` `{name: "a2500"|"a4500"|"b2500"|"b4000", peer, op_id}`, más `window` `{t_start_ms, t_end_ms}`. Antes de G9, `gap_reset` `{confirmed}`.
 - **G6:** `pause_order` `{op_id, T_d_ms, T_s_ms, T_e_ms, D_ms}` y `clock_run` `{t_start_ms, t_end_ms}`.
-- **G7:** `case` `{name, rule_id}`, con nombres `status400_P` … `status500_R`, `timeout_P`, `r_held`, `invalid_*` y `late_cb`.
+- **G7:** `case` `{name, rule_id}`, con nombres `status400_P` … `status500_R`, `timeout_P`, `r_held`, `invalid_*`, `measure_*` y `late_cb`. Las respuestas que el validador puede aceptar (`ok:1`, `args:{}`) son medidas (`measure_*`), no casos `invalid_*`.
 - **G8:** `case` `{name: "a"|"b"|"c", op_id}`.
 - **G9:** `mix_op` `{op_id}`, cien.
 
 ## Líneas del script log (`logs/*_script.log`)
 Se extrae el texto que sigue a `[DSBX] ` en cada línea. Formas que se leen (el resto se ignora):
+
+**Reloj** (brief v1.4, §10, H-04):
+- `tick_ms` es el reloj del motor de ese proceso, no el del arnés. Solo se usa para la pendiente y el salto de G6.
+- Una línea se sitúa en el reloj del arnés por la hora de pared que la encabeza (`HH:MM:SS.mmm`): `t = t_ancla + (hora_línea − hora_ancla)`, con el cruce de medianoche.
+- El ancla es el `start` del escenario (`t_ms`, `wall`) o, si no lo trae, el manifest (`t0_ms`, `t0_wall`).
+- Las ventanas toleran ±250 ms. Entre casos seguidos de G7, la cota alta es el caso siguiente, sin ensanchar.
+- Sin ancla, las filas que usan ventanas (G4, G5 y G7) son INCONCLUSO.
+- En el ensayo en seco (`fake: true`), `tick_ms` ya está en el reloj del arnés.
 ```
 effect step=<retirar|anotar> session=<s> op=<op> tick_ms=<n>
 rest error ch=<P|R> kind=<n> state=<n> tick_ms=<n>
@@ -87,8 +96,8 @@ Son los del brief, §5. «Recuperación» quiere decir un `recovery` cuya op lle
 - **G2:** foto `bridge` con el epoch del cliente igual al del servidor y `catalog.complete` con `n_classes > 0`; la mayor `req_bytes` de `route: catalog` en el proxy, con `upstream_status` 200, está entre 3000 y 3499 (con `fake: true` este criterio no aplica y se anota); el `req_bytes` del hello del servidor es < 3500.
 - **G3:**
   - a y b: `observado`, con exactamente una `effect retirar` y una `effect anotar` cada una (por `session` y `op`).
-  - c: `fallido` con `reason` `lectura_no_cumple`, y nunca `observado`.
-  - Recuperación.
+  - c: `fallido` con `reason` `lectura_no_cumple`, y nunca `observado`. Sus `effect` son esperables, porque el peer anota la revisión reescrita (D-P2); solo se anotan.
+  - Recuperación tras el caso c, que es la inyección; a y b no la necesitan.
 - **G4:**
   - a: dentro de `bad_key_window`, hellos del servidor con `upstream_status` 401 y ninguna `effect`; la op del caso a sin `effect` nunca.
   - b: la `stale_order` sin `effect` y con resultado `rejected` (motivo `stale_session`) si llega al proxy.
@@ -104,7 +113,7 @@ Son los del brief, §5. «Recuperación» quiere decir un `recovery` cuya op lle
   - FALLA si hay un `result_seen` de la op de `pause_order` con `status: "done"` y `t_ms > D_ms + 150`;
   - PASA si su `result_seen` es `rejected` o `error` con `reason: "expired"`;
   - INCONCLUSO si hay algún `result_seen` de esa op con `t_ms < T_s_ms`, o ninguno.
-  - La pendiente de las `clock` frente a su `t_ms` de llegada es una medida, y se anota la discontinuidad de `tick_ms` alrededor de la pausa.
+  - Son medidas, sobre las `clock` del servidor: la pendiente de su `tick_ms` frente al reloj del arnés (por la hora de pared de cada línea) y el salto de `tick_ms` y de tiempo entre las dos `clock` que rodean la pausa.
   - Recuperación.
 - **G7:**
   - Invariantes:
