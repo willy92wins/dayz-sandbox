@@ -913,6 +913,16 @@ def _verify_certifying_capture(
     if _frozen_mismatches(fixture, frozen):
         return (None, "unaccredited_fixture")
 
+    # BLOQ 7: el archivo certificador separado no es una isla.  Tiene que ser el
+    # mismo bloque que la fixture congelada declara (con los sellos re-materializados
+    # por el runner); si difiere en ordenes, ventanas o geometria, la captura no
+    # acredita nada aunque sus propios hashes cuadren.
+    fx_cert = fixture.get("certifying_capture")
+    if not isinstance(fx_cert, dict):
+        return (None, "unaccredited_fixture")
+    if _frozen_mismatches({"certifying_capture": cert_cap}, {"certifying_capture": fx_cert}):
+        return (None, "unaccredited_fixture")
+
     fix_sha = f03_common.sha256_file_hex(fixture_path)
     cert_sha = f03_common.sha256_file_hex(cert_path)
     accred = fixture.get("accreditation")
@@ -1929,6 +1939,17 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
                     break
 
             w_rec = rebuilt_world_features[pid]
+
+            # BLOQ 5: testigo independiente de la altura en las coordenadas del
+            # rasgo.  Las muestras crudas de la corrida se contrastan con la
+            # captura certificadora congelada antes de compararlas con lo que la
+            # propia evidencia declara.  Desplazar a la vez las alturas del
+            # parche, del localizador y de la colocacion no puede pasar.
+            if abs(float(w_rec["srv_y_m"]) - float(cert_info["certified_y_m"])) > 0.02:
+                map02_ok = False
+                map02_detail = f"patch_vs_certified_height_mismatch:{pid}"
+                break
+
             srv_x = float(l_num["srv_x_m"])
             srv_y = float(l_num["srv_y_m"])
             srv_z = float(l_num["srv_z_m"])
@@ -1941,14 +1962,6 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
             ):
                 map02_ok = False
                 map02_detail = f"srv_vs_patch256_mismatch:{pid}"
-                break
-
-            # BLOQ 5: las muestras crudas de la corrida tambien se contrastan con
-            # la captura certificadora congelada.  Desplazar a la vez las alturas
-            # del parche, del localizador y de la colocacion no puede pasar.
-            if abs(float(w_rec["srv_y_m"]) - float(cert_info["certified_y_m"])) > 0.02:
-                map02_ok = False
-                map02_detail = f"patch_vs_certified_height_mismatch:{pid}"
                 break
 
             # Comprobar que las 2 filas de auditoria pertenecen a las 256 muestras del parche

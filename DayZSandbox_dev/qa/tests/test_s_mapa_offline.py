@@ -2338,6 +2338,88 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             self.assertEqual(c_m1["status"], "fail")
             self.assertIn("idat_stream_not_terminated", c_m1["detail"])
 
+    def test_men_recongelado_two_accreditation_states(self) -> None:
+        """MEN: la acreditacion se prueba contra el estado congelado, en ambos sentidos.
+
+        No se asume ``offline`` ni que promover a ``diag`` cambie la fuente: se
+        construye una fixture congelada acreditada en juego y se comprueba que
+        (a) el paquete coherente pasa y (b) el paquete con la etiqueta contraria
+        se rechaza; despues se repite con el estado congelado offline.
+        """
+        frozen = gate_core.read_json(FIXTURE_PATH)
+        frozen_ingame = copy.deepcopy(frozen)
+        frozen_ingame["accreditation"]["accredited_ingame"] = True
+        frozen_ingame["certifying_capture"]["certifying_build"] = "diag"
+        frozen_ingame["certifying_capture"]["certifying_hello"]["build"] = "diag"
+
+        frozen_offline = copy.deepcopy(frozen_ingame)
+        frozen_offline["accreditation"]["accredited_ingame"] = False
+        frozen_offline["certifying_capture"]["certifying_build"] = "offline"
+        frozen_offline["certifying_capture"]["certifying_hello"]["build"] = "offline"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # (a) Congelado ingame: paquete diag coherente -> PASA.
+            p_ingame_ok = Path(tmp) / "ingame_ok"
+            _build_synthetic_part(
+                p_ingame_ok,
+                git_head=self.real_git_head,
+                probe_stamp=self.real_probe_stamp,
+                build="diag",
+                custom_fixture=frozen_ingame,
+            )
+            with mock.patch.object(
+                s_mapa_eval, "_load_frozen_fixture", return_value=copy.deepcopy(frozen_ingame)
+            ):
+                v_ingame_ok = s_mapa_eval.evaluate(p_ingame_ok, repo_root=REPO_ROOT)
+            self.assertEqual(v_ingame_ok["exit_code"], 0, v_ingame_ok)
+
+            # (b) Paquete offline contra el congelado ingame -> 2 INCONCLUSO.
+            p_ingame_bad = Path(tmp) / "ingame_bad"
+            _build_synthetic_part(
+                p_ingame_bad,
+                git_head=self.real_git_head,
+                probe_stamp=self.real_probe_stamp,
+                build="offline",
+                custom_fixture=frozen_offline,
+            )
+            with mock.patch.object(
+                s_mapa_eval, "_load_frozen_fixture", return_value=copy.deepcopy(frozen_ingame)
+            ):
+                v_ingame_bad = s_mapa_eval.evaluate(p_ingame_bad, repo_root=REPO_ROOT)
+            self.assertEqual(v_ingame_bad["exit_code"], 2, v_ingame_bad)
+            self.assertEqual(v_ingame_bad["reasons"], ["unaccredited_fixture"])
+
+            # (c) Congelado offline: paquete offline coherente -> PASA.
+            p_offline_ok = Path(tmp) / "offline_ok"
+            _build_synthetic_part(
+                p_offline_ok,
+                git_head=self.real_git_head,
+                probe_stamp=self.real_probe_stamp,
+                build="offline",
+                custom_fixture=frozen_offline,
+            )
+            with mock.patch.object(
+                s_mapa_eval, "_load_frozen_fixture", return_value=copy.deepcopy(frozen_offline)
+            ):
+                v_offline_ok = s_mapa_eval.evaluate(p_offline_ok, repo_root=REPO_ROOT)
+            self.assertEqual(v_offline_ok["exit_code"], 0, v_offline_ok)
+
+            # (d) Paquete diag contra el congelado offline -> 2 INCONCLUSO.
+            p_offline_bad = Path(tmp) / "offline_bad"
+            _build_synthetic_part(
+                p_offline_bad,
+                git_head=self.real_git_head,
+                probe_stamp=self.real_probe_stamp,
+                build="diag",
+                custom_fixture=frozen_ingame,
+            )
+            with mock.patch.object(
+                s_mapa_eval, "_load_frozen_fixture", return_value=copy.deepcopy(frozen_offline)
+            ):
+                v_offline_bad = s_mapa_eval.evaluate(p_offline_bad, repo_root=REPO_ROOT)
+            self.assertEqual(v_offline_bad["exit_code"], 2, v_offline_bad)
+            self.assertEqual(v_offline_bad["reasons"], ["unaccredited_fixture"])
+
     # =========================================================================
     # Regresiones del arbitraje r2 (2026-11-15): cada contraejemplo de Sol r2
     # con nombre fijo ``test_sol2_<id>_*``.  Las fabricaciones no dan PASA; las
