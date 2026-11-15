@@ -74,6 +74,13 @@ auxiliares), ``qb_vis_b`` (``IsElementVisible(EHudElement.QUICKBAR)``),
 ``read_sk``: ``cam_job_id``, ``cam_job_state``, ``sample_job_id``,
 ``sample_job_state``, ``saved_names_csv``.
 
+``SCAM-S1`` (CAM-02): pasos de ``ev="state"``
+--------------------------------------------
+``s_init``, ``s_a``, ``s_b`` y ``s_0`` (los tres tramos de teclado),
+``moved`` (pose tras desplazarse ``>= 10 m`` y girar ``>= 30`` grados) y
+``p_roll_applied``/``p0_applied`` (poses guardadas reaplicadas). Se aceptan
+sinónimos en mayúsculas y variantes listadas en ``_find_state``.
+
 ``samples/path_catmull_scripted.jsonl``, ``path_linear_hud.jsonl``,
 ``path_engine_interp.jsonl``, ``path_dof_var.jsonl``, ``path_dof_fix.jsonl``
 ----------------------------------------------------------------------------
@@ -135,6 +142,7 @@ con ``pos_mode`` y ``keys`` (``t_s``, ``pos_x_m``, ``pos_y_rel_m`` relativo a
 """
 
 import math
+import statistics
 import struct
 from pathlib import Path
 
@@ -387,6 +395,265 @@ def _theta3d_euler(obs: dict, ref: dict) -> float:
     return _theta3d(q_obs, q_ref)
 
 
+def _find_state(scenario: list, phase: str, *names: str) -> dict | None:
+    for name in names:
+        row = _state(scenario, phase, name)
+        if row is not None:
+            return row
+    return None
+
+
+def _col(row: dict, key: str) -> float | None:
+    try:
+        return float(row[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return float(statistics.median(values))
+
+
+def _lerp(a: float, b: float, u: float) -> float:
+    return float(a) + (float(b) - float(a)) * float(u)
+
+
+def _row_pos(row: dict, prefix: str = "") -> list[float]:
+    return [
+        float(row[f"{prefix}x_m"]),
+        float(row[f"{prefix}y_m"]),
+        float(row[f"{prefix}z_m"]),
+    ]
+
+
+def _row_dir(row: dict, prefix: str = "") -> list[float]:
+    return [
+        float(row[f"{prefix}dx"]),
+        float(row[f"{prefix}dy"]),
+        float(row[f"{prefix}dz"]),
+    ]
+
+
+def _mat_forward(row: dict) -> list[float]:
+    return [float(row["m20"]), float(row["m21"]), float(row["m22"])]
+
+
+def _matrix_dict(m: list) -> dict:
+    return {f"m{i}{j}": m[i][j] for i in range(3) for j in range(3)}
+
+
+def _q_from_row(row: dict) -> list:
+    m = [[float(row[f"m{i}{j}"]) for j in range(3)] for i in range(3)]
+    return _matrix_to_quat(m)
+
+
+def _key_table(fixture_path: dict) -> list[dict]:
+    keys = []
+    for raw in fixture_path.get("keys") or []:
+        keys.append(
+            {
+                "t_s": float(raw["t_s"]),
+                "pos": [
+                    float(raw["pos_x_m"]),
+                    float(raw["pos_y_rel_m"]),
+                    float(raw["pos_z_m"]),
+                ],
+                "yaw_deg": float(raw["yaw_deg"]),
+                "pitch_deg": float(raw["pitch_deg"]),
+                "roll_deg": float(raw["roll_deg"]),
+                "fov_rad": float(raw["fov_rad"]),
+                "focus_dist_m": float(raw["focus_dist_m"]),
+                "focus_blur": float(raw["focus_blur"]),
+            }
+        )
+    return keys
+
+
+def _ref_pos_rel(keys: list[dict], t_s: float, pos_mode: str) -> list[float]:
+    end = keys[-1]["t_s"]
+    t = _clip(float(t_s), 0.0, end)
+    if pos_mode == "linear":
+        for i in range(len(keys) - 1):
+            t0, t1 = keys[i]["t_s"], keys[i + 1]["t_s"]
+            if t0 <= t <= t1:
+                u = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
+                return [_lerp(keys[i]["pos"][a], keys[i + 1]["pos"][a], u) for a in range(3)]
+        return list(keys[-1]["pos"])
+    s = 0.0 if end <= 0.0 else t / end
+    segs = len(keys) - 1
+    seg = min(int(s * segs), segs - 1)
+    u = s * segs - seg
+    p0 = keys[max(seg - 1, 0)]["pos"]
+    p1 = keys[seg]["pos"]
+    p2 = keys[seg + 1]["pos"]
+    p3 = keys[min(seg + 2, len(keys) - 1)]["pos"]
+    out = []
+    for a in range(3):
+        out.append(
+            0.5
+            * (
+                2.0 * p1[a]
+                + (-p0[a] + p2[a]) * u
+                + (2.0 * p0[a] - 5.0 * p1[a] + 4.0 * p2[a] - p3[a]) * u * u
+                + (-p0[a] + 3.0 * p1[a] - 3.0 * p2[a] + p3[a]) * u * u * u
+            )
+        )
+    return out
+
+
+def _normalize_quat(q: list) -> list:
+    n = math.sqrt(sum(float(v) ** 2 for v in q))
+    if n <= 0.0:
+        return [0.0, 0.0, 0.0, 1.0]
+    return [float(v) / n for v in q]
+
+
+def _key_quat(key: dict) -> list:
+    return _matrix_to_quat(
+        _ypr_matrix(key["yaw_deg"], key["pitch_deg"], key["roll_deg"])
+    )
+
+
+def _slerp(qa: list, qb: list, u: float) -> list:
+    qa = _normalize_quat(qa)
+    qb = _normalize_quat(qb)
+    dot = sum(float(a) * float(b) for a, b in zip(qa, qb))
+    if dot < 0.0:
+        qb = [-v for v in qb]
+        dot = -dot
+    dot = _clip(dot, -1.0, 1.0)
+    if dot > 0.9995:
+        return _normalize_quat([_lerp(qa[i], qb[i], u) for i in range(4)])
+    omega = math.acos(dot)
+    sin_omega = math.sin(omega)
+    w1 = math.sin((1.0 - u) * omega) / sin_omega
+    w2 = math.sin(u * omega) / sin_omega
+    return _normalize_quat([w1 * qa[i] + w2 * qb[i] for i in range(4)])
+
+
+def _ref_quat(keys: list[dict], t_s: float) -> list:
+    end = keys[-1]["t_s"]
+    t = _clip(float(t_s), 0.0, end)
+    for i in range(len(keys) - 1):
+        t0, t1 = keys[i]["t_s"], keys[i + 1]["t_s"]
+        if t0 <= t <= t1:
+            u = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
+            return _slerp(_key_quat(keys[i]), _key_quat(keys[i + 1]), u)
+    return _key_quat(keys[-1])
+
+
+def _ref_fov(keys: list[dict], t_s: float) -> float:
+    end = keys[-1]["t_s"]
+    t = _clip(float(t_s), 0.0, end)
+    for i in range(len(keys) - 1):
+        t0, t1 = keys[i]["t_s"], keys[i + 1]["t_s"]
+        if t0 <= t <= t1:
+            u = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
+            return _lerp(keys[i]["fov_rad"], keys[i + 1]["fov_rad"], u)
+    return keys[-1]["fov_rad"]
+
+
+def _ref_focus(keys: list[dict], t_s: float) -> tuple[float, float]:
+    end = keys[-1]["t_s"]
+    t = _clip(float(t_s), 0.0, end)
+    for i in range(len(keys) - 1):
+        t0, t1 = keys[i]["t_s"], keys[i + 1]["t_s"]
+        if t0 <= t <= t1:
+            u = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
+            return (
+                _lerp(keys[i]["focus_dist_m"], keys[i + 1]["focus_dist_m"], u),
+                _lerp(keys[i]["focus_blur"], keys[i + 1]["focus_blur"], u),
+            )
+    return keys[-1]["focus_dist_m"], keys[-1]["focus_blur"]
+
+
+def _row_time(row: dict, t_end: float) -> float | None:
+    try:
+        return min(float(row["dtsum_ms"]) / 1000.0, float(t_end))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _closest_row(rows: list, t_target: float, t_end: float) -> tuple[dict | None, float]:
+    best = None
+    best_dt = float("inf")
+    best_t = 0.0
+    for row in rows:
+        t = _row_time(row, t_end)
+        if t is None:
+            continue
+        dt = abs(t - t_target)
+        if dt < best_dt:
+            best_dt = dt
+            best = row
+            best_t = t
+    return best, best_t
+
+
+def _path_status(
+    rows: list, keys: list[dict], pos_mode: str, t_end: float, y_datum: float
+) -> tuple[str, str]:
+    count = len(rows)
+    if count == 0:
+        return "missing", "no_rows"
+    if count < 180:
+        return "missing", f"rows={count}"
+    dtsums = []
+    for row in rows:
+        try:
+            dtsums.append(float(row["dtsum_ms"]))
+        except (KeyError, TypeError, ValueError):
+            return "missing", "bad_columns"
+    for i in range(1, count):
+        if dtsums[i] - dtsums[i - 1] > 100.0:
+            return "missing", f"gap_ms={dtsums[i] - dtsums[i - 1]:.1f}"
+    for i, row in enumerate(rows):
+        try:
+            seq = float(row["seq_n"])
+            frame = float(row["frame"])
+        except (KeyError, TypeError, ValueError):
+            return "missing", "bad_columns"
+        if i == 0:
+            if dtsums[0] != 0.0:
+                return "fail", "first_dtsum_not_zero"
+        else:
+            if dtsums[i] <= dtsums[i - 1]:
+                return "fail", "dtsum_not_increasing"
+            if abs(frame - float(rows[i - 1]["frame"]) - 1.0) > 1e-6:
+                return "fail", "frame_not_contiguous"
+        if abs(seq - i) > 1e-6:
+            return "fail", "seq_n_not_contiguous"
+    for row in rows:
+        try:
+            if float(row["active_b"]) != 1.0:
+                return "fail", "cam_inactive"
+            if _dist(_row_pos(row, "eng_"), _row_pos(row)) >= 0.01:
+                return "fail", "cam_eng_mismatch"
+        except (KeyError, TypeError, ValueError):
+            return "missing", "bad_columns"
+    for row in rows:
+        t = _row_time(row, t_end)
+        if t is None:
+            return "missing", "bad_dtsum"
+        ref_rel = _ref_pos_rel(keys, t, pos_mode)
+        ref = [ref_rel[0], y_datum + ref_rel[1], ref_rel[2]]
+        err = _dist(_row_pos(row, "eng_"), ref)
+        if err >= 0.5:
+            return "fail", f"ref_err_m={err:.3f}"
+    steps = [
+        _dist(_row_pos(rows[i], "eng_"), _row_pos(rows[i - 1], "eng_"))
+        for i in range(1, count)
+    ]
+    med = _median(steps)
+    if med <= 0.0:
+        return "fail", "median_step_zero"
+    if max(steps) > 3.0 * med:
+        return "fail", f"step_over_median={max(steps) / med:.2f}"
+    return "pass", "ok"
+
+
 def read_bmp_gray(path) -> list[list[float]]:
     """Lee un BMP 24 bits BGR sin comprimir y devuelve luminancia por píxel."""
     data = Path(path).read_bytes()
@@ -553,17 +820,142 @@ def _check_cam_01(samples: dict) -> dict:
 # desplazarse en el tramo 3, y al reaplicar las poses active_b == 1.0 con
 # < 0.05 m y < 0.5 grados. FAIL en caso contrario.
 def _check_cam_02(samples: dict) -> dict:
-    return _not_implemented("CAM-02")
+    scenario = samples.get("scenario") or []
+    phase = "SCAM-S1"
+    s_init = _find_state(scenario, phase, "s_init", "S_init")
+    s_a = _find_state(scenario, phase, "s_a", "S_a")
+    s_b = _find_state(scenario, phase, "s_b", "S_b")
+    s_0 = _find_state(scenario, phase, "s_0", "S_0")
+    moved = _find_state(
+        scenario, phase, "moved", "after_move", "moved_state", "s_moved"
+    )
+    p_roll = _find_state(
+        scenario, phase, "p_roll_applied", "apply_p_roll", "p_roll_restored", "post_p_roll"
+    )
+    p0 = _find_state(
+        scenario, phase, "p0_applied", "apply_p0", "p0_restored", "post_p0"
+    )
+    for name, row in (
+        ("s_init", s_init),
+        ("s_a", s_a),
+        ("s_b", s_b),
+        ("s_0", s_0),
+        ("moved", moved),
+        ("p_roll", p_roll),
+        ("p0", p0),
+    ):
+        if row is None:
+            return _chk("CAM-02", "missing", f"no_{name}")
+    try:
+        if _num(s_init, "active_b") != 1.0:
+            return _chk("CAM-02", "fail", "s_init_inactive")
+        if _dist(_row_pos(_nk(s_init)), _row_pos(_nk(s_init), "eng_")) >= 0.01:
+            return _chk("CAM-02", "fail", "s_init_cam_eng_mismatch")
+        if _angle_between(_mat_forward(_nk(s_init)), _row_dir(_nk(s_init), "eng_")) >= 0.05:
+            return _chk("CAM-02", "fail", "s_init_direction_mismatch")
+
+        dt1 = _num(s_a, "integrated_dt_s") - _num(s_init, "integrated_dt_s")
+        dt2 = _num(s_b, "integrated_dt_s") - _num(s_a, "integrated_dt_s")
+        if dt1 <= 0.2:
+            return _chk("CAM-02", "fail", f"dt1_int_s={dt1:.3f}")
+        if dt2 <= 0.2:
+            return _chk("CAM-02", "fail", f"dt2_int_s={dt2:.3f}")
+        f_init = _num(s_init, "input_frames_n")
+        f_a = _num(s_a, "input_frames_n")
+        f_b = _num(s_b, "input_frames_n")
+        f_0 = _num(s_0, "input_frames_n")
+        if not (f_a > f_init and f_b > f_a and f_0 > f_b):
+            return _chk("CAM-02", "fail", "input_frames_not_increasing")
+
+        p_init = _row_pos(_nk(s_init))
+        p_a = _row_pos(_nk(s_a))
+        p_b = _row_pos(_nk(s_b))
+        p_0 = _row_pos(_nk(s_0))
+        d1 = _dist(p_a, p_init)
+        d2 = _dist(p_b, p_a)
+        if not (1.5 <= d1 <= 2.5):
+            return _chk("CAM-02", "fail", f"d1_m={d1:.3f}")
+        if _theta3d_cells(_nk(s_a), _nk(s_init)) >= 0.5:
+            return _chk("CAM-02", "fail", "tramo1_rotation")
+        if _num(s_b, "speed_mps") != 8.0:
+            return _chk("CAM-02", "fail", f"speed_mps={_num(s_b, 'speed_mps')}")
+        if _num(s_b, "speed_steps_n") < 1.0:
+            return _chk("CAM-02", "fail", "speed_steps_n=0")
+        if not (3.0 <= d2 <= 5.0):
+            return _chk("CAM-02", "fail", f"d2_m={d2:.3f}")
+        ratio = (d2 / dt2) / (d1 / dt1)
+        if not (1.7 <= ratio <= 2.3):
+            return _chk("CAM-02", "fail", f"speed_ratio={ratio:.2f}")
+        if _dist(p_0, p_b) >= 0.05:
+            return _chk("CAM-02", "fail", "tramo3_moved")
+        dyaw = abs(_wrap180(_num(s_0, "yaw_deg") - _num(s_b, "yaw_deg")))
+        dpitch = abs(_num(s_0, "pitch_deg") - _num(s_b, "pitch_deg"))
+        if not (15.0 <= dyaw <= 40.0):
+            return _chk("CAM-02", "fail", f"tramo3_dyaw_deg={dyaw:.2f}")
+        if not (15.0 <= dpitch <= 40.0):
+            return _chk("CAM-02", "fail", f"tramo3_dpitch_deg={dpitch:.2f}")
+
+        saved_pos = _row_pos(_nk(s_0))
+        moved_pos = _row_pos(_nk(moved))
+        if _dist(moved_pos, saved_pos) < 10.0:
+            return _chk("CAM-02", "fail", "moved_less_than_10m")
+        if _theta3d_cells(_nk(moved), _nk(s_0)) < 30.0:
+            return _chk("CAM-02", "fail", "moved_less_than_30deg")
+
+        ref_roll = _matrix_dict(_ypr_matrix(35.0, -12.0, 18.0))
+        if _num(p_roll, "active_b") != 1.0:
+            return _chk("CAM-02", "fail", "p_roll_inactive")
+        if _dist(_row_pos(_nk(p_roll), "eng_"), saved_pos) >= 0.05:
+            return _chk("CAM-02", "fail", "p_roll_eng_pos_err")
+        if _dist(_row_pos(_nk(p_roll)), saved_pos) >= 0.05:
+            return _chk("CAM-02", "fail", "p_roll_cam_pos_err")
+        if _theta3d_cells(_nk(p_roll), ref_roll) >= 0.5:
+            return _chk("CAM-02", "fail", "p_roll_theta_deg")
+
+        if _num(p0, "active_b") != 1.0:
+            return _chk("CAM-02", "fail", "p0_inactive")
+        if _dist(_row_pos(_nk(p0), "eng_"), saved_pos) >= 0.05:
+            return _chk("CAM-02", "fail", "p0_eng_pos_err")
+        if _dist(_row_pos(_nk(p0)), saved_pos) >= 0.05:
+            return _chk("CAM-02", "fail", "p0_cam_pos_err")
+        if _theta3d_cells(_nk(p0), _nk(s_0)) >= 0.5:
+            return _chk("CAM-02", "fail", "p0_theta_deg")
+    except (KeyError, TypeError, ValueError):
+        return _chk("CAM-02", "missing", "bad_columns")
+    return _chk("CAM-02", "pass", "ok")
 
 
 # CAM-03: una muestra por frame en m_Probe.m_Frame, trayectoria a < 0.5 m de la
-# referencia analítica independiente y ningún paso mayor que 3x la mediana.
-# M < 180 filas o un salto de dtsum_ms > 100 ms dan missing (INCONCLUSO).
-# PASS exige seq_n y frame consecutivos, dtsum_ms creciente, cámara y motor a
-# < 0.01 m en todas las filas, error < 0.5 m en todas y paso <= 3x mediana.
-# FAIL en caso contrario.
+# referencia analítica independiente (claves de la fixture; solo el origen
+# vertical se ancla a la primera fila, como en CAM-04) y ningún paso mayor que
+# 3x la mediana. M < 180 filas o un salto de dtsum_ms > 100 ms dan missing
+# (INCONCLUSO). PASS exige seq_n y frame consecutivos, dtsum_ms creciente,
+# cámara y motor a < 0.01 m en todas las filas, error < 0.5 m en todas y paso
+# <= 3x mediana. FAIL en caso contrario.
 def _check_cam_03(samples: dict) -> dict:
-    return _not_implemented("CAM-03")
+    fixtures = (samples.get("fixtures_paths") or {}).get("paths") or {}
+    for dump in ("path_catmull_scripted", "path_linear_hud"):
+        rows = samples.get("paths", {}).get(dump) or []
+        fpath = fixtures.get(PATH_FIXTURE[dump])
+        if not rows or not isinstance(fpath, dict):
+            return _chk("CAM-03", "missing", f"no_{dump}")
+        try:
+            keys = _key_table(fpath)
+        except (KeyError, TypeError, ValueError):
+            return _chk("CAM-03", "missing", f"bad_{dump}_fixture")
+        if not keys:
+            return _chk("CAM-03", "missing", f"no_{dump}_keys")
+        pos_mode = fpath.get("pos_mode", "linear")
+        try:
+            y_datum = float(rows[0]["eng_y_m"]) - keys[0]["pos"][1]
+        except (KeyError, TypeError, ValueError):
+            return _chk("CAM-03", "missing", f"bad_{dump}_columns")
+        status, detail = _path_status(
+            rows, keys, pos_mode, keys[-1]["t_s"], y_datum
+        )
+        if status != "pass":
+            return _chk("CAM-03", status, f"{dump}_{detail}")
+    return _chk("CAM-03", "pass", "ok")
 
 
 # CAM-04: fin entre 6.0 y 6.3 s y pose y FOV finales iguales a la última clave.
@@ -615,8 +1007,190 @@ def _check_cam_04(samples: dict) -> dict:
 # < 2.0 grados, yaw cerca de 180/-179/-99 en los instantes fijados, excursión de
 # FOV >= 0.25 rad y error de lerp < 0.02 rad, y interp_comparison.json con
 # selected_mode calculado por la regla empírica de §5.3. FAIL en otro caso.
+def _path_stats(rows: list, keys: list[dict], pos_mode: str) -> dict | None:
+    if not rows:
+        return None
+    t_end = keys[-1]["t_s"]
+    try:
+        y_datum = float(rows[0]["eng_y_m"]) - keys[0]["pos"][1]
+    except (KeyError, TypeError, ValueError):
+        return None
+    errors = []
+    steps = []
+    for i, row in enumerate(rows):
+        t = _row_time(row, t_end)
+        if t is None:
+            return None
+        ref_rel = _ref_pos_rel(keys, t, pos_mode)
+        ref = [ref_rel[0], y_datum + ref_rel[1], ref_rel[2]]
+        try:
+            errors.append(_dist(_row_pos(row, "eng_"), ref))
+            if i:
+                steps.append(
+                    _dist(_row_pos(row, "eng_"), _row_pos(rows[i - 1], "eng_"))
+                )
+        except (KeyError, TypeError, ValueError):
+            return None
+    med = _median(steps)
+    return {
+        "max_over_median_step": (max(steps) / med) if med > 0.0 else float("inf"),
+        "max_pos_err_m": max(errors) if errors else float("inf"),
+    }
+
+
+def _engine_b2_b(rows: list, keys: list[dict]) -> bool:
+    if not rows:
+        return False
+    t_end = keys[-1]["t_s"]
+    try:
+        y_datum = float(rows[0]["eng_y_m"]) - keys[0]["pos"][1]
+    except (KeyError, TypeError, ValueError):
+        return False
+    status, _ = _path_status(rows, keys, "linear", t_end, y_datum)
+    if status != "pass":
+        return False
+    times = [_row_time(row, t_end) for row in rows]
+    if any(t is None for t in times):
+        return False
+    if not (any(t < 3.0 for t in times) and any(t >= 3.0 for t in times)):
+        return False
+    row3, t3 = _closest_row(rows, 3.0, t_end)
+    if row3 is None or abs(t3 - 3.0) > 0.1:
+        return False
+    try:
+        for row, t in zip(rows, times):
+            if _angle_between(_row_dir(row, "eng_"), _mat_forward(row)) >= 0.05:
+                return False
+            if _theta3d(_q_from_row(row), _ref_quat(keys, t)) >= 2.0:
+                return False
+            if abs(float(row["fov_rad"]) - _ref_fov(keys, t)) >= 0.02:
+                return False
+    except (KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _engine_keyed_dof(rows: list, keys: list[dict]) -> bool:
+    if not rows:
+        return False
+    t_end = keys[-1]["t_s"]
+    try:
+        for row in rows:
+            t = _row_time(row, t_end)
+            if t is None:
+                return False
+            ref_dist, ref_blur = _ref_focus(keys, t)
+            sent_dist = float(row["sent_focus_dist_m"])
+            sent_blur = float(row["sent_focus_blur"])
+            if abs(sent_dist - ref_dist) >= 0.25:
+                return False
+            if abs(sent_blur - ref_blur) >= 0.02:
+                return False
+    except (KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
 def _check_cam_05(samples: dict) -> dict:
-    return _not_implemented("CAM-05")
+    rows = samples.get("paths", {}).get("path_catmull_scripted") or []
+    fixtures = (samples.get("fixtures_paths") or {}).get("paths") or {}
+    fpath = fixtures.get("short_arc_6s")
+    if not rows or not isinstance(fpath, dict):
+        return _chk("CAM-05", "missing", "no_path_catmull_scripted")
+    try:
+        keys = _key_table(fpath)
+    except (KeyError, TypeError, ValueError):
+        return _chk("CAM-05", "missing", "bad_short_arc_fixture")
+    if not keys:
+        return _chk("CAM-05", "missing", "no_short_arc_keys")
+    t_end = keys[-1]["t_s"]
+    try:
+        for row in rows:
+            t = _row_time(row, t_end)
+            if t is None:
+                return _chk("CAM-05", "missing", "bad_dtsum")
+            if _angle_between(_row_dir(row, "eng_"), _mat_forward(row)) >= 0.05:
+                return _chk("CAM-05", "fail", "engine_direction_vs_matrix")
+            if _theta3d(_q_from_row(row), _ref_quat(keys, t)) >= 2.0:
+                return _chk("CAM-05", "fail", "orientation_vs_slerp")
+        for row in rows:
+            t = _row_time(row, t_end)
+            if t <= 3.0 + 1e-9:
+                yaw = _col(row, "yaw_deg")
+                if yaw is None or abs(yaw) < 178.5:
+                    return _chk("CAM-05", "fail", "short_arc_yaw_deg")
+        for target, expected, tol, label in (
+            (1.5, 180.0, 1.0, "mid_1_5s"),
+            (3.0, -179.0, 1.0, "end_3_0s"),
+            (4.5, -99.0, 2.0, "mid_4_5s"),
+        ):
+            row, t = _closest_row(rows, target, t_end)
+            if row is None or abs(t - target) > 0.1:
+                return _chk("CAM-05", "fail", f"no_sample_{label}")
+            yaw = _col(row, "yaw_deg")
+            if yaw is None or abs(_wrap180(yaw - expected)) >= tol:
+                return _chk("CAM-05", "fail", f"{label}_yaw_deg")
+        fovs = [_col(row, "fov_rad") for row in rows]
+        if any(v is None for v in fovs):
+            return _chk("CAM-05", "missing", "bad_fov")
+        if max(fovs) - min(fovs) < 0.25:
+            return _chk("CAM-05", "fail", "fov_excursion_rad")
+        for row in rows:
+            t = _row_time(row, t_end)
+            if abs(float(row["fov_rad"]) - _ref_fov(keys, t)) >= 0.02:
+                return _chk("CAM-05", "fail", "fov_vs_lerp_rad")
+    except (KeyError, TypeError, ValueError):
+        return _chk("CAM-05", "missing", "bad_columns")
+
+    engine_rows = samples.get("paths", {}).get("path_engine_interp") or []
+    scripted_stats = _path_stats(rows, keys, fpath.get("pos_mode", "linear"))
+    engine_stats = _path_stats(engine_rows, keys, "linear")
+    if scripted_stats is None:
+        return _chk("CAM-05", "missing", "bad_scripted_metrics")
+    if engine_stats is None:
+        return _chk("CAM-05", "missing", "no_path_engine_interp")
+    engine_ok = _engine_b2_b(engine_rows, keys)
+    engine_dof = _engine_keyed_dof(engine_rows, keys)
+    selected_mode = (
+        "engine_interp"
+        if (
+            engine_ok
+            and engine_dof
+            and engine_stats["max_pos_err_m"] < scripted_stats["max_pos_err_m"]
+            and engine_stats["max_over_median_step"]
+            < scripted_stats["max_over_median_step"]
+        )
+        else "scripted"
+    )
+    comparison = {
+        "engine_max_over_median_step": engine_stats["max_over_median_step"],
+        "engine_max_pos_err_m": engine_stats["max_pos_err_m"],
+        "engine_passes_b2_b": bool(engine_ok),
+        "engine_supports_keyed_dof_b": bool(engine_dof),
+        "scripted_max_over_median_step": scripted_stats["max_over_median_step"],
+        "scripted_max_pos_err_m": scripted_stats["max_pos_err_m"],
+        "selected_mode": selected_mode,
+    }
+    out = Path(samples["part_dir"]) / "samples" / "interp_comparison.json"
+    try:
+        gate_core.write_json(out, comparison)
+        written = gate_core.read_json(out)
+    except (OSError, ValueError):
+        return _chk("CAM-05", "missing", "interp_comparison_write")
+    required = (
+        "scripted_max_pos_err_m",
+        "engine_max_pos_err_m",
+        "scripted_max_over_median_step",
+        "engine_max_over_median_step",
+        "engine_passes_b2_b",
+        "engine_supports_keyed_dof_b",
+        "selected_mode",
+    )
+    if any(key not in written for key in required):
+        return _chk("CAM-05", "fail", "interp_comparison_incomplete")
+    if written.get("selected_mode") != selected_mode:
+        return _chk("CAM-05", "fail", "interp_comparison_mode_mismatch")
+    return _chk("CAM-05", "pass", "ok")
 
 
 # CAM-06: rechazos individuales de foco con 0 efectos sobre pose e imagen, y
