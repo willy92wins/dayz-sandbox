@@ -119,9 +119,162 @@ HEX_COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
 HEX_STAMP_RE = re.compile(r"^[0-9a-f]{16}$")
 HEX_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
+# Fixture congelada del propio oraculo (acreditacion contra la fuente, no contra
+# el hash que trae el paquete evaluado).  El evaluador la lee de su propio arbol;
+# no abre ``qa/fixtures/`` de la parte, que sigue siendo solo ``samples/``.
+FROZEN_FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "s_mapa_puntos.json"
+
+# Campos que el runner puede re-sellar al materializar la fixture en samples/:
+# commit y sello de la captura certificadora, y los hashes derivados de ellos.
+_FROZEN_MUTABLE_PATHS = frozenset(
+    {
+        ("accreditation", "certifying_capture_sha256"),
+        ("accreditation", "certifying_probe_stamp"),
+        ("certifying_capture", "certifying_git_head"),
+        ("certifying_capture", "certifying_hello", "probe_ver"),
+        ("certifying_capture", "certifying_probe_stamp"),
+        ("certifying_capture", "certifying_wire_cap"),
+    }
+)
+
+SAT_ARTIFACT_KEYS = (
+    "pbo_source_sha256",
+    "paa_tiles_sha256",
+    "pal2pace_exe_sha256",
+    "stitch_recipe_sha256",
+)
+
 
 def _is_finite_num(val: object) -> bool:
     return isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(float(val))
+
+
+def _exact_int(val: object) -> int | None:
+    """Devuelve el entero exacto contenido en ``val`` o ``None`` si no lo es.
+
+    N23/N26: los contadores (``_n``), booleanos (``_b``) y ``frame`` viajan como
+    enteros exactos; un ``0.49`` no es valido aunque redondee a ``0``.
+    """
+    if not _is_finite_num(val):
+        return None
+    f = float(val)
+    if f != math.floor(f):
+        return None
+    return int(f)
+
+
+def _same_num(val: object, ref: float, tol: float) -> bool:
+    return _is_finite_num(val) and abs(float(val) - float(ref)) <= tol
+
+
+def _load_frozen_fixture() -> dict | None:
+    try:
+        data = json.loads(FROZEN_FIXTURE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _frozen_mismatches(got: object, exp: object, path: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
+    """Lista de rutas donde ``got`` no coincide con la fixture congelada.
+
+    Se toleran solo los campos de ``_FROZEN_MUTABLE_PATHS`` (commit y sello de la
+    captura certificadora, y los hashes que de ellos derivan).  Todo lo demas
+    (puntos, ventanas, muestras, luminancias, superficies y banderas de
+    acreditacion) queda congelado: el implementador no puede autoacreditar su
+    copia en ``samples/``.
+    """
+    if path in _FROZEN_MUTABLE_PATHS:
+        return []
+    if isinstance(exp, dict):
+        if not isinstance(got, dict):
+            return [path]
+        bad: list[tuple[str, ...]] = []
+        for key in sorted(set(exp.keys()) | set(got.keys())):
+            if key not in exp or key not in got:
+                bad.append(path + (key,))
+            else:
+                bad.extend(_frozen_mismatches(got[key], exp[key], path + (key,)))
+        return bad
+    if isinstance(exp, list):
+        if not isinstance(got, list) or len(got) != len(exp):
+            return [path]
+        bad = []
+        for idx, (g_item, e_item) in enumerate(zip(got, exp)):
+            bad.extend(_frozen_mismatches(g_item, e_item, path + (str(idx),)))
+        return bad
+    if isinstance(exp, bool) or isinstance(got, bool):
+        return [] if got == exp else [path]
+    if isinstance(exp, (int, float)) and isinstance(got, (int, float)):
+        return [] if float(got) == float(exp) else [path]
+    return [] if got == exp else [path]
+
+
+def _roi_rect_overlap(a: object, b: object) -> bool:
+    if not (isinstance(a, (list, tuple)) and len(a) == 4 and isinstance(b, (list, tuple)) and len(b) == 4):
+        return True
+    au0, av0, au1, av1 = (float(a[0]), float(a[1]), float(a[2]), float(a[3]))
+    bu0, bv0, bu1, bv1 = (float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+    return not (au1 < bu0 or bu1 < au0 or av1 < bv0 or bv1 < av0)
+
+
+def _verify_sat_source(
+    provenance: dict,
+    accred: dict,
+    samples_dir: Path,
+) -> str | None:
+    """Acredita la Via A por ficheros y referencia, no por etiqueta.
+
+    El manifiesto declara ``source_kind = "dayz_tools_sat"``; para que valga, cada
+    hash declarado tiene que corresponder a un fichero realmente presente en
+    ``samples/`` (via ``<clave>_relpath``) y la imagen de referencia tiene que ser
+    un PNG con el SHA-256 declarado.  Si falta cualquier pieza, el resultado es
+    ``unaccredited_sat_source``.
+    """
+    if accred.get("sat_accredited") is not True:
+        return "unaccredited_sat_source"
+
+    ref_sha = accred.get("sat_reference_image_sha256")
+    ref_rel = accred.get("sat_reference_image_relpath")
+    if not isinstance(ref_sha, str) or not HEX_SHA256_RE.match(ref_sha):
+        return "unaccredited_sat_source"
+    if not isinstance(ref_rel, str) or not ref_rel:
+        return "unaccredited_sat_source"
+
+    root = samples_dir.resolve()
+    ref_path = (samples_dir / ref_rel).resolve()
+    if not ref_path.is_file() or root not in ref_path.parents:
+        return "unaccredited_sat_source"
+    try:
+        raw = ref_path.read_bytes()
+    except OSError:
+        return "unaccredited_sat_source"
+    if raw[:8] != PNG_SIGNATURE:
+        return "unaccredited_sat_source"
+    if hashlib.sha256(raw).hexdigest() != ref_sha:
+        return "unaccredited_sat_source"
+
+    for key in SAT_ARTIFACT_KEYS:
+        decl_sha = accred.get(key)
+        decl_rel = accred.get(key.replace("_sha256", "_relpath"))
+        if not isinstance(decl_sha, str) or not HEX_SHA256_RE.match(decl_sha):
+            return "unaccredited_sat_source"
+        if not isinstance(decl_rel, str) or not decl_rel:
+            return "unaccredited_sat_source"
+        art_path = (samples_dir / decl_rel).resolve()
+        if not art_path.is_file() or root not in art_path.parents:
+            return "unaccredited_sat_source"
+        try:
+            art = art_path.read_bytes()
+        except OSError:
+            return "unaccredited_sat_source"
+        if hashlib.sha256(art).hexdigest() != decl_sha:
+            return "unaccredited_sat_source"
+
+    # La imagen declarada por procedencia tiene que ser la misma referencia.
+    if provenance.get("sat_reference_image_sha256") not in (None, ref_sha):
+        return "unaccredited_sat_source"
+    return None
 
 
 def quantize_luma(y_m: float, sea_b: float, y_min_m: float, y_max_m: float) -> int:
@@ -478,7 +631,13 @@ def decode_and_validate_png(
     try:
         dobj = zlib.decompressobj()
         decompressed = dobj.decompress(b"".join(idat_parts)) + dobj.flush()
+        if not dobj.eof:
+            # MEN 10: un flujo zlib truncado puede dar la longitud esperada; se
+            # exige que el flujo comprimido haya terminado de verdad.
+            return (None, "idat_stream_not_terminated")
         if dobj.unused_data:
+            return (None, "idat_trailing_garbage")
+        if dobj.unconsumed_tail:
             return (None, "idat_trailing_garbage")
     except zlib.error:
         return (None, "idat_decompress_failed")
@@ -542,26 +701,74 @@ def _inconclusive(reason: str, metrics: dict[str, object] | None = None) -> dict
 def _extract_complete_ops(
     bridge_rows: list[dict],
 ) -> tuple[dict[str, dict], str | None]:
-    """Indexa operaciones verificando la presencia de enq, poll y result para cada op_id."""
+    """Indexa operaciones ligadas a la instancia del servidor observada en el hello.
+
+    Cada orden debe aparecer con su ``enq``, un ``poll`` que la incluya y un
+    ``result``, los tres atribuidos al peer ``server`` y a una instancia que haya
+    saludado como servidor.  Se exige orden temporal ``enq <= poll <= result``, que
+    el ``result.op_id`` interior coincida con el exterior y que no haya duplicados
+    ambiguos (mismo ``op_id`` con contenido distinto).
+    """
+    server_insts = {
+        r.get("inst")
+        for r in bridge_rows
+        if r.get("ev") == "hello"
+        and r.get("peer") == "server"
+        and r.get("http") == 200
+        and isinstance(r.get("inst"), str)
+        and r["inst"]
+    }
+    if not server_insts:
+        return ({}, "missing_server_hello")
+
     enqs: dict[str, dict] = {}
-    polls_for_op: set[str] = set()
+    polls_for_op: dict[str, list[dict]] = {}
     results: dict[str, dict] = {}
+
+    def _attr_ok(row: dict, require_inst: bool) -> bool:
+        if row.get("peer") != "server":
+            return False
+        inst = row.get("inst")
+        if require_inst or inst is not None:
+            return isinstance(inst, str) and inst in server_insts
+        return True
 
     for row in bridge_rows:
         ev = row.get("ev")
         if ev == "enq":
             oid = row.get("op_id")
-            if isinstance(oid, str) and oid:
-                enqs[oid] = row
+            if not isinstance(oid, str) or not oid:
+                continue
+            if not _attr_ok(row, require_inst=True):
+                return ({}, f"op_not_from_server_instance:{oid}")
+            prev = enqs.get(oid)
+            if prev is not None and (
+                prev.get("inst") != row.get("inst")
+                or prev.get("peer") != row.get("peer")
+                or prev.get("verb") != row.get("verb")
+                or prev.get("args") != row.get("args")
+            ):
+                return ({}, f"ambiguous_operation:{oid}")
+            enqs[oid] = row
         elif ev == "poll" and row.get("http") == 200:
+            if not _attr_ok(row, require_inst=True):
+                return ({}, f"poll_not_from_server_instance:{row.get('inst')}")
             for oid in row.get("op_ids") or []:
                 if isinstance(oid, str) and oid:
-                    polls_for_op.add(oid)
+                    polls_for_op.setdefault(oid, []).append(row)
         elif ev == "result" and row.get("http") == 200:
             oid = row.get("op_id")
             res = row.get("result")
-            if isinstance(oid, str) and oid and isinstance(res, dict):
-                results[oid] = row
+            if not isinstance(oid, str) or not oid or not isinstance(res, dict):
+                continue
+            if not _attr_ok(row, require_inst=False):
+                return ({}, f"result_not_from_server_instance:{oid}")
+            if res.get("op_id") != oid:
+                return ({}, f"result_op_id_mismatch:{oid}")
+            prev = results.get(oid)
+            if prev is not None and prev.get("result") != res:
+                return ({}, f"ambiguous_operation:{oid}")
+            results[oid] = row
 
     ops: dict[str, dict] = {}
     for oid, res_row in results.items():
@@ -577,6 +784,25 @@ def _extract_complete_ops(
         has_list = read_obj.get("has")
         if not isinstance(has_list, list):
             continue
+
+        # Orden temporal estricta en el reloj del puente.
+        t_enq = enq_row.get("t_ms")
+        t_res = res_row.get("t_ms")
+        if not (_is_finite_num(t_enq) and _is_finite_num(t_res)):
+            return ({}, f"missing_op_clock:{oid}")
+        t_poll = None
+        for poll_row in polls_for_op[oid]:
+            t_p = poll_row.get("t_ms")
+            if not _is_finite_num(t_p):
+                return ({}, f"missing_poll_clock:{oid}")
+            if t_p < float(t_enq):
+                return ({}, f"poll_before_enq:{oid}")
+            if t_p > float(t_res):
+                return ({}, f"poll_after_result:{oid}")
+            t_poll = t_p if t_poll is None else min(t_poll, t_p)
+        if t_poll is None or float(t_res) < float(t_enq):
+            return ({}, f"result_before_enq:{oid}")
+
         unpacked_args: dict | None = None
         raw_args = enq_row.get("args")
         if isinstance(raw_args, dict):
@@ -626,6 +852,15 @@ def _verify_certifying_capture(
     if fixture.get("schema") != "dsbx.map.fixture.v4":
         return (None, "unaccredited_fixture")
     if cert_cap.get("schema") != "dsbx.map.certifying_capture.v4":
+        return (None, "unaccredited_fixture")
+
+    # La copia en ``samples/`` se acredita contra la fixture congelada del oraculo,
+    # no contra el hash que el propio paquete aporta.  Solo pueden diferir los
+    # campos que el runner re-sella al materializar la captura.
+    frozen = _load_frozen_fixture()
+    if frozen is None:
+        return (None, "unaccredited_fixture")
+    if _frozen_mismatches(fixture, frozen):
         return (None, "unaccredited_fixture")
 
     fix_sha = f03_common.sha256_file_hex(fixture_path)
@@ -686,6 +921,18 @@ def _verify_certifying_capture(
     ):
         return (None, "unaccredited_fixture")
 
+    # Una captura offline no puede pasar a diag/retail solo cambiando etiquetas: la
+    # bandera de acreditacion en juego y el build certificador tienen que ser
+    # coherentes entre si (y quedan congelados contra la fixture del oraculo).
+    if cert_build == "offline":
+        if accred.get("accredited_ingame") is not False:
+            return (None, "unaccredited_fixture")
+    elif cert_build in ("diag", "retail"):
+        if accred.get("accredited_ingame") is not True:
+            return (None, "unaccredited_fixture")
+    else:
+        return (None, "unaccredited_fixture")
+
     if manifest_build in ("retail", "diag"):
         if accred.get("accredited_ingame") is not True or cert_build not in ("diag", "retail"):
             return (None, "unaccredited_fixture")
@@ -726,6 +973,26 @@ def _verify_certifying_capture(
     if set(cal_pts.keys()) != set(CAL_IDS) or set(ver_pts.keys()) != set(VER_IDS) or set(place_pts.keys()) != set(SURFACE_IDS):
         return (None, "unaccredited_fixture")
 
+    # Separacion fisica real entre calibracion y verificacion: puntos certificados
+    # distintos y ventanas disjuntas.  No basta con que los nombres C/V difieran:
+    # V1..V3 no puede ser una copia fisica de C1..C3 con los nombres cambiados.
+    for cid in CAL_IDS:
+        for vid in VER_IDS:
+            cpt = cal_pts[cid]
+            vpt = ver_pts[vid]
+            cx = cpt.get("certified_x_m")
+            cz = cpt.get("certified_z_m")
+            vx = vpt.get("certified_x_m")
+            vz = vpt.get("certified_z_m")
+            if not all(_is_finite_num(v) for v in (cx, cz, vx, vz)):
+                return (None, "unaccredited_fixture")
+            if math.hypot(float(cx) - float(vx), float(cz) - float(vz)) < 500.0:
+                return (None, "unaccredited_fixture")
+            if _roi_rect_overlap(cpt.get("roi_px"), vpt.get("roi_px")):
+                return (None, "unaccredited_fixture")
+            if _roi_rect_overlap(cpt.get("world_roi_m"), vpt.get("world_roi_m")):
+                return (None, "unaccredited_fixture")
+
     all_feature_pts = {**cal_pts, **ver_pts}
     patches = cert_cap.get("patches")
     if not isinstance(patches, dict) or set(patches.keys()) != set(PATCH_IDS):
@@ -740,6 +1007,7 @@ def _verify_certifying_capture(
                 top_ops_by_id[item["op_id"]] = item
 
     reconstructed_certified: dict[str, dict] = {}
+    seen_cert_op_ids: set[str] = set()
     for pid in PATCH_IDS:
         fpt = all_feature_pts[pid]
         p_cap = patches.get(pid)
@@ -774,15 +1042,19 @@ def _verify_certifying_capture(
         if not isinstance(locate_op, dict) and isinstance(p_cap.get("locate_op_id"), str):
             locate_op = top_ops_by_id.get(p_cap["locate_op_id"])
 
+        # N31: la captura certificadora debe conservar las 32 ordenes distintas
+        # (16 filas x 2 mitades de 8 muestras) que cubren las 256 muestras.
+        # Dos ordenes sueltas, o un mismo bloque repetido, no acreditan el parche.
         if (
             not isinstance(patch_row_ops, list)
-            or len(patch_row_ops) not in (2, 32)
+            or len(patch_row_ops) != 32
             or not isinstance(locate_op, dict)
         ):
             return (None, "unaccredited_fixture")
 
         p_idx_num = PATCH_IDS.index(pid)
-        for idx_chunk, op_entry in enumerate(patch_row_ops):
+        covered_cells: set[tuple[int, int]] = set()
+        for op_entry in patch_row_ops:
             if not isinstance(op_entry, dict):
                 return (None, "unaccredited_fixture")
             ord_obj = op_entry.get("order")
@@ -791,8 +1063,12 @@ def _verify_certifying_capture(
                 return (None, "unaccredited_fixture")
             if ord_obj.get("verb") != "map_world_read" or res_obj.get("status") != "done":
                 return (None, "unaccredited_fixture")
-            if ord_obj.get("op_id") != res_obj.get("op_id") or not isinstance(ord_obj.get("op_id"), str):
+            op_id_val = ord_obj.get("op_id")
+            if op_id_val != res_obj.get("op_id") or not isinstance(op_id_val, str) or not op_id_val:
                 return (None, "unaccredited_fixture")
+            if op_id_val in seen_cert_op_ids:
+                return (None, "unaccredited_fixture")
+            seen_cert_op_ids.add(op_id_val)
             try:
                 u_args = wire.unpack_payload(ord_obj.get("args", {}))
                 u_read = wire.unpack_payload(res_obj.get("read", {}))
@@ -810,6 +1086,9 @@ def _verify_certifying_capture(
             c_base = int(round((x0_val / 3.75) - float(roi_px[0])))
             if c_base not in (0, 8):
                 return (None, "unaccredited_fixture")
+            if (r_local, c_base) in covered_cells:
+                return (None, "unaccredited_fixture")
+            covered_cells.add((r_local, c_base))
             exp_x0 = 3.75 * float(roi_px[0] + c_base)
             exp_z0 = 15360.0 - 3.75 * float(roi_px[1] + r_local)
             if (
@@ -830,26 +1109,37 @@ def _verify_certifying_capture(
                 ):
                     return (None, "unaccredited_fixture")
 
+        if len(covered_cells) != 32:
+            return (None, "unaccredited_fixture")
+
         # Verificar orden/resultado de map_feature_locate en certifying_capture
         loc_ord = locate_op.get("order")
         loc_res = locate_op.get("result")
         if not isinstance(loc_ord, dict) or not isinstance(loc_res, dict):
             return (None, "unaccredited_fixture")
+        loc_op_id = loc_ord.get("op_id")
         if (
             loc_ord.get("verb") != "map_feature_locate"
             or loc_res.get("status") != "done"
-            or loc_ord.get("op_id") != loc_res.get("op_id")
+            or loc_op_id != loc_res.get("op_id")
+            or not isinstance(loc_op_id, str)
+            or not loc_op_id
+            or loc_op_id in seen_cert_op_ids
         ):
             return (None, "unaccredited_fixture")
+        seen_cert_op_ids.add(loc_op_id)
         try:
             loc_args = wire.unpack_payload(loc_ord.get("args", {}))
             loc_read = wire.unpack_payload(loc_res.get("read", {}))
         except ValueError:
             return (None, "unaccredited_fixture")
+        exp_loc_mode = "calibrate" if pid in CAL_IDS else "verify"
         if (
             loc_args["str"].get("point_id") != pid
             or loc_args["str"].get("feature_kind") != fkind
+            or loc_args["str"].get("mode_id") != exp_loc_mode
             or loc_read["str"].get("point_id") != pid
+            or loc_read["str"].get("mode_id") != exp_loc_mode
             or float(loc_read["num"].get("srv_feature_found_b", 0.0)) != 1.0
         ):
             return (None, "unaccredited_fixture")
@@ -932,12 +1222,17 @@ def _verify_certifying_capture(
         s_res = surf_op.get("result")
         if not isinstance(s_ord, dict) or not isinstance(s_res, dict):
             return (None, "unaccredited_fixture")
+        s_op_id = s_ord.get("op_id")
         if (
             s_ord.get("verb") != "map_place_ground"
             or s_res.get("status") != "done"
-            or s_ord.get("op_id") != s_res.get("op_id")
+            or s_op_id != s_res.get("op_id")
+            or not isinstance(s_op_id, str)
+            or not s_op_id
+            or s_op_id in seen_cert_op_ids
         ):
             return (None, "unaccredited_fixture")
+        seen_cert_op_ids.add(s_op_id)
         try:
             s_args = wire.unpack_payload(s_ord.get("args", {}))
             s_read = wire.unpack_payload(s_res.get("read", {}))
@@ -1068,13 +1363,9 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
     source_kind = provenance.get("source_kind")
     if source_kind == "dayz_tools_sat":
         accred = fixture.get("accreditation") if isinstance(fixture.get("accreditation"), dict) else {}
-        sat_ok = accred.get("sat_accredited") is True and isinstance(accred.get("sat_reference_image_sha256"), str)
-        for req_h in ("pbo_source_sha256", "paa_tiles_sha256", "pal2pace_exe_sha256", "stitch_recipe_sha256"):
-            val = provenance.get(req_h)
-            if not isinstance(val, str) or not HEX_SHA256_RE.match(val):
-                sat_ok = False
-        if not sat_ok:
-            return _inconclusive("unaccredited_sat_source")
+        sat_err = _verify_sat_source(provenance, accred, samples_dir)
+        if sat_err is not None:
+            return _inconclusive(sat_err)
 
     # N25 + N31: Verificar fixture y captura certificadora
     reconstructed_certified, cert_err = _verify_certifying_capture(
@@ -1146,6 +1437,9 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
             return _inconclusive("invalid_grid_read_mode")
         if u_read["str"].get("world_name") != "chernarusplus":
             return _inconclusive("world_name_mismatch")
+        for req_nk in ("x0_m", "z0_m", "step_m", "row_n", "chunk_n"):
+            if not _is_finite_num(u_args["num"].get(req_nk)):
+                return _inconclusive("missing_world_read_args")
         for req_nk in ("world_size_m", "sea_level_m", "x0_m", "z0_m", "step_m", "row_n", "tick_ms", "frame"):
             if not _is_finite_num(u_read["num"].get(req_nk)):
                 return _inconclusive("missing_world_read_scalars")
@@ -1157,14 +1451,20 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
         exp_x0 = 480.0 * float(c_chunk)
         exp_z0 = 15360.0 - 480.0 * float(r_glob)
         if (
-            int(round(float(u_args["num"].get("row_n", -1)))) != r_glob
-            or int(round(float(u_args["num"].get("chunk_n", -1)))) != 8
-            or abs(float(u_args["num"].get("x0_m", -1e9)) - exp_x0) > 1e-3
-            or abs(float(u_args["num"].get("z0_m", -1e9)) - exp_z0) > 1e-3
-            or abs(float(u_args["num"].get("step_m", 0.0)) - 480.0) > 1e-3
+            _exact_int(u_args["num"].get("row_n")) != r_glob
+            or _exact_int(u_args["num"].get("chunk_n")) != 8
+            or not _same_num(u_args["num"].get("x0_m"), exp_x0, 1e-3)
+            or not _same_num(u_args["num"].get("z0_m"), exp_z0, 1e-3)
+            or not _same_num(u_args["num"].get("step_m"), 480.0, 1e-3)
             or len(u_read["rows"]) != 8
         ):
             return _inconclusive("grid_read_coordinates_mismatch")
+
+        # La lectura observada tiene que repetir la geometria de la orden emitida,
+        # no solo ser plausible: un origen puesto a cero en la respuesta se rechaza.
+        for same_k in ("x0_m", "z0_m", "step_m", "row_n"):
+            if not _same_num(u_read["num"].get(same_k), float(u_args["num"][same_k]), 1e-6):
+                return _inconclusive("grid_read_coordinates_mismatch")
 
         for k_col, rdict in enumerate(u_read["rows"]):
             if not (_is_finite_num(rdict.get("y_m")) and _is_finite_num(rdict.get("sea_b"))):
@@ -1187,6 +1487,9 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
             return _inconclusive("invalid_patch_read_mode")
         if u_read["str"].get("world_name") != "chernarusplus":
             return _inconclusive("world_name_mismatch")
+        for req_nk in ("x0_m", "z0_m", "step_m", "row_n", "chunk_n"):
+            if not _is_finite_num(u_args["num"].get(req_nk)):
+                return _inconclusive("missing_world_read_args")
         for req_nk in ("world_size_m", "sea_level_m", "x0_m", "z0_m", "step_m", "row_n", "tick_ms", "frame"):
             if not _is_finite_num(u_read["num"].get(req_nk)):
                 return _inconclusive("missing_world_read_scalars")
@@ -1201,14 +1504,18 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
         exp_x0 = 3.75 * float(roi_px[0] + c_chunk)
         exp_z0 = 15360.0 - 3.75 * float(roi_px[1] + r_loc)
         if (
-            int(round(float(u_args["num"].get("row_n", -1)))) != exp_row_n
-            or int(round(float(u_args["num"].get("chunk_n", -1)))) != 8
-            or abs(float(u_args["num"].get("x0_m", -1e9)) - exp_x0) > 1e-3
-            or abs(float(u_args["num"].get("z0_m", -1e9)) - exp_z0) > 1e-3
-            or abs(float(u_args["num"].get("step_m", 0.0)) - 3.75) > 1e-6
+            _exact_int(u_args["num"].get("row_n")) != exp_row_n
+            or _exact_int(u_args["num"].get("chunk_n")) != 8
+            or not _same_num(u_args["num"].get("x0_m"), exp_x0, 1e-3)
+            or not _same_num(u_args["num"].get("z0_m"), exp_z0, 1e-3)
+            or not _same_num(u_args["num"].get("step_m"), 3.75, 1e-6)
             or len(u_read["rows"]) != 8
         ):
             return _inconclusive("patch_read_coordinates_mismatch")
+
+        for same_k in ("x0_m", "z0_m", "step_m", "row_n"):
+            if not _same_num(u_read["num"].get(same_k), float(u_args["num"][same_k]), 1e-6):
+                return _inconclusive("patch_read_coordinates_mismatch")
 
         for k_col, rdict in enumerate(u_read["rows"]):
             if not (_is_finite_num(rdict.get("y_m")) and _is_finite_num(rdict.get("sea_b"))):
@@ -1517,15 +1824,56 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
             exp_dec = "located" if pid in CAL_IDS else "verified"
             l_str = loc_op["read"]["str"]
             l_num = loc_op["read"]["num"]
+            l_args = loc_op["args"]
             if l_str.get("mode_id") != exp_mode or l_str.get("decision_id") != exp_dec or l_str.get("reject_reason_id") != "":
                 map02_ok = False
                 map02_detail = f"locate_decision_failed:{pid}:{l_str.get('decision_id')}:{l_str.get('reject_reason_id')}"
                 break
 
+            # La orden emitida y su respuesta tienen que hablar del mismo punto,
+            # del mismo rasgo y del mismo modo: no se acepta un eco cambiado.
+            if (
+                l_args["str"].get("point_id") != pid
+                or l_args["str"].get("feature_kind") != cert_info["feature_kind"]
+                or l_args["str"].get("mode_id") != exp_mode
+                or l_str.get("point_id") != pid
+            ):
+                map02_ok = False
+                map02_detail = f"locate_order_mismatch:{pid}"
+                break
+            roi_x_min, roi_z_min, roi_x_max, roi_z_max = cert_info["world_roi_m"]
+            if not (
+                _same_num(l_args["num"].get("x_min_m"), roi_x_min, 1e-3)
+                and _same_num(l_args["num"].get("z_min_m"), roi_z_min, 1e-3)
+                and _same_num(l_args["num"].get("x_max_m"), roi_x_max, 1e-3)
+                and _same_num(l_args["num"].get("z_max_m"), roi_z_max, 1e-3)
+            ):
+                map02_ok = False
+                map02_detail = f"locate_roi_mismatch:{pid}"
+                break
+
             if pid in CAL_IDS:
-                if "req_x_m" in loc_op["args"]["num"] or "req_z_m" in loc_op["args"]["num"]:
+                if "req_x_m" in l_args["num"] or "req_z_m" in l_args["num"]:
                     map02_ok = False
                     map02_detail = f"calibrate_had_req_coords:{pid}"
+                    break
+                if not (_same_num(l_num.get("req_x_m"), 0.0, 1e-6) and _same_num(l_num.get("req_z_m"), 0.0, 1e-6)):
+                    map02_ok = False
+                    map02_detail = f"calibrate_req_not_zero:{pid}"
+                    break
+            else:
+                arg_req_x = l_args["num"].get("req_x_m")
+                arg_req_z = l_args["num"].get("req_z_m")
+                if not (_is_finite_num(arg_req_x) and _is_finite_num(arg_req_z)):
+                    map02_ok = False
+                    map02_detail = f"verify_missing_req_args:{pid}"
+                    break
+                if not (
+                    _same_num(l_num.get("req_x_m"), float(arg_req_x), 1e-6)
+                    and _same_num(l_num.get("req_z_m"), float(arg_req_z), 1e-6)
+                ):
+                    map02_ok = False
+                    map02_detail = f"verify_req_echo_mismatch:{pid}"
                     break
 
             w_rec = rebuilt_world_features[pid]
@@ -1633,8 +1981,17 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
                             x_hat, z_hat = apply_affine_2d(a_ok, b_ok, u_v, v_v)
                             v_op = ver_locate_ops[vid]
                             v_num = v_op["read"]["num"]
-                            req_x = float(v_num["req_x_m"])
-                            req_z = float(v_num["req_z_m"])
+                            v_args = v_op["args"]
+                            # Coordenadas pedidas: de la orden, no del eco de la respuesta.
+                            req_x = float(v_args["num"]["req_x_m"])
+                            req_z = float(v_args["num"]["req_z_m"])
+                            if not (
+                                _same_num(v_num.get("req_x_m"), req_x, 1e-6)
+                                and _same_num(v_num.get("req_z_m"), req_z, 1e-6)
+                            ):
+                                map02_ok = False
+                                map02_detail = f"verify_req_echo_mismatch:{vid}"
+                                break
                             srv_x = float(v_num["srv_x_m"])
                             srv_z = float(v_num["srv_z_m"])
                             cert_x = reconstructed_certified[vid]["certified_x_m"]
@@ -1679,25 +2036,80 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
     map03_ok = True
     map03_detail = "ok"
     place_positive_ops = [(vid, ver_place_ops[vid]) for vid in VER_IDS] + [("P_GROUND", pground_op)]
+    place_negative_ops = [("P_OUT", pout_op), ("P_BRIDGE", pbridge_op), ("P_ROOF", proof_op)]
     seq_posts: list[int] = []
     max_contact_err = 0.0
 
-    for pid, pop in place_positive_ops:
+    # N23: contadores exactos (no redondeados), no negativos y continuos durante
+    # toda la sesion, incluidos los rechazos.  Se recorren en orden de emision.
+    counters_ok = True
+    counters_detail = "ok"
+    prev_post: int | None = None
+    for cpid, cop in sorted(
+        place_positive_ops + place_negative_ops,
+        key=lambda item: float(item[1]["enq_row"].get("t_ms", 0.0)),
+    ):
+        exact_vals: dict[str, int] = {}
+        for ck in ("seq_pre_n", "seq_post_n", "ent_id_n", "pre_count_n", "post_count_n"):
+            cval = _exact_int(cop["read"]["num"].get(ck))
+            if cval is None or cval < 0:
+                counters_ok = False
+                counters_detail = f"non_exact_counter:{cpid}:{ck}"
+                break
+            exact_vals[ck] = cval
+        if not counters_ok:
+            break
+        if exact_vals["pre_count_n"] != exact_vals["post_count_n"]:
+            counters_ok = False
+            counters_detail = f"cleanup_count_mismatch:{cpid}:{exact_vals['pre_count_n']}->{exact_vals['post_count_n']}"
+            break
+        if prev_post is not None and exact_vals["seq_pre_n"] != prev_post:
+            counters_ok = False
+            counters_detail = f"spawn_seq_not_continuous:{cpid}:{exact_vals['seq_pre_n']}!={prev_post}"
+            break
+        prev_post = exact_vals["seq_post_n"]
+
+    if not counters_ok:
+        map03_ok = False
+        map03_detail = counters_detail
+
+    for pid, pop in place_positive_ops if map03_ok else []:
         p_str = pop["read"]["str"]
         p_num = pop["read"]["num"]
-        seq_pre = int(round(float(p_num["seq_pre_n"])))
-        seq_post = int(round(float(p_num["seq_post_n"])))
-        ent_id = int(round(float(p_num["ent_id_n"])))
-        pre_cnt = int(round(float(p_num["pre_count_n"])))
-        post_cnt = int(round(float(p_num["post_count_n"])))
-        req_x = float(p_num["req_x_m"])
-        req_z = float(p_num["req_z_m"])
+        p_args = pop["args"]
+        seq_pre = _exact_int(p_num.get("seq_pre_n"))
+        seq_post = _exact_int(p_num.get("seq_post_n"))
+        ent_id = _exact_int(p_num.get("ent_id_n"))
+        pre_cnt = _exact_int(p_num.get("pre_count_n"))
+        post_cnt = _exact_int(p_num.get("post_count_n"))
+
+        # Coordenadas pedidas: de la orden emitida.  La respuesta solo puede
+        # repetirlas; no se toma el eco de la respuesta como peticion.
+        arg_req_x = p_args["num"].get("req_x_m")
+        arg_req_z = p_args["num"].get("req_z_m")
+        if not (_is_finite_num(arg_req_x) and _is_finite_num(arg_req_z)):
+            map03_ok = False
+            map03_detail = f"missing_req_args:{pid}"
+            break
+        req_x = float(arg_req_x)
+        req_z = float(arg_req_z)
+        if not (_same_num(p_num.get("req_x_m"), req_x, 1e-6) and _same_num(p_num.get("req_z_m"), req_z, 1e-6)):
+            map03_ok = False
+            map03_detail = f"place_req_echo_mismatch:{pid}"
+            break
+        arg_class = p_args["str"].get("class_id")
+        if not isinstance(arg_class, str) or arg_class == "":
+            map03_ok = False
+            map03_detail = f"missing_class_args:{pid}"
+            break
+
         obs_x = float(p_num["obs_x_m"])
         obs_y = float(p_num["obs_y_m"])
         obs_z = float(p_num["obs_z_m"])
         bbox_min_y = float(p_num["bbox_min_y_m"])
         bbox_max_y = float(p_num["bbox_max_y_m"])
         obs_surf_y = float(p_num["obs_surf_y_m"])
+        terrain_y = float(p_num["terrain_y_m"])
 
         if p_str.get("decision_id") != "placed" or p_str.get("reject_reason_id") != "":
             map03_ok = False
@@ -1707,7 +2119,7 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
             map03_ok = False
             map03_detail = f"invalid_spawn_seq_delta:{pid}:{seq_pre}->{seq_post}"
             break
-        if p_str.get("obs_class_id") != "Barrel_Green":
+        if p_str.get("point_id") != pid or p_str.get("obs_class_id") != arg_class:
             map03_ok = False
             map03_detail = f"wrong_obs_class:{pid}:{p_str.get('obs_class_id')}"
             break
@@ -1730,7 +2142,15 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
             map03_detail = f"horizontal_req_drift:{pid}:{horiz_req_err:.4f}"
             break
 
+        # Testigo independiente de la superficie: para V1..V3 las 256 muestras
+        # crudas del parche en map_world_read; para P_GROUND la superficie
+        # certificada de la captura.  Un valor fabricado no puede pasar.
         if pid in VER_IDS:
+            w_ref = rebuilt_world_features[pid]
+            if abs(terrain_y - float(w_ref["srv_y_m"])) > 5.0:
+                map03_ok = False
+                map03_detail = f"terrain_witness_mismatch:{pid}:{terrain_y:.3f}"
+                break
             srv_x = float(ver_locate_ops[pid]["read"]["num"]["srv_x_m"])
             srv_z = float(ver_locate_ops[pid]["read"]["num"]["srv_z_m"])
             cert_x = reconstructed_certified[pid]["certified_x_m"]
@@ -1740,6 +2160,16 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
                 map03_detail = f"verify_placement_drift:{pid}"
                 break
         else:
+            cap_surf = cert_cap["surfaces"]["P_GROUND"]
+            if not (
+                _same_num(terrain_y, float(cap_surf["terrain_y_m"]), 0.05)
+                and _same_num(p_num.get("road_y_m"), float(cap_surf["road_y_m"]), 0.05)
+                and _same_num(p_num.get("ray_hit_b"), float(cap_surf["ray_hit_b"]), 1e-6)
+                and _same_num(p_num.get("hit_y_m"), float(cap_surf["hit_y_m"]), 0.05)
+            ):
+                map03_ok = False
+                map03_detail = "pground_surface_witness_mismatch"
+                break
             pground_fix = next(p for p in fixture["placement_points"] if p["point_id"] == "P_GROUND")
             if a_ok is not None and b_ok is not None:
                 gx_hat, gz_hat = apply_affine_2d(a_ok, b_ok, float(pground_fix["u_px"]), float(pground_fix["v_px"]))
@@ -1752,8 +2182,13 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
                 map03_detail = "pground_certified_drift"
                 break
 
-        # N29: Contacto vertical sobre floats crudos sin cuantizar (< 0.2 m)
-        contact_err = abs(obs_y + bbox_min_y - obs_surf_y)
+        # El punto de contacto se mide contra terrain_y_m (lectura independiente
+        # de SurfaceY en la coordenada pedida), no contra el eco obs_surf_y_m.
+        if not _same_num(obs_surf_y, terrain_y, 0.05):
+            map03_ok = False
+            map03_detail = f"obs_surface_not_terrain:{pid}"
+            break
+        contact_err = abs(obs_y + bbox_min_y - terrain_y)
         max_contact_err = max(max_contact_err, contact_err)
         if not (contact_err < 0.2):
             map03_ok = False
@@ -1791,8 +2226,20 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
                 iop = inv_ops[vid]
                 i_str = iop["read"]["str"]
                 i_num = iop["read"]["num"]
-                req_x = float(i_num["req_x_m"])
-                req_z = float(i_num["req_z_m"])
+                i_args = iop["args"]
+                req_x = float(i_args["num"]["req_x_m"])
+                req_z = float(i_args["num"]["req_z_m"])
+                if not (
+                    _same_num(i_num.get("req_x_m"), req_x, 1e-6)
+                    and _same_num(i_num.get("req_z_m"), req_z, 1e-6)
+                ):
+                    map04_ok = False
+                    map04_detail = f"inv_req_echo_mismatch:{vid}"
+                    break
+                if i_args["str"].get("mode_id") != "verify" or i_args["str"].get("point_id") != vid:
+                    map04_ok = False
+                    map04_detail = f"inv_order_mismatch:{vid}"
+                    break
                 srv_x = float(i_num["srv_x_m"])
                 srv_z = float(i_num["srv_z_m"])
 
@@ -1813,75 +2260,84 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
 
     checks_out.append({"id": "MAP-04", "status": "pass" if map04_ok else "fail", "detail": map04_detail})
 
-    # =========================================================================
-    # MAP-05: Rechazo explicito de coordenadas fuera del mapa (P_OUT) sin instanciar
-    # =========================================================================
-    o_str = pout_op["read"]["str"]
-    o_num = pout_op["read"]["num"]
-    o_req_x = float(o_num["req_x_m"])
-    o_req_z = float(o_num["req_z_m"])
-    o_out_bounds = o_req_x < 0.0 or o_req_x > 15360.0 or o_req_z < 0.0 or o_req_z > 15360.0
-    o_no_spawn = (
-        int(round(float(o_num["seq_post_n"]))) == int(round(float(o_num["seq_pre_n"])))
-        and o_str.get("obs_class_id") == ""
-        and int(round(float(o_num["ent_id_n"]))) == 0
-        and int(round(float(o_num["post_count_n"]))) == int(round(float(o_num["pre_count_n"])))
-    )
-    map05_ok = (
-        o_out_bounds
-        and o_no_spawn
-        and o_str.get("decision_id") == "rejected"
-        and o_str.get("reject_reason_id") == "out_of_map"
-    )
-    checks_out.append({
-        "id": "MAP-05",
-        "status": "pass" if map05_ok else "fail",
-        "detail": "ok" if map05_ok else f"out_of_map_check_failed:{o_str.get('decision_id')}:{o_str.get('reject_reason_id')}",
-    })
+    def _place_negative(
+        neg_id: str,
+        neg_op: dict,
+        cap_surf: dict,
+        expect_reason: str,
+        require_elevated: bool,
+    ) -> tuple[bool, str]:
+        n_str = neg_op["read"]["str"]
+        n_num = neg_op["read"]["num"]
+        n_args = neg_op["args"]
+        arg_req_x = n_args["num"].get("req_x_m")
+        arg_req_z = n_args["num"].get("req_z_m")
+        arg_class = n_args["str"].get("class_id")
+        if not (_is_finite_num(arg_req_x) and _is_finite_num(arg_req_z)):
+            return (False, f"missing_req_args:{neg_id}")
+        req_x = float(arg_req_x)
+        req_z = float(arg_req_z)
+        if not (_same_num(n_num.get("req_x_m"), req_x, 1e-6) and _same_num(n_num.get("req_z_m"), req_z, 1e-6)):
+            return (False, f"req_echo_mismatch:{neg_id}")
+        if not isinstance(arg_class, str) or arg_class == "":
+            return (False, f"missing_class_args:{neg_id}")
+        if n_str.get("point_id") != neg_id:
+            return (False, f"point_mismatch:{neg_id}")
 
-    # =========================================================================
-    # MAP-06: Rechazo explicito de colocacion sobre puente (P_BRIDGE) sin instanciar
-    # =========================================================================
-    b_str = pbridge_op["read"]["str"]
-    b_no_spawn = (
-        int(round(float(b_num["seq_post_n"]))) == int(round(float(b_num["seq_pre_n"])))
-        and b_str.get("obs_class_id") == ""
-        and int(round(float(b_num["ent_id_n"]))) == 0
-        and int(round(float(b_num["post_count_n"]))) == int(round(float(b_num["pre_count_n"])))
-    )
-    map06_ok = (
-        b_elevated
-        and b_no_spawn
-        and b_str.get("decision_id") == "rejected"
-        and b_str.get("reject_reason_id") == "elevated_surface"
-    )
-    checks_out.append({
-        "id": "MAP-06",
-        "status": "pass" if map06_ok else "fail",
-        "detail": "ok" if map06_ok else f"bridge_check_failed:{b_str.get('decision_id')}:{b_str.get('reject_reason_id')}",
-    })
+        # La superficie de la captura certificada es el testigo independiente:
+        # las lecturas de la corrida tienen que coincidir con ella.
+        if not (
+            _same_num(req_x, float(cap_surf["req_x_m"]), 1e-3)
+            and _same_num(req_z, float(cap_surf["req_z_m"]), 1e-3)
+            and _same_num(n_num.get("terrain_y_m"), float(cap_surf["terrain_y_m"]), 0.05)
+            and _same_num(n_num.get("road_y_m"), float(cap_surf["road_y_m"]), 0.05)
+            and _same_num(n_num.get("ray_hit_b"), float(cap_surf["ray_hit_b"]), 1e-6)
+            and _same_num(n_num.get("hit_y_m"), float(cap_surf["hit_y_m"]), 0.05)
+        ):
+            return (False, f"surface_witness_mismatch:{neg_id}")
+        if n_str.get("hit_class_id", "") != cap_surf["hit_class_id"]:
+            return (False, f"hit_class_witness_mismatch:{neg_id}")
 
-    # =========================================================================
-    # MAP-07: Rechazo explicito de colocacion sobre tejado (P_ROOF) sin instanciar
-    # =========================================================================
-    r_str = proof_op["read"]["str"]
-    r_no_spawn = (
-        int(round(float(r_num["seq_post_n"]))) == int(round(float(r_num["seq_pre_n"])))
-        and r_str.get("obs_class_id") == ""
-        and int(round(float(r_num["ent_id_n"]))) == 0
-        and int(round(float(r_num["post_count_n"]))) == int(round(float(r_num["pre_count_n"])))
+        cap_t_y = float(cap_surf["terrain_y_m"])
+        cap_r_y = float(cap_surf["road_y_m"])
+        cap_ray = float(cap_surf["ray_hit_b"])
+        cap_h_y = float(cap_surf["hit_y_m"])
+        cap_elevated = (cap_r_y - cap_t_y > 0.25) or (cap_ray == 1.0 and cap_h_y - cap_t_y > 0.25)
+        if require_elevated and not cap_elevated:
+            return (False, f"fixture_surface_mismatch:{neg_id}")
+        if not require_elevated:
+            if not (req_x < 0.0 or req_x > 15360.0 or req_z < 0.0 or req_z > 15360.0):
+                return (False, f"out_of_map_check_failed:{neg_id}")
+
+        vals = {}
+        for nk in ("seq_pre_n", "seq_post_n", "ent_id_n", "pre_count_n", "post_count_n"):
+            iv = _exact_int(n_num.get(nk))
+            if iv is None or iv < 0:
+                return (False, f"non_exact_counter:{neg_id}:{nk}")
+            vals[nk] = iv
+        if not (
+            vals["seq_post_n"] == vals["seq_pre_n"]
+            and n_str.get("obs_class_id") == ""
+            and vals["ent_id_n"] == 0
+            and vals["post_count_n"] == vals["pre_count_n"]
+        ):
+            return (False, f"spawned_on_reject:{neg_id}")
+        if n_str.get("decision_id") != "rejected" or n_str.get("reject_reason_id") != expect_reason:
+            return (False, f"reason_failed:{neg_id}:{n_str.get('decision_id')}:{n_str.get('reject_reason_id')}")
+        return (True, "ok")
+
+    map05_ok, map05_detail = _place_negative("P_OUT", pout_op, cert_cap["surfaces"]["P_OUT"], "out_of_map", False)
+    checks_out.append({"id": "MAP-05", "status": "pass" if map05_ok else "fail", "detail": map05_detail})
+
+    map06_ok, map06_detail = _place_negative(
+        "P_BRIDGE", pbridge_op, cert_cap["surfaces"]["P_BRIDGE"], "elevated_surface", True
     )
-    map07_ok = (
-        r_elevated
-        and r_no_spawn
-        and r_str.get("decision_id") == "rejected"
-        and r_str.get("reject_reason_id") == "elevated_surface"
+    checks_out.append({"id": "MAP-06", "status": "pass" if map06_ok else "fail", "detail": map06_detail})
+
+    map07_ok, map07_detail = _place_negative(
+        "P_ROOF", proof_op, cert_cap["surfaces"]["P_ROOF"], "elevated_surface", True
     )
-    checks_out.append({
-        "id": "MAP-07",
-        "status": "pass" if map07_ok else "fail",
-        "detail": "ok" if map07_ok else f"roof_check_failed:{r_str.get('decision_id')}:{r_str.get('reject_reason_id')}",
-    })
+    checks_out.append({"id": "MAP-07", "status": "pass" if map07_ok else "fail", "detail": map07_detail})
 
     failed_ids = [c["id"] for c in checks_out if c["status"] != "pass"]
     exit_code = 0 if not failed_ids else 1
