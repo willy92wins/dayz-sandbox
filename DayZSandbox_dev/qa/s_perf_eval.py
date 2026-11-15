@@ -143,7 +143,14 @@ EXPECTED ``samples/`` SCHEMA AND ENFORCE API PROVENANCE
         ``children_alive_n``, ``entities_alive_n``, ``census_dynamic_n``,
         ``census_foreign_n``, ``director_orig_allow_damage_b``,
         ``director_allow_damage_b``, ``foreign_injected_b``, ``tick_ms``,
-        ``frame``, ``avg_fps_now``.
+        ``frame``, ``avg_fps_now``, and (N6, Sol r1 BLOQ 11) ``foreign_sig_n``: a numeric
+        signature of the engine identities of the foreign items. It is > 0 on the injection
+        snapshot, identical on the snapshot after the partial cleanup iff the SAME two Rag
+        survived (destruction or substitution change it) and 0 once they are retired.
+        Checkpoint rows are bound to the window by SERVER time (``tick_ms``), their identities
+        (``entity_idx_n``) are unique per snapshot and stable across snapshots, and the
+        per-category counts of the headers must equal the reconstruction from the rows.
+        The 4 quarters are the temporal quarters of ``[rows[0].tick_ms, rows[-1].tick_ms]``.
       Row columns (``ncol``, 18 numeric columns, ``scol = []``):
       - ``entity_idx_n``: deterministic index within the step
       - ``kind_code_n``: ``1`` = object (``SeaChest``), ``2`` = infected,
@@ -187,11 +194,11 @@ EXPECTED ``samples/`` SCHEMA AND ENFORCE API PROVENANCE
         "budget_exceeded:children_total", "budget_exceeded:combined_roots",
         "budget_exceeded:combined_entities"}``.
 
-3. Optional supplementary files in ``samples/``
-   - ``samples/step_<step>_polls.jsonl``: per-poll harness timestamps ``h_ms`` and
-     terminal ``job_read`` marks (``end_tick_ms``, ``onjobend_tick_ms``,
-     ``released_tick_ms``).
-   - ``samples/final_snap.json``: unpacked final ``perf_snap`` after bench closure.
+3. Optional supplementary files in ``samples/`` (NEVER a source of state, marks or clocks:
+   Sol r1 BLOQ 1/2; job state and marks come only from the raw ``job_read`` results of the
+   core's bridge log, and the harness clock only from the bridge's deliver/result instants)
+   - ``samples/step_<step>_polls.jsonl``: written by the runner (N12 wait record); ignored here.
+   - ``samples/final_snap.json``: may only ADD violations; the closure needs a RAW snapshot.
    - ``samples/technical.json``: technical blocker report written by the runner on
      transport ``timeout``/``lost``, non-``done`` job termination
      (``stopped``/``failed``/``expired``), ``cleanup_incomplete``, or
@@ -889,6 +896,319 @@ def _check_budget_violation_path(req_num: dict[str, Any]) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Helpers for the Sol-r1 hardening (BLOQ 4, 5, 10, 11): per-category identity counts,
+# time-anchored checkpoints, temporal quarters and the isolated N5 stimuli
+# ---------------------------------------------------------------------------
+
+CP_ANCHOR_TOL_MS = 2500.0
+CP_GAP_MIN_MS = 2500.0
+CP_GAP_MAX_MS = 10000.0
+ROLE_OF_KIND = {1: (0,), 2: (3,), 3: (3,), 4: (1, 2)}
+KIND_COUNT_KEY = {1: "objects_n", 2: "infected_n", 3: "animals_n", 4: "actors_n"}
+KIND_ALIVE_KEY = {1: "objects_alive_n", 2: "infected_alive_n", 3: "animals_alive_n", 4: "actors_alive_n"}
+TERMINAL_STATES = ("done", "stopped", "failed", "expired")
+N6_RETIRED_CENSUS = 0
+
+
+def _start_is_neg_probe(op: dict[str, Any], step_id: str) -> bool:
+    """A `perf_window_start` that is the N1a probe (1 expected row, no warmup, <= 1 s) or has no step."""
+    p_num = op["payload"]["num"]
+    r_num = op["req"]["num"]
+    return bool(
+        op["raw"].get("subcase") == "N1a"
+        or step_id not in STEP_SPEC
+        or (
+            int(p_num.get("expected_rows_n", 61)) == 1
+            and float(p_num.get("warmup_ms", r_num.get("warmup_ms", 0.0))) == 0
+            and float(p_num.get("duration_ms", r_num.get("duration_ms", 0.0))) <= 1000
+        )
+    )
+
+
+def _mid_h_ms(op: dict[str, Any]) -> float:
+    """Harness-clock instant at which the peer executed the order: midpoint of the core's
+    deliver and result events (both written by the bridge, never by the runner)."""
+    return (float(op["ack_ms"]) + float(op["read_ms"])) / 2.0
+
+
+def _interp(points: list[tuple[float, float]], t: float) -> float:
+    """Piecewise-linear value at server time `t` of a (tick, value) series sorted by tick."""
+    if t <= points[0][0]:
+        return points[0][1]
+    if t >= points[-1][0]:
+        return points[-1][1]
+    for (t0, v0), (t1, v1) in zip(points, points[1:]):
+        if t0 <= t <= t1:
+            return v1 if t1 == t0 else v0 + (v1 - v0) * (t - t0) / (t1 - t0)
+    return points[-1][1]
+
+
+def _path_len(pts: list[tuple[float, float, float]], a: float, b: float) -> float:
+    """Horizontal path length of an entity between server times `a` and `b`, with the
+    positions at the boundaries interpolated from the surrounding checkpoints."""
+    xs = [(t, x) for t, x, _ in pts]
+    zs = [(t, z) for t, _, z in pts]
+    poly = [(_interp(xs, a), _interp(zs, a))]
+    poly += [(x, z) for t, x, z in pts if a < t < b]
+    poly.append((_interp(xs, b), _interp(zs, b)))
+    return sum(math.hypot(q[0] - p[0], q[1] - p[1]) for p, q in zip(poly, poly[1:]))
+
+
+def _cp_time_violations(cps: list[dict[str, Any]], t0: float, t_end: float) -> list[str]:
+    """Checkpoints must be ordered in server time, spread every ~5 s and anchored to the
+    measured window [t0, t_end] (rows[0].tick_ms .. rows[-1].tick_ms), not just to each other."""
+    out: list[str] = []
+    ticks = [c["tick_ms"] for c in cps]
+    for i in range(1, len(ticks)):
+        if ticks[i] <= ticks[i - 1]:
+            out.append(f"non-increasing checkpoint tick_ms at cp={i}")
+    gaps = [b - a for a, b in zip(ticks, ticks[1:])]
+    if gaps and any(g < CP_GAP_MIN_MS or g > CP_GAP_MAX_MS for g in gaps):
+        out.append(
+            f"checkpoint tick_ms spacing outside [{CP_GAP_MIN_MS:.0f}, {CP_GAP_MAX_MS:.0f}] ms "
+            f"(min={min(gaps):.0f}, max={max(gaps):.0f})"
+        )
+    elif ticks and ticks[-1] - ticks[0] < 50000.0:
+        out.append(f"checkpoints span only {ticks[-1] - ticks[0]:.0f} ms (< 50000)")
+    if ticks:
+        outside = [t for t in ticks if t < t0 - CP_ANCHOR_TOL_MS or t > t_end + CP_ANCHOR_TOL_MS]
+        if outside:
+            out.append(
+                f"{len(outside)} checkpoint(s) outside the measured window [{t0:.0f}, {t_end:.0f}] ms "
+                f"(first at {outside[0]:.0f}); activity belongs to another window"
+            )
+        if ticks[0] > t0 + CP_ANCHOR_TOL_MS or ticks[-1] < t_end - CP_ANCHOR_TOL_MS:
+            out.append(
+                f"checkpoints [{ticks[0]:.0f}, {ticks[-1]:.0f}] ms do not cover the measured window [{t0:.0f}, {t_end:.0f}] ms"
+            )
+    return out
+
+
+def _cp_rows_violations(spec: dict[str, int], cp_idx: int, cp: dict[str, Any]) -> list[str]:
+    """Per-checkpoint identity and category reconstruction from the raw rows (BLOQ 4)."""
+    out: list[str] = []
+    rows = cp["rows"]
+    num = cp["num"]
+    tag = f"cp={cp_idx}"
+    if len(rows) != spec["roots_n"]:
+        return [f"{tag}: snap row count {len(rows)} != {spec['roots_n']}"]
+    for r in rows:
+        if any(c not in r or not _is_finite_number(r[c]) for c in SNAP_NCOL):
+            return [f"{tag}: snap row missing required columns"]
+    for r in rows:
+        if int(r["alive_b"]) != 1 or int(r["foreign_content_b"]) != 0:
+            return [f"{tag}: entity {r['entity_idx_n']} alive_b={r['alive_b']} foreign={r['foreign_content_b']}"]
+    ids = [int(r["entity_idx_n"]) for r in rows]
+    if len(set(ids)) != len(ids):
+        dup = sorted({i for i in ids if ids.count(i) > 1})
+        out.append(f"{tag}: duplicate entity_idx_n {dup[:5]} (identities must be unique per checkpoint)")
+    kind_n: dict[int, int] = {}
+    for r in rows:
+        kind_n[int(r["kind_code_n"])] = kind_n.get(int(r["kind_code_n"]), 0) + 1
+    for kind, key in KIND_COUNT_KEY.items():
+        if kind_n.get(kind, 0) != spec[key]:
+            out.append(f"{tag}: kind {kind} rows={kind_n.get(kind, 0)} != {spec[key]} ({key})")
+        header = num.get(KIND_ALIVE_KEY[kind])
+        if header != kind_n.get(kind, 0):
+            out.append(
+                f"{tag}: header {KIND_ALIVE_KEY[kind]}={header} != {kind_n.get(kind, 0)} rows of kind {kind}"
+            )
+    if set(kind_n) - set(KIND_COUNT_KEY):
+        out.append(f"{tag}: unknown kind_code_n {sorted(set(kind_n) - set(KIND_COUNT_KEY))}")
+    roam = emote = 0
+    for r in rows:
+        kind, role = int(r["kind_code_n"]), int(r["role_code_n"])
+        if kind in ROLE_OF_KIND and role not in ROLE_OF_KIND[kind]:
+            out.append(f"{tag}: entity {r['entity_idx_n']} kind {kind} has role_code_n={role}")
+            break
+        if kind == 4:
+            roam += role == 1
+            emote += role == 2
+    if roam != (spec["actors_n"] + 1) // 2 or emote != spec["actors_n"] // 2:
+        out.append(f"{tag}: actor roles ({roam} roam, {emote} emote) != ({(spec['actors_n'] + 1) // 2}, {spec['actors_n'] // 2})")
+    wardrobe = sum(int(r["wardrobe_n"]) for r in rows if int(r["kind_code_n"]) == 4)
+    if wardrobe != spec["children_n"]:
+        out.append(f"{tag}: garments on actor rows {wardrobe} != children_n {spec['children_n']}")
+    if any(int(r["wardrobe_n"]) != 0 for r in rows if int(r["kind_code_n"]) != 4):
+        out.append(f"{tag}: non-actor rows carry garments")
+    census = num.get("census_dynamic_n")
+    if census not in (spec["roots_n"], spec["entities_n"]):
+        out.append(f"{tag}: census_dynamic_n={census} does not match alive roots/entities ({spec['roots_n']}/{spec['entities_n']})")
+    return out
+
+
+def _cp_activity_violations(
+    step_id: str, spec: dict[str, int], cps: list[dict[str, Any]], t0: float, t_end: float
+) -> list[str]:
+    """Continuity per temporal quarter, reconstructed from raw positions at the real server
+    times of the checkpoints (BLOQ 5): the four quarters are [t0 + j*span/4, t0 + (j+1)*span/4]."""
+    out: list[str] = []
+    span = t_end - t0
+    bounds = [(t0 + span * j / 4.0, t0 + span * (j + 1) / 4.0) for j in range(4)]
+    series: dict[int, list[tuple[float, dict[str, Any]]]] = {}
+    id_sets = []
+    for cp in cps:
+        id_sets.append({int(r["entity_idx_n"]) for r in cp["rows"]})
+        for r in cp["rows"]:
+            series.setdefault(int(r["entity_idx_n"]), []).append((cp["tick_ms"], r))
+    if any(s != id_sets[0] for s in id_sets):
+        return [f"step {step_id}: the set of entity identities changes between checkpoints"]
+    roam_seen = emote_seen = creature_seen = 0
+    for e_idx, pts in sorted(series.items()):
+        kind = int(pts[0][1]["kind_code_n"])
+        role = int(pts[0][1]["role_code_n"])
+        if any(int(r["kind_code_n"]) != kind or int(r["role_code_n"]) != role for _, r in pts):
+            return [f"step {step_id}: entity {e_idx} changes kind/role between checkpoints"]
+        xz = [(t, float(r["pos_x_m"]), float(r["pos_z_m"])) for t, r in pts]
+        subs = [math.hypot(b[1] - a[1], b[2] - a[2]) for a, b in zip(xz, xz[1:])]
+        if kind == 4 and any(int(r["wardrobe_n"]) != spec["wardrobe_per_actor_n"] for _, r in pts):
+            out.append(f"step {step_id}: actor {e_idx} wardrobe_n != {spec['wardrobe_per_actor_n']}")
+            break
+        if kind == 4 and role == 1:
+            roam_seen += 1
+            if any(d < ROAM_SUBSTEP_MIN_M for d in subs):
+                out.append(
+                    f"step {step_id}: roam actor {e_idx} stalled during 5 s sub-step (min={min(subs):.3f} m < {ROAM_SUBSTEP_MIN_M} m)"
+                )
+                break
+            for q, (a, b) in enumerate(bounds, start=1):
+                q_dist = _path_len(xz, a, b)
+                if q_dist < ROAM_QUARTER_MIN_M:
+                    out.append(f"step {step_id}: roam actor {e_idx} Q{q} displacement {q_dist:.2f} m < {ROAM_QUARTER_MIN_M} m")
+                    break
+            if out:
+                break
+            total = _path_len(xz, t0, t_end)
+            legs = _interp([(t, float(r["wp_legs_n"])) for t, r in pts], t_end) - _interp(
+                [(t, float(r["wp_legs_n"])) for t, r in pts], t0
+            )
+            if total < ROAM_TOTAL_MIN_M or legs < ROAM_MIN_WP_LEGS - 1e-9:
+                out.append(
+                    f"step {step_id}: roam actor {e_idx} 60 s total_dist={total:.2f} m (< {ROAM_TOTAL_MIN_M}) or wp_legs={legs:.1f} (< {ROAM_MIN_WP_LEGS})"
+                )
+                break
+        elif kind == 4 and role == 2:
+            emote_seen += 1
+            for i, (_, s) in enumerate(pts):
+                if (
+                    int(s["emote_playing_b"]) != 1
+                    or int(s["emote_cb_id_n"]) != EMOTE_CB_CMD_CLAP
+                    or int(s["emote_cb_state_n"]) <= 0
+                ):
+                    out.append(
+                        f"step {step_id}: emote actor {e_idx} inactive at cp={i} (playing={s['emote_playing_b']}, cb_id={s['emote_cb_id_n']}, state={s['emote_cb_state_n']})"
+                    )
+                    break
+                if i > 0:
+                    prev_t, cur_t = int(pts[i - 1][1]["emote_active_ticks_n"]), int(s["emote_active_ticks_n"])
+                    if cur_t - prev_t < 3:
+                        out.append(
+                            f"step {step_id}: emote actor {e_idx} active_ticks stalled between cp={i - 1} and cp={i} ({prev_t} -> {cur_t})"
+                        )
+                        break
+            if out:
+                break
+            comp = [(t, float(r["emote_completions_n"])) for t, r in pts]
+            for q, (a, b) in enumerate(bounds, start=1):
+                q_comp = _interp(comp, b) - _interp(comp, a)
+                if q_comp < EMOTE_QUARTER_MIN_COMPLETIONS - 1e-9:
+                    out.append(f"step {step_id}: emote actor {e_idx} Q{q} completions={q_comp:.1f} < {EMOTE_QUARTER_MIN_COMPLETIONS}")
+                    break
+            if out:
+                break
+            tot_comp = _interp(comp, t_end) - _interp(comp, t0)
+            if tot_comp < EMOTE_TOTAL_MIN_COMPLETIONS - 1e-9:
+                out.append(f"step {step_id}: emote actor {e_idx} total completions={tot_comp:.1f} < {EMOTE_TOTAL_MIN_COMPLETIONS}")
+                break
+        elif kind in (2, 3):
+            creature_seen += 1
+            if any(int(r["ai_agent_b"]) != 1 for _, r in pts):
+                out.append(f"step {step_id}: creature {e_idx} ai_agent_b != 1")
+                break
+            if any(d <= 0.01 for d in subs):
+                out.append(f"step {step_id}: creature {e_idx} stationary during 5 s sub-step (min={min(subs):.4f} m)")
+                break
+            for q, (a, b) in enumerate(bounds, start=1):
+                q_dist = _path_len(xz, a, b)
+                if q_dist < CREATURES_QUARTER_MIN_M:
+                    out.append(f"step {step_id}: creature {e_idx} Q{q} displacement {q_dist:.3f} m < {CREATURES_QUARTER_MIN_M} m")
+                    break
+            if out:
+                break
+            tot = _path_len(xz, t0, t_end)
+            if tot < CREATURES_TOTAL_MIN_M:
+                out.append(f"step {step_id}: creature {e_idx} 60 s displacement {tot:.3f} m < {CREATURES_TOTAL_MIN_M} m")
+                break
+    if not out:
+        exp = ((spec["actors_n"] + 1) // 2, spec["actors_n"] // 2, spec["infected_n"] + spec["animals_n"])
+        if (roam_seen, emote_seen, creature_seen) != exp:
+            out.append(f"step {step_id}: role counts in snap ({roam_seen} roam, {emote_seen} emote, {creature_seen} creatures) != expected {exp}")
+    return out
+
+
+def _budget_guard_excess(req_num: dict[str, Any]) -> dict[str, int]:
+    """For every A6 guard, how far the candidate is over its limit (<= 0 means within it)."""
+    g = lambda k: int(req_num.get(k, 0))  # noqa: E731
+    roots = g("cand_objects_n") + g("cand_infected_n") + g("cand_animals_n") + g("cand_actors_n")
+    children = g("cand_wardrobe_total_n") + g("cand_extra_children_n")
+    return {
+        "budget_exceeded:objects": g("cand_objects_n") - g("max_objects_n"),
+        "budget_exceeded:infected": g("cand_infected_n") - g("max_infected_n"),
+        "budget_exceeded:animals": g("cand_animals_n") - g("max_animals_n"),
+        "budget_exceeded:actors": g("cand_actors_n") - g("max_actors_n"),
+        "budget_exceeded:wardrobe_per_actor": g("cand_wardrobe_max_per_actor_n") - g("max_wardrobe_per_actor_n"),
+        "budget_exceeded:children_total": children - g("max_children_n"),
+        "budget_exceeded:combined_roots": roots - g("max_combined_roots_n"),
+        "budget_exceeded:combined_entities": roots + children - g("max_combined_entities_n"),
+    }
+
+
+N5_MAX_KEYS = (
+    "max_objects_n",
+    "max_infected_n",
+    "max_animals_n",
+    "max_actors_n",
+    "max_wardrobe_per_actor_n",
+    "max_children_n",
+    "max_combined_roots_n",
+    "max_combined_entities_n",
+)
+
+
+def n5_stimulus_matches(reason: str, req_num: dict[str, Any], cap: dict[str, int]) -> str | None:
+    """Does `req_num` isolate exactly the guard `reason` against the certified cap `cap` (a STEP_SPEC
+    entry), by exactly one unit? Returns None when it does, else why not (BLOQ 10)."""
+    cap_max = {
+        "max_objects_n": cap["objects_n"],
+        "max_infected_n": cap["infected_n"],
+        "max_animals_n": cap["animals_n"],
+        "max_actors_n": cap["actors_n"],
+        "max_wardrobe_per_actor_n": cap["wardrobe_per_actor_n"],
+        "max_children_n": cap["children_n"],
+        "max_combined_roots_n": cap["roots_n"],
+        "max_combined_entities_n": cap["entities_n"],
+    }
+    expect = dict(cap_max)
+    if reason == "budget_exceeded:combined_roots":
+        expect["max_combined_roots_n"] = cap["roots_n"] - 1
+    if reason == "budget_exceeded:combined_entities":
+        expect["max_combined_entities_n"] = cap["entities_n"] - 1
+    for k in N5_MAX_KEYS:
+        if k not in req_num or int(req_num[k]) != expect[k]:
+            return f"{k}={req_num.get(k)} != {expect[k]} (cap of the certified step)"
+    excess = _budget_guard_excess(req_num)
+    over = sorted(r for r, v in excess.items() if v > 0)
+    if over != [reason]:
+        return f"stimulus violates {over or 'no guard'} instead of only {reason}"
+    if excess[reason] != 1:
+        return f"stimulus exceeds {reason} by {excess[reason]} (must be exactly +1)"
+    if reason == "budget_exceeded:wardrobe_per_actor":
+        if int(req_num.get("cand_actors_n", 0)) < 1:
+            return "wardrobe_per_actor stimulus needs at least 1 actor"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Main Evaluator Entry Point
 # ---------------------------------------------------------------------------
 
@@ -1258,19 +1578,34 @@ def evaluate(
                         )
 
     # -----------------------------------------------------------------------
-    # Organize per-step operations (apply, window start + job_read, snaps)
+    # Organize the server operations into INSTANCES (Sol r1 BLOQ 7): every non-cleanup
+    # perf_step_apply opens one, with its own windows, checkpoints and actor orders. Nothing is
+    # replaced by a later apply of the same step: every present instance is evaluated.
     # -----------------------------------------------------------------------
-    step_apply_ops: dict[str, dict[str, Any]] = {}
-    step_window_starts: dict[str, list[dict[str, Any]]] = {}
+    instances: list[dict[str, Any]] = []
+    cur: dict[str, Any] | None = None
     job_reads_by_id: dict[str, list[dict[str, Any]]] = {}
     job_frees_by_id: set[str] = set()
     job_free_idx: dict[str, int] = {}
-    step_snaps: dict[str, list[dict[str, Any]]] = {}
+    job_inst: dict[str, dict[str, Any]] = {}
     all_snap_ops: list[dict[str, Any]] = []
     budget_check_ops: list[dict[str, Any]] = []
     cleanup_ops: list[dict[str, Any]] = []
-    current_apply_step: str | None = None
     act_ops: list[dict[str, Any]] = []
+    start_records: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+
+    def _new_instance(step: str, apply_op: dict[str, Any] | None) -> dict[str, Any]:
+        return {
+            "step": step,
+            "apply": apply_op,
+            "windows": [],
+            "snaps": [],
+            "cps": [],
+            "acts": [],
+            "window_open": False,
+            "closed": False,
+            "ok02": False,
+        }
 
     for op in ops:
         if op["peer"] != "server":
@@ -1283,6 +1618,8 @@ def evaluate(
 
         if verb.startswith("act_"):
             act_ops.append(op)
+            if cur is not None and not cur["closed"]:
+                cur["acts"].append(op)
             if op["status"] != "done":
                 prf02_violations.append(
                     f"op {op['op_id']} ({verb}): S3 actor command failed ({op['status']}/{op['reason']})"
@@ -1291,55 +1628,77 @@ def evaluate(
         elif verb == "perf_step_apply":
             raw_step = req_str.get("step_id") or p_str.get("step_id", "")
             step_id = _normalize_step_id(raw_step)
-            current_apply_step = step_id
             if step_id == "cleanup":
                 cleanup_ops.append(op)
+                cur = None
             elif step_id in STEP_SPEC:
-                step_apply_ops[step_id] = op
-                step_snaps[step_id] = []
+                cur = _new_instance(step_id, op)
+                instances.append(cur)
             elif op["status"] == "done":
                 prf02_violations.append(f"op {op['op_id']}: unknown step_id {raw_step!r}")
 
         elif verb == "perf_window_start":
             raw_step = p_str.get("step_id") or req_str.get("step_id", "")
             step_id = _normalize_step_id(raw_step)
-            step_window_starts.setdefault(step_id, []).append(op)
+            start_records.append((op, cur))
+            if (
+                op["status"] == "done"
+                and not _start_is_neg_probe(op, step_id)
+                and cur is not None
+                and cur["step"] == step_id
+            ):
+                cur["window_open"] = True
+                if p_str.get("job"):
+                    job_inst[p_str["job"]] = cur
 
         elif verb in ("job_read", "poll_job"):
             job_id = req_str.get("job") or p_str.get("job", "")
             if job_id:
                 job_reads_by_id.setdefault(job_id, []).append(op)
+                if (
+                    op["status"] == "done"
+                    and p_str.get("state") in TERMINAL_STATES
+                    and job_id in job_inst
+                ):
+                    job_inst[job_id]["closed"] = True
 
         elif verb == "job_free":
             job_id = req_str.get("job") or p_str.get("job", "")
             if job_id and op["status"] == "done":
                 job_frees_by_id.add(job_id)
                 job_free_idx.setdefault(job_id, op["idx"])
+                if job_id in job_inst:
+                    job_inst[job_id]["closed"] = True
 
         elif verb == "perf_snap":
             all_snap_ops.append(op)
             raw_step = req_str.get("step_id") or p_str.get("step_id", "")
             step_id = _normalize_step_id(raw_step)
-            # A snapshot belongs to the step whose perf_step_apply precedes it in the bridge
-            # order (the label alone is a probe string); snapshots after a cleanup, and the N6
-            # injection, are not checkpoints of any load step.
+            # A snapshot is a checkpoint of an instance only while its measured window is open
+            # (after the window start, before its terminal read); the label alone is a probe
+            # string. Snapshots outside any window (post-N5, N6, closure) are not checkpoints.
             inj_b = int(req_num.get("inject_foreign_cargo_b", p_num.get("foreign_injected_b", 0)))
-            if inj_b == 0 and op["status"] == "done" and current_apply_step in STEP_SPEC:
-                if step_id != current_apply_step:
+            if (
+                inj_b == 0
+                and op["status"] == "done"
+                and cur is not None
+                and cur["window_open"]
+                and not cur["closed"]
+            ):
+                if step_id != cur["step"]:
                     prf02_violations.append(
-                        f"op {op['op_id']}: perf_snap labelled {step_id!r} taken while step {current_apply_step!r} is applied"
+                        f"op {op['op_id']}: perf_snap labelled {step_id!r} taken while step {cur['step']!r} is applied"
                     )
                 else:
-                    step_snaps.setdefault(current_apply_step, []).append(op)
+                    cur["snaps"].append(op)
 
         elif verb == "perf_budget_check":
             budget_check_ops.append(op)
 
     # Combine multi-page perf_snap calls that belong to the same checkpoint (page_n == 0 starts a checkpoint)
-    step_checkpoints: dict[str, list[dict[str, Any]]] = {}
-    for step_id, snap_list in step_snaps.items():
+    for inst in instances:
         merged_cps: list[dict[str, Any]] = []
-        for sop in snap_list:
+        for sop in inst["snaps"]:
             p_num = sop["payload"]["num"]
             page_n = int(p_num.get("page_n", 0))
             pages_n = int(p_num.get("pages_n", 1))
@@ -1348,7 +1707,9 @@ def evaluate(
                 merged_cps.append(
                     {
                         "op_id": sop["op_id"],
+                        "idx": sop["idx"],
                         "tick_ms": float(p_num.get("tick_ms", 0.0)),
+                        "h_ms": _mid_h_ms(sop),
                         "frame": int(p_num.get("frame", 0)),
                         "pages_expected": pages_n,
                         "pages_seen": {page_n},
@@ -1358,171 +1719,143 @@ def evaluate(
                     }
                 )
             else:
-                cur = merged_cps[-1]
-                cur["pages_seen"].add(page_n)
-                cur["rows"].extend(rows)
-        step_checkpoints[step_id] = merged_cps
+                cur_cp = merged_cps[-1]
+                cur_cp["pages_seen"].add(page_n)
+                cur_cp["rows"].extend(rows)
+        inst["cps"] = merged_cps
 
-    # Assemble window datasets from perf_window_start + job_read (and step_<step>_polls.jsonl if present)
-    step_windows: dict[str, dict[str, Any]] = {}
+    # Assemble window datasets from perf_window_start + job_read. State and marks come ONLY from
+    # the raw job_read results of the core's bridge log (Sol r1 BLOQ 1): no auxiliary file
+    # (step_<step>_polls.jsonl, technical.json) can substitute them.
+    all_windows: list[dict[str, Any]] = []
     n1a_brief_windows: list[dict[str, Any]] = []
     n1b_modset_rejects: list[dict[str, Any]] = []
     technical_window_missing = False
     dup_row_violations: list[str] = []
 
-    for step_id, start_ops in step_window_starts.items():
-        for w_op in start_ops:
-            req_str = w_op["req"]["str"]
-            req_num = w_op["req"]["num"]
-            if w_op["status"] == "rejected":
-                if w_op["reason"] == "modset_mismatch":
-                    n1b_modset_rejects.append(w_op)
-                else:
-                    prf03_violations.append(
-                        f"op {w_op['op_id']} ({step_id}): perf_window_start rejected with {w_op['reason']!r}"
-                    )
-                continue
-            if w_op["status"] != "done":
+    for w_op, w_cur in start_records:
+        req_str = w_op["req"]["str"]
+        req_num = w_op["req"]["num"]
+        step_id = _normalize_step_id(w_op["payload"]["str"].get("step_id") or req_str.get("step_id", ""))
+        if w_op["status"] == "rejected":
+            if w_op["reason"] == "modset_mismatch":
+                n1b_modset_rejects.append(w_op)
+            else:
                 prf03_violations.append(
-                    f"op {w_op['op_id']} ({step_id}): perf_window_start status={w_op['status']!r}"
+                    f"op {w_op['op_id']} ({step_id}): perf_window_start rejected with {w_op['reason']!r}"
+                )
+            continue
+        if w_op["status"] != "done":
+            prf03_violations.append(
+                f"op {w_op['op_id']} ({step_id}): perf_window_start status={w_op['status']!r}"
+            )
+            continue
+
+        p_str = w_op["payload"]["str"]
+        p_num = w_op["payload"]["num"]
+        job_id = p_str.get("job", "")
+        if not job_id:
+            prf03_violations.append(f"op {w_op['op_id']} ({step_id}): missing job id")
+            continue
+
+        reads = job_reads_by_id.get(job_id, [])
+        merged_rows_by_seq: dict[int, dict[str, Any]] = {}
+        raw_rows_list: list[dict[str, Any]] = []
+        terminal_state = p_str.get("state", "running")
+        terminal_num: dict[str, Any] = {}
+
+        if w_op["payload"]["rows"]:
+            for r in w_op["payload"]["rows"]:
+                raw_rows_list.append(r)
+
+        for r_op in reads:
+            if r_op["status"] != "done":
+                prf03_violations.append(
+                    f"op {r_op['op_id']} (job_read {job_id}): status={r_op['status']!r}"
                 )
                 continue
-
-            p_str = w_op["payload"]["str"]
-            p_num = w_op["payload"]["num"]
-            job_id = p_str.get("job", "")
-            if not job_id:
-                prf03_violations.append(f"op {w_op['op_id']} ({step_id}): missing job id")
-                continue
-
-            reads = job_reads_by_id.get(job_id, [])
-            # Collect rows and terminal metadata across job_read operations
-            merged_rows_by_seq: dict[int, dict[str, Any]] = {}
-            raw_rows_list: list[dict[str, Any]] = []
-            terminal_state = p_str.get("state", "running")
-            terminal_num: dict[str, Any] = {}
-            first_poll_h_ms = w_op["ack_ms"]
-            last_poll_h_ms = w_op["read_ms"]
-
-            # If rows were attached directly on w_op (e.g., synthetic compact fixture), read them too
-            if w_op["payload"]["rows"]:
-                for r in w_op["payload"]["rows"]:
-                    raw_rows_list.append(r)
-
-            for r_op in reads:
-                if r_op["status"] != "done":
-                    prf03_violations.append(
-                        f"op {r_op['op_id']} (job_read {job_id}): status={r_op['status']!r}"
-                    )
-                    continue
-                rp_str = r_op["payload"]["str"]
-                rp_num = r_op["payload"]["num"]
-                st = rp_str.get("state", "")
-                if st in ("done", "stopped", "failed", "expired"):
-                    terminal_state = st
-                    terminal_num.update(rp_num)
-                last_poll_h_ms = max(last_poll_h_ms, r_op["read_ms"])
-                seen_in_read: set[int] = set()
-                for row in r_op["payload"]["rows"]:
-                    if "seq_n" in row and _is_finite_number(row["seq_n"]):
-                        s_idx = int(row["seq_n"])
-                        if s_idx in seen_in_read:
-                            dup_row_violations.append(
-                                f"step {step_id}: duplicate window row seq_n={s_idx} inside one job_read (op {r_op['op_id']})"
-                            )
-                        seen_in_read.add(s_idx)
-                        if s_idx not in merged_rows_by_seq:
-                            merged_rows_by_seq[s_idx] = row
-                            raw_rows_list.append(row)
-                        elif merged_rows_by_seq[s_idx] != row:
-                            dup_row_violations.append(
-                                f"step {step_id}: window row seq_n={s_idx} differs between two reads of the job"
-                            )
-                    else:
+            rp_str = r_op["payload"]["str"]
+            rp_num = r_op["payload"]["num"]
+            st = rp_str.get("state", "")
+            if st in TERMINAL_STATES:
+                terminal_state = st
+                terminal_num.update(rp_num)
+            seen_in_read: set[int] = set()
+            for row in r_op["payload"]["rows"]:
+                if "seq_n" in row and _is_finite_number(row["seq_n"]):
+                    s_idx = int(row["seq_n"])
+                    if s_idx in seen_in_read:
+                        dup_row_violations.append(
+                            f"step {step_id}: duplicate window row seq_n={s_idx} inside one job_read (op {r_op['op_id']})"
+                        )
+                    seen_in_read.add(s_idx)
+                    if s_idx not in merged_rows_by_seq:
+                        merged_rows_by_seq[s_idx] = row
                         raw_rows_list.append(row)
+                    elif merged_rows_by_seq[s_idx] != row:
+                        dup_row_violations.append(
+                            f"step {step_id}: window row seq_n={s_idx} differs between two reads of the job"
+                        )
+                else:
+                    raw_rows_list.append(row)
 
-            # Check optional step_<step>_polls.jsonl for harness clock span and terminal marks
-            poll_file = samples_dir / f"step_{step_id}_polls.jsonl"
-            poll_h_span_ms: float | None = None
-            if poll_file.is_file():
-                try:
-                    polls = f03_common.read_jsonl(poll_file)
-                    h_vals = [
-                        float(p["h_ms"])
-                        for p in polls
-                        if isinstance(p, dict) and _is_finite_number(p.get("h_ms"))
-                    ]
-                    if len(h_vals) >= 2:
-                        poll_h_span_ms = h_vals[-1] - h_vals[0]
-                    for p in polls:
-                        if isinstance(p, dict):
-                            if p.get("state") in ("done", "stopped", "failed", "expired"):
-                                terminal_state = str(p["state"])
-                            for mk in ("end_tick_ms", "onjobend_tick_ms", "released_tick_ms", "rows_total_n"):
-                                if _is_finite_number(p.get(mk)) and mk not in terminal_num:
-                                    terminal_num[mk] = p[mk]
-                except Exception as exc:
-                    prf03_violations.append(f"malformed {poll_file.name}: {exc}")
+        w_info = {
+            "step_id": step_id,
+            "job_id": job_id,
+            "op_id": w_op["op_id"],
+            "idx": w_op["idx"],
+            "start_tick_ms": float(p_num.get("start_tick_ms", 0.0)),
+            "start_frame": int(p_num.get("start_frame", 0)),
+            "warmup_ms": float(p_num.get("warmup_ms", req_num.get("warmup_ms", 0.0))),
+            "duration_ms": float(p_num.get("duration_ms", req_num.get("duration_ms", 0.0))),
+            "sample_step_ms": float(p_num.get("sample_step_ms", req_num.get("sample_step_ms", 0.0))),
+            "expected_rows_n": int(p_num.get("expected_rows_n", 61)),
+            "terminal_state": terminal_state,
+            "terminal_num": terminal_num,
+            "rows": raw_rows_list,
+            "freed": job_id in job_frees_by_id,
+            "ok03": False,
+            "ok04": False,
+            "inst": None,
+        }
 
-            w_info = {
-                "step_id": step_id,
-                "job_id": job_id,
-                "op_id": w_op["op_id"],
-                "start_tick_ms": float(p_num.get("start_tick_ms", 0.0)),
-                "start_frame": int(p_num.get("start_frame", 0)),
-                "warmup_ms": float(p_num.get("warmup_ms", req_num.get("warmup_ms", 0.0))),
-                "duration_ms": float(p_num.get("duration_ms", req_num.get("duration_ms", 0.0))),
-                "sample_step_ms": float(
-                    p_num.get("sample_step_ms", req_num.get("sample_step_ms", 0.0))
-                ),
-                "expected_rows_n": int(p_num.get("expected_rows_n", 61)),
-                "terminal_state": terminal_state,
-                "terminal_num": terminal_num,
-                "rows": raw_rows_list,
-                "freed": job_id in job_frees_by_id,
-                "h_span_ms": poll_h_span_ms,
-                "is_neg_probe": bool(
-                    w_op["raw"].get("subcase") == "N1a"
-                    or step_id not in STEP_SPEC
-                    or (
-                        int(p_num.get("expected_rows_n", 61)) == 1
-                        and float(p_num.get("warmup_ms", req_num.get("warmup_ms", 0.0))) == 0
-                        and float(p_num.get("duration_ms", req_num.get("duration_ms", 0.0))) <= 1000
-                    )
-                ),
-            }
-
-            if w_info["is_neg_probe"]:
-                n1a_brief_windows.append(w_info)
-            else:
-                step_windows[step_id] = w_info
+        if _start_is_neg_probe(w_op, step_id):
+            n1a_brief_windows.append(w_info)
+        else:
+            inst = w_cur if (w_cur is not None and w_cur["step"] == step_id) else None
+            if inst is None:
+                inst = _new_instance(step_id, None)
+                instances.append(inst)
+            inst["windows"].append(w_info)
+            w_info["inst"] = inst
+            all_windows.append(w_info)
 
     # -----------------------------------------------------------------------
     # PRF-03: warmup_and_window_completeness
     # -----------------------------------------------------------------------
-    valid_prf03_steps: set[str] = set()
     prf03_technical = False
 
-    # Two perf_sampler jobs alive at once (E9: the resource must serialise them): a second
-    # perf_window_start answered `done` is only legitimate after the previous job has been
-    # read in a terminal state (or freed) earlier in the bridge order.
+    # Every successful perf_window_start must carry the contractual resource (Sol r1 BLOQ 6):
+    # the concurrency guard cannot depend on a label the probe may omit. And two jobs of the verb
+    # alive at once are only legitimate after the previous one was read terminal or freed.
     sampler_starts = sorted(
-        (
-            w_op
-            for start_ops in step_window_starts.values()
-            for w_op in start_ops
-            if w_op["status"] == "done" and w_op["payload"]["str"].get("resource") == "perf_sampler"
-        ),
+        (w_op for w_op, _ in start_records if w_op["status"] == "done"),
         key=lambda o: o["idx"],
     )
     for pos, w_op in enumerate(sampler_starts):
+        resource = w_op["payload"]["str"].get("resource")
+        if resource != "perf_sampler":
+            prf03_violations.append(
+                f"op {w_op['op_id']} ({w_op['payload']['str'].get('step_id', '?')}): perf_window_start answered "
+                f"done with resource={resource!r}, not the contractual 'perf_sampler'"
+            )
         if pos == 0:
             continue
         prev = sampler_starts[pos - 1]
         prev_job = prev["payload"]["str"].get("job", "")
         closed = any(
             r["status"] == "done"
-            and r["payload"]["str"].get("state") in ("done", "stopped", "failed", "expired")
+            and r["payload"]["str"].get("state") in TERMINAL_STATES
             and prev["idx"] < r["idx"] < w_op["idx"]
             for r in job_reads_by_id.get(prev_job, [])
         ) or (prev_job in job_free_idx and prev["idx"] < job_free_idx[prev_job] < w_op["idx"])
@@ -1532,70 +1865,56 @@ def evaluate(
                 f"started while previous job {prev_job!r} was not terminal or freed"
             )
 
-    # Check regular step windows
-    for step_id, w_info in step_windows.items():
+    def _check_window_prf03(w_info: dict[str, Any]) -> bool:
+        """All PRF-03 predicates of one window; appends its violations and returns True if clean."""
+        nonlocal prf03_technical
+        step_id = w_info["step_id"]
         t_state = w_info["terminal_state"]
         rows = w_info["rows"]
         t_num = w_info["terminal_num"]
         rows_total_n = int(t_num.get("rows_total_n", len(rows)))
+        before = len(prf03_violations)
 
-        # Non-done terminal states (stopped, failed, expired) are technical failures -> INCONCLUSO (Arbitraje N2, §4.2 N12)
+        # Non-done terminal states (stopped, failed, expired) are technical failures -> INCONCLUSO
         if t_state in ("stopped", "failed", "expired", "running"):
             prf03_technical = True
             reasons.append(
                 f"PRF-03 technical: step {step_id!r} job {w_info['job_id']!r} ended in state={t_state!r}"
             )
-            continue
+            return False
 
-        # Terminal 'done' with < 61 samples is a completeness FAILURE (1 FALLA, insufficient_samples; Arbitraje N2)
+        # Terminal 'done' with < 61 samples is a completeness FAILURE (insufficient_samples)
         if rows_total_n < EXPECTED_WINDOW_ROWS or len(rows) < EXPECTED_WINDOW_ROWS:
             prf03_violations.append(
                 f"step {step_id}: insufficient_samples (rows_total_n={rows_total_n}, rows={len(rows)} < {EXPECTED_WINDOW_ROWS})"
             )
-            continue
+            return False
 
         if w_info["warmup_ms"] < WARMUP_MIN_MS:
-            prf03_violations.append(
-                f"step {step_id}: warmup_ms={w_info['warmup_ms']} < {WARMUP_MIN_MS}"
-            )
+            prf03_violations.append(f"step {step_id}: warmup_ms={w_info['warmup_ms']} < {WARMUP_MIN_MS}")
         if w_info["duration_ms"] < WINDOW_MIN_MS:
-            prf03_violations.append(
-                f"step {step_id}: duration_ms={w_info['duration_ms']} < {WINDOW_MIN_MS}"
-            )
+            prf03_violations.append(f"step {step_id}: duration_ms={w_info['duration_ms']} < {WINDOW_MIN_MS}")
         if w_info["sample_step_ms"] != SAMPLE_STEP_MS:
             prf03_violations.append(
                 f"step {step_id}: sample_step_ms={w_info['sample_step_ms']} != {SAMPLE_STEP_MS}"
             )
 
-        # Verify all required columns exist in every row (anti-fabrication E9: reject probe-only labels)
-        missing_col = False
         for r_idx, r in enumerate(rows):
             for col in WINDOW_NCOL:
                 if col not in r or not _is_finite_number(r[col]):
-                    prf03_violations.append(
-                        f"step {step_id}: row[{r_idx}] missing or non-finite column {col!r}"
-                    )
-                    missing_col = True
-                    break
-            if missing_col:
-                break
-        if missing_col:
-            continue
+                    prf03_violations.append(f"step {step_id}: row[{r_idx}] missing or non-finite column {col!r}")
+                    return False
 
-        # Check seq_n contiguous 0..N-1
         seqs = [int(r["seq_n"]) for r in rows]
         if seqs != list(range(len(rows))):
             prf03_violations.append(f"step {step_id}: seq_n not contiguous 0..{len(rows) - 1}")
-            continue
+            return False
 
-        # Check warmup anchor from start_tick_ms to row[0].tick_ms (§4.1 N6, §5 PRF-03)
         first_tick = float(rows[0]["tick_ms"])
         last_tick = float(rows[-1]["tick_ms"])
         warmup_obs = first_tick - w_info["start_tick_ms"]
         if warmup_obs < WARMUP_MIN_MS:
-            prf03_violations.append(
-                f"step {step_id}: effective warmup {warmup_obs:.1f} ms < {WARMUP_MIN_MS} ms"
-            )
+            prf03_violations.append(f"step {step_id}: effective warmup {warmup_obs:.1f} ms < {WARMUP_MIN_MS} ms")
 
         span_ms = last_tick - first_tick
         if span_ms < WINDOW_MIN_MS or span_ms > WINDOW_MAX_MS:
@@ -1603,8 +1922,6 @@ def evaluate(
                 f"step {step_id}: window span {span_ms:.1f} ms outside [{WINDOW_MIN_MS}, {WINDOW_MAX_MS}] ms"
             )
 
-        # Check per-step delta_t in [500, 1500] ms and strictly increasing frame and dtsum_ms
-        step_dt_bad = False
         for i in range(1, len(rows)):
             dt = float(rows[i]["tick_ms"]) - float(rows[i - 1]["tick_ms"])
             df = int(rows[i]["frame"]) - int(rows[i - 1]["frame"])
@@ -1613,42 +1930,38 @@ def evaluate(
                 prf03_violations.append(
                     f"step {step_id}: sample interval dt[{i}]={dt:.1f} ms outside [{SAMPLE_DT_MIN_MS}, {SAMPLE_DT_MAX_MS}] ms"
                 )
-                step_dt_bad = True
-                break
+                return False
             if df <= 0 or ddt <= 0.0:
                 prf03_violations.append(
                     f"step {step_id}: non-increasing frame or dtsum_ms at seq {i} (df={df}, ddt={ddt})"
                 )
-                step_dt_bad = True
-                break
-        if step_dt_bad:
-            continue
+                return False
 
-        # Check job lifecycle marks: end_tick_ms <= onjobend_tick_ms <= released_tick_ms
         end_t = t_num.get("end_tick_ms")
         onjobend_t = t_num.get("onjobend_tick_ms")
         released_t = t_num.get("released_tick_ms")
-        if (
-            not _is_finite_number(end_t)
-            or not _is_finite_number(onjobend_t)
-            or not _is_finite_number(released_t)
-        ):
+        if not (_is_finite_number(end_t) and _is_finite_number(onjobend_t) and _is_finite_number(released_t)):
             prf03_violations.append(
                 f"step {step_id}: missing job lifecycle marks (end={end_t}, onjobend={onjobend_t}, released={released_t})"
             )
-            continue
+            return False
         if not (last_tick <= float(end_t) <= float(onjobend_t) <= float(released_t)):
             prf03_violations.append(
                 f"step {step_id}: invalid job lifecycle order (last_tick={last_tick}, end={end_t}, onjobend={onjobend_t}, released={released_t})"
             )
-            continue
+            return False
+        return len(prf03_violations) == before
 
-        if step_id not in [v.split(":")[0].replace("step ", "") for v in prf03_violations]:
-            valid_prf03_steps.add(step_id)
+    for w_info in all_windows:
+        w_info["ok03"] = _check_window_prf03(w_info)
 
     # N1a (1-sample probe window) is a negative of the product audited by PRF-06 (brief section 6), not a PRF-03 window.
 
     prf03_violations.extend(dup_row_violations)
+    steps_windows: dict[str, list[dict[str, Any]]] = {}
+    for w_info in all_windows:
+        steps_windows.setdefault(w_info["step_id"], []).append(w_info)
+    valid_prf03_steps: set[str] = {s for s, ws in steps_windows.items() if all(w["ok03"] for w in ws)}
     if prf03_violations:
         checks["PRF-03"] = "fail"
         reasons.extend(f"PRF-03: {v}" for v in prf03_violations)
@@ -1660,10 +1973,10 @@ def evaluate(
     # -----------------------------------------------------------------------
     # PRF-04: dual_source_fps_agreement
     # -----------------------------------------------------------------------
-    valid_prf04_steps: set[str] = set()
-    step_fps_metrics: dict[str, dict[str, float]] = {}
+    step_fps_all: dict[str, list[dict[str, float]]] = {}
 
-    for step_id, w_info in step_windows.items():
+    for w_info in all_windows:
+        step_id = w_info["step_id"]
         if w_info["terminal_state"] != "done":
             continue
         rows = w_info["rows"]
@@ -1691,22 +2004,35 @@ def evaluate(
         rel_diff_fps = abs(fps_window_mean - fps_frame_counter) / fps_frame_counter
         dtsum_drift = abs(span_dtsum_ms - span_tick_ms) / span_tick_ms
 
-        # Only check harness drift if polls.jsonl provided valid span (optional supplementary file)
-        h_span_ms = w_info.get("h_span_ms")
-        h_drift = 0.0
-        check_harness_drift = False
-        if h_span_ms is not None and h_span_ms > 0.0:
-            h_drift = abs(h_span_ms - span_tick_ms) / span_tick_ms
-            check_harness_drift = True
+        # Harness clock (Sol r1 BLOQ 2): the interval is the one the core credited, anchored to the
+        # measured window: first and last checkpoint of THIS window, with the harness instants
+        # taken from the bridge's deliver/result events and the server ticks from the snapshots.
+        # No checkpoints covering the window means no evidence -> not pass (missing), never skipped.
+        h_drift = None
+        cps = w_info["inst"]["cps"] if w_info["inst"] is not None else []
+        if len(cps) >= 2:
+            t0, t_end = float(rows[0]["tick_ms"]), float(rows[-1]["tick_ms"])
+            c0, c1 = cps[0], cps[-1]
+            if (
+                c0["tick_ms"] <= t0 + CP_ANCHOR_TOL_MS
+                and c1["tick_ms"] >= t_end - CP_ANCHOR_TOL_MS
+                and c1["tick_ms"] > c0["tick_ms"]
+            ):
+                tick_span = c1["tick_ms"] - c0["tick_ms"]
+                h_drift = abs((c1["h_ms"] - c0["h_ms"]) - tick_span) / tick_span
 
-        step_fps_metrics[step_id] = {
+        info = {
+            "fps_window_mean_raw": fps_window_mean,
+            "fps_frame_counter_raw": fps_frame_counter,
             "fps_window_mean": round(fps_window_mean, 4),
             "fps_frame_counter": round(fps_frame_counter, 4),
             "fps_roll5_min": round(fps_roll5_min, 4),
             "fps_rel_diff": round(rel_diff_fps, 6),
             "dtsum_drift": round(dtsum_drift, 6),
-            "h_ms_drift": round(h_drift, 6),
+            "h_ms_drift": None if h_drift is None else round(h_drift, 6),
         }
+        w_info["fps"] = info
+        step_fps_all.setdefault(step_id, []).append(info)
 
         step_failed_04 = False
         if rel_diff_fps > FPS_REL_TOL:
@@ -1715,22 +2041,25 @@ def evaluate(
             )
             step_failed_04 = True
         if dtsum_drift > DTSUM_DRIFT_TOL:
-            prf04_violations.append(
-                f"step {step_id}: dtsum drift {dtsum_drift:.4f} > {DTSUM_DRIFT_TOL}"
-            )
+            prf04_violations.append(f"step {step_id}: dtsum drift {dtsum_drift:.4f} > {DTSUM_DRIFT_TOL}")
             step_failed_04 = True
-        if check_harness_drift and h_drift > HARNESS_DRIFT_TOL:
-            prf04_violations.append(
-                f"step {step_id}: harness clock drift {h_drift:.4f} > {HARNESS_DRIFT_TOL}"
-            )
+        if h_drift is not None and h_drift > HARNESS_DRIFT_TOL:
+            prf04_violations.append(f"step {step_id}: harness clock drift {h_drift:.4f} > {HARNESS_DRIFT_TOL}")
             step_failed_04 = True
 
-        if not step_failed_04:
-            valid_prf04_steps.add(step_id)
+        if not step_failed_04 and h_drift is not None:
+            w_info["ok04"] = True
 
+    # Per step, the most conservative window (lowest mean) feeds the certified numbers.
+    step_fps_metrics: dict[str, dict[str, float]] = {
+        s: min(infos, key=lambda i: i["fps_window_mean_raw"]) for s, infos in step_fps_all.items()
+    }
     if step_fps_metrics:
-        metrics["step_fps"] = step_fps_metrics
+        metrics["step_fps"] = {
+            s: {k: v for k, v in m.items() if not k.endswith("_raw")} for s, m in step_fps_metrics.items()
+        }
 
+    valid_prf04_steps: set[str] = {s for s, ws in steps_windows.items() if all(w["ok04"] for w in ws)}
     if prf04_violations:
         checks["PRF-04"] = "fail"
         reasons.extend(f"PRF-04: {v}" for v in prf04_violations)
@@ -1740,28 +2069,21 @@ def evaluate(
         checks["PRF-04"] = "missing"
 
     # -----------------------------------------------------------------------
-    # PRF-02: step_loads_and_continuous_activity
+    # PRF-02: step_loads_and_continuous_activity (one verdict per instance)
     # -----------------------------------------------------------------------
-    present_load_steps = (
-        set(step_apply_ops.keys())
-        | (set(step_windows.keys()) & set(STEP_SPEC.keys()))
-        | set(step_checkpoints.keys())
-    )
-    valid_prf02_steps: set[str] = set()
     actor_driver_missing = bool(
         technical_data and technical_data.get("reason") == "actor_driver_unavailable"
     )
 
-    for step_id in STEP_ORDER:
-        if step_id not in present_load_steps:
-            continue
+    for inst in sorted(instances, key=lambda i: STEP_ORDER.index(i["step"])):
+        step_id = inst["step"]
         spec = STEP_SPEC[step_id]
+        iv: list[str] = []  # this instance's violations
         if spec["actors_n"] > 0 and actor_driver_missing:
             reasons.append(f"PRF-02 technical: actor_driver_unavailable on step {step_id!r}")
             continue
 
-        step_bad = False
-        apply_op = step_apply_ops.get(step_id)
+        apply_op = inst["apply"]
         if apply_op is None:
             if "perf_step_apply" in transport_failed_verbs:
                 reasons.append(f"PRF-02 technical: perf_step_apply for step {step_id!r} lost or timed out")
@@ -1781,7 +2103,6 @@ def evaluate(
         ap_num = apply_op["payload"]["num"]
         req_num = apply_op["req"]["num"]
 
-        # Verify requested and observed counts match STEP_SPEC[step_id]
         for cat in ("objects", "infected", "animals", "actors"):
             exp_val = spec[f"{cat}_n"]
             # The order comes from the core's enq record, the observation from the peer's
@@ -1789,367 +2110,142 @@ def evaluate(
             req_val = req_num.get(f"{cat}_n")
             alive_val = ap_num.get(f"{cat}_alive_n")
             if req_val != exp_val or alive_val != exp_val:
-                prf02_violations.append(
-                    f"step {step_id}: {cat} count mismatch (expected={exp_val}, req={req_val}, alive={alive_val})"
-                )
-                step_bad = True
-
-        if ap_num.get("roots_alive_n") != spec["roots_n"]:
-            prf02_violations.append(
-                f"step {step_id}: roots_alive_n={ap_num.get('roots_alive_n')} != {spec['roots_n']}"
-            )
-            step_bad = True
-        if ap_num.get("children_alive_n") != spec["children_n"]:
-            prf02_violations.append(
-                f"step {step_id}: children_alive_n={ap_num.get('children_alive_n')} != {spec['children_n']}"
-            )
-            step_bad = True
-        if ap_num.get("entities_alive_n") != spec["entities_n"]:
-            prf02_violations.append(
-                f"step {step_id}: entities_alive_n={ap_num.get('entities_alive_n')} != {spec['entities_n']}"
-            )
-            step_bad = True
+                iv.append(f"step {step_id}: {cat} count mismatch (expected={exp_val}, req={req_val}, alive={alive_val})")
+        for key, exp in (("roots_alive_n", spec["roots_n"]), ("children_alive_n", spec["children_n"]), ("entities_alive_n", spec["entities_n"])):
+            if ap_num.get(key) != exp:
+                iv.append(f"step {step_id}: {key}={ap_num.get(key)} != {exp}")
         if ap_num.get("director_allow_damage_b") != 0:
-            prf02_violations.append(
-                f"step {step_id}: director_allow_damage_b={ap_num.get('director_allow_damage_b')} != 0"
-            )
-            step_bad = True
+            iv.append(f"step {step_id}: director_allow_damage_b={ap_num.get('director_allow_damage_b')} != 0")
 
         # Check spawn flags (#11)
         if spec["objects_n"] > 0:
             flags_obj = int(ap_num.get("spawn_flags_obj_n", 0))
             if flags_obj != SPAWN_FLAGS_OBJ or (flags_obj & FORBIDDEN_SPAWN_FLAG) != 0:
-                prf02_violations.append(
-                    f"step {step_id}: invalid spawn_flags_obj_n={flags_obj} (expected {SPAWN_FLAGS_OBJ})"
-                )
-                step_bad = True
+                iv.append(f"step {step_id}: invalid spawn_flags_obj_n={flags_obj} (expected {SPAWN_FLAGS_OBJ})")
         if (spec["infected_n"] + spec["animals_n"] + spec["actors_n"]) > 0:
             flags_ai = int(ap_num.get("spawn_flags_ai_n", 0))
             if flags_ai != SPAWN_FLAGS_AI or (flags_ai & FORBIDDEN_SPAWN_FLAG) != 0:
-                prf02_violations.append(
-                    f"step {step_id}: invalid spawn_flags_ai_n={flags_ai} (expected {SPAWN_FLAGS_AI})"
-                )
-                step_bad = True
+                iv.append(f"step {step_id}: invalid spawn_flags_ai_n={flags_ai} (expected {SPAWN_FLAGS_AI})")
 
-        # Check 1 Hz window rows for continuous per-second activity (Arbitraje N3 & N5)
-        w_info = step_windows.get(step_id)
-        if w_info is not None and w_info["rows"]:
+        # 1 Hz window rows: continuous per-second activity (Arbitraje N3 & N5), every window of the instance
+        exp_roam_actors = (spec["actors_n"] + 1) // 2
+        exp_emote_actors = spec["actors_n"] // 2
+        exp_creatures = spec["infected_n"] + spec["animals_n"]
+        for w_info in inst["windows"]:
             rows = w_info["rows"]
-            exp_roam_actors = (spec["actors_n"] + 1) // 2
-            exp_emote_actors = spec["actors_n"] // 2
-            exp_creatures = spec["infected_n"] + spec["animals_n"]
-
             for r_idx, r in enumerate(rows):
                 if any(c not in r or not _is_finite_number(r[c]) for c in WINDOW_NCOL):
-                    prf02_violations.append(f"step {step_id}: row[{r_idx}] missing activity columns")
-                    step_bad = True
+                    iv.append(f"step {step_id}: row[{r_idx}] missing activity columns")
                     break
                 if int(r["alive_roots_n"]) != spec["roots_n"]:
-                    prf02_violations.append(
-                        f"step {step_id}: row[{r_idx}] alive_roots_n={r['alive_roots_n']} != {spec['roots_n']}"
-                    )
-                    step_bad = True
+                    iv.append(f"step {step_id}: row[{r_idx}] alive_roots_n={r['alive_roots_n']} != {spec['roots_n']}")
                     break
                 if int(r["alive_wardrobe_n"]) != spec["children_n"]:
-                    prf02_violations.append(
-                        f"step {step_id}: row[{r_idx}] alive_wardrobe_n={r['alive_wardrobe_n']} != {spec['children_n']}"
-                    )
-                    step_bad = True
+                    iv.append(f"step {step_id}: row[{r_idx}] alive_wardrobe_n={r['alive_wardrobe_n']} != {spec['children_n']}")
                     break
-
                 seq_n = int(r["seq_n"])
                 if seq_n >= 1 and spec["k"] >= 1:
-                    if exp_roam_actors > 0:
-                        if (
-                            float(r["roam_min_step_m"]) < ROAM_MIN_STEP_M
-                            or float(r["roam_disp_step_m"]) < ROAM_MIN_STEP_M
-                        ):
-                            prf02_violations.append(
-                                f"step {step_id}: seq={seq_n} roam_min_step_m={r['roam_min_step_m']} < {ROAM_MIN_STEP_M}"
-                            )
-                            step_bad = True
-                            break
-                    if exp_emote_actors > 0:
-                        if (
-                            int(r["emote_active_actors_n"]) != exp_emote_actors
-                            or int(r["emote_cb_cmd1101_actors_n"]) != exp_emote_actors
-                        ):
-                            prf02_violations.append(
-                                f"step {step_id}: seq={seq_n} emote callback 1101 inactive (active={r['emote_active_actors_n']}, cb1101={r['emote_cb_cmd1101_actors_n']}, expected={exp_emote_actors})"
-                            )
-                            step_bad = True
-                            break
-                    if exp_creatures > 0:
-                        if (
-                            int(r["creatures_moved_step_n"]) != exp_creatures
-                            or float(r["creatures_min_step_m"]) < CREATURES_MIN_STEP_M
-                        ):
-                            prf02_violations.append(
-                                f"step {step_id}: seq={seq_n} creature step movement below minimum (moved={r['creatures_moved_step_n']}/{exp_creatures}, min_step={r['creatures_min_step_m']} < {CREATURES_MIN_STEP_M})"
-                            )
-                            step_bad = True
-                            break
+                    if exp_roam_actors > 0 and (
+                        float(r["roam_min_step_m"]) < ROAM_MIN_STEP_M or float(r["roam_disp_step_m"]) < ROAM_MIN_STEP_M
+                    ):
+                        iv.append(f"step {step_id}: seq={seq_n} roam_min_step_m={r['roam_min_step_m']} < {ROAM_MIN_STEP_M}")
+                        break
+                    if exp_emote_actors > 0 and (
+                        int(r["emote_active_actors_n"]) != exp_emote_actors
+                        or int(r["emote_cb_cmd1101_actors_n"]) != exp_emote_actors
+                    ):
+                        iv.append(
+                            f"step {step_id}: seq={seq_n} emote callback 1101 inactive (active={r['emote_active_actors_n']}, cb1101={r['emote_cb_cmd1101_actors_n']}, expected={exp_emote_actors})"
+                        )
+                        break
+                    if exp_creatures > 0 and (
+                        int(r["creatures_moved_step_n"]) != exp_creatures
+                        or float(r["creatures_min_step_m"]) < CREATURES_MIN_STEP_M
+                    ):
+                        iv.append(
+                            f"step {step_id}: seq={seq_n} creature step movement below minimum (moved={r['creatures_moved_step_n']}/{exp_creatures}, min_step={r['creatures_min_step_m']} < {CREATURES_MIN_STEP_M})"
+                        )
+                        break
 
-        # Check 13 perf_snap checkpoints (cp = 0..12) and quarter trajectories Q1..Q4
-        cps = step_checkpoints.get(step_id, [])
+        # Checkpoints (cp = 0..12): counts, identities and activity, bound to the window by server time
+        w_last = inst["windows"][-1] if inst["windows"] else None
+        full_window = w_last is not None and len(w_last["rows"]) >= EXPECTED_WINDOW_ROWS
+        cps = inst["cps"]
+        anchored = False
+        t0 = t_end = 0.0
+        if (
+            w_last is not None
+            and len(w_last["rows"]) >= 2
+            and all(_is_finite_number(r.get("tick_ms")) for r in (w_last["rows"][0], w_last["rows"][-1]))
+        ):
+            t0, t_end = float(w_last["rows"][0]["tick_ms"]), float(w_last["rows"][-1]["tick_ms"])
+            anchored = t_end > t0
         if not cps:
-            # If window completed with 61 rows, checkpoints are required for PRF-02 to pass
-            if w_info is not None and len(w_info["rows"]) >= EXPECTED_WINDOW_ROWS and not step_bad:
-                prf02_violations.append(f"step {step_id}: missing perf_snap checkpoints (0/{EXPECTED_SNAP_CHECKPOINTS})")
-                step_bad = True
-            continue
-
-        if len(cps) < EXPECTED_SNAP_CHECKPOINTS:
-            prf02_violations.append(
-                f"step {step_id}: insufficient perf_snap checkpoints ({len(cps)} < {EXPECTED_SNAP_CHECKPOINTS})"
-            )
-            step_bad = True
-
-        # Checkpoints must really be spread over the window (cp = 0..12 about every 5 s)
-        cp_gaps = [b["tick_ms"] - a["tick_ms"] for a, b in zip(cps, cps[1:])]
-        if any(g < 2500.0 or g > 10000.0 for g in cp_gaps):
-            prf02_violations.append(
-                f"step {step_id}: checkpoint tick_ms spacing outside [2500, 10000] ms (min={min(cp_gaps):.0f}, max={max(cp_gaps):.0f})"
-            )
-            step_bad = True
-        elif cps and cps[-1]["tick_ms"] - cps[0]["tick_ms"] < 50000.0:
-            prf02_violations.append(
-                f"step {step_id}: checkpoints span only {cps[-1]['tick_ms'] - cps[0]['tick_ms']:.0f} ms (< 50000)"
-            )
-            step_bad = True
-
-        # Validate each checkpoint's census, counts, and entity rows
-        entity_series: dict[int, list[dict[str, Any]]] = {}
-        prev_cp_tick: float | None = None
-        for cp_idx, cp in enumerate(cps):
-            cp_num = cp["num"]
-            cp_rows = cp["rows"]
-            cp_tick = cp["tick_ms"]
-            if prev_cp_tick is not None and cp_tick <= prev_cp_tick:
-                prf02_violations.append(
-                    f"step {step_id}: non-increasing checkpoint tick_ms at cp={cp_idx}"
-                )
-                step_bad = True
-            prev_cp_tick = cp_tick
-
-            if cp_num.get("director_allow_damage_b") != 0:
-                prf02_violations.append(
-                    f"step {step_id} cp={cp_idx}: director_allow_damage_b != 0"
-                )
-                step_bad = True
-            if cp_num.get("roots_alive_n") != spec["roots_n"]:
-                prf02_violations.append(
-                    f"step {step_id} cp={cp_idx}: roots_alive_n={cp_num.get('roots_alive_n')} != {spec['roots_n']}"
-                )
-                step_bad = True
-            if cp_num.get("children_alive_n") != spec["children_n"]:
-                prf02_violations.append(
-                    f"step {step_id} cp={cp_idx}: children_alive_n={cp_num.get('children_alive_n')} != {spec['children_n']}"
-                )
-                step_bad = True
-            if cp_num.get("census_foreign_n", 0) != 0:
-                prf02_violations.append(
-                    f"step {step_id} cp={cp_idx}: unexpected foreign entity in census ({cp_num.get('census_foreign_n')})"
-                )
-                step_bad = True
-            census_dyn = cp_num.get("census_dynamic_n")
-            if census_dyn not in (spec["roots_n"], spec["entities_n"]):
-                prf02_violations.append(
-                    f"step {step_id} cp={cp_idx}: census_dynamic_n={census_dyn} does not match alive roots/entities ({spec['roots_n']}/{spec['entities_n']})"
-                )
-                step_bad = True
-
-            if len(cp_rows) != spec["roots_n"]:
-                prf02_violations.append(
-                    f"step {step_id} cp={cp_idx}: snap row count {len(cp_rows)} != {spec['roots_n']}"
-                )
-                step_bad = True
-                break
-
-            for r in cp_rows:
-                if any(c not in r or not _is_finite_number(r[c]) for c in SNAP_NCOL):
-                    prf02_violations.append(
-                        f"step {step_id} cp={cp_idx}: snap row missing required columns"
-                    )
-                    step_bad = True
+            if full_window and not iv:
+                iv.append(f"step {step_id}: missing perf_snap checkpoints (0/{EXPECTED_SNAP_CHECKPOINTS})")
+        else:
+            if len(cps) < EXPECTED_SNAP_CHECKPOINTS:
+                iv.append(f"step {step_id}: insufficient perf_snap checkpoints ({len(cps)} < {EXPECTED_SNAP_CHECKPOINTS})")
+            if anchored:
+                iv.extend(f"step {step_id}: {v}" for v in _cp_time_violations(cps, t0, t_end))
+            else:
+                iv.append(f"step {step_id}: checkpoints cannot be anchored to a measured window (no usable window rows)")
+            cp_bad = False
+            for cp_idx, cp in enumerate(cps):
+                cp_num = cp["num"]
+                if cp_num.get("director_allow_damage_b") != 0:
+                    iv.append(f"step {step_id} cp={cp_idx}: director_allow_damage_b != 0")
+                    cp_bad = True
+                if cp_num.get("roots_alive_n") != spec["roots_n"]:
+                    iv.append(f"step {step_id} cp={cp_idx}: roots_alive_n={cp_num.get('roots_alive_n')} != {spec['roots_n']}")
+                    cp_bad = True
+                if cp_num.get("children_alive_n") != spec["children_n"]:
+                    iv.append(f"step {step_id} cp={cp_idx}: children_alive_n={cp_num.get('children_alive_n')} != {spec['children_n']}")
+                    cp_bad = True
+                if cp_num.get("census_foreign_n", 0) != 0:
+                    iv.append(f"step {step_id} cp={cp_idx}: unexpected foreign entity in census ({cp_num.get('census_foreign_n')})")
+                    cp_bad = True
+                row_viol = _cp_rows_violations(spec, cp_idx, cp)
+                if row_viol:
+                    iv.extend(f"step {step_id} {v}" for v in row_viol)
+                    cp_bad = True
+                if cp_bad:
                     break
-                if int(r["alive_b"]) != 1 or int(r["foreign_content_b"]) != 0:
-                    prf02_violations.append(
-                        f"step {step_id} cp={cp_idx}: entity {r['entity_idx_n']} alive_b={r['alive_b']} foreign={r['foreign_content_b']}"
-                    )
-                    step_bad = True
-                    break
-                e_idx = int(r["entity_idx_n"])
-                entity_series.setdefault(e_idx, []).append(r)
-            if step_bad:
-                break
+            if (
+                not cp_bad
+                and not iv
+                and spec["k"] >= 1
+                and len(cps) >= EXPECTED_SNAP_CHECKPOINTS
+                and anchored
+            ):
+                iv.extend(_cp_activity_violations(step_id, spec, cps, t0, t_end))
 
-        # Quarter trajectory & continuous activity reconstruction across cp = 0..12
-        if not step_bad and spec["k"] >= 1 and len(cps) >= EXPECTED_SNAP_CHECKPOINTS:
-            quarters = ((0, 3), (3, 6), (6, 9), (9, 12))
-            roam_seen = 0
-            emote_seen = 0
-            creature_seen = 0
+        # Actor driving must be evidenced through the certified S3 adapter (Sol r1 BLOQ 13): the
+        # profile exports the S3 regime, so a step with actors needs act_* orders that reached them.
+        acts_ok = True
+        if spec["actors_n"] > 0 and not iv and full_window:
+            if not any(a["status"] == "done" for a in inst["acts"]):
+                acts_ok = False
+                reasons.append(
+                    f"PRF-02 technical: actor_driver_unavailable: no act_* order of the S3 adapter drove the actors of step {step_id!r}"
+                )
 
-            for e_idx, series in sorted(entity_series.items()):
-                if len(series) < EXPECTED_SNAP_CHECKPOINTS:
-                    prf02_violations.append(
-                        f"step {step_id}: entity {e_idx} missing checkpoints ({len(series)} < 13)"
-                    )
-                    step_bad = True
-                    break
-                kind = int(series[0]["kind_code_n"])
-                role = int(series[0]["role_code_n"])
+        prf02_violations.extend(iv)
+        inst["ok02"] = not iv and full_window and acts_ok
 
-                # Actors (kind == 4) must wear 5 garments
-                if kind == 4:
-                    if any(int(s["wardrobe_n"]) != spec["wardrobe_per_actor_n"] for s in series):
-                        prf02_violations.append(
-                            f"step {step_id}: actor {e_idx} wardrobe_n != {spec['wardrobe_per_actor_n']}"
-                        )
-                        step_bad = True
-                        break
-
-                # Roam actor (kind == 4, role == 1)
-                if kind == 4 and role == 1:
-                    roam_seen += 1
-                    substep_dists = [
-                        math.hypot(
-                            float(series[i + 1]["pos_x_m"]) - float(series[i]["pos_x_m"]),
-                            float(series[i + 1]["pos_z_m"]) - float(series[i]["pos_z_m"]),
-                        )
-                        for i in range(12)
-                    ]
-                    if any(d < ROAM_SUBSTEP_MIN_M for d in substep_dists):
-                        prf02_violations.append(
-                            f"step {step_id}: roam actor {e_idx} stalled during 5 s sub-step (min={min(substep_dists):.3f} m < {ROAM_SUBSTEP_MIN_M} m)"
-                        )
-                        step_bad = True
-                        break
-                    for q_idx, (q_start, q_end) in enumerate(quarters, start=1):
-                        q_dist = sum(substep_dists[q_start:q_end])
-                        if q_dist < ROAM_QUARTER_MIN_M:
-                            prf02_violations.append(
-                                f"step {step_id}: roam actor {e_idx} Q{q_idx} displacement {q_dist:.2f} m < {ROAM_QUARTER_MIN_M} m"
-                            )
-                            step_bad = True
-                            break
-                    if step_bad:
-                        break
-                    total_dist = sum(substep_dists)
-                    wp_legs = int(series[12]["wp_legs_n"]) - int(series[0]["wp_legs_n"])
-                    if total_dist < ROAM_TOTAL_MIN_M or wp_legs < ROAM_MIN_WP_LEGS:
-                        prf02_violations.append(
-                            f"step {step_id}: roam actor {e_idx} 60 s total_dist={total_dist:.2f} m (< {ROAM_TOTAL_MIN_M}) or wp_legs={wp_legs} (< {ROAM_MIN_WP_LEGS})"
-                        )
-                        step_bad = True
-                        break
-
-                # Emote actor (kind == 4, role == 2)
-                elif kind == 4 and role == 2:
-                    emote_seen += 1
-                    for cp_i, s in enumerate(series):
-                        if (
-                            int(s["emote_playing_b"]) != 1
-                            or int(s["emote_cb_id_n"]) != EMOTE_CB_CMD_CLAP
-                            or int(s["emote_cb_state_n"]) <= 0
-                        ):
-                            prf02_violations.append(
-                                f"step {step_id}: emote actor {e_idx} inactive at cp={cp_i} (playing={s['emote_playing_b']}, cb_id={s['emote_cb_id_n']}, state={s['emote_cb_state_n']})"
-                            )
-                            step_bad = True
-                            break
-                        if cp_i > 0:
-                            prev_ticks = int(series[cp_i - 1]["emote_active_ticks_n"])
-                            cur_ticks = int(s["emote_active_ticks_n"])
-                            # Require active ticks to advance substantially across every 5 s sub-step (Arbitraje N5)
-                            if cur_ticks - prev_ticks < 3:
-                                prf02_violations.append(
-                                    f"step {step_id}: emote actor {e_idx} active_ticks stalled between cp={cp_i - 1} and cp={cp_i} ({prev_ticks} -> {cur_ticks})"
-                                )
-                                step_bad = True
-                                break
-                    if step_bad:
-                        break
-                    for q_idx, (q_start, q_end) in enumerate(quarters, start=1):
-                        q_comp = int(series[q_end]["emote_completions_n"]) - int(
-                            series[q_start]["emote_completions_n"]
-                        )
-                        if q_comp < EMOTE_QUARTER_MIN_COMPLETIONS:
-                            prf02_violations.append(
-                                f"step {step_id}: emote actor {e_idx} Q{q_idx} completions={q_comp} < {EMOTE_QUARTER_MIN_COMPLETIONS}"
-                            )
-                            step_bad = True
-                            break
-                    if step_bad:
-                        break
-                    tot_comp = int(series[12]["emote_completions_n"]) - int(
-                        series[0]["emote_completions_n"]
-                    )
-                    if tot_comp < EMOTE_TOTAL_MIN_COMPLETIONS:
-                        prf02_violations.append(
-                            f"step {step_id}: emote actor {e_idx} total completions={tot_comp} < {EMOTE_TOTAL_MIN_COMPLETIONS}"
-                        )
-                        step_bad = True
-                        break
-
-                # Creatures: infected (kind == 2) and animals (kind == 3)
-                elif kind in (2, 3):
-                    creature_seen += 1
-                    if any(int(s["ai_agent_b"]) != 1 for s in series):
-                        prf02_violations.append(
-                            f"step {step_id}: creature {e_idx} ai_agent_b != 1"
-                        )
-                        step_bad = True
-                        break
-                    substep_dists = [
-                        math.hypot(
-                            float(series[i + 1]["pos_x_m"]) - float(series[i]["pos_x_m"]),
-                            float(series[i + 1]["pos_z_m"]) - float(series[i]["pos_z_m"]),
-                        )
-                        for i in range(12)
-                    ]
-                    if any(d <= 0.01 for d in substep_dists):
-                        prf02_violations.append(
-                            f"step {step_id}: creature {e_idx} stationary during 5 s sub-step (min={min(substep_dists):.4f} m)"
-                        )
-                        step_bad = True
-                        break
-                    for q_idx, (q_start, q_end) in enumerate(quarters, start=1):
-                        q_dist = sum(substep_dists[q_start:q_end])
-                        if q_dist < CREATURES_QUARTER_MIN_M:
-                            prf02_violations.append(
-                                f"step {step_id}: creature {e_idx} Q{q_idx} displacement {q_dist:.3f} m < {CREATURES_QUARTER_MIN_M} m"
-                            )
-                            step_bad = True
-                            break
-                    if step_bad:
-                        break
-                    tot_c_dist = sum(substep_dists)
-                    if tot_c_dist < CREATURES_TOTAL_MIN_M:
-                        prf02_violations.append(
-                            f"step {step_id}: creature {e_idx} 60 s displacement {tot_c_dist:.3f} m < {CREATURES_TOTAL_MIN_M} m"
-                        )
-                        step_bad = True
-                        break
-
-            if not step_bad:
-                exp_roam = (spec["actors_n"] + 1) // 2
-                exp_emote = spec["actors_n"] // 2
-                exp_creat = spec["infected_n"] + spec["animals_n"]
-                if roam_seen != exp_roam or emote_seen != exp_emote or creature_seen != exp_creat:
-                    prf02_violations.append(
-                        f"step {step_id}: role counts in snap ({roam_seen} roam, {emote_seen} emote, {creature_seen} creatures) != expected ({exp_roam}, {exp_emote}, {exp_creat})"
-                    )
-                    step_bad = True
-
-        if not step_bad and w_info is not None and len(w_info["rows"]) >= EXPECTED_WINDOW_ROWS:
-            valid_prf02_steps.add(step_id)
-
+    steps_instances: dict[str, list[dict[str, Any]]] = {}
+    for inst in instances:
+        steps_instances.setdefault(inst["step"], []).append(inst)
+    valid_prf02_steps: set[str] = {
+        s for s, ins in steps_instances.items() if all(i["ok02"] for i in ins)
+    }
+    acts_missing_somewhere = any(
+        r.startswith("PRF-02 technical: actor_driver_unavailable") for r in reasons
+    )
     if prf02_violations:
         checks["PRF-02"] = "fail"
         reasons.extend(f"PRF-02: {v}" for v in prf02_violations)
-    elif valid_prf02_steps and not actor_driver_missing and not technical_window_missing:
+    elif valid_prf02_steps and not actor_driver_missing and not technical_window_missing and not acts_missing_somewhere:
         checks["PRF-02"] = "pass"
     else:
         checks["PRF-02"] = "missing"
@@ -2157,43 +2253,33 @@ def evaluate(
     # -----------------------------------------------------------------------
     # PRF-05: floor_and_combined_budget_derivation
     # -----------------------------------------------------------------------
-    # If there's a technical failure in PRF-03, PRF-05 cannot be evaluated -> missing
+    cap_spec: dict[str, int] | None = None
+    certified_step_id: str | None = None
     if prf03_technical:
         checks["PRF-05"] = "missing"
     else:
-        # Immediate floor failure rule (S-perf brief §5 PRF-05):
-        # If 'base' or 'fixture' is present and has fps_window_mean <= 35.0 -> immediate 'fail'.
+        # The approved floor (#28, Q9) applies to fps_window_mean ONLY, unrounded, and only once the
+        # dual-source agreement of that step was validated (Sol r1 BLOQ 8): the independent counter
+        # is not a second floor.
         for mandatory_step in ("base", "fixture"):
-            if mandatory_step in step_fps_metrics:
-                m_fps = step_fps_metrics[mandatory_step]["fps_window_mean"]
-                c_fps = step_fps_metrics[mandatory_step]["fps_frame_counter"]
-                if m_fps <= FLOOR_FPS or c_fps <= FLOOR_FPS:
+            if mandatory_step in step_fps_metrics and mandatory_step in valid_prf04_steps:
+                m_fps = step_fps_metrics[mandatory_step]["fps_window_mean_raw"]
+                if m_fps <= FLOOR_FPS:
                     prf05_violations.append(
-                        f"step {mandatory_step} below floor ({m_fps:.2f} / {c_fps:.2f} <= {FLOOR_FPS} FPS)"
+                        f"step {mandatory_step} below floor (fps_window_mean {m_fps:.4f} <= {FLOOR_FPS} FPS)"
                     )
 
-        certified_k: int | None = None
-        certified_step_id: str | None = None
-
-        # Check if we have enough valid steps for k* derivation (S-perf brief §2.1):
-        # k* = max{k in {1,2,3} | for all j <= k, step j is admissible (fps > 35.0 in PRF-03/PRF-04)}
-        # We need PRF-01 pass, and for each step up to k*: PRF-02, PRF-03, PRF-04 pass.
         steps_up_to_k_valid = {}
         for s_name in ("fixture", "inc1", "inc2"):
-            s_k = STEP_SPEC[s_name]["k"]
-            # A step is admissible if it has valid PRF-02, PRF-03, PRF-04 and FPS > floor
-            admissible = (
+            steps_up_to_k_valid[s_name] = (
                 s_name in valid_prf02_steps
                 and s_name in valid_prf03_steps
                 and s_name in valid_prf04_steps
                 and s_name in step_fps_metrics
-                and step_fps_metrics[s_name]["fps_window_mean"] > FLOOR_FPS
-                and step_fps_metrics[s_name]["fps_frame_counter"] > FLOOR_FPS
+                and step_fps_metrics[s_name]["fps_window_mean_raw"] > FLOOR_FPS
             )
-            steps_up_to_k_valid[s_name] = admissible
 
-        # Brief §5 PRF-05: k* is derived "con los 4 escalones validos en PRF-01..PRF-04"; a partial
-        # run (fewer steps, or a step whose PRF-02..04 did not pass) cannot certify a budget.
+        # Brief §5 PRF-05: k* is derived "con los 4 escalones validos en PRF-01..PRF-04"
         all_four_valid = all(
             s_name in valid_prf02_steps
             and s_name in valid_prf03_steps
@@ -2202,7 +2288,6 @@ def evaluate(
             for s_name in STEP_ORDER
         )
 
-        # Derive k* consecutively from fixture
         if not prf05_violations and checks["PRF-01"] == "pass" and all_four_valid:
             k_star = 0
             for s_name in ("fixture", "inc1", "inc2"):
@@ -2214,11 +2299,9 @@ def evaluate(
             if k_star < 1:
                 prf05_violations.append("no load step >= fixture met the > 35.0 FPS floor")
             else:
-                certified_k = k_star
                 certified_step_id = {1: "fixture", 2: "inc1", 3: "inc2"}[k_star]
                 cap_spec = STEP_SPEC[certified_step_id]
 
-                # Verify positive perf_budget_check at the certified cap (budget_at_cap)
                 cap_accepted = False
                 for bop in budget_check_ops:
                     req_num = bop["req"]["num"]
@@ -2230,8 +2313,7 @@ def evaluate(
                         and int(req_num.get("cand_infected_n", -1)) == cap_spec["infected_n"]
                         and int(req_num.get("cand_animals_n", -1)) == cap_spec["animals_n"]
                         and int(req_num.get("cand_actors_n", -1)) == cap_spec["actors_n"]
-                        and int(req_num.get("cand_wardrobe_max_per_actor_n", -1))
-                        == cap_spec["wardrobe_per_actor_n"]
+                        and int(req_num.get("cand_wardrobe_max_per_actor_n", -1)) == cap_spec["wardrobe_per_actor_n"]
                         and int(req_num.get("cand_wardrobe_total_n", -1)) == cap_spec["children_n"]
                         and int(req_num.get("cand_extra_children_n", -1)) == 0
                         and int(req_num.get("max_combined_roots_n", -1)) == cap_spec["roots_n"]
@@ -2249,13 +2331,9 @@ def evaluate(
                             ):
                                 cap_accepted = True
                             else:
-                                prf05_violations.append(
-                                    f"op {bop['op_id']}: budget_at_cap invalid done payload"
-                                )
+                                prf05_violations.append(f"op {bop['op_id']}: budget_at_cap invalid done payload")
                         else:
-                            prf05_violations.append(
-                                f"op {bop['op_id']}: budget_at_cap rejected ({bop['reason']})"
-                            )
+                            prf05_violations.append(f"op {bop['op_id']}: budget_at_cap rejected ({bop['reason']})")
 
                 if not cap_accepted and not prf05_violations:
                     prf05_violations.append(
@@ -2292,6 +2370,7 @@ def evaluate(
                                 "object_flags": SPAWN_FLAGS_OBJ,
                                 "ai_flags": SPAWN_FLAGS_AI,
                             },
+                            # Exported only because the S3 adapter orders were evidenced (PRF-02, BLOQ 13)
                             "ai_regime": "s3_adapter_roam_6m_emote_clap_1101_creature_sway_1p5m",
                         },
                     }
@@ -2307,8 +2386,7 @@ def evaluate(
     # -----------------------------------------------------------------------
     # PRF-06: negative_guards_and_clean_teardown
     # -----------------------------------------------------------------------
-    # 1. Inspect every perf_budget_check operation for A6 guard violations
-    seen_n5_reasons: set[str] = set()
+    # 1. Every perf_budget_check: the verdict must follow the request itself ...
     for bop in budget_check_ops:
         req_str = bop["req"]["str"]
         req_num = bop["req"]["num"]
@@ -2332,10 +2410,30 @@ def evaluate(
                 prf06_violations.append(
                     f"op {bop['op_id']}: expected reason {expected_violation!r}, got {bop['reason']!r}"
                 )
-            else:
-                seen_n5_reasons.add(expected_violation)
 
-    # 2. Check N2 (client role rejection on perf_snap or any perf_* verb)
+    # ... and each of the 8 N5 stimuli must be isolated AGAINST THE CERTIFIED BUDGET (BLOQ 10):
+    # a rejection obtained with the limits of another step does not credit the guard.
+    anchored_n5: set[str] = set()
+    if cap_spec is not None:
+        for reason in N5_REQUIRED_REASONS:
+            why_not = []
+            for bop in budget_check_ops:
+                if bop["req"]["str"].get("expected_modset_sig", canonical_modset_sig) != canonical_modset_sig:
+                    continue
+                if bop["status"] != "rejected" or bop["reason"] != reason:
+                    continue
+                miss = n5_stimulus_matches(reason, bop["req"]["num"], cap_spec)
+                if miss is None:
+                    anchored_n5.add(reason)
+                    break
+                why_not.append(miss)
+            if reason not in anchored_n5 and why_not:
+                reasons.append(
+                    f"PRF-06: N5 {reason} not anchored to the certified budget {certified_step_id!r}: {why_not[0]}"
+                )
+    all_n5_present = all(r in anchored_n5 for r in N5_REQUIRED_REASONS)
+
+    # 2. N2 (client role rejection on perf_snap or any perf_* verb)
     n2_client_rejects = [
         op
         for op in ops
@@ -2347,22 +2445,20 @@ def evaluate(
     for op in ops:
         if op["peer"] == "client" and op["verb"] in PERF_VERBS:
             if op["status"] != "rejected" or op["reason"] != "wrong_role:client":
-                # Note: status == "done" already fails PRF-01; any wrong rejection reason fails PRF-06
+                # status == "done" already fails PRF-01; any wrong rejection reason fails PRF-06
                 if op["status"] != "done":
                     prf06_violations.append(
                         f"op {op['op_id']}: client {op['verb']} expected rejected/wrong_role:client, got {op['status']}/{op['reason']}"
                     )
 
-    # 3. Check N1a (1-sample window probe rejected as insufficient_samples and freed)
+    # 3. N1a (1-sample window probe rejected as insufficient_samples and freed)
     n1a_valid = False
     for nw in n1a_brief_windows:
         t_num = nw["terminal_num"]
         r_tot = int(t_num.get("rows_total_n", len(nw["rows"])))
         if nw["terminal_state"] == "done" and r_tot == 1 and len(nw["rows"]) == 1:
             if not nw["freed"]:
-                prf06_violations.append(
-                    f"op {nw['op_id']}: N1a 1-row job {nw['job_id']!r} was not freed with job_free"
-                )
+                prf06_violations.append(f"op {nw['op_id']}: N1a 1-row job {nw['job_id']!r} was not freed with job_free")
             else:
                 n1a_valid = True
         else:
@@ -2370,74 +2466,74 @@ def evaluate(
                 f"op {nw['op_id']}: N1a expected done with 1 row, got state={nw['terminal_state']!r} rows={r_tot}"
             )
 
-    # 4. Check N1b (modset_mismatch rejection)
+    # 4. N1b (modset_mismatch rejection)
     for op in preflight_rejected_ops:
         if op["reason"] == "modset_mismatch":
             n1b_modset_rejects.append(op)
     n1b_valid = len(n1b_modset_rejects) >= 1
 
-    # 5. Check N4 (area_not_clear rejection on preflight when foreign entity present)
+    # 5. N4 (area_not_clear): mandatory (Sol r1 BLOQ 9). Stimulus = a canonical preflight (same
+    # world, seal, centre and radius as the honest one) so the rejection is about the area and not
+    # about the request; the rejection is exact; zero effects is evidenced by the N1-N5 census
+    # invariance below, which this rejection must sit inside.
     n4_rejects = [
         op
         for op in preflight_rejected_ops
         if op["reason"] == "area_not_clear" or op["reason"].startswith("area_not_clear:")
     ]
+    n4_canonical: list[dict[str, Any]] = []
+    for op in n4_rejects:
+        rs, rn = op["req"]["str"], op["req"]["num"]
+        if (
+            rs.get("expected_world") == canonical_world
+            and rs.get("expected_modset_sig") == canonical_modset_sig
+            and _is_finite_number(rn.get("center_x_m"))
+            and _is_finite_number(rn.get("center_z_m"))
+            and abs(float(rn["center_x_m"]) - CENTER_POS[0]) < 1e-6
+            and abs(float(rn["center_z_m"]) - CENTER_POS[2]) < 1e-6
+            and float(rn.get("clear_radius_m", 0.0)) >= CLEAR_RADIUS_M
+        ):
+            n4_canonical.append(op)
+        else:
+            prf06_violations.append(
+                f"op {op['op_id']}: N4 area_not_clear stimulus is not the canonical preflight request (world/seal/centre/radius)"
+            )
 
-    # 6. Check Pre/Post N1-N5 census invariance BEFORE N6 (S-perf brief §6 line 182, N10)
+    # 6. Pre/Post N1-N5 census invariance BEFORE N6 (S-perf brief §6, N10)
     foreign_inject_ops = [
         op
         for op in all_snap_ops
         if op["peer"] == "server"
-        and int(
-            op["req"]["num"].get(
-                "inject_foreign_cargo_b",
-                op["payload"]["num"].get("foreign_injected_b", 0),
-            )
-        )
-        == 1
+        and int(op["req"]["num"].get("inject_foreign_cargo_b", op["payload"]["num"].get("foreign_injected_b", 0))) == 1
     ]
-
-    neg_battery_ops = n1a_brief_windows + n1b_modset_rejects + n2_client_rejects + [
-        bop for bop in budget_check_ops if bop["status"] == "rejected"
-    ]
+    battery = (
+        [x["idx"] for x in n1b_modset_rejects]
+        + [x["idx"] for x in n2_client_rejects]
+        + [b["idx"] for b in budget_check_ops if b["status"] == "rejected"]
+        + [x["idx"] for x in n4_rejects]
+        + [w["idx"] for w in n1a_brief_windows]
+    )
     pre_post_n5_invariance_ok = False
-    if neg_battery_ops:
-        first_neg_idx = min(
-            (x["idx"] if "idx" in x else 0)
-            for x in (
-                n1b_modset_rejects
-                + n2_client_rejects
-                + [bop for bop in budget_check_ops if bop["status"] == "rejected"]
-            )
-        ) if (n1b_modset_rejects or n2_client_rejects or budget_check_ops) else 0
-        last_n5_idx = max(
-            (bop["idx"] for bop in budget_check_ops if bop["status"] == "rejected"),
-            default=first_neg_idx,
-        )
+    pre_idx = post_idx = None
+    if battery:
+        first_neg_idx, last_neg_idx = min(battery), max(battery)
         first_n6_idx = min((op["idx"] for op in foreign_inject_ops), default=len(raw_records) + 1)
-        if last_n5_idx > first_n6_idx:
-            prf06_violations.append(
-                "N1-N5 negative battery did not finish before N6 foreign cargo injection"
-            )
-        snaps_before_n5 = [
+        if last_neg_idx > first_n6_idx:
+            prf06_violations.append("N1-N5 negative battery did not finish before N6 foreign cargo injection")
+        clean_snaps = [
             op
             for op in all_snap_ops
             if op["peer"] == "server"
             and op["status"] == "done"
-            and op["idx"] < first_neg_idx
             and int(op["payload"]["num"].get("foreign_injected_b", 0)) == 0
         ]
-        snaps_after_n5_before_n6 = [
-            op
-            for op in all_snap_ops
-            if op["peer"] == "server"
-            and op["status"] == "done"
-            and last_n5_idx < op["idx"] < first_n6_idx
-            and int(op["payload"]["num"].get("foreign_injected_b", 0)) == 0
-        ]
-        if snaps_before_n5 and snaps_after_n5_before_n6:
-            pre_s = snaps_before_n5[-1]["payload"]["num"]
-            post_s = snaps_after_n5_before_n6[0]["payload"]["num"]
+        snaps_before = [op for op in clean_snaps if op["idx"] < first_neg_idx]
+        snaps_after = [op for op in clean_snaps if last_neg_idx < op["idx"] < first_n6_idx]
+        if snaps_before and snaps_after:
+            pre_idx, post_idx = snaps_before[-1]["idx"], snaps_after[0]["idx"]
+            pre_s = snaps_before[-1]["payload"]["num"]
+            post_s = snaps_after[0]["payload"]["num"]
+            inv_ok = True
             for k_cmp in (
                 "objects_alive_n",
                 "infected_alive_n",
@@ -2453,40 +2549,79 @@ def evaluate(
                     prf06_violations.append(
                         f"N1-N5 census invariance broken on {k_cmp}: before={pre_s.get(k_cmp)} vs after={post_s.get(k_cmp)}"
                     )
-            if not prf06_violations:
-                pre_post_n5_invariance_ok = True
+                    inv_ok = False
+            pre_post_n5_invariance_ok = inv_ok
+        elif n1b_modset_rejects or n2_client_rejects or any(b["status"] == "rejected" for b in budget_check_ops):
+            prf06_violations.append(
+                "N1-N5 census invariance not shown: needs a server snapshot before the first and another after the last negative (and before N6)"
+            )
+    n4_valid = bool(n4_canonical) and pre_idx is not None and any(
+        pre_idx < op["idx"] < post_idx for op in n4_canonical
+    )
+    if n4_canonical and pre_idx is not None and not n4_valid:
+        prf06_violations.append("N4 area_not_clear rejection lies outside the pre/post census invariance window")
 
-    # 7. Check N6 (foreign_cargo in SeaChest + equipped garment, preserving actor ancestor) & teardown
+    # 7. N6 (foreign cargo in SeaChest + equipped garment, preserving the actor ancestor), identities and closure
     n6_valid = False
     if foreign_inject_ops:
+        n6_before = len(prf06_violations)
         inj_op = foreign_inject_ops[-1]
         if inj_op["status"] != "done":
-            prf06_violations.append(
-                f"op {inj_op['op_id']}: perf_snap(inject_foreign_cargo_b=1) failed"
-            )
+            prf06_violations.append(f"op {inj_op['op_id']}: perf_snap(inject_foreign_cargo_b=1) failed")
         else:
             inj_num = inj_op["payload"]["num"]
             inj_rows = inj_op["payload"]["rows"]
-            if int(inj_num.get("foreign_injected_b", 0)) != 1 or int(inj_num.get("census_foreign_n", 0)) < 2:
+            inj_sig = inj_num.get("foreign_sig_n")
+            if int(inj_num.get("foreign_injected_b", 0)) != 1 or int(inj_num.get("census_foreign_n", 0)) != 2:
                 prf06_violations.append(
-                    f"op {inj_op['op_id']}: N6 injection did not record foreign_injected_b=1 and census_foreign_n>=2 (got {inj_num.get('census_foreign_n')})"
+                    f"op {inj_op['op_id']}: N6 injection did not record foreign_injected_b=1 and census_foreign_n=2 (the two Rag) (got {inj_num.get('census_foreign_n')})"
                 )
-            # Record pre-cleanup positions of entities flagged with foreign_content_b == 1
-            pre_foreign_entities: dict[int, tuple[ int, float, float, float ]] = {}
+            if not _is_finite_number(inj_sig) or float(inj_sig) <= 0:
+                prf06_violations.append(
+                    f"op {inj_op['op_id']}: N6 injection snapshot carries no foreign_sig_n identity of the two Rag"
+                )
+            # Observed identities of the containers holding the foreign content, before cleanup
+            pre_foreign: dict[int, tuple[int, float, float, float]] = {}
             for r in inj_rows:
                 if int(r.get("foreign_content_b", 0)) == 1:
-                    pre_foreign_entities[int(r["entity_idx_n"])] = (
+                    pre_foreign[int(r["entity_idx_n"])] = (
                         int(r["kind_code_n"]),
                         float(r["pos_x_m"]),
                         float(r["pos_y_m"]),
                         float(r["pos_z_m"]),
                     )
-            if len(pre_foreign_entities) < 2:
+            if len(pre_foreign) != 2 or {k for k, _, _, _ in pre_foreign.values()} != {1, 4}:
                 prf06_violations.append(
-                    f"op {inj_op['op_id']}: N6 injection snap must mark both SeaChest and actor with foreign_content_b=1"
+                    f"op {inj_op['op_id']}: N6 injection snap must mark exactly the SeaChest and the actor with foreign_content_b=1"
                 )
 
-            # Find the cleanup operation immediately following inj_op
+            def _same_survivors(snap_op: dict[str, Any], label: str, *, foreign_flag: int) -> None:
+                rows_s = snap_op["payload"]["rows"]
+                ids_s = {int(r["entity_idx_n"]) for r in rows_s}
+                if len(rows_s) != 2 or ids_s != set(pre_foreign):
+                    prf06_violations.append(
+                        f"op {snap_op['op_id']}: {label}: survivors {sorted(ids_s)} are not the observed identities {sorted(pre_foreign)}"
+                    )
+                    return
+                for r in rows_s:
+                    e_idx = int(r["entity_idx_n"])
+                    kind0, px, py, pz = pre_foreign[e_idx]
+                    dist = math.sqrt(
+                        (float(r["pos_x_m"]) - px) ** 2 + (float(r["pos_y_m"]) - py) ** 2 + (float(r["pos_z_m"]) - pz) ** 2
+                    )
+                    if int(r["kind_code_n"]) != kind0 or dist > 0.05:
+                        prf06_violations.append(
+                            f"op {snap_op['op_id']}: {label}: entity {e_idx} is not the same object as before cleanup (kind {r['kind_code_n']} vs {kind0}, moved {dist:.3f} m)"
+                        )
+                    if int(r["alive_b"]) != 1 or int(r["foreign_content_b"]) != foreign_flag:
+                        prf06_violations.append(
+                            f"op {snap_op['op_id']}: {label}: survivor {e_idx} must have alive_b=1 and foreign_content_b={foreign_flag}"
+                        )
+                    if int(r["kind_code_n"]) == 4 and int(r["wardrobe_n"]) != 1:
+                        prf06_violations.append(
+                            f"op {snap_op['op_id']}: {label}: preserved actor {e_idx} must retain exactly the 1 garment with foreign cargo (got wardrobe_n={r['wardrobe_n']})"
+                        )
+
             post_inj_cleanups = [c for c in cleanup_ops if c["idx"] > inj_op["idx"]]
             if not post_inj_cleanups:
                 prf06_violations.append("N6: missing cleanup after foreign cargo injection")
@@ -2494,6 +2629,7 @@ def evaluate(
                 c1 = post_inj_cleanups[0]
                 c1_str = c1["payload"]["str"]
                 c1_num = c1["payload"]["num"]
+                c2 = post_inj_cleanups[1] if len(post_inj_cleanups) >= 2 else None
                 if c1["status"] != "done":
                     prf06_violations.append(f"op {c1['op_id']}: N6 cleanup not done")
                 else:
@@ -2522,106 +2658,94 @@ def evaluate(
                             f"op {c1['op_id']}: N6 partial cleanup survivor counts mismatch (expected 1 object, 1 actor, 1 garment -> 2 roots, 1 child, 3 entities)"
                         )
 
-                    # Find the perf_snap immediately after c1 (cleanup_snap)
-                    snaps_after_c1 = [
+                    mid_snaps = [
                         s
                         for s in all_snap_ops
-                        if s["peer"] == "server" and s["status"] == "done" and s["idx"] > c1["idx"]
+                        if s["peer"] == "server"
+                        and s["status"] == "done"
+                        and s["idx"] > c1["idx"]
+                        and (c2 is None or s["idx"] < c2["idx"])
                     ]
-                    if not snaps_after_c1:
+                    if not mid_snaps:
                         prf06_violations.append("N6: missing cleanup_snap after partial cleanup")
                     else:
-                        cs = snaps_after_c1[0]
+                        cs = mid_snaps[0]
                         cs_num = cs["payload"]["num"]
-                        cs_rows = cs["payload"]["rows"]
                         if (
                             int(cs_num.get("roots_alive_n", -1)) != 2
                             or int(cs_num.get("children_alive_n", -1)) != 1
                             or int(cs_num.get("entities_alive_n", -1)) != 3
-                            or int(cs_num.get("census_foreign_n", -1)) != 2
+                            or int(cs_num.get("census_foreign_n", -1)) != int(inj_num.get("census_foreign_n", 2))
                         ):
                             prf06_violations.append(
-                                f"op {cs['op_id']}: cleanup_snap counts mismatch (roots={cs_num.get('roots_alive_n')}, children={cs_num.get('children_alive_n')}, foreign={cs_num.get('census_foreign_n')})"
+                                f"op {cs['op_id']}: cleanup_snap counts mismatch (roots={cs_num.get('roots_alive_n')}, children={cs_num.get('children_alive_n')}, foreign={cs_num.get('census_foreign_n')}; the two Rag must survive)"
                             )
-                        if cs_num.get("director_allow_damage_b") != cs_num.get(
-                            "director_orig_allow_damage_b"
-                        ):
+                        if _is_finite_number(inj_sig) and cs_num.get("foreign_sig_n") != inj_sig:
+                            prf06_violations.append(
+                                f"op {cs['op_id']}: the foreign content was destroyed or substituted by cleanup (foreign_sig_n {cs_num.get('foreign_sig_n')} != {inj_sig})"
+                            )
+                        if cs_num.get("director_allow_damage_b") != cs_num.get("director_orig_allow_damage_b"):
                             prf06_violations.append(
                                 f"op {cs['op_id']}: cleanup_snap director_allow_damage_b not restored to original"
                             )
-                        if len(cs_rows) != 2:
+                        _same_survivors(cs, "cleanup_snap", foreign_flag=1)
+
+                    # Bench closure (N10): retirement of BOTH foreign items confirmed, closing
+                    # cleanup, and a raw final snapshot with 0 entities. All of it is required.
+                    if c2 is None:
+                        prf06_violations.append(
+                            "N6 closure: missing the cleanup that follows the retirement of the foreign content (bench_reset_foreign)"
+                        )
+                    else:
+                        if len(mid_snaps) < 2:
                             prf06_violations.append(
-                                f"op {cs['op_id']}: cleanup_snap expected 2 root rows (SeaChest + preserved actor), got {len(cs_rows)}"
+                                "N6 closure: no snapshot confirms the retirement of both foreign items before the closing cleanup"
                             )
                         else:
-                            kinds_seen = set()
-                            for r in cs_rows:
-                                e_idx = int(r["entity_idx_n"])
-                                kind = int(r["kind_code_n"])
-                                kinds_seen.add(kind)
-                                if int(r["alive_b"]) != 1 or int(r["foreign_content_b"]) != 1:
-                                    prf06_violations.append(
-                                        f"op {cs['op_id']}: survivor {e_idx} must have alive_b=1 and foreign_content_b=1"
-                                    )
-                                if kind == 4 and int(r["wardrobe_n"]) != 1:
-                                    prf06_violations.append(
-                                        f"op {cs['op_id']}: preserved actor {e_idx} must retain exactly the 1 garment with foreign cargo (got wardrobe_n={r['wardrobe_n']})"
-                                    )
-                                if e_idx in pre_foreign_entities:
-                                    _, px, py, pz = pre_foreign_entities[e_idx]
-                                    dist = math.sqrt(
-                                        (float(r["pos_x_m"]) - px) ** 2
-                                        + (float(r["pos_y_m"]) - py) ** 2
-                                        + (float(r["pos_z_m"]) - pz) ** 2
-                                    )
-                                    if dist > 0.05:
-                                        prf06_violations.append(
-                                            f"op {cs['op_id']}: preserved entity {e_idx} moved during cleanup ({dist:.3f} m)"
-                                        )
-                            if kinds_seen != {1, 4}:
-                                prf06_violations.append(
-                                    f"op {cs['op_id']}: expected survivor kinds {{1 (SeaChest), 4 (Actor)}}, got {kinds_seen}"
-                                )
-
-                        # If bench closure (second cleanup after bench_reset_foreign) is present, verify 0 survivors
-                        if len(post_inj_cleanups) >= 2:
-                            c2 = post_inj_cleanups[-1]
-                            c2_str = c2["payload"]["str"]
-                            c2_num = c2["payload"]["num"]
+                            conf = mid_snaps[-1]
+                            cf_num = conf["payload"]["num"]
                             if (
-                                c2["status"] != "done"
-                                or c2_str.get("cleanup_status") != "clean"
-                                or int(c2_num.get("roots_alive_n", -1)) != 0
-                                or int(c2_num.get("children_alive_n", -1)) != 0
-                                or int(c2_num.get("entities_alive_n", -1)) != 0
+                                int(cf_num.get("census_foreign_n", -1)) != N6_RETIRED_CENSUS
+                                or float(cf_num.get("foreign_sig_n", 0) or 0) != 0
                             ):
                                 prf06_violations.append(
-                                    f"op {c2['op_id']}: bench closure cleanup did not leave 0 entities"
+                                    f"op {conf['op_id']}: retirement not confirmed: census_foreign_n={cf_num.get('census_foreign_n')}, foreign_sig_n={cf_num.get('foreign_sig_n')}"
                                 )
-                            snaps_after_c2 = [
-                                s
-                                for s in all_snap_ops
-                                if s["peer"] == "server"
-                                and s["status"] == "done"
-                                and s["idx"] > c2["idx"]
-                            ]
-                            if snaps_after_c2:
-                                fs = snaps_after_c2[-1]["payload"]
-                                if (
-                                    int(fs["num"].get("roots_alive_n", -1)) != 0
-                                    or int(fs["num"].get("entities_alive_n", -1)) != 0
-                                    or int(fs["num"].get("census_dynamic_n", -1)) != 0
-                                    or int(fs["num"].get("census_foreign_n", -1)) != 0
-                                    or len(fs["rows"]) != 0
-                                ):
-                                    prf06_violations.append(
-                                        "final_snap after bench closure does not show 0 entities and 0 foreign cargo"
-                                    )
+                            _same_survivors(conf, "retirement confirmation", foreign_flag=0)
+                        c2_str = c2["payload"]["str"]
+                        c2_num = c2["payload"]["num"]
+                        if (
+                            c2["status"] != "done"
+                            or c2_str.get("cleanup_status") != "clean"
+                            or int(c2_num.get("roots_alive_n", -1)) != 0
+                            or int(c2_num.get("children_alive_n", -1)) != 0
+                            or int(c2_num.get("entities_alive_n", -1)) != 0
+                        ):
+                            prf06_violations.append(f"op {c2['op_id']}: bench closure cleanup did not leave 0 entities")
+                        snaps_after_c2 = [
+                            s
+                            for s in all_snap_ops
+                            if s["peer"] == "server" and s["status"] == "done" and s["idx"] > c2["idx"]
+                        ]
+                        if not snaps_after_c2:
+                            prf06_violations.append("N6 closure: missing the raw final snapshot with 0 entities after the closing cleanup")
+                        else:
+                            fs = snaps_after_c2[-1]["payload"]
+                            if (
+                                int(fs["num"].get("roots_alive_n", -1)) != 0
+                                or int(fs["num"].get("entities_alive_n", -1)) != 0
+                                or int(fs["num"].get("census_dynamic_n", -1)) != 0
+                                or int(fs["num"].get("census_foreign_n", -1)) != 0
+                                or len(fs["rows"]) != 0
+                            ):
+                                prf06_violations.append(
+                                    "final_snap after bench closure does not show 0 entities and 0 foreign cargo"
+                                )
+                            if fs["num"].get("director_allow_damage_b") != fs["num"].get("director_orig_allow_damage_b"):
+                                prf06_violations.append("final snapshot: director_allow_damage_b not restored to the cycle original")
+        n6_valid = len(prf06_violations) == n6_before
 
-                        if not prf06_violations:
-                            n6_valid = True
-
-    # Check optional samples/final_snap.json if present
+    # Optional samples/final_snap.json can only ADD violations; it never substitutes a raw snapshot
     final_snap_path = samples_dir / "final_snap.json"
     if final_snap_path.is_file():
         try:
@@ -2632,26 +2756,21 @@ def evaluate(
             else:
                 fs_num = fs_unpacked["num"]
                 if fs_num.get("director_allow_damage_b") != fs_num.get("director_orig_allow_damage_b"):
-                    prf06_violations.append(
-                        "final_snap.json: director_allow_damage_b != director_orig_allow_damage_b"
-                    )
+                    prf06_violations.append("final_snap.json: director_allow_damage_b != director_orig_allow_damage_b")
         except Exception as exc:
             prf06_violations.append(f"invalid final_snap.json ({exc})")
 
     # Determine if the complete §6 negative suite + teardown is present and valid
-    all_n5_present = all(r in seen_n5_reasons for r in N5_REQUIRED_REASONS)
     full_prf06_ready = (
         n1a_valid
         and n1b_valid
         and len(n2_client_rejects) >= 1
         and all_n5_present
+        and n4_valid
         and pre_post_n5_invariance_ok
         and n6_valid
     )
 
-    # Individual negative battery violations should cause PRF-06 to fail
-    # (per brief §6: each negative case must be detected)
-    # Only enforce when negative battery elements are actually present in the evidence
     negative_battery_incomplete = False
     has_negative_battery_elements = (
         n1a_brief_windows
@@ -2666,7 +2785,6 @@ def evaluate(
         if n1b_modset_rejects and not n1b_valid:
             negative_battery_incomplete = True
         if not n2_client_rejects:
-            # Check if any perf_snap on client was expected but not rejected correctly
             client_perf_ops = [op for op in ops if op["peer"] == "client" and op["verb"] in PERF_VERBS]
             if client_perf_ops:
                 for op in client_perf_ops:
@@ -2675,7 +2793,9 @@ def evaluate(
                         break
         if not all_n5_present:
             negative_battery_incomplete = True
-        if not pre_post_n5_invariance_ok and (n1b_modset_rejects or n2_client_rejects or any(bop["status"] == "rejected" for bop in budget_check_ops)):
+        if not pre_post_n5_invariance_ok and (
+            n1b_modset_rejects or n2_client_rejects or any(bop["status"] == "rejected" for bop in budget_check_ops)
+        ):
             negative_battery_incomplete = True
         if foreign_inject_ops and not n6_valid:
             negative_battery_incomplete = True
@@ -2684,11 +2804,13 @@ def evaluate(
         checks["PRF-06"] = "fail"
         reasons.extend(f"PRF-06: {v}" for v in prf06_violations)
         if negative_battery_incomplete and not prf06_violations:
-            reasons.append("PRF-06: incomplete or invalid negative battery (N1a, N1b, N2, N4, N5, N6)")
+            reasons.append("PRF-06: incomplete or invalid negative battery (N1a, N1b, N2, N4, N5 anchored to the certified budget, N6 with closure)")
     elif full_prf06_ready:
         checks["PRF-06"] = "pass"
     else:
         checks["PRF-06"] = "missing"
+        if has_negative_battery_elements and not n4_valid:
+            reasons.append("PRF-06: missing N4 evidence (perf_preflight rejected area_not_clear inside the N1-N5 invariance window)")
 
     # -----------------------------------------------------------------------
     # Final Verdict Aggregation (S-perf brief §5: fail > missing > pass)

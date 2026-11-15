@@ -5,6 +5,7 @@ Covers:
 - E9 anti-fabrication negatives (all must FAIL or INCONCLUSO, never PASS)
 - 11 mutants from EXPECTED_MUTANTS with must_fail_checks in "fail", never "missing"
 - §8.1 offline tests: k* derivation, N5 8 subcases, N6, geometry, modset equality
+- test_sol1_NN_* regressions of Sol's round-1 findings (14 BLOQ + 2 MEN; BLOQ 3 is pending the common e2e witness)
 - test_e2e_* tests that fail now (skeleton implementation)
 
 Run: python -m unittest discover -s qa/tests -t qa -p test_s_perf_offline.py
@@ -15,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import os
 import re
 import secrets
 import sys
@@ -95,6 +97,9 @@ REQUIRED_CLASSES = CANONICAL_FIXTURE["required_classes"]
 # Evidence Constructors (synthetic bridge.jsonl, samples, etc.)
 # ==============================================================================
 
+H_OFFSET_MS = 7000.0
+
+
 def _now() -> float:
     return 1000.0
 
@@ -147,9 +152,11 @@ def _bridge_record(
     req_payload: dict | None = None,
     res_payload: dict | None = None,
     ack_payload: dict | None = None,
+    tick_hint: float | None = None,
     **extra,
 ) -> dict:
     oid = op_id or _op_id()
+    t_explicit = issued_ms is not None or ack_ms is not None or read_ms is not None
     now = _now()
     i_ms = issued_ms or now
     a_ms = ack_ms or now + 1.0
@@ -175,6 +182,8 @@ def _bridge_record(
         "args": req_payload or {},
         "payload_req": req_payload or {},
         "payload_res": res_payload or {},
+        "tick_hint": tick_hint,
+        "t_explicit": t_explicit,
         **extra,
     }
 
@@ -261,6 +270,7 @@ def _preflight_done(
         issued_ms=issued_ms,
         ack_ms=ack_ms,
         read_ms=read_ms,
+        tick_hint=tick_ms,
     )
 
 
@@ -363,6 +373,7 @@ def _step_apply_done(
         op_id=op_id,
         req_payload=req,
         res_payload=res,
+        tick_hint=tick_ms,
     )
 
 
@@ -411,6 +422,7 @@ def _window_start_done(
     sample_step_ms: float = SAMPLE_STEP_MS,
     expected_rows_n: int = EXPECTED_WINDOW_ROWS,
     req_expected_modset_sig: str = CANONICAL_MODSET_SIG,
+    resource: str = "perf_sampler",
 ) -> dict:
     jid = job_id or f"job-{secrets.token_hex(8)}"
     req = _pack_payload(
@@ -425,7 +437,7 @@ def _window_start_done(
         scalars_str={
             "job": jid,
             "state": "running",
-            "resource": "perf_sampler",
+            "resource": resource,
             "step_id": step_id,
             "modset_sig": modset_sig,
         },
@@ -446,6 +458,7 @@ def _window_start_done(
         op_id=op_id,
         req_payload=req,
         res_payload=res,
+        tick_hint=start_tick_ms,
     )
 
 
@@ -530,6 +543,7 @@ def _job_read_done(
         op_id=op_id,
         req_payload=req,
         res_payload=res,
+        tick_hint=(released_tick_ms or end_tick_ms),
     )
 
 
@@ -566,6 +580,7 @@ def _snap_done(
     rows: list | None = None,
     modset_sig: str = CANONICAL_MODSET_SIG,
     peer: str = "server",
+    foreign_sig_n: float = 0.0,
 ) -> dict:
     spec = STEP_SPEC.get(step_id, STEP_SPEC["fixture"])
     cnt = counts or {
@@ -591,6 +606,7 @@ def _snap_done(
             "director_orig_allow_damage_b": director_orig_allow_damage_b,
             "director_allow_damage_b": director_allow_damage_b,
             "foreign_injected_b": foreign_injected_b,
+            "foreign_sig_n": foreign_sig_n,
             "tick_ms": tick_ms,
             "frame": frame,
             "avg_fps_now": avg_fps_now,
@@ -606,6 +622,7 @@ def _snap_done(
         op_id=op_id,
         req_payload=req,
         res_payload=res,
+        tick_hint=tick_ms,
     )
 
 
@@ -921,10 +938,20 @@ def _records_to_events(records: list[dict]) -> list[dict]:
     """Expand the test's one-record-per-op builders into the REAL core event log
     (enq -> deliver -> result), the only format the evaluator accepts."""
     events: list[dict] = []
+    last_h = 0.0
     for rec in records:
         if "ev" in rec:
             events.append(rec)
             continue
+        rec = dict(rec)
+        if not rec.get("t_explicit"):
+            # A coherent harness clock: the instant the peer executed an order is its server tick
+            # shifted by a constant (the two clocks run at the same rate), and strictly increasing
+            # across the run. Operations without a tick follow their predecessor.
+            hint = rec.get("tick_hint")
+            h = max(last_h + 3.0, hint + H_OFFSET_MS) if hint is not None else last_h + 3.0
+            rec["issued_ms"], rec["ack_ms"], rec["read_ms"] = h, h + 1.0, h + 2.0
+        last_h = max(last_h, rec["read_ms"])
         read_env = dict(rec["read"])
         status = read_env.pop("status")
         reason = read_env.pop("reason", "")
@@ -985,6 +1012,18 @@ def _window_marks(rows: list) -> dict:
     return {"end_tick_ms": last + 100.0, "onjobend_tick_ms": last + 200.0, "released_tick_ms": last + 300.0}
 
 
+STEP_TICK_BASE = {"base": 0.0, "fixture": 200000.0, "inc1": 400000.0, "inc2": 600000.0}
+
+
+def _act_done(verb: str = "act_drive") -> dict:
+    """An order of the certified S3 actor adapter that reached the peer (BLOQ 13)."""
+    return _bridge_record(
+        verb=verb, peer="server", status="done", reason="",
+        req_payload=_pack_payload(scalars_str={"actor": "a0"}),
+        res_payload=_pack_payload(scalars_str={"driven": "roam"}),
+    )
+
+
 def _step_segment(
     step: str,
     *,
@@ -998,17 +1037,35 @@ def _step_segment(
     apply_rec: dict | None = None,
     read_kwargs: dict | None = None,
     census_dynamic_n: int | None = None,
+    tick_base: float | None = None,
+    acts: bool = True,
+    h_scale: float = 1.0,
+    snap_tick_shift: float = 0.0,
+    snap_ticks: list | None = None,
 ) -> list[dict]:
-    """apply -> window start -> n snapshots over the window -> terminal job_read -> job_free
-    (the order of the brief §4.2 run sequence)."""
+    """apply -> actor orders -> window start -> n snapshots over the window -> terminal job_read -> job_free
+    (the order of the brief §4.2 run sequence). Every step lives at its own server time (tick_base);
+    the harness clock follows the server clock at `h_scale` (1.0 = same rate)."""
     fps = DEFAULT_FPS[step] if fps is None else fps
+    base = STEP_TICK_BASE[step] if tick_base is None else tick_base
     jid = job_id or f"job-{step}"
-    rows = _build_window_rows(step, fps_mean=fps, fps_counter=fps) if rows is None else rows
-    t0 = rows[0]["tick_ms"] if rows else 41000.0
-    seg = [apply_rec or _step_apply_done(step), _window_start_done(step, job_id=jid, **(ws_kwargs or {}))]
+    rows = (_build_window_rows(step, fps_mean=fps, fps_counter=fps, start_tick_ms=40000.0 + base)
+            if rows is None else rows)
+    t0 = rows[0]["tick_ms"] if rows else 41000.0 + base
+    ws_kw = {"start_tick_ms": t0 - 31000.0}
+    ws_kw.update(ws_kwargs or {})
+    seg = [apply_rec or _step_apply_done(step, tick_ms=t0 - 32000.0)]
+    if acts and STEP_SPEC[step]["actors_n"] > 0:
+        seg.append(_act_done())
+    seg.append(_window_start_done(step, job_id=jid, **ws_kw))
     for cp in range(n_snaps):
         sr = snap_rows(cp) if snap_rows else _build_snap_rows(step, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)
-        seg.append(_snap_done(step, tick_ms=t0 + cp * 5000.0, rows=sr, census_dynamic_n=census_dynamic_n))
+        cp_off = cp * 5000.0 if snap_ticks is None else snap_ticks[cp]
+        rec = _snap_done(step, tick_ms=t0 + cp_off + snap_tick_shift, rows=sr, census_dynamic_n=census_dynamic_n)
+        if h_scale != 1.0:
+            h = t0 + H_OFFSET_MS + cp_off * h_scale
+            rec.update(issued_ms=h, ack_ms=h + 1.0, read_ms=h + 2.0, t_explicit=True)
+        seg.append(rec)
     kw = {"rows": rows, "rows_total_n": len(rows), **_window_marks(rows)}
     kw.update(read_kwargs or {})
     seg.append(_job_read_done(jid, **kw))
@@ -1075,58 +1132,75 @@ def _n5_records(step: str = "inc2", *, accept_reason: str | None = None) -> list
     return recs
 
 
+FOREIGN_SIG = 7777.0
+
+
 def _negatives_segment(step: str = "inc2", *, post_census_dynamic_n: int | None = None,
-                       accept_reason: str | None = None, tick0: float = 110000.0) -> list[dict]:
+                       accept_reason: str | None = None, tick0: float | None = None,
+                       closure: bool = True, n4: bool = True, rag_sig_after: float = FOREIGN_SIG,
+                       n5_step: str | None = None) -> list[dict]:
     """Brief section 6: N5 x8, N2, N1a, N1b, N4, the post-N5 snapshot (closing N1-N5 BEFORE N6),
-    then N6 + partial cleanup + bench closure."""
+    then N6 + partial cleanup + retirement confirmation + closing cleanup + raw final snapshot."""
     spec = STEP_SPEC[step]
-    seg = _n5_records(step, accept_reason=accept_reason)
+    tick0 = STEP_TICK_BASE[step] + 110000.0 if tick0 is None else tick0
+    seg = _n5_records(n5_step or step, accept_reason=accept_reason)
     seg.append(_snap_rejected(step, peer="client"))
     seg.append(_window_start_done(step, job_id="job-n1a", expected_rows_n=1, warmup_ms=0, duration_ms=1000))
     seg.append(_job_read_done("job-n1a", rows_total_n=1, pages_n=1, rows=_build_window_rows(step, n_rows=1)))
     seg.append(_job_free_done("job-n1a"))
     seg.append(_window_start_rejected(step, req_expected_modset_sig="wrong"))
-    seg.append(_preflight_rejected(reason="area_not_clear"))
+    if n4:
+        seg.append(_preflight_rejected(reason="area_not_clear"))
     seg.append(_snap_done(step, tick_ms=tick0, census_dynamic_n=post_census_dynamic_n,
                           rows=_build_snap_rows(step, cp_index=13, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
     actor_idx = spec["objects_n"] + spec["infected_n"] + spec["animals_n"]
     seg.append(_snap_done(step, inject_foreign_cargo_b=1, foreign_injected_b=1, census_foreign_n=2,
-                          tick_ms=tick0 + 2000.0, rows=_build_snap_rows(step, foreign_content_b=1, actor_foreign_idx=actor_idx)))
+                          foreign_sig_n=FOREIGN_SIG, tick_ms=tick0 + 2000.0,
+                          rows=_build_snap_rows(step, foreign_content_b=1, actor_foreign_idx=actor_idx)))
     seg.append(_step_apply_done(
         "cleanup", cleanup_status="partial_foreign_content", requested_counts=dict(ZERO_COUNTS),
         alive_counts={"objects_alive_n": 1, "infected_alive_n": 0, "animals_alive_n": 0, "actors_alive_n": 1,
                       "roots_alive_n": 2, "children_alive_n": 1, "entities_alive_n": 3},
         director_orig_allow_damage_b=1, director_allow_damage_b=1, skipped_foreign_containers_n=2,
-        preserved_ancestors_n=1))
+        preserved_ancestors_n=1, tick_ms=tick0 + 3000.0))
     surv = _build_snap_rows(step, foreign_content_b=1, actor_foreign_idx=actor_idx)
     for r in surv:
         if r["entity_idx_n"] == actor_idx:
             r["wardrobe_n"] = 1
+    survivors = [surv[0], surv[actor_idx]]
     seg.append(_snap_done(
         step, tick_ms=tick0 + 4000.0, counts={"roots_alive_n": 2, "children_alive_n": 1, "entities_alive_n": 3},
-        census_dynamic_n=2, census_foreign_n=2, director_allow_damage_b=1, director_orig_allow_damage_b=1,
-        rows=[surv[0], surv[actor_idx]]))
-    seg.append(_step_apply_done(
-        "cleanup", cleanup_status="clean", requested_counts=dict(ZERO_COUNTS), alive_counts=dict(ZERO_ALIVE),
-        director_orig_allow_damage_b=1, director_allow_damage_b=1))
-    seg.append(_snap_done(
-        step, tick_ms=tick0 + 6000.0, counts={"roots_alive_n": 0, "children_alive_n": 0, "entities_alive_n": 0},
-        census_dynamic_n=0, census_foreign_n=0, director_allow_damage_b=1, director_orig_allow_damage_b=1, rows=[]))
+        census_dynamic_n=2, census_foreign_n=2, foreign_sig_n=rag_sig_after, director_allow_damage_b=1,
+        director_orig_allow_damage_b=1, rows=survivors))
+    if closure:
+        # the operator retires both foreign items (bench_reset_foreign) and the snapshot confirms it
+        retired = [dict(r, foreign_content_b=0) for r in survivors]
+        seg.append(_snap_done(
+            step, tick_ms=tick0 + 5000.0, counts={"roots_alive_n": 2, "children_alive_n": 1, "entities_alive_n": 3},
+            census_dynamic_n=2, census_foreign_n=0, foreign_sig_n=0.0, director_allow_damage_b=1,
+            director_orig_allow_damage_b=1, rows=retired))
+        seg.append(_step_apply_done(
+            "cleanup", cleanup_status="clean", requested_counts=dict(ZERO_COUNTS), alive_counts=dict(ZERO_ALIVE),
+            director_orig_allow_damage_b=1, director_allow_damage_b=1, tick_ms=tick0 + 5500.0))
+        seg.append(_snap_done(
+            step, tick_ms=tick0 + 6000.0, counts={"roots_alive_n": 0, "children_alive_n": 0, "entities_alive_n": 0},
+            census_dynamic_n=0, census_foreign_n=0, director_allow_damage_b=1, director_orig_allow_damage_b=1, rows=[]))
     return seg
 
 
 def _full_run(*, fps: dict | None = None, steps=STEP_ORDER, negatives: bool = True,
-              budget_step: str | None = "inc2", segs: dict | None = None) -> list[dict]:
+              budget_step: str | None = "inc2", segs: dict | None = None, acts: bool = True,
+              neg_kw: dict | None = None) -> list[dict]:
     """A complete honest run (brief section 4.2): preflight, 4 steps, budget at the certified cap,
     negative battery with its closure."""
     fps = dict(DEFAULT_FPS, **(fps or {}))
     bridge = [_preflight_done()]
     for s in steps:
-        bridge.extend((segs or {}).get(s) or _step_segment(s, fps=fps[s]))
+        bridge.extend((segs or {}).get(s) or _step_segment(s, fps=fps[s], acts=acts))
     if budget_step:
         bridge.append(_budget_at_cap(budget_step))
     if negatives:
-        bridge.extend(_negatives_segment(budget_step or "inc2"))
+        bridge.extend(_negatives_segment(budget_step or "inc2", **(neg_kw or {})))
     return bridge
 
 
@@ -1474,20 +1548,10 @@ class TestSPerfOffline(unittest.TestCase):
     # ==========================================================================
 
     def test_prf04_healthy_agreement_passes(self):
-        """FPS sources within ±10% and clock drifts within tolerance pass PRF-04."""
+        """FPS sources within +-10% and clock drifts (dtsum and the core-credited harness clock) within tolerance pass PRF-04."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            ws = _window_start_done("fixture", job_id="job-1", start_tick_ms=40000.0)
-            rows = _build_window_rows("fixture", fps_mean=51.0, fps_counter=51.0, start_tick_ms=70000.0)
-            bridge = [
-                _preflight_done(),
-                _step_apply_done("fixture"),
-                ws,
-                _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-            ]
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            self.assertEqual(_chk(verdict, "PRF-04"), "pass")
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", fps=51.0), td)
+            self.assertEqual(_chk(v, "PRF-04"), "pass", v["reasons"])
 
     def test_prf04_fps_disagreement_fails(self):
         """FPS sources > 10% apart fails PRF-04."""
@@ -1527,28 +1591,12 @@ class TestSPerfOffline(unittest.TestCase):
             self.assertTrue(any("dtsum drift" in r for r in verdict["reasons"]))
 
     def test_prf04_harness_drift_fails(self):
-        """Harness clock drift > 5% fails PRF-04."""
+        """Harness clock running 50 % faster than the server tick over the window (the equivalent
+        interval credited by the core's bridge events) fails PRF-04."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            ws = _window_start_done("fixture", job_id="job-1", start_tick_ms=40000.0)
-            rows = _build_window_rows("fixture", start_tick_ms=70000.0)
-            bridge = [
-                _preflight_done(),
-                _step_apply_done("fixture"),
-                ws,
-                _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-            ]
-            # Add polls.jsonl with large harness span
-            extra = {
-                "step_fixture_polls.jsonl": [
-                    {"h_ms": 1000.0}, {"h_ms": 2000.0}, {"h_ms": 3000.0},
-                    # Harness span ~72s vs tick span ~60s -> ~20% drift
-                ]
-            }
-            _write_part(part, bridge, extra_samples=extra)
-            verdict = s_perf_eval.evaluate(part)
-            self.assertEqual(_chk(verdict, "PRF-04"), "fail")
-            self.assertTrue(any("harness clock drift" in r for r in verdict["reasons"]))
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", h_scale=1.5), td)
+            self.assertEqual(_chk(v, "PRF-04"), "fail")
+            self.assertTrue(any("harness clock drift" in r for r in v["reasons"]))
 
     def test_prf04_less_than_two_rows_missing(self):
         """< 2 rows or zero span -> missing (no division), not fail (N13)."""
@@ -1571,25 +1619,10 @@ class TestSPerfOffline(unittest.TestCase):
     # ==========================================================================
 
     def test_prf02_healthy_step_passes(self):
-        """Complete step with correct counts, activity, and 13 checkpoints passes PRF-02."""
+        """Complete step with correct counts, activity, actor orders and 13 window checkpoints passes PRF-02."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            ws = _window_start_done("fixture", job_id="job-1")
-            rows = _build_window_rows("fixture")
-            bridge = [
-                _preflight_done(),
-                _step_apply_done("fixture"),
-                ws,
-                _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-                _job_free_done("job-1"),
-            ]
-            # 13 checkpoints (each is a separate checkpoint operation, not paginated)
-            for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                snap_rows = _build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)
-                bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=snap_rows))
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            self.assertEqual(_chk(verdict, "PRF-02"), "pass")
+            v = _eval_records([_preflight_done()] + _step_segment("fixture"), td)
+            self.assertEqual(_chk(v, "PRF-02"), "pass", v["reasons"])
 
     def test_prf02_counts_mismatch_fails(self):
         """Observed counts != requested counts fails PRF-02."""
@@ -1782,84 +1815,22 @@ class TestSPerfOffline(unittest.TestCase):
     def test_prf05_fixture_below_floor_fails_immediately(self):
         """fixture step with fps_window_mean <= 35.0 fails PRF-05 immediately."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            ws = _window_start_done("fixture", job_id="job-1")
-            rows = _build_window_rows("fixture", fps_mean=30.0, fps_counter=30.0)
-            bridge = [
-                _preflight_done(),
-                _step_apply_done("fixture"),
-                ws,
-                _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-            ]
-            for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            self.assertEqual(_chk(verdict, "PRF-05"), "fail")
-            self.assertTrue(any("below floor" in r for r in verdict["reasons"]))
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", fps=30.0), td)
+            self.assertEqual(_chk(v, "PRF-05"), "fail")
+            self.assertTrue(any("below floor" in r for r in v["reasons"]))
 
     def test_prf05_base_below_floor_fails_immediately(self):
         """base step with fps_window_mean <= 35.0 fails PRF-05 immediately."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            ws = _window_start_done("base", job_id="job-1")
-            rows = _build_window_rows("base", fps_mean=30.0, fps_counter=30.0)
-            bridge = [
-                _preflight_done(),
-                _step_apply_done("base"),
-                ws,
-                _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-            ]
-            for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                bridge.append(_snap_done("base", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("base", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            self.assertEqual(_chk(verdict, "PRF-05"), "fail")
+            v = _eval_records([_preflight_done()] + _step_segment("base", fps=30.0), td)
+            self.assertEqual(_chk(v, "PRF-05"), "fail")
 
     def test_prf05_k_star_derivation_certified_budget(self):
         """k* derivation exports certified_budget metrics when all 4 steps valid (k*=3)."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            bridge = [_preflight_done()]
-            # All 4 steps with healthy windows (all > 35 FPS -> k*=3)
-            for s in STEP_ORDER:
-                ws = _window_start_done(s, job_id=f"job-{s}")
-                rows = _build_window_rows(s, fps_mean=51.0 if s == "fixture" else 44.0 if s == "inc1" else 38.5 if s == "inc2" else 58.0, fps_counter=51.0 if s == "fixture" else 44.0 if s == "inc1" else 38.5 if s == "inc2" else 58.0)
-                bridge.extend([
-                    _step_apply_done(s),
-                    ws,
-                    _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-                    _job_free_done(f"job-{s}"),
-                ])
-                for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            # Budget check at inc2 cap (k*=3) - build proper max_vals/cand_vals
-            spec = STEP_SPEC["inc2"]
-            max_vals = {
-                "max_objects_n": spec["objects_n"],
-                "max_infected_n": spec["infected_n"],
-                "max_animals_n": spec["animals_n"],
-                "max_actors_n": spec["actors_n"],
-                "max_wardrobe_per_actor_n": spec["wardrobe_per_actor_n"],
-                "max_children_n": spec["children_n"],
-                "max_combined_roots_n": spec["roots_n"],
-                "max_combined_entities_n": spec["entities_n"],
-            }
-            cand_vals = {
-                "cand_objects_n": spec["objects_n"],
-                "cand_infected_n": spec["infected_n"],
-                "cand_animals_n": spec["animals_n"],
-                "cand_actors_n": spec["actors_n"],
-                "cand_wardrobe_total_n": spec["children_n"],
-                "cand_wardrobe_max_per_actor_n": spec["wardrobe_per_actor_n"],
-                "cand_extra_children_n": 0,
-            }
-            bridge.append(_budget_check_done(accepted=True, max_vals=max_vals, cand_vals=cand_vals))
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            self.assertEqual(_chk(verdict, "PRF-05"), "pass")
-            self.assertIn("certified_budget", verdict["metrics"])
-            cb = verdict["metrics"]["certified_budget"]
+            v = _eval_records(_full_run(negatives=False), td)
+            self.assertEqual(_chk(v, "PRF-05"), "pass", v["reasons"])
+            cb = v["metrics"]["certified_budget"]
             self.assertEqual(cb["certified_step_id"], "inc2")
             self.assertEqual(cb["certified_step_index"], 3)
             self.assertEqual(cb["floor_fps"], 35.0)
@@ -1867,70 +1838,17 @@ class TestSPerfOffline(unittest.TestCase):
     def test_prf05_k_star_2_when_inc1_above_floor(self):
         """k* = 2 when fixture and inc1 > 35.0 but inc2 <= 35.0."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            bridge = [_preflight_done()]
-            fps_map = {"base": 58.0, "fixture": 51.0, "inc1": 44.0, "inc2": 30.0}
-            for s in STEP_ORDER:
-                ws = _window_start_done(s, job_id=f"job-{s}")
-                rows = _build_window_rows(s, fps_mean=fps_map[s], fps_counter=fps_map[s])
-                bridge.extend([
-                    _step_apply_done(s),
-                    ws,
-                    _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-                    _job_free_done(f"job-{s}"),
-                ])
-                for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            # Budget check at inc1 cap (k*=2) - build proper max_vals/cand_vals
-            spec = STEP_SPEC["inc1"]
-            max_vals = {
-                "max_objects_n": spec["objects_n"],
-                "max_infected_n": spec["infected_n"],
-                "max_animals_n": spec["animals_n"],
-                "max_actors_n": spec["actors_n"],
-                "max_wardrobe_per_actor_n": spec["wardrobe_per_actor_n"],
-                "max_children_n": spec["children_n"],
-                "max_combined_roots_n": spec["roots_n"],
-                "max_combined_entities_n": spec["entities_n"],
-            }
-            cand_vals = {
-                "cand_objects_n": spec["objects_n"],
-                "cand_infected_n": spec["infected_n"],
-                "cand_animals_n": spec["animals_n"],
-                "cand_actors_n": spec["actors_n"],
-                "cand_wardrobe_total_n": spec["children_n"],
-                "cand_wardrobe_max_per_actor_n": spec["wardrobe_per_actor_n"],
-                "cand_extra_children_n": 0,
-            }
-            bridge.append(_budget_check_done(accepted=True, max_vals=max_vals, cand_vals=cand_vals))
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            self.assertEqual(_chk(verdict, "PRF-05"), "pass")
-            cb = verdict["metrics"]["certified_budget"]
-            self.assertEqual(cb["certified_step_id"], "inc1")
-            self.assertEqual(cb["certified_step_index"], 2)
+            v = _eval_records(_full_run(fps={"inc2": 30.0}, negatives=False, budget_step="inc1"), td)
+            self.assertEqual(_chk(v, "PRF-05"), "pass", v["reasons"])
+            cb = v["metrics"]["certified_budget"]
+            self.assertEqual((cb["certified_step_id"], cb["certified_step_index"]), ("inc1", 2))
 
     def test_prf05_missing_budget_check_at_cap_fails(self):
         """Missing accepted perf_budget_check at certified cap fails PRF-05."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            bridge = [_preflight_done()]
-            for s in STEP_ORDER:
-                ws = _window_start_done(s, job_id=f"job-{s}")
-                rows = _build_window_rows(s, fps_mean=51.0 if s == "fixture" else 44.0 if s == "inc1" else 38.5 if s == "inc2" else 58.0, fps_counter=51.0 if s == "fixture" else 44.0 if s == "inc1" else 38.5 if s == "inc2" else 58.0)
-                bridge.extend([
-                    _step_apply_done(s),
-                    ws,
-                    _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-                    _job_free_done(f"job-{s}"),
-                ])
-                for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            # NO budget check at cap
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            self.assertEqual(_chk(verdict, "PRF-05"), "fail")
-            self.assertTrue(any("missing accepted perf_budget_check" in r for r in verdict["reasons"]))
+            v = _eval_records(_full_run(negatives=False, budget_step=None), td)
+            self.assertEqual(_chk(v, "PRF-05"), "fail")
+            self.assertTrue(any("missing accepted perf_budget_check" in r for r in v["reasons"]))
 
     # ==========================================================================
     # PRF-06: negative_guards_and_clean_teardown
@@ -2087,97 +2005,11 @@ class TestSPerfOffline(unittest.TestCase):
             self.assertTrue(any("census invariance broken" in r for r in verdict["reasons"]))
 
     def test_prf06_full_negative_battery_passes(self):
-        """Complete negative battery (N1a, N1b, N2, N4, N5x8, N6) with invariance passes PRF-06."""
+        """Complete negative battery (N1a, N1b, N2, N4, N5x8 anchored to the certified cap, N6 with
+        identities and closure) with invariance passes PRF-06 on an honest full run."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            bridge = [
-                _preflight_done(),
-                _step_apply_done("fixture"),
-            ]
-            # 13 checkpoints for the step (pre-N5 snapshots for census invariance)
-            for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            # N5 - all 8 with proper fixture max_vals/cand_vals
-            spec = STEP_SPEC["fixture"]
-            base_max_vals = {
-                "max_objects_n": spec["objects_n"],
-                "max_infected_n": spec["infected_n"],
-                "max_animals_n": spec["animals_n"],
-                "max_actors_n": spec["actors_n"],
-                "max_wardrobe_per_actor_n": spec["wardrobe_per_actor_n"],
-                "max_children_n": spec["children_n"],
-                "max_combined_roots_n": spec["roots_n"],
-                "max_combined_entities_n": spec["entities_n"],
-            }
-            for reason in N5_REQUIRED_REASONS:
-                cat = reason.split(":")[1]
-                max_vals = dict(base_max_vals)
-                # Base candidate at fixture limits (all categories at max)
-                cand_vals = {
-                    "cand_objects_n": spec["objects_n"],
-                    "cand_infected_n": spec["infected_n"],
-                    "cand_animals_n": spec["animals_n"],
-                    "cand_actors_n": spec["actors_n"],
-                    "cand_wardrobe_total_n": spec["children_n"],
-                    "cand_wardrobe_max_per_actor_n": spec["wardrobe_per_actor_n"],
-                    "cand_extra_children_n": 0,
-                }
-                if cat == "objects":
-                    cand_vals["cand_objects_n"] = max_vals["max_objects_n"] + 1
-                elif cat == "infected":
-                    cand_vals["cand_infected_n"] = max_vals["max_infected_n"] + 1
-                elif cat == "animals":
-                    cand_vals["cand_animals_n"] = max_vals["max_animals_n"] + 1
-                elif cat == "actors":
-                    cand_vals["cand_actors_n"] = max_vals["max_actors_n"] + 1
-                elif cat == "wardrobe_per_actor":
-                    cand_vals["cand_wardrobe_max_per_actor_n"] = max_vals["max_wardrobe_per_actor_n"] + 1
-                elif cat == "children_total":
-                    cand_vals["cand_extra_children_n"] = max_vals["max_children_n"] + 1
-                elif cat == "combined_roots":
-                    # Candidate: all categories at max (roots=35), but max_combined_roots_n=34
-                    max_vals["max_combined_roots_n"] = max_vals["max_combined_roots_n"] - 1
-                elif cat == "combined_entities":
-                    # Candidate: all categories at max (entities=45), but max_combined_entities_n=44
-                    max_vals["max_combined_entities_n"] = max_vals["max_combined_entities_n"] - 1
-                bridge.append(_budget_check_done(accepted=False, violation_path=reason, max_vals=max_vals, cand_vals=cand_vals))
-            # N2
-            bridge.append(_snap_rejected("fixture", peer="client"))
-            # N1a
-            ws_n1a = _window_start_done("fixture", job_id="job-n1a", expected_rows_n=1, warmup_ms=0, duration_ms=1000)
-            bridge.append(ws_n1a)
-            bridge.append(_job_read_done("job-n1a", rows_total_n=1, rows=_build_window_rows("fixture", n_rows=1)))
-            bridge.append(_job_free_done("job-n1a"))
-            # N1b
-            bridge.append(_window_start_rejected("fixture", req_expected_modset_sig="wrong"))
-            # N4
-            bridge.append(_preflight_rejected(reason="area_not_clear"))
-            # Post-N5, pre-N6 snapshot (for census invariance check)
-            bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=75000.0, rows=_build_snap_rows("fixture", cp_index=13, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            # N6 injection - mark both SeaChest (idx 0) and first actor (idx 33) with foreign_content_b=1
-            fixture_spec = STEP_SPEC["fixture"]
-            actor_foreign_idx = fixture_spec["objects_n"] + fixture_spec["infected_n"] + fixture_spec["animals_n"]  # 20+10+3=33
-            bridge.append(_snap_done("fixture", inject_foreign_cargo_b=1, foreign_injected_b=1, census_foreign_n=2, rows=_build_snap_rows("fixture", foreign_content_b=1, actor_foreign_idx=actor_foreign_idx)))
-            # Cleanup partial
-            bridge.append(_step_apply_done("cleanup", cleanup_status="partial_foreign_content", requested_counts={c: 0 for c in ("objects_n", "infected_n", "animals_n", "actors_n", "wardrobe_per_actor_n")}, alive_counts={"objects_alive_n": 1, "infected_alive_n": 0, "animals_alive_n": 0, "actors_alive_n": 1, "roots_alive_n": 2, "children_alive_n": 1, "entities_alive_n": 3}, director_orig_allow_damage_b=1, director_allow_damage_b=1, skipped_foreign_containers_n=2, preserved_ancestors_n=1))
-            # Cleanup snap - must show both SeaChest (idx 0) and actor (idx 33) as survivors
-            # Actor should have only 1 garment (the one with foreign cargo), so wardrobe_n=1
-            cleanup_snap_rows = _build_snap_rows("fixture", foreign_content_b=1, actor_foreign_idx=actor_foreign_idx)
-            # Modify actor's wardrobe_n to 1 (only the garment with foreign cargo)
-            for r in cleanup_snap_rows:
-                if r["entity_idx_n"] == actor_foreign_idx:
-                    r["wardrobe_n"] = 1
-                    break
-            # Filter to only the two survivors: SeaChest (idx 0) and actor (idx 33)
-            survivor_rows = [cleanup_snap_rows[0], cleanup_snap_rows[actor_foreign_idx]]
-            bridge.append(_snap_done("fixture", tick_ms=80000.0, counts={"roots_alive_n": 2, "children_alive_n": 1, "entities_alive_n": 3}, census_foreign_n=2, director_allow_damage_b=1, director_orig_allow_damage_b=1, rows=survivor_rows))
-            # Bench closure
-            bridge.append(_step_apply_done("cleanup", cleanup_status="clean", requested_counts={c: 0 for c in ("objects_n", "infected_n", "animals_n", "actors_n", "wardrobe_per_actor_n")}, alive_counts={"objects_alive_n": 0, "infected_alive_n": 0, "animals_alive_n": 0, "actors_alive_n": 0, "roots_alive_n": 0, "children_alive_n": 0, "entities_alive_n": 0}, director_orig_allow_damage_b=1, director_allow_damage_b=1))
-            bridge.append(_snap_done("fixture", tick_ms=85000.0, counts={"roots_alive_n": 0, "children_alive_n": 0, "entities_alive_n": 0}, census_dynamic_n=0, census_foreign_n=0, director_allow_damage_b=1, director_orig_allow_damage_b=1, rows=[]))
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            self.assertEqual(_chk(verdict, "PRF-06"), "pass")
-
+            v = _eval_records(_full_run(), td)
+            self.assertEqual(_chk(v, "PRF-06"), "pass", v["reasons"])
 
 # ==============================================================================
 # Honest full run and the format of the evidence (real core event log)
@@ -2265,7 +2097,7 @@ class TestEvidenceFormat(unittest.TestCase):
             all_ev = self._events()
             lost_ops = {e["op_id"] for e in all_ev if e["ev"] == "enq" and e["verb"] == "perf_step_apply"}
             ev = [e for e in all_ev if not (e["ev"] == "result" and e["op_id"] in lost_ops)]
-            ev += [{"ev": "lost", "t_ms": 5000.0, "op_id": o} for o in lost_ops]
+            ev += [{"ev": "lost", "t_ms": 9.0e6, "op_id": o} for o in lost_ops]
             v = self._eval_events(td, ev)
             self.assertEqual(v["exit_code"], INCONCLUSO)
 
@@ -2406,7 +2238,7 @@ class TestE9AntiFabrication(unittest.TestCase):
                                                 row_dicts=n["rows"]))
             v = _eval_records(bridge, td)
             self.assertEqual(_chk(v, "PRF-02"), "fail")
-            self.assertIn("checkpoint tick_ms spacing", _chk_detail(v, "PRF-02"))
+            self.assertIn("non-increasing checkpoint tick_ms", " | ".join(v["reasons"]))
 
     def test_snapshots_bunched_in_a_few_seconds_do_not_cover_the_window(self):
         with tempfile.TemporaryDirectory() as td:
@@ -2745,157 +2577,33 @@ class TestSection81Offline(unittest.TestCase):
     def test_k_star_derivation_fixture_only(self):
         """k* = 1 when only fixture > 35.0 and inc1 <= 35.0."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            bridge = [_preflight_done()]
-            fps_map = {"base": 58.0, "fixture": 51.0, "inc1": 30.0, "inc2": 30.0}
-            for s in STEP_ORDER:
-                ws = _window_start_done(s, job_id=f"job-{s}")
-                rows = _build_window_rows(s, fps_mean=fps_map[s], fps_counter=fps_map[s])
-                bridge.extend([
-                    _step_apply_done(s),
-                    ws,
-                    _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-                    _job_free_done(f"job-{s}"),
-                ])
-                for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            # Budget check at fixture cap (k*=1)
-            spec = STEP_SPEC["fixture"]
-            max_vals = {
-                "max_objects_n": spec["objects_n"],
-                "max_infected_n": spec["infected_n"],
-                "max_animals_n": spec["animals_n"],
-                "max_actors_n": spec["actors_n"],
-                "max_wardrobe_per_actor_n": spec["wardrobe_per_actor_n"],
-                "max_children_n": spec["children_n"],
-                "max_combined_roots_n": spec["roots_n"],
-                "max_combined_entities_n": spec["entities_n"],
-            }
-            cand_vals = {
-                "cand_objects_n": spec["objects_n"],
-                "cand_infected_n": spec["infected_n"],
-                "cand_animals_n": spec["animals_n"],
-                "cand_actors_n": spec["actors_n"],
-                "cand_wardrobe_total_n": spec["children_n"],
-                "cand_wardrobe_max_per_actor_n": spec["wardrobe_per_actor_n"],
-                "cand_extra_children_n": 0,
-            }
-            bridge.append(_budget_check_done(accepted=True, max_vals=max_vals, cand_vals=cand_vals))
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            self.assertEqual(_chk(verdict, "PRF-05"), "pass")
-            cb = verdict["metrics"]["certified_budget"]
-            self.assertEqual(cb["certified_step_id"], "fixture")
-            self.assertEqual(cb["certified_step_index"], 1)
+            v = _eval_records(_full_run(fps={'inc1': 30.0, 'inc2': 30.0}, negatives=False, budget_step="fixture"), td)
+            self.assertEqual(_chk(v, "PRF-05"), "pass", v["reasons"])
+            cb = v["metrics"]["certified_budget"]
+            self.assertEqual((cb["certified_step_id"], cb["certified_step_index"]), ("fixture", 1))
 
     def test_k_star_derivation_fixture_inc1(self):
         """k* = 2 when fixture and inc1 > 35.0, inc2 <= 35.0."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            bridge = [_preflight_done()]
-            fps_map = {"base": 58.0, "fixture": 51.0, "inc1": 44.0, "inc2": 30.0}
-            for s in STEP_ORDER:
-                ws = _window_start_done(s, job_id=f"job-{s}")
-                rows = _build_window_rows(s, fps_mean=fps_map[s], fps_counter=fps_map[s])
-                bridge.extend([
-                    _step_apply_done(s),
-                    ws,
-                    _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-                    _job_free_done(f"job-{s}"),
-                ])
-                for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            # Budget check at inc1 cap (k*=2)
-            spec = STEP_SPEC["inc1"]
-            max_vals = {
-                "max_objects_n": spec["objects_n"],
-                "max_infected_n": spec["infected_n"],
-                "max_animals_n": spec["animals_n"],
-                "max_actors_n": spec["actors_n"],
-                "max_wardrobe_per_actor_n": spec["wardrobe_per_actor_n"],
-                "max_children_n": spec["children_n"],
-                "max_combined_roots_n": spec["roots_n"],
-                "max_combined_entities_n": spec["entities_n"],
-            }
-            cand_vals = {
-                "cand_objects_n": spec["objects_n"],
-                "cand_infected_n": spec["infected_n"],
-                "cand_animals_n": spec["animals_n"],
-                "cand_actors_n": spec["actors_n"],
-                "cand_wardrobe_total_n": spec["children_n"],
-                "cand_wardrobe_max_per_actor_n": spec["wardrobe_per_actor_n"],
-                "cand_extra_children_n": 0,
-            }
-            bridge.append(_budget_check_done(accepted=True, max_vals=max_vals, cand_vals=cand_vals))
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            cb = verdict["metrics"]["certified_budget"]
-            self.assertEqual(cb["certified_step_id"], "inc1")
-            self.assertEqual(cb["certified_step_index"], 2)
+            v = _eval_records(_full_run(fps={'inc2': 30.0}, negatives=False, budget_step="inc1"), td)
+            self.assertEqual(_chk(v, "PRF-05"), "pass", v["reasons"])
+            cb = v["metrics"]["certified_budget"]
+            self.assertEqual((cb["certified_step_id"], cb["certified_step_index"]), ("inc1", 2))
 
     def test_k_star_derivation_all_three(self):
         """k* = 3 when all three load steps > 35.0."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            bridge = [_preflight_done()]
-            fps_map = {"base": 58.0, "fixture": 51.0, "inc1": 44.0, "inc2": 38.5}
-            for s in STEP_ORDER:
-                ws = _window_start_done(s, job_id=f"job-{s}")
-                rows = _build_window_rows(s, fps_mean=fps_map[s], fps_counter=fps_map[s])
-                bridge.extend([
-                    _step_apply_done(s),
-                    ws,
-                    _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-                    _job_free_done(f"job-{s}"),
-                ])
-                for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            # Budget check at inc2 cap (k*=3)
-            spec = STEP_SPEC["inc2"]
-            max_vals = {
-                "max_objects_n": spec["objects_n"],
-                "max_infected_n": spec["infected_n"],
-                "max_animals_n": spec["animals_n"],
-                "max_actors_n": spec["actors_n"],
-                "max_wardrobe_per_actor_n": spec["wardrobe_per_actor_n"],
-                "max_children_n": spec["children_n"],
-                "max_combined_roots_n": spec["roots_n"],
-                "max_combined_entities_n": spec["entities_n"],
-            }
-            cand_vals = {
-                "cand_objects_n": spec["objects_n"],
-                "cand_infected_n": spec["infected_n"],
-                "cand_animals_n": spec["animals_n"],
-                "cand_actors_n": spec["actors_n"],
-                "cand_wardrobe_total_n": spec["children_n"],
-                "cand_wardrobe_max_per_actor_n": spec["wardrobe_per_actor_n"],
-                "cand_extra_children_n": 0,
-            }
-            bridge.append(_budget_check_done(accepted=True, max_vals=max_vals, cand_vals=cand_vals))
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            cb = verdict["metrics"]["certified_budget"]
-            self.assertEqual(cb["certified_step_id"], "inc2")
-            self.assertEqual(cb["certified_step_index"], 3)
+            v = _eval_records(_full_run(fps={}, negatives=False, budget_step="inc2"), td)
+            self.assertEqual(_chk(v, "PRF-05"), "pass", v["reasons"])
+            cb = v["metrics"]["certified_budget"]
+            self.assertEqual((cb["certified_step_id"], cb["certified_step_index"]), ("inc2", 3))
 
     def test_k_star_fixture_below_floor_blocks_f1(self):
         """fixture <= 35.0 -> PRF-05 fail (blocks F1 per brief)."""
         with tempfile.TemporaryDirectory() as td:
-            part = Path(td) / "part"
-            ws = _window_start_done("fixture", job_id="job-1")
-            rows = _build_window_rows("fixture", fps_mean=30.0, fps_counter=30.0)
-            bridge = [
-                _preflight_done(),
-                _step_apply_done("fixture"),
-                ws,
-                _job_read_done("job-1", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
-            ]
-            for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture")))
-            _write_part(part, bridge)
-            verdict = s_perf_eval.evaluate(part)
-            self.assertEqual(_chk(verdict, "PRF-05"), "fail")
-            self.assertEqual(verdict["exit_code"], FALLA)
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", fps=30.0), td)
+            self.assertEqual(_chk(v, "PRF-05"), "fail")
+            self.assertEqual(v["exit_code"], FALLA)
 
     def test_n5_8_subcases_individual(self):
         """Each of the 8 N5 subcases tested individually."""
@@ -3131,7 +2839,10 @@ def _unpack_result(ev: dict) -> dict | None:
     body = ev.get("result") or {}
     rd = body.get("read") or {}
     if body.get("status") == "done" and rd.get("has") == ["payload"]:
-        return wire.unpack_payload(rd)
+        try:
+            return wire.unpack_payload(rd)
+        except ValueError:  # a result without a wire payload (e.g. job_free): nothing to unpack
+            return None
     return None
 
 
@@ -3181,9 +2892,17 @@ def _unpack_any(obj):
 
 
 def _order_violations(reg: _Register) -> list[str]:
-    """Every order the runner enqueued must be a valid order: instance, ttl, issued_ms, op_id, args, qa_fault."""
+    """Every order must be PRESENT for its enqueue event and VALID at delivery (MEN 15): instance, ttl,
+    issued_ms, op_id, args, qa_fault, and `delivered - issued_ms < ttl_ms` (an expired order is rejected
+    by the peer, so it cannot count as traffic that happened)."""
     out: list[str] = []
     for name, slot in reg.parts.items():
+        enq_ids = {e["op_id"] for e in slot["events"] if e.get("ev") == "enq"}
+        order_ids = {o["op_id"] for o in slot["orders"]}
+        deliver_t = {e["op_id"]: e["t_ms"] for e in slot["events"] if e.get("ev") == "deliver"}
+        gone = {e["op_id"] for e in slot["events"] if e.get("ev") in ("expire", "lost")}
+        for oid in sorted(enq_ids - order_ids):
+            out.append(f"{name}/{oid}: enq event with no registered order")
         for o in slot["orders"]:
             tag = f"{name}/{o['verb']}/{o['op_id']}"
             if not isinstance(o["inst"], str) or not o["inst"] or o["inst"] != o["registered_inst"]:
@@ -3193,6 +2912,11 @@ def _order_violations(reg: _Register) -> list[str]:
             im = o["issued_ms"]
             if not isinstance(im, (int, float)) or isinstance(im, bool) or not math.isfinite(im) or im > o["now_ms"] + 1.0:
                 out.append(f"{tag}: issued_ms {im!r}")
+            elif isinstance(o["ttl_ms"], int) and not isinstance(o["ttl_ms"], bool):
+                if o["op_id"] not in deliver_t:
+                    out.append(f"{tag}: order never delivered" + (" (expired or lost)" if o["op_id"] in gone else ""))
+                elif deliver_t[o["op_id"]] - im >= o["ttl_ms"]:
+                    out.append(f"{tag}: order expired at delivery (age {deliver_t[o['op_id']] - im:.0f} ms >= ttl {o['ttl_ms']} ms)")
             if not isinstance(o["op_id"], str) or not NONCE_OP_RE.match(o["op_id"]) or not o["op_id"].startswith(o["nonce"] + "-"):
                 out.append(f"{tag}: op_id is not <nonce16>-<n> of this part")
             try:
@@ -3209,10 +2933,10 @@ def _order_violations(reg: _Register) -> list[str]:
 GATE_ARGV = ["spike", "S-perf", "--both", "--build", "offline"]
 
 
-def _run_gate(evidence: Path):
+def _run_gate(evidence: Path, env: dict | None = None, extra_argv: list | None = None):
     import m1_gate
-    with _witnessed() as reg:
-        rc = m1_gate.main(GATE_ARGV + ["--evidence", str(evidence)])
+    with mock.patch.dict(os.environ, env or {}), _witnessed() as reg:
+        rc = m1_gate.main(GATE_ARGV + (extra_argv or []) + ["--evidence", str(evidence)])
     return rc, reg
 
 
@@ -3253,6 +2977,665 @@ class TestSyntheticRunnerIsDetected(unittest.TestCase):
 
 
 # ==============================================================================
+# Sol round 1 (14 BLOQ + 2 MEN): each reproduction is a regression. Fabrications must give
+# FALLA or INCONCLUSO, never PASA, and for the check and the reason that matter.
+# BLOQ 3 (the register also records traces fabricated by the runner) is NOT handled here: it is
+# closed for every oracle by the common witness qa/tests/e2e_witness.py (branch claude/e2e-testigo),
+# which captures the traffic at its origin; the orchestrator swaps it in for `_witnessed`.
+# ==============================================================================
+
+def _detail_all(v: dict) -> str:
+    return " | ".join(v["reasons"])
+
+
+def _not_pasa(tc: unittest.TestCase, v: dict) -> None:
+    tc.assertNotEqual(v["exit_code"], PASA, v["reasons"][:4])
+    tc.assertNotEqual(set(_statuses(v).values()), {"pass"})
+
+
+class TestSol1Regressions(unittest.TestCase):
+    def setUp(self):
+        self.maxDiff = None
+
+    # -- BLOQ 1: state and marks only from the raw job_read results ----------------------------
+    def test_sol1_01_polls_file_cannot_turn_an_expired_job_into_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            part = Path(td) / "part"
+            seg = _step_segment("fixture", read_kwargs={"state": "expired"})
+            _write_part(part, [_preflight_done()] + seg, extra_samples={
+                "step_fixture_polls.jsonl": [{"h_ms": 1000.0 + 2000.0 * i, "state": "done", "rows_total_n": 61,
+                                              "end_tick_ms": 1.0, "onjobend_tick_ms": 2.0, "released_tick_ms": 3.0}
+                                             for i in range(40)]})
+            v = s_perf_eval.evaluate(part)
+            self.assertEqual(v["exit_code"], INCONCLUSO, v["reasons"][:4])
+            self.assertNotEqual(_chk(v, "PRF-03"), "pass")
+            self.assertIn("state='expired'", _detail_all(v))
+
+    def test_sol1_01_polls_file_cannot_supply_the_job_marks(self):
+        """The raw terminal read has marks in the wrong order; a polls file with good ones does not repair it."""
+        with tempfile.TemporaryDirectory() as td:
+            part = Path(td) / "part"
+            rows = _build_window_rows("fixture")
+            seg = _step_segment("fixture", rows=rows, read_kwargs={
+                "end_tick_ms": rows[-1]["tick_ms"] - 5000.0, "onjobend_tick_ms": rows[-1]["tick_ms"] - 4000.0,
+                "released_tick_ms": rows[-1]["tick_ms"] - 3000.0})
+            _write_part(part, [_preflight_done()] + seg, extra_samples={
+                "step_fixture_polls.jsonl": [{"h_ms": 1.0, "end_tick_ms": rows[-1]["tick_ms"] + 100.0,
+                                              "onjobend_tick_ms": rows[-1]["tick_ms"] + 200.0,
+                                              "released_tick_ms": rows[-1]["tick_ms"] + 300.0, "state": "done"}]})
+            v = s_perf_eval.evaluate(part)
+            self.assertEqual(_chk(v, "PRF-03"), "fail")
+            self.assertIn("invalid job lifecycle order", _chk_detail(v, "PRF-03"))
+            self.assertEqual(v["exit_code"], FALLA)
+
+    # -- BLOQ 2: harness-clock drift anchored to the window and credited by the core ---------------
+    def test_sol1_02_no_polls_file_is_needed_and_honest_polls_from_startup_do_not_fail(self):
+        with tempfile.TemporaryDirectory() as td:
+            part = Path(td) / "part"
+            recs = _full_run()
+            _write_part(part, recs, extra_samples={
+                # polls from the start of the job: 30 s warm-up + 60 s measured (90 s), not the window
+                "step_fixture_polls.jsonl": [{"h_ms": 241000.0 + 2000.0 * i} for i in range(46)]})
+            v = s_perf_eval.evaluate(part)
+            self.assertEqual(v["exit_code"], PASA, v["reasons"][:4])
+            self.assertEqual(set(_statuses(v).values()), {"pass"})
+            v2 = _eval_records(recs, td, "no_polls")
+            self.assertEqual(v2["exit_code"], PASA, v2["reasons"][:4])
+
+    def test_sol1_02_without_checkpoints_the_drift_is_missing_never_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", n_snaps=0), td)
+            self.assertNotEqual(_chk(v, "PRF-04"), "pass")
+            self.assertEqual(_chk(v, "PRF-04"), "missing")
+            self.assertEqual(_chk(v, "PRF-02"), "fail")
+            _not_pasa(self, v)
+
+    def test_sol1_02_checkpoints_that_do_not_cover_the_window_cannot_credit_the_drift(self):
+        with tempfile.TemporaryDirectory() as td:
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", snap_ticks=[i * 2000.0 for i in range(13)]), td)
+            self.assertNotEqual(_chk(v, "PRF-04"), "pass")
+            _not_pasa(self, v)
+
+    def test_sol1_02_drift_is_judged_on_the_equivalent_interval(self):
+        with tempfile.TemporaryDirectory() as td:
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", h_scale=0.8), td)
+            self.assertEqual(_chk(v, "PRF-04"), "fail")
+            self.assertIn("harness clock drift", _chk_detail(v, "PRF-04"))
+
+    # -- BLOQ 4: per-category counts with unique identities ------------------------------------
+    def test_sol1_04_static_objects_sharing_index_zero_fail(self):
+        with tempfile.TemporaryDirectory() as td:
+            def snaps(cp):
+                rows = _build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)
+                for r in rows:
+                    if r["kind_code_n"] == 1:
+                        r["entity_idx_n"] = 0
+                return rows
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", snap_rows=snaps), td)
+            self.assertEqual(_chk(v, "PRF-02"), "fail")
+            self.assertIn("duplicate entity_idx_n", _chk_detail(v, "PRF-02"))
+            self.assertEqual(v["exit_code"], FALLA)
+
+    def test_sol1_04_all_animals_turned_into_infected_fail_on_the_category_counts(self):
+        with tempfile.TemporaryDirectory() as td:
+            def snaps(cp):
+                rows = _build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)
+                for r in rows:
+                    if r["kind_code_n"] == 3:
+                        r["kind_code_n"] = 2
+                return rows
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", snap_rows=snaps), td)
+            self.assertEqual(_chk(v, "PRF-02"), "fail")
+            self.assertIn("kind 2 rows=13 != 10", _chk_detail(v, "PRF-02"))
+            self.assertEqual(v["exit_code"], FALLA)
+
+    def test_sol1_04_header_counts_must_match_the_reconstruction_from_rows(self):
+        with tempfile.TemporaryDirectory() as td:
+            bridge = [_preflight_done()] + _step_segment("fixture")
+            for b in bridge:
+                if b["verb"] == "perf_snap":
+                    n = wire.unpack_payload({k: b["read"][k] for k in wire.PAYLOAD_KEYS})
+                    n["num"]["animals_alive_n"], n["num"]["infected_alive_n"] = 0, 13
+                    b["read"].update(_pack_payload(scalars_str=n["str"], scalars_num=n["num"], num_cols=list(SNAP_NCOL),
+                                                   row_dicts=n["rows"]))
+            v = _eval_records(bridge, td)
+            self.assertEqual(_chk(v, "PRF-02"), "fail")
+            self.assertIn("header infected_alive_n=13 != 10 rows of kind 2", _chk_detail(v, "PRF-02"))
+
+    def test_sol1_04_identities_must_be_stable_across_checkpoints(self):
+        with tempfile.TemporaryDirectory() as td:
+            def snaps(cp):
+                rows = _build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)
+                if cp >= 6:
+                    for r in rows:
+                        if r["kind_code_n"] == 1:
+                            r["entity_idx_n"] += 500
+                return rows
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", snap_rows=snaps), td)
+            self.assertEqual(_chk(v, "PRF-02"), "fail")
+            self.assertIn("identities changes", _chk_detail(v, "PRF-02"))
+
+    # -- BLOQ 5: activity bound to the measured window by server time --------------------------
+    def test_sol1_05_snapshots_shifted_a_million_ms_off_the_window_fail(self):
+        with tempfile.TemporaryDirectory() as td:
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", snap_tick_shift=1_000_000.0), td)
+            self.assertEqual(_chk(v, "PRF-02"), "fail")
+            self.assertIn("outside the measured window", _chk_detail(v, "PRF-02"))
+            self.assertEqual(v["exit_code"], FALLA)
+
+    def test_sol1_05_quarters_are_temporal_not_index_ranges(self):
+        """Uneven checkpoint spacing: a roam actor whose 5 s sub-steps are 1.7 m early and 0.7 m late.
+        By index every group of 3 sub-steps clears 2.0 m; by server time quarter 3 only gets ~1 m."""
+        offsets = [0.0, 2600.0, 5200.0, 7800.0, 10400.0, 13000.0, 15600.0, 18200.0, 20800.0,
+                   30400.0, 40200.0, 50200.0, 60000.0]
+
+        def snaps(cp):
+            rows = _build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)
+            for r in rows:
+                if r["kind_code_n"] == 4 and r["role_code_n"] == 1:
+                    steps = [1.7 if i < 8 else 0.7 for i in range(cp)]
+                    r["pos_x_m"], r["pos_z_m"] = 7508.0 + sum(steps), 7470.0
+                    r["wp_legs_n"] = cp // 3
+                if r["kind_code_n"] == 4 and r["role_code_n"] == 2:
+                    r["emote_completions_n"] = int(offsets[cp] // 9000.0)
+                    r["emote_active_ticks_n"] = cp * 30
+                if r["kind_code_n"] in (2, 3):  # creatures drift 5 cm/s in server time
+                    r["pos_x_m"] = 7500.0 + 0.05 * offsets[cp] / 1000.0
+            return rows
+        with tempfile.TemporaryDirectory() as td:
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", snap_rows=snaps, snap_ticks=offsets), td)
+            self.assertEqual(_chk(v, "PRF-02"), "fail", v["reasons"][:3])
+            self.assertIn("roam actor", _chk_detail(v, "PRF-02"))
+            self.assertIn("Q3 displacement", _chk_detail(v, "PRF-02"))
+
+    # -- BLOQ 6: the sampler resource is contractual on every successful start --------------------
+    def test_sol1_06_first_job_with_an_unlocked_label_cannot_hide_the_concurrency(self):
+        with tempfile.TemporaryDirectory() as td:
+            rows = _build_window_rows("fixture")
+            bridge = [_preflight_done(), _step_apply_done("fixture", tick_ms=9000.0),
+                      _window_start_done("fixture", job_id="job-1", resource="unlocked", start_tick_ms=10000.0),
+                      _window_start_done("fixture", job_id="job-2", start_tick_ms=10000.0),
+                      _job_read_done("job-1", rows=rows, rows_total_n=61, **_window_marks(rows)),
+                      _job_read_done("job-2", rows=rows, rows_total_n=61, **_window_marks(rows))]
+            v = _eval_records(bridge, td)
+            self.assertEqual(_chk(v, "PRF-03"), "fail")
+            self.assertIn("concurrent perf_sampler job", _detail_all(v))
+            self.assertIn("contractual 'perf_sampler'", _detail_all(v))
+
+    def test_sol1_06_a_single_start_without_the_contractual_resource_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            seg = _step_segment("fixture")
+            seg[[i for i, r in enumerate(seg) if r["verb"] == "perf_window_start"][0]] = _window_start_done(
+                "fixture", job_id="job-fixture", resource="", start_tick_ms=210000.0)
+            v = _eval_records([_preflight_done()] + seg, td)
+            self.assertEqual(_chk(v, "PRF-03"), "fail")
+            self.assertIn("not the contractual 'perf_sampler'", _chk_detail(v, "PRF-03"))
+
+    # -- BLOQ 7: every present operation is evaluated -------------------------------------------
+    def test_sol1_07_a_bad_apply_followed_by_a_correct_one_still_fails(self):
+        bad = {"objects_alive_n": 0, "infected_alive_n": 0, "animals_alive_n": 0, "actors_alive_n": 0,
+               "roots_alive_n": 999, "children_alive_n": 0, "entities_alive_n": 999}
+        for order in ("bad_first", "bad_last"):
+            with self.subTest(order=order), tempfile.TemporaryDirectory() as td:
+                good = _step_segment("base")
+                bad_apply = [_step_apply_done("base", alive_counts=bad, tick_ms=1500.0)]
+                seg = bad_apply + good if order == "bad_first" else good + bad_apply
+                v = _eval_records(_full_run(segs={"base": seg}), td)
+                self.assertEqual(_chk(v, "PRF-02"), "fail")
+                self.assertIn("roots_alive_n=999", _chk_detail(v, "PRF-02"))
+                self.assertEqual(v["exit_code"], FALLA)
+
+    def test_sol1_07_two_cycles_are_distinguished_and_both_evaluated(self):
+        """A second cycle (preflight .. cleanup) repeating a step does not erase the first one's violation."""
+        with tempfile.TemporaryDirectory() as td:
+            bad = _step_apply_done("fixture", alive_counts={"objects_alive_n": 20, "infected_alive_n": 10, "animals_alive_n": 3,
+                                                           "actors_alive_n": 2, "roots_alive_n": 34, "children_alive_n": 10,
+                                                           "entities_alive_n": 44})
+            cyc1 = [_preflight_done(director_orig_allow_damage_b=1), bad,
+                    _step_apply_done("cleanup", cleanup_status="clean", director_orig_allow_damage_b=1, director_allow_damage_b=1)]
+            cyc2 = [_preflight_done(director_orig_allow_damage_b=0), _step_apply_done("fixture", director_orig_allow_damage_b=0),
+                    _step_apply_done("cleanup", cleanup_status="clean", director_orig_allow_damage_b=0, director_allow_damage_b=0)]
+            v = _eval_records(cyc1 + cyc2, td)
+            self.assertEqual(_chk(v, "PRF-02"), "fail")
+            self.assertIn("roots_alive_n=34", _chk_detail(v, "PRF-02"))
+
+    # -- BLOQ 8: the approved floor applies to fps_window_mean only ------------------------------
+    def test_sol1_08_honest_mean_35_5_with_counter_34_is_pasa(self):
+        with tempfile.TemporaryDirectory() as td:
+            rows = _build_window_rows("fixture", fps_mean=35.5, fps_counter=34.0, start_tick_ms=240000.0)
+            for r in rows:
+                r["avg_fps"] = 35.5
+            v = _eval_records(_full_run(segs={"fixture": _step_segment("fixture", rows=rows)}), td)
+            self.assertEqual(v["exit_code"], PASA, v["reasons"][:4])
+            self.assertEqual(set(_statuses(v).values()), {"pass"})
+            m = v["metrics"]["step_fps"]["fixture"]
+            self.assertEqual(m["fps_window_mean"], 35.5)
+            self.assertAlmostEqual(m["fps_frame_counter"], 34.0, delta=0.05)
+            self.assertEqual(v["metrics"]["certified_budget"]["certified_step_index"], 3)
+
+    def test_sol1_08_the_floor_uses_the_unrounded_mean(self):
+        with tempfile.TemporaryDirectory() as td:
+            rows = _build_window_rows("fixture", fps_mean=35.00004, fps_counter=35.0, start_tick_ms=240000.0)
+            for r in rows:
+                r["avg_fps"] = 35.00004  # rounds to 35.0 at 4 decimals: decided before rounding it is > 35.0
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", rows=rows), td)
+            self.assertNotIn("below floor", _detail_all(v))
+            rows2 = _build_window_rows("fixture", fps_mean=35.0, fps_counter=35.0, start_tick_ms=240000.0)
+            for r in rows2:
+                r["avg_fps"] = 35.0
+            v2 = _eval_records([_preflight_done()] + _step_segment("fixture", rows=rows2), td, "exact")
+            self.assertEqual(_chk(v2, "PRF-05"), "fail")  # exactly the floor is not above it
+            self.assertIn("below floor", _detail_all(v2))
+
+    def test_sol1_08_the_floor_is_judged_after_the_agreement_is_validated(self):
+        with tempfile.TemporaryDirectory() as td:
+            v = _eval_records([_preflight_done()] + _step_segment("fixture", rows=_build_window_rows(
+                "fixture", fps_mean=60.0, fps_counter=30.0, start_tick_ms=240000.0)), td)
+            self.assertEqual(_chk(v, "PRF-04"), "fail")
+            self.assertNotEqual(_chk(v, "PRF-05"), "pass")
+
+    # -- BLOQ 9: N4 is mandatory ----------------------------------------------------------------
+    def test_sol1_09_removing_only_n4_from_a_full_run_is_not_pasa(self):
+        with tempfile.TemporaryDirectory() as td:
+            v = _eval_records(_full_run(neg_kw={"n4": False}), td)
+            self.assertNotEqual(v["exit_code"], PASA)
+            self.assertEqual(_chk(v, "PRF-06"), "missing")
+            self.assertIn("N4", _detail_all(v))
+            self.assertEqual(_statuses(v)["PRF-05"], "pass")  # nothing else moved
+
+    def test_sol1_09_n4_must_be_the_canonical_request_and_inside_the_invariance_window(self):
+        with tempfile.TemporaryDirectory() as td:
+            recs = _full_run()
+            i = next(i for i, r in enumerate(recs) if r["verb"] == "perf_preflight" and r["read"]["status"] == "rejected"
+                     and r["read"]["reason"] == "area_not_clear")
+            recs[i] = _preflight_rejected(reason="area_not_clear", req_expected_modset_sig="another-seal")
+            v = _eval_records(recs, td)
+            self.assertEqual(_chk(v, "PRF-06"), "fail")
+            self.assertIn("N4 area_not_clear stimulus is not the canonical", _chk_detail(v, "PRF-06"))
+            recs = _full_run()
+            i = next(i for i, r in enumerate(recs) if r["verb"] == "perf_preflight" and r["read"]["status"] == "rejected"
+                     and r["read"]["reason"] == "area_not_clear")
+            n4 = recs.pop(i)
+            j = next(j for j, r in enumerate(recs) if r["verb"] == "perf_snap" and r["args"] and
+                     wire.unpack_payload(r["args"])["num"].get("inject_foreign_cargo_b") == 1)
+            recs.insert(j, n4)  # after the post-N5 snapshot: its zero effects are not covered
+            v = _eval_records(recs, td, "late")
+            self.assertEqual(_chk(v, "PRF-06"), "fail")
+            self.assertIn("census invariance not shown", _chk_detail(v, "PRF-06"))
+
+    # -- BLOQ 10: N5 anchored to the certified budget -------------------------------------------
+    def test_sol1_10_eight_negatives_against_k1_with_certificate_k3_do_not_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            v = _eval_records(_full_run(neg_kw={"n5_step": "fixture"}), td)
+            self.assertEqual(_chk(v, "PRF-05"), "pass")
+            self.assertEqual(_chk(v, "PRF-06"), "fail")
+            self.assertEqual(v["exit_code"], FALLA)
+            self.assertIn("not anchored to the certified budget 'inc2'", _detail_all(v))
+            self.assertIn("max_objects_n=20 != 40", _detail_all(v))
+
+    def test_sol1_10_every_one_of_the_eight_is_anchored_individually(self):
+        cap = STEP_SPEC["inc2"]
+        stim = {reason: (mx, cand) for reason, mx, cand in _n5_stimuli("inc2")}
+        for reason in N5_REQUIRED_REASONS:
+            mx, cand = stim[reason]
+            req = {**mx, **cand}
+            self.assertIsNone(s_perf_eval.n5_stimulus_matches(reason, req, cap), reason)
+            wrong = {**req, "max_infected_n": req["max_infected_n"] - 1}
+            self.assertIsNotNone(s_perf_eval.n5_stimulus_matches(reason, wrong, cap), reason)
+        # the stimulus must violate ONLY its guard, by exactly one unit
+        mx, cand = stim["budget_exceeded:objects"]
+        self.assertIsNotNone(s_perf_eval.n5_stimulus_matches("budget_exceeded:objects", {**mx, **cand, "cand_infected_n": 21}, cap))
+        self.assertIsNotNone(s_perf_eval.n5_stimulus_matches("budget_exceeded:objects", {**mx, **cand, "cand_objects_n": 45}, cap))
+        # the two combined limits are modified by exactly one unit and independently
+        mx, cand = stim["budget_exceeded:combined_roots"]
+        self.assertEqual((mx["max_combined_roots_n"], mx["max_combined_entities_n"]), (cap["roots_n"] - 1, cap["entities_n"]))
+        mx, cand = stim["budget_exceeded:combined_entities"]
+        self.assertEqual((mx["max_combined_roots_n"], mx["max_combined_entities_n"]), (cap["roots_n"], cap["entities_n"] - 1))
+
+    # -- BLOQ 11: N6 preserves the ORIGINALS, observed by stable identities -----------------------
+    def _n6_run(self, td, **neg_kw):
+        return _eval_records(_full_run(neg_kw=neg_kw), td)
+
+    def test_sol1_11_changing_the_survivors_indexes_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            recs = _full_run()
+            snaps = [r for r in recs if r["verb"] == "perf_snap" and r["read"]["status"] == "done"]
+            cleanup_snap = next(r for r in snaps if len(wire.unpack_payload({k: r["read"][k] for k in wire.PAYLOAD_KEYS})["rows"]) == 2
+                                and wire.unpack_payload({k: r["read"][k] for k in wire.PAYLOAD_KEYS})["num"]["census_foreign_n"] == 2)
+            n = wire.unpack_payload({k: cleanup_snap["read"][k] for k in wire.PAYLOAD_KEYS})
+            for r in n["rows"]:
+                r["entity_idx_n"] += 100
+            cleanup_snap["read"].update(_pack_payload(scalars_str=n["str"], scalars_num=n["num"], num_cols=list(SNAP_NCOL), row_dicts=n["rows"]))
+            v = _eval_records(recs, td)
+            self.assertEqual(_chk(v, "PRF-06"), "fail")
+            self.assertIn("are not the observed identities", _chk_detail(v, "PRF-06"))
+            self.assertEqual(v["exit_code"], FALLA)
+
+    def test_sol1_11_destroyed_foreign_content_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            v = self._n6_run(td, rag_sig_after=0.0)
+            self.assertEqual(_chk(v, "PRF-06"), "fail")
+            self.assertIn("destroyed or substituted", _chk_detail(v, "PRF-06"))
+
+    def test_sol1_11_substituted_foreign_content_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            v = self._n6_run(td, rag_sig_after=FOREIGN_SIG + 1.0)
+            self.assertEqual(_chk(v, "PRF-06"), "fail")
+            self.assertIn("destroyed or substituted", _chk_detail(v, "PRF-06"))
+            self.assertIn(f"{FOREIGN_SIG + 1.0}", _chk_detail(v, "PRF-06"))
+
+    def test_sol1_11_the_injection_must_identify_both_rag(self):
+        with tempfile.TemporaryDirectory() as td:
+            recs = _full_run()
+            inj = next(r for r in recs if r["verb"] == "perf_snap" and r["read"]["status"] == "done" and
+                       wire.unpack_payload({k: r["read"][k] for k in wire.PAYLOAD_KEYS})["num"]["foreign_injected_b"] == 1)
+            n = wire.unpack_payload({k: inj["read"][k] for k in wire.PAYLOAD_KEYS})
+            n["num"]["foreign_sig_n"] = 0.0
+            inj["read"].update(_pack_payload(scalars_str=n["str"], scalars_num=n["num"], num_cols=list(SNAP_NCOL), row_dicts=n["rows"]))
+            v = _eval_records(recs, td)
+            self.assertEqual(_chk(v, "PRF-06"), "fail")
+            self.assertIn("no foreign_sig_n identity", _chk_detail(v, "PRF-06"))
+
+    # -- BLOQ 12: the bench closure is mandatory ------------------------------------------------
+    def _drop(self, td, predicate, name):
+        recs = _full_run()
+        keep = [r for r in recs if not predicate(r)]
+        self.assertLess(len(keep), len(recs))
+        return _eval_records(keep, td, name)
+
+    def test_sol1_12_removing_the_last_cleanup_and_the_final_snapshot_is_not_pasa(self):
+        with tempfile.TemporaryDirectory() as td:
+            recs = _full_run()
+            last_cleanup = max(i for i, r in enumerate(recs) if r["verb"] == "perf_step_apply")
+            keep = recs[:last_cleanup]  # closing cleanup AND final snapshot are the last two operations
+            v = _eval_records(keep, td)
+            self.assertEqual(_chk(v, "PRF-06"), "fail")
+            self.assertIn("N6 closure", _chk_detail(v, "PRF-06"))
+            self.assertEqual(v["exit_code"], FALLA)
+
+    def test_sol1_12_each_closure_piece_is_required(self):
+        with tempfile.TemporaryDirectory() as td:
+            recs = _full_run()
+            last = len(recs) - 1
+            cases = {
+                "final snapshot": [r for i, r in enumerate(recs) if i != last],
+                "retirement confirmation": [r for i, r in enumerate(recs) if i != last - 2],
+                "closing cleanup": [r for i, r in enumerate(recs) if i != last - 1],
+            }
+            for name, keep in cases.items():
+                with self.subTest(missing=name):
+                    v = _eval_records(keep, td, name.replace(" ", "_"))
+                    self.assertEqual(_chk(v, "PRF-06"), "fail", name)
+                    self.assertNotEqual(v["exit_code"], PASA)
+
+    def test_sol1_12_retirement_must_leave_no_foreign_flag_nor_census(self):
+        with tempfile.TemporaryDirectory() as td:
+            recs = _full_run()
+            conf = recs[len(recs) - 3]
+            n = wire.unpack_payload({k: conf["read"][k] for k in wire.PAYLOAD_KEYS})
+            n["num"]["census_foreign_n"] = 1
+            conf["read"].update(_pack_payload(scalars_str=n["str"], scalars_num=n["num"], num_cols=list(SNAP_NCOL), row_dicts=n["rows"]))
+            v = _eval_records(recs, td)
+            self.assertEqual(_chk(v, "PRF-06"), "fail")
+            self.assertIn("retirement not confirmed", _chk_detail(v, "PRF-06"))
+
+    # -- BLOQ 13: the S3 regime needs evidence of its use ---------------------------------------
+    def test_sol1_13_a_full_run_without_any_act_order_cannot_certify_the_profile(self):
+        with tempfile.TemporaryDirectory() as td:
+            v = _eval_records(_full_run(acts=False), td)
+            self.assertNotEqual(v["exit_code"], PASA)
+            self.assertNotEqual(_chk(v, "PRF-02"), "pass")
+            self.assertNotIn("certified_budget", v["metrics"])
+            self.assertIn("actor_driver_unavailable", _detail_all(v))
+
+    def test_sol1_13_steps_without_actors_do_not_need_the_adapter(self):
+        with tempfile.TemporaryDirectory() as td:
+            v = _eval_records([_preflight_done()] + _step_segment("base", acts=False), td)
+            self.assertEqual(_chk(v, "PRF-02"), "pass", v["reasons"])
+
+    def test_sol1_13_actor_orders_must_belong_to_the_step_window(self):
+        """An act_* order issued after the step's window closed does not evidence its regime."""
+        with tempfile.TemporaryDirectory() as td:
+            seg = _step_segment("fixture", acts=False)
+            seg.append(_act_done())  # after the terminal read and job_free
+            v = _eval_records([_preflight_done()] + seg, td)
+            self.assertNotEqual(_chk(v, "PRF-02"), "pass")
+            self.assertIn("actor_driver_unavailable", _detail_all(v))
+
+
+# ==============================================================================
+# Harness validators of the e2e (BLOQ 14, MEN 15, MEN 16): checked here on hand-built evidence so
+# that they cannot be satisfied by a lenient runner; the e2e tests below apply them to the real run
+# ==============================================================================
+
+# The e2e stimuli are prepared OUTSIDE the runner, by the test, through the environment the
+# spawned fake peer inherits (contract for qa/fake_ext_perf.py):
+#   DSBX_FAKE_PERF_DIRECTOR_ORIGINALS="1,0"  director original AllowDamage of successive cycles
+#   DSBX_FAKE_PERF_JOB_END="expired"|"done_1row"  how the first positive sampler job ends
+E2E_ENV_ORIGINALS = "DSBX_FAKE_PERF_DIRECTOR_ORIGINALS"
+E2E_ENV_JOB_END = "DSBX_FAKE_PERF_JOB_END"
+E2E_ORIGINALS = (1, 0)
+
+
+def _cycle_violations(events: list[dict], expected_originals=E2E_ORIGINALS) -> list[str]:
+    """Director cycles of ONE part on ONE peer instance (N11): >= 2 cycles with the originals the
+    independent fixture prepared, each cleanup restoring its own original, no peer restart in between."""
+    out: list[str] = []
+    by_id = {e["op_id"]: e for e in events if e.get("ev") == "enq"}
+    server_enq = [e for e in events if e.get("ev") == "enq" and e.get("peer") == "server"]
+    insts = {e.get("inst") for e in server_enq}
+    if len(insts) != 1:
+        out.append(f"cycles are not on one server instance: {sorted(map(str, insts))}")
+    hello_insts = [e.get("inst") for e in events if e.get("ev") == "hello" and e.get("peer") == "server" and e.get("ok", True)]
+    if len(hello_insts) < 1 or len(set(hello_insts)) != 1:
+        out.append(f"server peer restarted or never said hello: {hello_insts}")
+    order = [e for e in events if e.get("ev") in ("enq", "hello")]
+    first_enq = next((i for i, e in enumerate(order) if e.get("ev") == "enq" and e.get("peer") == "server"), None)
+    if first_enq is not None and any(e.get("ev") == "hello" and e.get("peer") == "server" for e in order[first_enq:]):
+        out.append("server hello after the first order: the peer restarted between cycles")
+    cycles: list[dict] = []
+    for e in events:
+        if e.get("ev") != "result" or by_id.get(e["op_id"], {}).get("peer") != "server":
+            continue
+        u = _unpack_result(e)
+        verb = by_id[e["op_id"]]["verb"]
+        if u and verb == "perf_preflight":
+            cycles.append({"orig": u["num"]["director_orig_allow_damage_b"], "restored": None})
+        elif u and verb == "perf_step_apply" and u["str"].get("step_id") == "cleanup" and u["str"].get("cleanup_status") == "clean" \
+                and cycles and cycles[-1]["restored"] is None:
+            cycles[-1]["restored"] = u["num"]["director_allow_damage_b"]
+    if len(cycles) < 2:
+        out.append(f"fewer than 2 director cycles ({len(cycles)})")
+    if [c["orig"] for c in cycles[:len(expected_originals)]] != list(expected_originals):
+        out.append(f"cycle originals {[c['orig'] for c in cycles]} != prepared {list(expected_originals)}")
+    for i, c in enumerate(cycles):
+        if c["restored"] != c["orig"]:
+            out.append(f"cycle {i}: cleanup restored {c['restored']} instead of its own original {c['orig']}")
+    return out
+
+
+def _n12_violations(part_dir: Path, events: list[dict], *, expect_exit: tuple[int, ...]) -> list[str]:
+    """N12 observed on a real runner run: INCONCLUSO (or FALLA for a one-row job) with technical.json,
+    a verifiable wall-clock deadline in the polls, and an observed teardown (job_free, cleanup, final snapshot)."""
+    out: list[str] = []
+    v = s_perf_eval.evaluate(part_dir)
+    if v["exit_code"] not in expect_exit:
+        out.append(f"verdict {v['exit_code']} not in {expect_exit}: {v['reasons'][:3]}")
+    if _chk(v, "PRF-03") == "pass":
+        out.append("PRF-03 passed on a failed job")
+    tech = part_dir / "samples" / "technical.json"
+    if not tech.is_file() or not json.loads(tech.read_text(encoding="utf-8")).get("reason"):
+        out.append("samples/technical.json with a reason is missing")
+    by_id = {e["op_id"]: e for e in events if e.get("ev") == "enq"}
+    start = next((e for e in events if e.get("ev") == "enq" and e.get("verb") == "perf_window_start" and e.get("peer") == "server"), None)
+    if start is None:
+        return out + ["no perf_window_start was enqueued"]
+    sres = next((_unpack_result(e) for e in events if e.get("ev") == "result" and e["op_id"] == start["op_id"]), None)
+    job = (sres or {}).get("str", {}).get("job")
+    args = wire.unpack_payload(start["args"]) if "sk" in start.get("args", {}) else {"num": {}}
+    deadline = args["num"].get("warmup_ms", 0) + args["num"].get("duration_ms", 0) + 30000 + 15000
+    polls = sorted((part_dir / "samples").glob("step_*_polls.jsonl"))
+    hs = [p["h_ms"] for pf in polls for p in f03_common.read_jsonl(pf) if "h_ms" in p]
+    if len(hs) < 1:
+        out.append("no step_<step>_polls.jsonl entries: the wait left no verifiable record")
+    elif max(hs) - min(hs) > deadline + 2000.0:
+        out.append(f"polling lasted {max(hs) - min(hs):.0f} ms, beyond the wall deadline {deadline:.0f} ms")
+    seq = [(by_id[e["op_id"]]["verb"], _unpack_result(e)) for e in events
+           if e.get("ev") == "result" and e["op_id"] in by_id]
+    verbs = [v_ for v_, _ in seq]
+    if "job_free" not in verbs:
+        out.append("teardown: the failed job was never freed (job_free)")
+    cleanups = [i for i, (v_, u) in enumerate(seq) if v_ == "perf_step_apply" and u and u["str"].get("step_id") == "cleanup"]
+    if not cleanups:
+        out.append("teardown: no perf_step_apply cleanup after the failure")
+    else:
+        tail_snaps = [u for v_, u in seq[cleanups[-1] + 1:] if v_ == "perf_snap" and u]
+        if not tail_snaps or tail_snaps[-1]["num"].get("entities_alive_n", -1) != 0 or tail_snaps[-1]["num"].get("census_dynamic_n", -1) != 0:
+            out.append("teardown: no raw final snapshot with 0 own entities after the cleanup")
+    return out
+
+
+def _synthetic_n12_part(td: Path, *, state: str, free=True, cleanup=True, final_snap=True, polls_span_ms=45000.0,
+                        technical=True) -> tuple[Path, list[dict]]:
+    part = td / "part"
+    rows = _build_window_rows("fixture") if state == "done" else []
+    seg = [_preflight_done(), _step_apply_done("fixture"),
+           _window_start_done("fixture", job_id="job-x", start_tick_ms=10000.0),
+           _job_read_done("job-x", state=state, rows=rows[:1] if rows else [], rows_total_n=1 if rows else 0,
+                          bypass_wire_validation=False)]
+    if free:
+        seg.append(_job_free_done("job-x"))
+    if cleanup:
+        seg.append(_step_apply_done("cleanup", cleanup_status="clean", requested_counts=dict(ZERO_COUNTS),
+                                    alive_counts=dict(ZERO_ALIVE), director_allow_damage_b=1, director_orig_allow_damage_b=1))
+    if final_snap:
+        seg.append(_snap_done("fixture", counts={"roots_alive_n": 0, "children_alive_n": 0, "entities_alive_n": 0},
+                              census_dynamic_n=0, director_allow_damage_b=1, rows=[]))
+    n = int(polls_span_ms // 2000.0) + 1
+    extra = {"step_fixture_polls.jsonl": [{"h_ms": 20000.0 + 2000.0 * i, "state": "running"} for i in range(n)]}
+    if technical:
+        extra["technical.json"] = {"reason": f"job_{state}"}
+    _write_part(part, seg, extra_samples=extra)
+    return part, _records_to_events(seg)
+
+
+class TestSol1HarnessValidators(unittest.TestCase):
+    # -- BLOQ 14 ---------------------------------------------------------------------------------
+    def _cycle_events(self, *, same_inst=True, restart=False, originals=(1, 0), restore_other=False, cycles=2):
+        def cyc(orig, restored):
+            return [_preflight_done(director_orig_allow_damage_b=orig), _step_apply_done("fixture", director_orig_allow_damage_b=orig),
+                    _step_apply_done("cleanup", cleanup_status="clean", director_orig_allow_damage_b=orig,
+                                     director_allow_damage_b=restored)]
+        recs = cyc(originals[0], originals[0])
+        if cycles > 1:
+            recs += cyc(originals[1], (1 - originals[1]) if restore_other else originals[1])
+        events = _records_to_events(recs)
+        n_enq = 0
+        for e in events:
+            if e.get("ev") in ("enq", "deliver"):
+                e["inst"] = "srv-A"
+        for e in events:
+            if e.get("ev") == "enq":
+                n_enq += 1
+                if not same_inst and n_enq > 3:
+                    e["inst"] = "srv-B"
+        hello = {"ev": "hello", "t_ms": 1.0, "peer": "server", "inst": "srv-A", "ok": True, "http": 200}
+        events = [hello] + events
+        if restart:
+            events.insert(len(events) // 2, dict(hello, t_ms=2.0, inst="srv-B"))
+        return events
+
+    def test_sol1_14_cycles_on_one_instance_with_prepared_originals_pass_the_validator(self):
+        self.assertEqual(_cycle_violations(self._cycle_events()), [])
+
+    def test_sol1_14_cycles_mixed_across_instances_are_rejected(self):
+        v = _cycle_violations(self._cycle_events(same_inst=False))
+        self.assertTrue(any("not on one server instance" in x for x in v), v)
+
+    def test_sol1_14_a_peer_restart_between_cycles_is_rejected(self):
+        v = _cycle_violations(self._cycle_events(restart=True))
+        self.assertTrue(any("restarted" in x for x in v), v)
+
+    def test_sol1_14_originals_must_be_the_ones_the_independent_fixture_prepared(self):
+        v = _cycle_violations(self._cycle_events(originals=(1, 1)))
+        self.assertTrue(any("!= prepared" in x for x in v), v)
+        v = _cycle_violations(self._cycle_events(originals=(0, 1)))
+        self.assertTrue(any("!= prepared" in x for x in v), v)
+
+    def test_sol1_14_a_cleanup_restoring_the_wrong_original_is_rejected(self):
+        v = _cycle_violations(self._cycle_events(restore_other=True))
+        self.assertTrue(any("instead of its own original" in x for x in v), v)
+
+    def test_sol1_14_a_single_cycle_is_not_enough(self):
+        self.assertTrue(any("fewer than 2" in x for x in _cycle_violations(self._cycle_events(cycles=1))))
+
+    # -- MEN 15 ----------------------------------------------------------------------------------
+    def _reg(self, *, issued_ms, ttl_ms, deliver_ms=10000.0, with_order=True, with_deliver=True, now_ms=10000.0):
+        reg = _Register()
+        slot = reg.part("run")
+        nonce = "0123456789abcdef"
+        op_id = f"{nonce}-1"
+        args = wire.pack_payload({"x": "1"}, {"y": 1.0})
+        args = f03_common._normalize_new_verb_args(args, None)
+        slot["events"].append({"ev": "enq", "t_ms": now_ms, "op_id": op_id, "peer": "server", "verb": "perf_snap", "inst": "i", "args": args})
+        if with_deliver:
+            slot["events"].append({"ev": "deliver", "t_ms": deliver_ms, "op_id": op_id, "peer": "server", "verb": "perf_snap", "inst": "i"})
+        if with_order:
+            slot["orders"].append({"peer": "server", "verb": "perf_snap", "args": args, "inst": "i", "ttl_ms": ttl_ms,
+                                   "op_id": op_id, "issued_ms": issued_ms, "registered_inst": "i", "now_ms": now_ms, "nonce": nonce})
+        return reg
+
+    def test_sol1_15_a_valid_present_order_passes(self):
+        self.assertEqual(_order_violations(self._reg(issued_ms=9500.0, ttl_ms=1000)), [])
+
+    def test_sol1_15_an_order_already_expired_at_delivery_is_rejected(self):
+        v = _order_violations(self._reg(issued_ms=-10000.0, ttl_ms=1000))
+        self.assertTrue(any("expired at delivery" in x for x in v), v)
+
+    def test_sol1_15_an_order_delivered_after_its_ttl_is_rejected(self):
+        v = _order_violations(self._reg(issued_ms=9500.0, ttl_ms=1000, deliver_ms=10600.0))
+        self.assertTrue(any("expired at delivery" in x for x in v), v)
+
+    def test_sol1_15_orders_must_be_present_for_every_enqueue_event(self):
+        v = _order_violations(self._reg(issued_ms=9500.0, ttl_ms=1000, with_order=False))
+        self.assertTrue(any("no registered order" in x for x in v), v)
+
+    def test_sol1_15_an_order_never_delivered_is_rejected(self):
+        v = _order_violations(self._reg(issued_ms=9500.0, ttl_ms=1000, with_deliver=False))
+        self.assertTrue(any("never delivered" in x for x in v), v)
+
+    # -- MEN 16 ----------------------------------------------------------------------------------
+    def test_sol1_16_expired_job_with_deadline_and_teardown_satisfies_the_validator(self):
+        with tempfile.TemporaryDirectory() as td:
+            part, events = _synthetic_n12_part(Path(td), state="expired")
+            self.assertEqual(_n12_violations(part, events, expect_exit=(INCONCLUSO,)), [])
+
+    def test_sol1_16_one_row_done_job_is_never_pasa(self):
+        with tempfile.TemporaryDirectory() as td:
+            part, events = _synthetic_n12_part(Path(td), state="done", technical=True)
+            self.assertEqual(_n12_violations(part, events, expect_exit=(FALLA, INCONCLUSO)), [])
+            self.assertNotEqual(s_perf_eval.evaluate(part)["exit_code"], PASA)
+
+    def test_sol1_16_a_wait_beyond_the_wall_deadline_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            part, events = _synthetic_n12_part(Path(td), state="expired", polls_span_ms=200000.0)
+            self.assertTrue(any("beyond the wall deadline" in x for x in _n12_violations(part, events, expect_exit=(INCONCLUSO,))))
+
+    def test_sol1_16_missing_teardown_pieces_are_rejected(self):
+        for kw, needle in (({"free": False}, "never freed"), ({"cleanup": False}, "no perf_step_apply cleanup"),
+                           ({"final_snap": False}, "no raw final snapshot"), ({"technical": False}, "technical.json")):
+            with self.subTest(kw=kw), tempfile.TemporaryDirectory() as td:
+                part, events = _synthetic_n12_part(Path(td), state="expired", **kw)
+                self.assertTrue(any(needle in x for x in _n12_violations(part, events, expect_exit=(INCONCLUSO,))),
+                                _n12_violations(part, events, expect_exit=(INCONCLUSO,)))
+
+    def test_sol1_16_evaluating_a_terminal_state_is_not_the_runner(self):
+        """The old `_with_state` calls evaluate() on evidence it builds itself: it proves the evaluator,
+        not the runner's wait. The runner tests are the test_e2e_n12_* ones below."""
+        self.assertTrue(callable(getattr(TestE2EN12, "test_e2e_n12_expired_job_leaves_the_runner_inconclusive_and_torn_down")))
+
+
+# ==============================================================================
 # End to end: the real gate with the fake peers, one shared run (these FAIL on the skeleton)
 # ==============================================================================
 
@@ -3263,7 +3646,7 @@ class TestE2E(unittest.TestCase):
     def setUpClass(cls):
         cls._td = tempfile.TemporaryDirectory()
         cls.evidence = Path(cls._td.name) / "ev"
-        cls.rc, cls.reg = _run_gate(cls.evidence)
+        cls.rc, cls.reg = _run_gate(cls.evidence, {E2E_ENV_ORIGINALS: ",".join(map(str, E2E_ORIGINALS))})
 
     @classmethod
     def tearDownClass(cls):
@@ -3312,26 +3695,38 @@ class TestE2E(unittest.TestCase):
         self.assertEqual(_order_violations(self.reg), [])
 
     def test_e2e_two_director_cycles_with_different_originals(self):
-        """N11: consecutive cycles on the same server peer with originals true and false; each
-        cleanup restores that cycle's original, never the previous one."""
-        cycles = []
-        for name in sorted(self.reg.parts):
-            ev = self.reg.parts[name]["events"]
-            by_id = {e["op_id"]: e for e in ev if e.get("ev") == "enq"}
-            for e in ev:
-                if e.get("ev") != "result" or by_id.get(e["op_id"], {}).get("peer") != "server":
-                    continue
-                u = _unpack_result(e)
-                verb = by_id[e["op_id"]]["verb"]
-                if u and verb == "perf_preflight":
-                    cycles.append({"orig": u["num"]["director_orig_allow_damage_b"], "restored": None})
-                elif u and verb == "perf_step_apply" and u["str"].get("step_id") == "cleanup" \
-                        and u["str"].get("cleanup_status") == "clean" and cycles and cycles[-1]["restored"] is None:
-                    cycles[-1]["restored"] = u["num"]["director_allow_damage_b"]
-        self.assertGreaterEqual(len(cycles), 2)
-        self.assertEqual({c["orig"] for c in cycles}, {0, 1})
-        for c in cycles:
-            self.assertEqual(c["restored"], c["orig"])
+        """N11 (BLOQ 14): two consecutive cycles in ONE part on the SAME peer instance, with the originals the
+        test's independent fixture prepared (true then false); each cleanup restores its own original.
+        The runner never reads the fixture: it cannot choose the originals itself."""
+        self.assertIn("run", self.reg.parts, "no traffic registered for part run/")
+        self.assertEqual(_cycle_violations(self.reg.parts["run"]["events"]), [])
+        runner = QA_DIR / "s_perf_run.py"
+        self.assertNotIn(E2E_ENV_ORIGINALS, runner.read_text(encoding="utf-8"))
+
+
+class TestE2EN12(unittest.TestCase):
+    """N12 (MEN 16) on the REAL runner: the sampler job's terminal state is injected by the fake peer through
+    the environment this test sets (independent of the runner), and the runner's own wait, deadline,
+    technical.json and teardown are observed in the register and in the part's samples."""
+
+    def _run(self, end: str):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        evidence = Path(td.name) / "ev"
+        rc, reg = _run_gate(evidence, {E2E_ENV_JOB_END: end}, ["--part", "run"])
+        return evidence, rc, reg
+
+    def test_e2e_n12_expired_job_leaves_the_runner_inconclusive_and_torn_down(self):
+        evidence, rc, reg = self._run("expired")
+        self.assertEqual(rc, INCONCLUSO)
+        self.assertIn("run", reg.parts, "no traffic registered for part run/")
+        self.assertEqual(_n12_violations(evidence / "run", reg.parts["run"]["events"], expect_exit=(INCONCLUSO,)), [])
+
+    def test_e2e_n12_done_job_with_one_row_never_passes_and_is_torn_down(self):
+        evidence, rc, reg = self._run("done_1row")
+        self.assertNotEqual(rc, PASA)
+        self.assertIn("run", reg.parts, "no traffic registered for part run/")
+        self.assertEqual(_n12_violations(evidence / "run", reg.parts["run"]["events"], expect_exit=(FALLA, INCONCLUSO)), [])
 
 
 if __name__ == "__main__":
