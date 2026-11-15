@@ -301,13 +301,17 @@ class DSBX_Peer
 		{
 			s_ServerPeer = null;
 		}
+		int inflightP = 0;
+		int inflightR = 0;
 		if (m_ActiveCbP)
 		{
+			inflightP = 1;
 			m_ActiveCbP.Detach();
 			m_ActiveCbP = null;
 		}
 		if (m_ActiveCbR)
 		{
+			inflightR = 1;
 			m_ActiveCbR.Detach();
 			m_ActiveCbR = null;
 		}
@@ -333,15 +337,10 @@ class DSBX_Peer
 			j = j + 1;
 		}
 		m_PoolR.Clear();
-		// Each in-flight request keeps its callback alive inside the engine. Without clearing the
-		// context, shutdown reports "Leaked 'DSBX_Callback' script instance" (G1 smoke, diag, 15-nov).
-		// Callbacks are detached first, so anything reset() fires is a no-op.
-		if (m_Ctx && GetRestApi())
-		{
-			m_Ctx.reset();
-		}
 		m_Ctx = null;
-		Log("shutdown role=" + m_Role);
+		// created_n and the in-flight requests bound the engine's exit report
+		// "Leaked 'DSBX_Callback' script instance (Nx)!" (G1 smoke, diag, 15-nov).
+		Log("shutdown role=" + m_Role + " created_n=" + m_CallbacksCreatedN + " inflight_p=" + inflightP + " inflight_r=" + inflightR);
 	}
 
 	void Log(string msg)
