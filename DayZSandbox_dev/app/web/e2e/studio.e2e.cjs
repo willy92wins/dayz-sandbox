@@ -1907,6 +1907,49 @@ async function runS5(browser) {
       }
     }
 
+    // F06 (2): un éxito que llega tarde no borra el borrador escrito después del envío
+    {
+      let releaseOps2;
+      const opsGate2 = new Promise((r) => {
+        releaseOps2 = r;
+      });
+      let opsHeld2 = false;
+      const holdOps2 = async (route) => {
+        if (route.request().method() === "POST") {
+          opsHeld2 = true;
+          await opsGate2;
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", holdOps2);
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7300");
+        await page.keyboard.press("Enter");
+        const d = Date.now() + 3000;
+        while (!opsHeld2 && Date.now() < d) await sleep(50);
+        assert(opsHeld2, "S5(-): F06 (2): no salio el POST de X=7300");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7301");
+        releaseOps2();
+        await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.x === 7300;
+        }, "F06 (2): X=7300 aplicado", 8000);
+        await sleep(500);
+        const vLate = await page.locator("#f-x").inputValue();
+        assert(vLate === "7301", "S5(-): un exito tardio borro el borrador escrito despues del envio (F06): " + vLate);
+      } finally {
+        releaseOps2();
+        await page.unroute("**/api/scene/ops", holdOps2);
+        await page.keyboard.press("Escape");
+        await page.locator("#f-x").evaluate((el) => el.blur());
+        await sleep(200);
+      }
+    }
+
     // F01: X y luego Z con las lecturas de /api/scene retenidas; no se pierde X
     {
       let releaseScene;
