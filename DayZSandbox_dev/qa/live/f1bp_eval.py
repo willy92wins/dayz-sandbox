@@ -32,6 +32,7 @@ PEER_LOG = {"server": "server_script.log", "client": "client_script.log"}
 EXIT = {"PASA": 0, "FALLA": 1, "INCONCLUSO": 2}
 RECOVERY_LIMIT_MS = 60000.0
 KEY_LEAK_REASON = "clave en los logs"
+KEY_INCOMPLETE_REASON = "escaneo incompleto"
 
 
 class EvidenceError(Exception):
@@ -41,15 +42,16 @@ class EvidenceError(Exception):
 def evaluate(evidence_dir):
     directory = Path(evidence_dir)
     leak = _key_leak(directory)  # R4: una clave en cualquier escenario tumba el agregado
+    incomplete = _key_unreadable(directory)  # R26: un escaneo con ficheros ilegibles no basta
     manifest_path = directory / "manifest.json"
     if not manifest_path.is_file():
         rows = {gid: _row("INCONCLUSO", "manifest.json ausente", {}) for gid in ROW_IDS}
-        return _aggregate(rows, leak)
+        return _aggregate(rows, leak, incomplete)
     try:
         manifest = _read_json(manifest_path)
     except EvidenceError as exc:
         rows = {gid: _row("INCONCLUSO", str(exc), {}) for gid in ROW_IDS}
-        return _aggregate(rows, leak)
+        return _aggregate(rows, leak, incomplete)
     scenarios = manifest.get("scenarios")
     if not isinstance(scenarios, list):
         scenarios = []
@@ -61,7 +63,7 @@ def evaluate(evidence_dir):
         if gid not in ROW_IDS:
             continue
         rows[gid] = _eval_row(directory, manifest, gid, dirty, final)
-    return _aggregate(rows, leak)
+    return _aggregate(rows, leak, incomplete)
 
 
 def _logs_final(directory):
@@ -99,12 +101,35 @@ def _key_leak(directory):
     return False
 
 
-def _aggregate(rows, leak=False):
+def _key_unreadable(directory):
+    """True si algun `key_scan` de samples/G*.jsonl trae `unreadable` no vacio (R26)."""
+    samples = directory / "samples"
+    if not samples.is_dir():
+        return False
+    for path in sorted(samples.glob("G*.jsonl")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(obj, dict) and obj.get("ev") == "key_scan" and obj.get("unreadable"):
+                return True
+    return False
+
+
+def _aggregate(rows, leak=False, incomplete=False):
     verdicts = [row["verdict"] for row in rows.values()]
     if leak:
         return {"aggregate": "FALLA", "reason": KEY_LEAK_REASON, "rows": rows}
     if "FALLA" in verdicts:
         aggregate = "FALLA"
+    elif incomplete:
+        # R26: sin FALLA previa, un escaneo incompleto deja el agregado en INCONCLUSO.
+        return {"aggregate": "INCONCLUSO", "reason": KEY_INCOMPLETE_REASON, "rows": rows}
     elif "INCONCLUSO" in verdicts:
         aggregate = "INCONCLUSO"
     else:
@@ -423,12 +448,16 @@ def _fire_line(ctx, case, rule_id, proxy):
     def served(ev):
         return ev["t_done_ms"] if _num(ev.get("t_done_ms")) else ev.get("t_ms")
 
+    def acted_version(ev):
+        # R18: `rule_version` es la version vigente cuando la regla actuo; sin ella, `rules_version`.
+        return ev["rule_version"] if _num(ev.get("rule_version")) else ev.get("rules_version")
+
     lines = [
         ev
         for ev in proxy
         if ev.get("rule_id") == rule_id
-        and _num(ev.get("rules_version"))
-        and ev["rules_version"] >= version
+        and _num(acted_version(ev))
+        and acted_version(ev) >= version
         and _num(served(ev))
         and served(ev) >= t_written
     ]
@@ -536,24 +565,28 @@ def _recovery(ctx, anchor, anchors):
     ]
     if not candidates:
         return False, None, "sin recovery"
-    rec = candidates[0]
-    op = rec.get("op_id")
-    session = rec.get("session")
-    observed = [
-        ev
-        for ev in _events(ctx, "op_state")
-        if ev.get("op_id") == op
-        and (session is None or ev.get("session") == session)
-        and ev.get("state") == "observado"
-        and _num(ev.get("t_ms"))
-        and ev["t_ms"] >= rec["t_ms"]
-    ]
-    if not observed:
+    # R20: vale si ALGUNA recovery del tramo llega a observado (casada por sesion) dentro de 60 s
+    # desde el ancla; una fallida (conexion_perdida) seguida de otra que llega es valida.
+    latencies = []
+    for rec in candidates:
+        op = rec.get("op_id")
+        session = rec.get("session")
+        for ev in _events(ctx, "op_state"):
+            if (
+                ev.get("op_id") == op
+                and (session is None or ev.get("session") == session)
+                and ev.get("state") == "observado"
+                and _num(ev.get("t_ms"))
+                and ev["t_ms"] >= rec["t_ms"]
+            ):
+                latencies.append(ev["t_ms"] - t0)
+                break
+    if not latencies:
         return False, None, "recovery sin observado"
-    latency = observed[0]["t_ms"] - t0
-    if latency > RECOVERY_LIMIT_MS:
-        return False, latency, "recuperacion > 60 s"
-    return True, latency, ""
+    within = [value for value in latencies if value <= RECOVERY_LIMIT_MS]
+    if not within:
+        return False, min(latencies), "recuperacion > 60 s"
+    return True, min(within), ""
 
 
 def _g1(ctx):
@@ -1144,7 +1177,8 @@ def _g7(ctx):
     if why:
         return "INCONCLUSO", "cobertura incompleta: " + why, {}
     lease = _manifest_int(ctx, "lease_ms")
-    why, _ = _injection(ctx, [case for case in cases if not _is_measure(case)])
+    # R21: las medidas tambien exigen la inyeccion observada; lo medido puede ser cualquier cosa.
+    why, _ = _injection(ctx, cases)
     if why:
         return "INCONCLUSO", why, {}
     effects = _effects(ctx)
@@ -1228,14 +1262,15 @@ def _g7(ctx):
             window_effects = _window_effects(ctx, effects, start, end, tol_hi=tol_hi)
             if window_effects:
                 problems.append(f"{name}: effect en la ventana")
-            if channel == "P":
-                p_lines = [ev for ev in invalid if ev.get("ch") == "P"]
-                if len(p_lines) == len(rewritten) and len(p_lines) >= 2:
-                    stamps = [_line_t(ctx, ev) for ev in p_lines]
-                    span = max(stamps) - min(stamps)
-                    entry["invalid_span_ms"] = span
-                    if span > lease and not _any_lease_lost(ctx, start, end):
+            if name == "invalid_all_P":
+                # R22: mayor tramo del caso sin respuestas validas de P al servidor, del proxy.
+                gap = _longest_invalid_p_gap(proxy, rule, start, end)
+                entry["invalid_gap_ms"] = gap
+                if gap > lease:
+                    if not _any_lease_lost(ctx, start, end):
                         problems.append(f"{name}: sin lease lost pese a > lease_ms")
+                else:
+                    return "INCONCLUSO", f"{name}: la ventana no superó el lease", metrics
         elif name == "late_cb":
             late_lines = [
                 ev
@@ -1258,6 +1293,11 @@ def _g7(ctx):
                 entry["changes"] = len(changes)
                 if changes:
                     problems.append("late_cb: cambio de estado en la ventana")
+            # R24: ninguna linea effect en la ventana, salvo las de las ops de recuperacion.
+            window_effects = _window_effects(ctx, effects, start, end, tol_hi=tol_hi)
+            entry["effects_in_window"] = len(window_effects)
+            if window_effects:
+                problems.append("late_cb: effect en la ventana")
         elif name == "timeout_P":
             # Plazo efectivo: desde que el proxy recibe la peticion retenida hasta la linea
             # rest timeout de P dentro del caso (las dos en el reloj del arnes).
@@ -1324,6 +1364,26 @@ def _g7(ctx):
     return "PASA", "", metrics
 
 
+def _longest_invalid_p_gap(proxy, rule, start, end):
+    """R22: mayor tramo de [start, end] sin una respuesta valida de P (hello/poll) al servidor.
+
+    Valida = un 200 que la regla del caso no reescribio. Cuenta por `t_done_ms`; los extremos de la
+    ventana cierran el primer y el ultimo tramo.
+    """
+    done = sorted(
+        (ev["t_done_ms"] if _num(ev.get("t_done_ms")) else ev["t_ms"])
+        for ev in proxy
+        if ev.get("peer") == "server"
+        and ev.get("route") in P_ROUTES
+        and ev.get("upstream_status") == 200
+        and ev.get("rule_id") != rule
+        and _num(ev.get("t_ms"))
+    )
+    inside = [value for value in done if start <= value <= end]
+    times = [start] + inside + [end]
+    return max(b - a for a, b in zip(times, times[1:]))
+
+
 def _g8(ctx):
     missing = _missing_logs(ctx, SCRIPT_LOGS)
     if missing:
@@ -1361,8 +1421,14 @@ def _g8(ctx):
         if name == "a":
             observed = [ev for ev in _states(ctx, session, op) if ev.get("state") == "observado"]
             entry["observed"] = len(observed)
-            if len(observed) > 1:
-                problems.append("a: cambio extra por resultado repetido")
+            # R23: al menos 2 result_seen de la op (el que perdio su acuse y la repeticion) y una
+            # sola transicion a observado.
+            op_results = [ev for ev in results if ev.get("op_id") == op]
+            entry["result_seen"] = len(op_results)
+            if len(op_results) < 2:
+                problems.append("a: menos de 2 result_seen de la op")
+            if len(observed) != 1:
+                problems.append(f"a: {len(observed)} transiciones a observado (debe ser 1)")
         elif name == "b":
             duplicates = [ev for ev in results if ev.get("op_id") == op and ev.get("dup") is True]
             entry["dups"] = len(duplicates)

@@ -1,4 +1,4 @@
-"""Pruebas del evaluador de F1b-peers en partida (EVIDENCIA.md, v1.5: R1-R15).
+"""Pruebas del evaluador de F1b-peers en partida (EVIDENCIA.md, v1.5: R1-R15; v1.6: R18, R20-R24, R26).
 
 Las pruebas de una regla v1.5 estan escritas para caer si se quita la regla: la fixture la daba por
 buena el evaluador anterior y no el nuevo, o al reves (cada prueba lo dice en su comentario).
@@ -67,6 +67,12 @@ def _write_jsonl(path, events):
     ordered = sorted(events, key=lambda ev: ev["t_ms"])
     text = "".join(json.dumps(ev, sort_keys=True) + "\n" for ev in ordered)
     path.write_bytes(text.encode("utf-8"))
+
+
+def _add_events(path, events):
+    path = Path(path)
+    current = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    _write_jsonl(path, current + events)
 
 
 INVENTORY = {
@@ -514,6 +520,8 @@ def _g7(
     late_change=False,
     px_version=None,
     measure_effect=False,
+    valid_p=False,
+    p_second=3600,
 ):
     """21 casos de G7 de 10000 ms cada uno: reglas, caso, disparo, lineas del log, fin de la inyeccion
     (rules vacio a base+5000) y recuperacion (base+6000). `extra`: (caso, desfase, linea) de efectos.
@@ -564,8 +572,11 @@ def _g7(
             proxy.append(_px(base + 100, rule=seen, version=v))
             log(name, 150, "rest invalid ch=P kind=3", base)
             if name == "invalid_all_P":
-                proxy.append(_px(base + 3600, rule=seen, version=v))
-                log(name, 3650, "rest invalid ch=P kind=3", base)
+                proxy.append(_px(base + p_second, rule=seen, version=v))
+                log(name, p_second + 50, "rest invalid ch=P kind=3", base)
+                if valid_p:
+                    # R22: respuestas validas de P (200 sin reescribir) que parten el tramo.
+                    proxy += [_px(base + 1000 * k, rule=None, version=v) for k in range(1, 5)]
                 if lease_lost:
                     log(name, 3200, "lease lost age_ms=3100", base)
         elif name.startswith("measure_"):
@@ -606,6 +617,8 @@ def _g8(
     dup_line=False,
     uninjected_b=False,
     skip_c=False,
+    a_results=2,
+    a_obs=1,
 ):
     root = _base(root, ["G8"])
     op_c = "op-1" if reuse_op else "c1"
@@ -614,9 +627,13 @@ def _g8(
     events += _rules(50, 1, ["drop_a", "st503_b"])
     events += [
         {"t_ms": 200.0, "ev": "case", "name": "a", "session": a_session, "op_id": op_a, "rule_id": "drop_a"},
-        _state(300, a_session, op_a, "observado"),
-        {"t_ms": 310.0, "ev": "result_seen", "op_id": op_a, "status": "done", "reason": "", "dup": False},
-        {"t_ms": 320.0, "ev": "result_seen", "op_id": op_a, "status": "done", "reason": "", "dup": False},
+    ]
+    events += [_state(300 + k, a_session, op_a, "observado") for k in range(a_obs)]
+    events += [
+        {"t_ms": 310.0 + 10 * k, "ev": "result_seen", "op_id": op_a, "status": "done", "reason": "", "dup": False}
+        for k in range(a_results)
+    ]
+    events += [
         {"t_ms": 400.0, "ev": "case", "name": "b", "session": "s2", "op_id": "b1", "rule_id": "st503_b"},
         {"t_ms": 500.0, "ev": "result_seen", "op_id": "b1", "status": "done", "reason": "", "dup": False},
         {"t_ms": 600.0, "ev": "result_seen", "op_id": "b1", "status": "done", "reason": "", "dup": True},
@@ -705,7 +722,7 @@ def _g9(
     return root
 
 
-def _two_rows(root, dirty=False, g2_aborted=False, g2_mismatch=False, key_hits=0):
+def _two_rows(root, dirty=False, g2_aborted=False, g2_mismatch=False, key_hits=0, unreadable=None):
     root = _base(root, ["G1", "G2"], dirty=dirty)
     _write_jsonl(
         root / "samples" / "G1.jsonl",
@@ -727,8 +744,11 @@ def _two_rows(root, dirty=False, g2_aborted=False, g2_mismatch=False, key_hits=0
             "catalog": {"complete": True, "n_classes": 12, "catalog_id": "c"},
         },
     ]
-    if key_hits:
-        g2.append({"t_ms": 300.0, "ev": "key_scan", "files": [], "hits": key_hits})
+    if key_hits or unreadable is not None:
+        scan = {"t_ms": 300.0, "ev": "key_scan", "files": [], "hits": key_hits}
+        if unreadable is not None:
+            scan["unreadable"] = unreadable
+        g2.append(scan)
     g2.append(
         {
             "t_ms": 400.0,
@@ -944,6 +964,67 @@ class TestG3(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             verdict = EVAL.evaluate(_g3(tmp, recovery_ab=False))
             self.assertEqual(verdict["rows"]["G3"]["verdict"], "PASA")
+
+    def test_r20_recovery_fallida_seguida_de_otra_que_llega(self):
+        # R20: la primera recovery acaba en conexion_perdida, la segunda llega a observado: vale. Antes solo
+        # se miraba la primera y daba FALLA.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _g3(tmp, recovery_c=False)
+            _add_events(
+                root / "samples" / "G3.jsonl",
+                [
+                    {"t_ms": 1300.0, "ev": "recovery", "op_id": "rc1"},
+                    _state(1350, "s2", "rc1", "fallido", "conexion_perdida"),
+                    {"t_ms": 1400.0, "ev": "recovery", "op_id": "rc2"},
+                    _state(1500, "s2", "rc2", "observado"),
+                ],
+            )
+            row = EVAL.evaluate(root)["rows"]["G3"]
+            self.assertEqual(row["verdict"], "PASA", row["reason"])
+            self.assertEqual(row["metrics"]["cases"]["c"]["recovery_ms"], 400.0)
+
+    def test_r20_todas_las_recovery_fallidas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _g3(tmp, recovery_c=False)
+            _add_events(
+                root / "samples" / "G3.jsonl",
+                [
+                    {"t_ms": 1300.0, "ev": "recovery", "op_id": "rc1"},
+                    _state(1350, "s2", "rc1", "fallido", "conexion_perdida"),
+                    {"t_ms": 1400.0, "ev": "recovery", "op_id": "rc2"},
+                    _state(1450, "s2", "rc2", "fallido", "conexion_perdida"),
+                ],
+            )
+            row = EVAL.evaluate(root)["rows"]["G3"]
+            self.assertEqual(row["verdict"], "FALLA")
+            self.assertIn("c: recovery sin observado", row["reason"])
+
+    def test_r20_observado_de_otra_sesion_no_vale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _g3(tmp, recovery_c=False)
+            _add_events(
+                root / "samples" / "G3.jsonl",
+                [
+                    {"t_ms": 1300.0, "ev": "recovery", "op_id": "rc1", "session": "s2"},
+                    _state(1350, "sX", "rc1", "observado"),
+                ],
+            )
+            row = EVAL.evaluate(root)["rows"]["G3"]
+            self.assertEqual(row["verdict"], "FALLA")
+
+    def test_r20_observado_pasados_60_s_desde_el_ancla(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _g3(tmp, recovery_c=False)
+            _add_events(
+                root / "samples" / "G3.jsonl",
+                [
+                    {"t_ms": 1300.0, "ev": "recovery", "op_id": "rc1"},
+                    _state(62000, "s2", "rc1", "observado"),
+                ],
+            )
+            row = EVAL.evaluate(root)["rows"]["G3"]
+            self.assertEqual(row["verdict"], "FALLA")
+            self.assertIn("> 60 s", row["reason"])
 
     def test_fail_sin_recuperacion_tras_c(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1331,14 +1412,21 @@ class TestG7(unittest.TestCase):
             verdict = EVAL.evaluate(_g7(tmp, uninjected=("late_cb",)))
             self.assertEqual(verdict["rows"]["G7"]["verdict"], "INCONCLUSO")
 
-    def test_r9_las_medidas_anotan_sin_tumbar(self):
-        # status* y measure_* sin disparo en el proxy: se anota injection_observed=False y la fila sigue.
+    def test_r21_medida_sin_disparo_es_inconcluso(self):
+        # R21: status* y measure_* tambien exigen la inyeccion observada. Antes anotaban
+        # injection_observed=False y la fila pasaba; ahora es INCONCLUSO.
+        for name in ("status400_P", "measure_ok1_P"):
+            with tempfile.TemporaryDirectory() as tmp:
+                row = EVAL.evaluate(_g7(tmp, uninjected=(name,)))["rows"]["G7"]
+                self.assertEqual(row["verdict"], "INCONCLUSO", name)
+                self.assertIn("inyección no observada", row["reason"])
+                self.assertIn(name, row["reason"])
+
+    def test_r21_medida_con_disparo_anota_lo_medido(self):
         with tempfile.TemporaryDirectory() as tmp:
-            verdict = EVAL.evaluate(_g7(tmp, uninjected=("status400_P", "measure_ok1_P")))
-            row = verdict["rows"]["G7"]
+            row = EVAL.evaluate(_g7(tmp))["rows"]["G7"]
             self.assertEqual(row["verdict"], "PASA", row["reason"])
-            self.assertIs(row["metrics"]["cases"]["status400_P"]["injection_observed"], False)
-            self.assertIs(row["metrics"]["cases"]["status401_P"]["injection_observed"], True)
+            self.assertIs(row["metrics"]["cases"]["status400_P"]["injection_observed"], True)
             self.assertEqual(row["metrics"]["cases"]["status400_P"]["state"], 2)
 
     def test_r9_version_antigua_no_acredita(self):
@@ -1409,6 +1497,45 @@ class TestG7(unittest.TestCase):
             self.assertEqual(verdict["rows"]["G7"]["verdict"], "FALLA")
             self.assertIn("sin lease lost", verdict["rows"]["G7"]["reason"])
 
+    def test_r22_tramo_sin_validas_mayor_que_lease_exige_lease_lost(self):
+        # R22: el tramo sale del proxy, no de las lineas rest invalid. Las dos lineas invalid distan 1500 ms
+        # (el calculo anterior daba PASA sin lease lost), pero el proxy no ve ninguna respuesta valida de
+        # P en 4900 ms.
+        with tempfile.TemporaryDirectory() as tmp:
+            row = EVAL.evaluate(_g7(tmp, p_second=1600, lease_lost=False))["rows"]["G7"]
+            self.assertEqual(row["verdict"], "FALLA")
+            self.assertIn("invalid_all_P: sin lease lost", row["reason"])
+            self.assertGreater(row["metrics"]["cases"]["invalid_all_P"]["invalid_gap_ms"], 3000)
+
+    def test_r22_con_lease_lost_pasa(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row = EVAL.evaluate(_g7(tmp, p_second=1600))["rows"]["G7"]
+            self.assertEqual(row["verdict"], "PASA", row["reason"])
+
+    def test_r22_ventana_que_no_supera_el_lease_es_inconcluso(self):
+        # R22: respuestas validas de P cada 1000 ms: el mayor tramo no llega a lease_ms (3000). Antes, con
+        # las lineas invalid a 3500 ms de distancia, se exigia lease lost (FALLA sin el) o pasaba.
+        for lease_lost in (True, False):
+            with tempfile.TemporaryDirectory() as tmp:
+                row = EVAL.evaluate(_g7(tmp, valid_p=True, lease_lost=lease_lost))["rows"]["G7"]
+                self.assertEqual(row["verdict"], "INCONCLUSO", row["reason"])
+                self.assertIn("la ventana no superó el lease", row["reason"])
+
+    def test_r24_late_cb_con_effect_en_la_ventana(self):
+        # R24: una effect en la ventana de late_cb (sin cambio de op_state) tumba el caso.
+        with tempfile.TemporaryDirectory() as tmp:
+            extra = [("late_cb", 2000, _eff("retirar", "s", "zz", "@T"))]
+            row = EVAL.evaluate(_g7(tmp, extra=extra))["rows"]["G7"]
+            self.assertEqual(row["verdict"], "FALLA")
+            self.assertIn("late_cb: effect en la ventana", row["reason"])
+
+    def test_r24_late_cb_effect_de_la_recuperacion_no_cuenta(self):
+        # late_cb es el caso 21: su recuperacion es rec21 (sesion s).
+        with tempfile.TemporaryDirectory() as tmp:
+            extra = [("late_cb", 2000, _eff("retirar", "s", "rec21", "@T"))]
+            row = EVAL.evaluate(_g7(tmp, extra=extra))["rows"]["G7"]
+            self.assertEqual(row["verdict"], "PASA", row["reason"])
+
     def test_late_cb_sin_invocacion_se_anota(self):
         with tempfile.TemporaryDirectory() as tmp:
             row = EVAL.evaluate(_g7(tmp, late_line=False))["rows"]["G7"]
@@ -1448,6 +1575,23 @@ class TestH09FireLine(unittest.TestCase):
         proxy = [{"t_ms": 110.0, "t_done_ms": 160.0, "rule_id": "r", "rules_version": 2}]
         self.assertIsNone(EVAL._fire_line(ctx, ctx["scenario"][2], "r", proxy))
 
+    def test_r18_rule_version_manda_sobre_rules_version(self):
+        # R18: la linea trae rules_version 3 (la vigente al recibirla) pero la regla actuo con la 2: no
+        # acredita la version 3. Antes se leia rules_version y contaba.
+        ctx = self._ctx()
+        proxy = [{"t_ms": 110.0, "t_done_ms": 160.0, "rule_id": "r", "rules_version": 3, "rule_version": 2}]
+        self.assertIsNone(EVAL._fire_line(ctx, ctx["scenario"][2], "r", proxy))
+
+    def test_r18_rule_version_nueva_acredita_aunque_rules_version_sea_vieja(self):
+        ctx = self._ctx()
+        proxy = [{"t_ms": 110.0, "t_done_ms": 160.0, "rule_id": "r", "rules_version": 2, "rule_version": 3}]
+        self.assertIsNotNone(EVAL._fire_line(ctx, ctx["scenario"][2], "r", proxy))
+
+    def test_r18_sin_rule_version_se_usa_rules_version(self):
+        ctx = self._ctx()
+        proxy = [{"t_ms": 110.0, "t_done_ms": 160.0, "rule_id": "r", "rules_version": 3, "rule_version": None}]
+        self.assertIsNotNone(EVAL._fire_line(ctx, ctx["scenario"][2], "r", proxy))
+
     def test_servida_antes_de_escribir_la_version_no_cuenta(self):
         ctx = self._ctx()
         proxy = [{"t_ms": 80.0, "t_done_ms": 90.0, "rule_id": "r", "rules_version": 3}]
@@ -1482,6 +1626,31 @@ class TestG8(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             verdict = EVAL.evaluate(_g8(tmp))
             self.assertEqual(verdict["rows"]["G8"]["verdict"], "PASA", verdict["rows"]["G8"]["reason"])
+
+    def test_r23_a_con_un_solo_result_seen(self):
+        # R23: el acuse perdido y la repeticion son dos result_seen. Con uno, FALLA (antes PASA).
+        with tempfile.TemporaryDirectory() as tmp:
+            row = EVAL.evaluate(_g8(tmp, a_results=1))["rows"]["G8"]
+            self.assertEqual(row["verdict"], "FALLA")
+            self.assertIn("a: menos de 2 result_seen", row["reason"])
+
+    def test_r23_a_sin_transicion_a_observado(self):
+        # R23: exactamente una transicion a observado. Con cero, FALLA (antes PASA).
+        with tempfile.TemporaryDirectory() as tmp:
+            row = EVAL.evaluate(_g8(tmp, a_obs=0))["rows"]["G8"]
+            self.assertEqual(row["verdict"], "FALLA")
+            self.assertIn("a: 0 transiciones a observado", row["reason"])
+
+    def test_r23_a_con_dos_observado(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row = EVAL.evaluate(_g8(tmp, a_obs=2))["rows"]["G8"]
+            self.assertEqual(row["verdict"], "FALLA")
+            self.assertIn("a: 2 transiciones a observado", row["reason"])
+
+    def test_r23_a_aborted_es_inconcluso(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row = EVAL.evaluate(_g8(tmp, aborted=True, a_results=1))["rows"]["G8"]
+            self.assertEqual(row["verdict"], "INCONCLUSO")
 
     def test_fail_b_two_pairs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1596,6 +1765,31 @@ class TestAggregate(unittest.TestCase):
             self.assertEqual(verdict["rows"]["G1"]["verdict"], "PASA")
             self.assertEqual(verdict["rows"]["G2"]["verdict"], "INCONCLUSO")
             self.assertEqual(verdict["aggregate"], "INCONCLUSO")
+
+    def test_r26_unreadable_deja_el_agregado_inconcluso(self):
+        # R26: filas PASA pero un key_scan con ficheros ilegibles: el agregado es INCONCLUSO (antes PASA).
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = EVAL.evaluate(_two_rows(tmp, unreadable=["C:/prof/server/script_1.log"]))
+            self.assertEqual(verdict["rows"]["G1"]["verdict"], "PASA")
+            self.assertEqual(verdict["rows"]["G2"]["verdict"], "PASA")
+            self.assertEqual(verdict["aggregate"], "INCONCLUSO")
+            self.assertEqual(verdict["reason"], "escaneo incompleto")
+
+    def test_r26_unreadable_vacio_no_cuenta(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = EVAL.evaluate(_two_rows(tmp, unreadable=[]))
+            self.assertEqual(verdict["aggregate"], "PASA")
+
+    def test_r26_una_fila_falla_sigue_siendo_falla(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = EVAL.evaluate(_two_rows(tmp, g2_mismatch=True, unreadable=["x"]))
+            self.assertEqual(verdict["aggregate"], "FALLA")
+
+    def test_r26_clave_encontrada_sigue_siendo_falla(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = EVAL.evaluate(_two_rows(tmp, key_hits=1, unreadable=["x"]))
+            self.assertEqual(verdict["aggregate"], "FALLA")
+            self.assertEqual(verdict["reason"], "clave en los logs")
 
     def test_aggregate_pasa(self):
         with tempfile.TemporaryDirectory() as tmp:
