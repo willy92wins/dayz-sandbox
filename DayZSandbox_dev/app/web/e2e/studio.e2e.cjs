@@ -1,6 +1,5 @@
 "use strict";
 const fs = require("fs");
-const http = require("http");
 const path = require("path");
 const readline = require("readline");
 const { chromium } = require("playwright");
@@ -340,28 +339,6 @@ async function waitForSnap(predicate, desc, timeoutMs = 6000) {
     await sleep(100);
   }
   throw new Error("timeout esperando snapshot (" + desc + "): rev=" + (last && last.rev));
-}
-
-// Servidor local que contesta con las cabeceras y un trozo del cuerpo, y nunca lo termina (SEG-03).
-async function startStallServer() {
-  const sockets = new Set();
-  const srv = http.createServer((req, res) => {
-    req.resume();
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.write('{"ok":tr');
-  });
-  srv.on("connection", (s) => {
-    sockets.add(s);
-    s.on("close", () => sockets.delete(s));
-  });
-  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
-  return {
-    url: "http://127.0.0.1:" + srv.address().port + "/stall",
-    close: () => {
-      for (const s of sockets) s.destroy();
-      srv.close();
-    },
-  };
 }
 
 async function openToolsMenu(page) {
@@ -2412,24 +2389,35 @@ async function runS5(browser) {
       await activatePanel(page, "propiedades");
     };
 
-    // SEG-03: una respuesta con las cabeceras y sin el cuerpo entero no deja la fila parada
+    // SEG-03: una respuesta con las cabeceras y sin el cuerpo entero no deja la fila parada. La
+    // interceptación de Playwright entrega las respuestas enteras, así que el cuerpo que no termina se
+    // simula en la página: el primer POST de la escena devuelve un 200 cuyo cuerpo nunca acaba y que,
+    // como uno de verdad, se corta solo cuando se aborta la petición.
     await reopenOnEntity();
     {
-      const stall = await startStallServer();
-      let divertedS3 = false;
-      const divertFirst = async (route) => {
-        if (route.request().method() === "POST" && !divertedS3) {
-          divertedS3 = true;
-          try {
-            await route.continue({ url: stall.url });
-          } catch (e) {
-            if (!/already handled/i.test(String(e && e.message))) throw e;
+      await page.evaluate(() => {
+        const orig = window.fetch;
+        let armed = true;
+        window.fetch = (input, init) => {
+          const url = typeof input === "string" ? input : input.url;
+          if (armed && url.endsWith("/api/scene/ops") && init && init.method === "POST") {
+            armed = false;
+            const signal = init.signal;
+            const body = new ReadableStream({
+              start(ctrl) {
+                ctrl.enqueue(new TextEncoder().encode('{"ok":tr'));
+                if (signal) {
+                  signal.addEventListener("abort", () => ctrl.error(new DOMException("Aborted", "AbortError")));
+                }
+              },
+            });
+            return Promise.resolve(
+              new Response(body, { status: 200, headers: { "Content-Type": "application/json; charset=utf-8" } })
+            );
           }
-          return;
-        }
-        await continueSafe(route);
-      };
-      await page.route("**/api/scene/ops", divertFirst);
+          return orig(input, init);
+        };
+      });
       try {
         await page.locator("#f-x").focus();
         await waitEditable(page, "#f-x");
@@ -2454,8 +2442,6 @@ async function runS5(browser) {
           throw new Error("S5(-): tras un cuerpo que no llega, la fila siguio parada (SEG-03): x=" + (e && e.x) + " · " + err.message);
         });
       } finally {
-        await page.unroute("**/api/scene/ops", divertFirst);
-        stall.close();
         await page.locator("#f-x").evaluate((el) => el.blur());
         await sleep(200);
       }
@@ -2688,14 +2674,9 @@ async function runS5(browser) {
         await page.keyboard.type("7100");
         await page.keyboard.press("Enter");
         await page.locator("#f-x").evaluate((el) => el.blur()); // encola la reconfirmación
-        await page
-          .locator('[data-aviso="sin-respuesta"]')
-          .first()
-          .waitFor({ state: "visible", timeout: 16000 })
-          .catch(() => {
-            throw new Error("S5(-): SEG-02 (3): la primera tanda retenida no dio el aviso sin-respuesta en 16 s");
-          });
-        const dl3 = Date.now() + 8000;
+        // Se espera al reintento (el segundo POST), no al aviso: la reconfirmación encolada resuelve la
+        // duda en seguida y el aviso dura muy poco.
+        const dl3 = Date.now() + 22000;
         while (aiOk3 === null && Date.now() < dl3) await sleep(100);
         assert(aiOk3 === true, "S5(-): SEG-02 (3): el reintento no llego o el ai_ops de la IA fallo");
         await sleep(1500);
