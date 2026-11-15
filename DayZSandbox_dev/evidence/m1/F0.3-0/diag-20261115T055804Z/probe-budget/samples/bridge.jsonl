@@ -1,0 +1,8 @@
+{"args": {"build": "diag", "inst": "ed709505769a4de8879067947c4c71ef", "peer": "client", "probe_ver": "dsbx-qa1+02952a5a9658cc6e", "proto": "qa0"}, "ev": "hello", "http": 200, "inst": "ed709505769a4de8879067947c4c71ef", "ok": true, "peer": "client", "t_ms": 1153.657}
+{"args": {"build": "diag", "inst": "1adab49411c44afda06afeb14635610c", "peer": "server", "probe_ver": "dsbx-qa1+02952a5a9658cc6e", "proto": "qa0"}, "ev": "hello", "http": 200, "inst": "1adab49411c44afda06afeb14635610c", "ok": true, "peer": "server", "t_ms": 1642.05}
+{"ev": "cut_start", "peer": "server", "t_ms": 1723.511}
+{"ev": "cut_start", "peer": "client", "t_ms": 1723.916}
+{"ev": "cut_end", "peer": "server", "t_ms": 1878.61}
+{"ev": "cut_end", "peer": "client", "t_ms": 1878.709}
+{"args": {"build": "diag", "inst": "ed709505769a4de8879067947c4c71ef", "peer": "client", "probe_ver": "dsbx-qa1+02952a5a9658cc6e", "proto": "qa0"}, "ev": "hello", "http": 503, "inst": "ed709505769a4de8879067947c4c71ef", "peer": "client", "t_ms": 2057.815}
+{"args": {"build": "diag", "inst": "1adab49411c44afda06afeb14635610c", "peer": "server", "probe_ver": "dsbx-qa1+02952a5a9658cc6e", "proto": "qa0"}, "ev": "hello", "http": 503, "inst": "1adab49411c44afda06afeb14635610c", "peer": "server", "t_ms": 2092.508}

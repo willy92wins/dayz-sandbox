@@ -1,0 +1,105 @@
+{
+  "checks": [
+    {
+      "detail": "",
+      "id": "C0",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "H1.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "H1.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "M1",
+      "status": "pass"
+    },
+    {
+      "detail": "p95 >= 1000",
+      "id": "M2",
+      "status": "fail"
+    },
+    {
+      "detail": "",
+      "id": "N1.server",
+      "status": "pass"
+    },
+    {
+      "detail": "no 401 in key window",
+      "id": "N1.client",
+      "status": "missing"
+    },
+    {
+      "detail": "",
+      "id": "N2.server",
+      "status": "pass"
+    },
+    {
+      "detail": "resume_timeout",
+      "id": "N2.client",
+      "status": "missing"
+    },
+    {
+      "detail": "",
+      "id": "N3.server",
+      "status": "pass"
+    },
+    {
+      "detail": "resume_timeout",
+      "id": "N3.client",
+      "status": "missing"
+    },
+    {
+      "detail": "",
+      "id": "N4.server",
+      "status": "pass"
+    },
+    {
+      "detail": "resume_timeout",
+      "id": "N4.client",
+      "status": "missing"
+    },
+    {
+      "detail": "",
+      "id": "N5.server",
+      "status": "pass"
+    },
+    {
+      "detail": "resume_timeout",
+      "id": "N5.client",
+      "status": "missing"
+    },
+    {
+      "detail": "resume_timeout",
+      "id": "N6",
+      "status": "missing"
+    }
+  ],
+  "error": null,
+  "exit_code": 1,
+  "id": "S-puente",
+  "metrics": {
+    "max_ms": "inf",
+    "n_not_observed": 0,
+    "n_timeouts": 23,
+    "p50_ms": 199.7509999999893,
+    "p95_ms": "inf"
+  },
+  "reasons": [
+    "M2",
+    "N1.client",
+    "N2.client",
+    "N3.client",
+    "N4.client",
+    "N5.client",
+    "N6"
+  ],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "FALLA"
+}

@@ -1,0 +1,82 @@
+{
+  "argv": [
+    "spike",
+    "F0.3-0",
+    "--pbo",
+    "C:\\tmp\\dsbx-f030-work\\pbo\\d94a927\\@DayZSandbox_QA\\Addons\\DayZSandbox_QA.pbo",
+    "--evidence",
+    "evidence/m1/F0.3-0/retail-20261115T061436Z",
+    "--both",
+    "--build",
+    "retail",
+    "--server-profile",
+    "C:\\tmp\\dsbx-f030-work\\partida\\profiles_retail\\server",
+    "--client-profile",
+    "C:\\tmp\\dsbx-f030-work\\partida\\profiles_retail\\client",
+    "--peer-timeout",
+    "600"
+  ],
+  "both": true,
+  "build": "retail",
+  "ended_utc": "2026-11-15T06:19:03Z",
+  "execution_identity": {
+    "fake_peer_pids": {
+      "client": null,
+      "server": null
+    },
+    "key_sha256": {
+      "client": "451366e038b745f6",
+      "server": "0d569699b6e45094"
+    },
+    "peer_insts": {
+      "client": [
+        "79aad6768efd4b78a408bf3f89ddd537"
+      ],
+      "server": [
+        "767d2800b5fd48b485a234ea6c6056dd"
+      ]
+    },
+    "port": 54536
+  },
+  "faults": [],
+  "harness": {
+    "git_dirty": false,
+    "git_head": "d94a927a4b3f3ce46e04fbd70cb8051ea92844d8",
+    "platform": "Windows-11-10.0.22631-SP0",
+    "python": "3.14.3"
+  },
+  "id": "F0.3-0",
+  "identity": {
+    "build": "retail",
+    "git_dirty": false,
+    "git_head": "d94a927a4b3f3ce46e04fbd70cb8051ea92844d8",
+    "params": {
+      "hold_ms": 2000,
+      "lease_ms": 3000,
+      "probe_budget_log_poll_ms": 10,
+      "probe_budget_retry_ms": 1000,
+      "retry_ms": 2000,
+      "seed": 20261026,
+      "ttl_ms": 5000,
+      "wire_cap": 3500
+    },
+    "pbo_sha256": "0d4ae9d973d6d40d10d8263bdfb3a3eead10327c7a827a4b7c9da1449b57a1d6",
+    "peer_builds": {
+      "client": "retail",
+      "server": "retail"
+    },
+    "probe_stamp": "02952a5a9658cc6e"
+  },
+  "kind": "spike",
+  "params": {
+    "hold_ms": 2000,
+    "lease_ms": 3000,
+    "port": 54536,
+    "retry_ms": 2000,
+    "run_id": "8f989b82",
+    "seed": 20261026,
+    "ttl_ms": 5000
+  },
+  "schema": "dsbx-qa-manifest/1",
+  "started_utc": "2026-11-15T06:17:36Z"
+}

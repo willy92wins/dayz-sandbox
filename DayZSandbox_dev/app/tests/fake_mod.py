@@ -21,14 +21,33 @@ import sys
 import threading
 import time
 from collections import OrderedDict
+from pathlib import Path
 from urllib.parse import quote
+
+try:
+    from app.tests.fake_world import FakeWorld
+except ImportError:  # CLI: python app/tests/fake_mod.py
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from app.tests.fake_world import FakeWorld
 
 WIRE_CAP = 3500
 # El motor corta a 1023 caracteres cada cadena que lee con JsonSerializer (medido en la partida diag
 # de F0.3-0, BASE-01). El mod falso lee las respuestas igual, para que las pruebas sin juego lo vean.
 ENGINE_STR_CAP = 1023
 REG_SHA = "0" * 64
+MAX_STRING_CHARS = 1023  # A15/M20: el motor corta cada cadena de un JSON a 1023
 _HEX = re.compile(r"[0-9a-fA-F]+")
+
+
+def _truncate_strings(obj, limit=MAX_STRING_CHARS):
+    """Copia profunda de `obj` con cada cadena cortada a `limit` (M20)."""
+    if isinstance(obj, str):
+        return obj[:limit]
+    if isinstance(obj, list):
+        return [_truncate_strings(x, limit) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _truncate_strings(v, limit) for k, v in obj.items()}
+    return obj
 
 
 def cut_engine_strings(obj, cap=ENGINE_STR_CAP):
@@ -138,6 +157,10 @@ class _Peer:
         self.annotate_rev_delta = 0
         self.state_read_mode = "ok"
         self.drop_all_results = False
+        # solo pruebas: op_id cuyos resultados se pierden siempre (las lecturas no)
+        self.drop_results_for = set()
+        # solo pruebas: verbos cuyos resultados se pierden siempre (C-01)
+        self.drop_results_for_verb = set()
         self._drop_next_result = False
         self._lose_next_ack = False
         self._cut_until = 0.0
@@ -251,8 +274,15 @@ class _Peer:
         body = {"proto": "dsbx1", "peer": self.role, "inst": self.inst,
                 "epoch": self.epoch, "mod_ver": self.fake.mod_ver, "build": "retail"}
         if self.role == "server":
-            body.update({"map": "chernarus", "world_size": 15360,
+            world_size = 15360
+            scene = None
+            if self.fake.world is not None:
+                world_size = self.fake.world.world_size
+                scene = 1
+            body.update({"map": "chernarus", "world_size": world_size,
                          "modset": ["DayZSandbox"], "actor_engine": "none"})
+            if scene is not None:
+                body["scene"] = scene
         try:
             status, obj, _ts, _tr = self._http("POST", "/hello", body, route="hello")
         except (OSError, ValueError):
@@ -439,6 +469,10 @@ class _Peer:
     def _execute(self, entry):
         order = entry.order
         verb = order["verb"]
+        if self.fake.world is not None and verb in (
+                "state.read", "scene.apply", "scene.reset", "scene.observe"):
+            self._execute_world(entry, verb)
+            return
         if verb == "state.read":
             if self.state_read_mode == "error":
                 self._finish(entry, "error", "state_read_error", {})
@@ -484,6 +518,39 @@ class _Peer:
         self.fake._set_generation(gen)
         self._finish(entry, "done", None, self.fake.world_read())
 
+    def _tick(self):
+        """Tick del peer durante un verbo del mundo: poll de mantenimiento (M8).
+
+        Si los polls estan cortados, no se manda nada y el lease del peer caduca.
+        """
+        if time.monotonic() < self._cut_until:
+            self._sleep(0.005)
+            return
+        self._poll_once(deliver=False)
+
+    def _execute_world(self, entry, verb):
+        order = entry.order
+        args = _truncate_strings(order.get("args"))
+        order2 = dict(order)
+        order2["args"] = args
+        check = lambda: self._check_before_effect(entry)
+        tick = lambda: self._tick()
+        if verb == "state.read":
+            doc_id = args.get("doc_id") if isinstance(args, dict) else None
+            if isinstance(doc_id, str) and doc_id:
+                read = self.fake.world.read(doc_id)
+            else:
+                read = self.fake.world_read()
+            self._finish(entry, "done", None, read)
+            return
+        if verb == "scene.apply":
+            status, reason, read = self.fake.world.apply(order2, check=check, tick=tick)
+        elif verb == "scene.reset":
+            status, reason, read = self.fake.world.reset(order2, check=check, tick=tick)
+        else:
+            status, reason, read = self.fake.world.observe(order2)
+        self._finish(entry, status, reason, read)
+
     # -- resultados ----------------------------------------------------------------
     def _attempt_result(self, entry):
         """Un intento. Devuelve 'ok', 'unknown' o 'fail'."""
@@ -499,6 +566,10 @@ class _Peer:
                     "epoch": entry.order["epoch"], "status": "error",
                     "reason": "result_too_large", "dup": bool(entry.send_dup), "read": {}}
         if self.drop_all_results:
+            return "fail"
+        if entry.order["op_id"] in self.drop_results_for:
+            return "fail"
+        if entry.order["verb"] in self.drop_results_for_verb:
             return "fail"
         if self._drop_next_result:
             self._drop_next_result = False
@@ -640,7 +711,7 @@ class FakeMod:
                  deadline_margin_ms=100, retention_extra_ms=1000,
                  work_before_ms=0, work_between_ms=0,
                  catalog_classes=None, catalog_page_size=1,
-                 mod_ver="fake-1", epoch=None, r_retry_unknown=False):
+                 mod_ver="fake-1", epoch=None, world=None, r_retry_unknown=False):
         self.bridge_url = bridge_url
         self.peer_key = peer_key
         self.cache_capacity = int(cache_capacity)
@@ -654,12 +725,17 @@ class FakeMod:
         # reintenta como cualquier fallo, hasta el cuarto.
         self.r_retry_unknown = bool(r_retry_unknown)
         self.mod_ver = mod_ver
+        self.world = world
+        if catalog_classes is None and world is not None:
+            catalog_classes = world.catalog_classes()
         self.catalog_classes = catalog_classes or [["FakeClaseA", "BaseA"],
                                                    ["FakeClaseB", "BaseB"]]
         self.catalog_page_size = int(catalog_page_size)
         self._peer_kwargs = {"work_before_ms": work_before_ms,
                              "work_between_ms": work_between_ms}
-        self.epoch = epoch or secrets.token_hex(16)
+        # Con mundo, el epoch de los peers es el del mundo: las ordenes llevan ese
+        # epoch y el mundo las acepta.
+        self.epoch = world.epoch if world is not None else (epoch or secrets.token_hex(16))
         self._world_lock = threading.Lock()
         self._generation = None
         self._effects = {}
@@ -784,7 +860,10 @@ class FakeMod:
     def restart_mission(self):
         for p in list(self.peers.values()):
             p.stop()
-        self.epoch = secrets.token_hex(16)
+        if self.world is not None:
+            self.epoch = self.world.restart()
+        else:
+            self.epoch = secrets.token_hex(16)
         with self._world_lock:
             self._generation = None
             self._mission_effects = {"retirar": 0, "anotar": 0}
@@ -827,6 +906,8 @@ class FakeMod:
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Mod falso dsbx1")
     ap.add_argument("--config", required=True)
+    ap.add_argument("--world", action="store_true",
+                    help="peer servidor con mundo falso (escena sin actores de F2)")
     args = ap.parse_args(argv)
     with open(args.config, encoding="utf-8") as f:
         cfg = json.load(f)
@@ -835,7 +916,13 @@ def main(argv=None):
     if not peer_key:
         print("Falta peer_key en la configuracion", file=sys.stderr)
         return 2
-    fake = FakeMod("http://127.0.0.1:%d" % int(bridge_port), peer_key)
+    world = None
+    if args.world:
+        fixture = Path(__file__).resolve().parents[2] / "fixtures" / "escena-sin-actores.json"
+        with fixture.open("r", encoding="utf-8") as f:
+            json.load(f)  # la escena la aplica el backend; aqui solo se comprueba
+        world = FakeWorld()
+    fake = FakeMod("http://127.0.0.1:%d" % int(bridge_port), peer_key, world=world)
     print("Mod falso dsbx1 conectado al bridge local", flush=True)
     try:
         while True:

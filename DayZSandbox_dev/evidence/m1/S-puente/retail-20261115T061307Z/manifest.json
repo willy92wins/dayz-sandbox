@@ -1,0 +1,40 @@
+{
+  "argv": [
+    "spike",
+    "S-puente",
+    "--evidence",
+    "evidence/m1/S-puente/retail-20261115T061307Z",
+    "--both",
+    "--build",
+    "retail",
+    "--server-profile",
+    "C:\\tmp\\dsbx-f030-work\\partida\\profiles_retail\\server",
+    "--client-profile",
+    "C:\\tmp\\dsbx-f030-work\\partida\\profiles_retail\\client",
+    "--peer-timeout",
+    "600"
+  ],
+  "both": true,
+  "build": "retail",
+  "ended_utc": "2026-11-15T06:14:36Z",
+  "faults": [],
+  "harness": {
+    "git_dirty": false,
+    "git_head": "d94a927a4b3f3ce46e04fbd70cb8051ea92844d8",
+    "platform": "Windows-11-10.0.22631-SP0",
+    "python": "3.14.3"
+  },
+  "id": "S-puente",
+  "kind": "spike",
+  "params": {
+    "hold_ms": 2000,
+    "lease_ms": 3000,
+    "port": 62308,
+    "retry_ms": 2000,
+    "run_id": "3b69aae2",
+    "seed": 20261026,
+    "ttl_ms": 5000
+  },
+  "schema": "dsbx-qa-manifest/1",
+  "started_utc": "2026-11-15T06:13:07Z"
+}
