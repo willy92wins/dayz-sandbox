@@ -116,6 +116,14 @@ class FakeBase(unittest.TestCase):
         self.assertTrue(wait_until(lambda: any(pred(b) for b in fake.server.sent_results), timeout),
                         "el resultado esperado no aparece en sent_results")
 
+    def peer_snapshot(self, fake, op_id):
+        """Estado del peer servidor para el mensaje de un fallo: entradas de op_id, sesion y envios."""
+        s = fake.server
+        with s._lock:
+            ents = [(e.state, e.pending, e.attempts) for e in s.cache.values() if e.order["op_id"] == op_id]
+            n_pending = len(s._pending)
+        return "entradas=%r session=%s pendientes=%d" % (ents, "si" if s.session else "no", n_pending)
+
     def wait_state(self, env, op_id, state, timeout=8.0):
         ok = wait_until(lambda: env.op(op_id)["state"] == state, timeout)
         self.assertTrue(ok, "op %s no llego a %s (esta %s)" % (op_id, state, env.op(op_id)))
@@ -614,17 +622,19 @@ class BR22ConfirmacionTardia(FakeBase):
         fake.server.poll_response_delay_ms = 900
         r = env.apply_direct()
         op_id = r["op_id"]
-        # la orden llega vencida: rejected/expired en cache, sin transmitir
+        # la orden llega vencida: rejected/expired en cache, sin transmitir. Con la maquina muy
+        # cargada los hilos del mod falso pueden quedarse segundos sin CPU: esperas de 15 s.
         self.assertTrue(wait_until(
             lambda: any(e.order["op_id"] == op_id and e.state == "terminada" and not e.pending
-                        for e in fake.server.cache.values()), 5))
-        self.wait_past_ttl(env, op_id)
+                        for e in fake.server.cache.values()), 15),
+            self.peer_snapshot(fake, op_id))
+        self.wait_past_ttl(env, op_id, timeout=15)
         env.bridge.sweep()
-        self.assertEqual(env.op(op_id)["state"], "parcial")
+        self.assertEqual(env.op(op_id)["state"], "parcial", self.peer_snapshot(fake, op_id))
         fake.server.drop_all_results = False
         fake.server.poll_response_delay_ms = 0
         self.assertTrue(fake.resend_cached_result(op_id))
-        op = self.wait_state(env, op_id, "fallido")
+        op = self.wait_state(env, op_id, "fallido", timeout=15)
         self.assertEqual(op["reason"], "expired")
 
     def test_error_tardio_sigue_parcial_con_motivo_nuevo(self):
