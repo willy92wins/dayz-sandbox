@@ -41,6 +41,8 @@ function Own([string]$Role, [int]$ProcessId) {
   $st = $null; if ($p) { try { $st = $p.StartTime.ToUniversalTime().ToString('o') } catch { $st = $null } }
   [pscustomobject]@{ role = $Role; pid = $ProcessId; start_time = $st }
 }
+# EVIDENCIA v1.5, R14: sin instante de creacion no hay identidad. Ese proceso cuenta como vivo mientras
+# exista su PID (bloquea la suelta del lease) y nunca recibe WM_CLOSE.
 function IsAlive($o) {
   $p = Get-Process -Id $o.pid -ErrorAction SilentlyContinue
   if (-not $p) { return $false }
@@ -49,13 +51,16 @@ function IsAlive($o) {
 }
 function CloseOwn($o) {
   if (-not (IsAlive $o)) { return "$($o.role) pid $($o.pid) ya no estaba" }
+  if (-not $o.start_time) { return "$($o.role) pid $($o.pid) SIN instante de creacion: no lo cierro" }
   foreach ($h in [MCPWin]::WindowsOf([uint32]$o.pid)) { [void][MCPWin]::PostMessage($h, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
   for ($i = 0; $i -lt 240; $i++) { Start-Sleep -Milliseconds 500; if (-not (IsAlive $o)) { return "$($o.role) pid $($o.pid) cerrado por WM_CLOSE" } }
   return "$($o.role) pid $($o.pid) SIGUE VIVO tras WM_CLOSE"
 }
+# JSON con LF (EVIDENCIA); las claves van ya ordenadas en los [ordered] de quien llama.
 function WriteJson([string]$Path, $Obj) {
   $tmp = "$Path.tmp"
-  [IO.File]::WriteAllText($tmp, ($Obj | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+  $text = (($Obj | ConvertTo-Json -Depth 6) -replace "`r`n", "`n") + "`n"
+  [IO.File]::WriteAllText($tmp, $text, (New-Object System.Text.UTF8Encoding($false)))
   Move-Item -Force $tmp $Path
 }
 
@@ -63,8 +68,11 @@ function WriteJson([string]$Path, $Obj) {
 New-Item -ItemType Directory -Force $WorkRoot | Out-Null
 $pbo = Join-Path $Mod 'Addons\DayZSandbox.pbo'
 if (-not (Test-Path $pbo)) { L "no existe $pbo : no lanzo"; exit 3 }
-$dirty = (& git -C $WS status --porcelain -- . ':(exclude)evidence') -join "`n"
-if ($dirty) { L "repo sucio fuera de evidence/ (git_dirty): no lanzo`n$dirty"; exit 3 }
+# EVIDENCIA v1.5, R1: todo el worktree (tambien el mod hermano DayZSandbox/), menos la evidencia.
+$RepoRoot = Split-Path $WS -Parent
+$dirty = (& git -C $RepoRoot status --porcelain -- . ':(exclude)DayZSandbox_dev/evidence') -join "`n"
+if ($LASTEXITCODE -ne 0) { L "git status fallo en $RepoRoot (exit $LASTEXITCODE): no lanzo"; exit 3 }
+if ($dirty) { L "worktree sucio fuera de DayZSandbox_dev/evidence (git_dirty): no lanzo`n$dirty"; exit 3 }
 $ajenos = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like 'DayZ*' -and $_.ProcessName -ne 'DayZToolsLauncher' })
 if ($ajenos.Count) { L "hay DayZ abiertos ($(($ajenos | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ', ')): no lanzo"; exit 3 }
 $co = & $Py -I $Lease comprobar --min-vram-libre 4000 2>&1 | Out-String
@@ -75,6 +83,7 @@ L "gpu_lease adquirir (exit $LASTEXITCODE): $($lo.Trim())"
 if ($LASTEXITCODE -ne 0) { L "sin lease de GPU: no lanzo"; exit 4 }
 
 $own = @()
+$identityProblem = $false   # R14: un proceso propio sin identidad acreditada impide soltar el lease
 $ev = "evidence/m1/F1b-peers/$Build-$(Utc)"
 $evAbs = Join-Path $WS $ev
 $allClosed = $false
@@ -117,14 +126,32 @@ try {
     Start-Sleep -Seconds 60
     $antes = @(Get-Process -Name DayZ_x64 -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
     $bepid = Start-ExeViaWmi (Join-Path $GameDir 'DayZ_BE.exe') $GameDir "0 1 1 -exe DayZ_x64.exe `"-mod=$Mod`" -connect=127.0.0.1 -port=$Port `"-profiles=$C`" -name=DSBXQA -window -x=1280 -y=720 -noPause"
-    $own += Own 'battleye_launcher' $bepid; L "lanzador BattlEye pid=$bepid"
+    $beOwn = Own 'battleye_launcher' $bepid
+    $own += $beOwn; L "lanzador BattlEye pid=$bepid"
+    # R14. Bajo BattlEye la linea de ordenes de DayZ_x64 sale vacia (F0.3-0), asi que la procedencia es:
+    # un DayZ_x64 que no estaba antes, creado despues del lanzador; si alguno es hijo del lanzador, solo esos.
+    # Un candidato exacto se adopta; cero o varios: no se adopta ni se cierra ninguno y no se suelta el lease.
+    $beStart = $null; if ($beOwn.start_time) { $beStart = [datetime]::Parse($beOwn.start_time).ToUniversalTime() }
+    $adopted = $false
     for ($i = 0; $i -lt 120; $i++) {
       Start-Sleep -Milliseconds 500
-      $nuevos = @(Get-Process -Name DayZ_x64 -ErrorAction SilentlyContinue | Where-Object { $antes -notcontains $_.Id })
-      if ($nuevos.Count -eq 1) { $own = @(Own 'client' $nuevos[0].Id) + $own; L "cliente retail (juego) pid=$($nuevos[0].Id)"; break }
-      elseif ($nuevos.Count -gt 1) { L "aparecen $($nuevos.Count) DayZ_x64 nuevos: no adopto ninguno"; break }
+      $nuevos = @(Get-CimInstance Win32_Process -Filter "Name='DayZ_x64.exe'" -ErrorAction SilentlyContinue | Where-Object {
+          ($antes -notcontains [int]$_.ProcessId) -and $beStart -and $_.CreationDate -and ($_.CreationDate.ToUniversalTime() -ge $beStart.AddSeconds(-1)) })
+      if ($nuevos.Count -eq 0) { continue }
+      $hijos = @($nuevos | Where-Object { [int]$_.ParentProcessId -eq $bepid })
+      $cands = $nuevos; $via = 'nuevo tras el lanzador'
+      if ($hijos.Count -gt 0) { $cands = $hijos; $via = 'hijo del lanzador BattlEye' }
+      if ($cands.Count -eq 1) {
+        $cli = Own 'client' ([int]$cands[0].ProcessId)
+        if (-not $cli.start_time) { $identityProblem = $true; L "cliente retail pid=$($cli.pid) sin instante de creacion: identidad sin acreditar" }
+        $own = @($cli) + $own; $adopted = $true; L "cliente retail (juego) pid=$($cli.pid) ($via)"; break
+      }
+      $identityProblem = $true; L "hay $($cands.Count) DayZ_x64 candidatos ($via): no adopto ninguno"; break
     }
+    if (-not $beStart) { $identityProblem = $true; L "lanzador BattlEye sin instante de creacion: identidad sin acreditar" }
+    if (-not $adopted -and -not $identityProblem) { $identityProblem = $true; L "ningun DayZ_x64 nuevo en 60 s: identidad sin acreditar" }
   }
+  foreach ($o in $own) { if (-not $o.start_time) { $identityProblem = $true; L "$($o.role) pid $($o.pid) sin instante de creacion: identidad sin acreditar" } }
   WriteJson $pidsFile @{ processes = $own }
   L "pids.json: $(($own | ForEach-Object { "$($_.role)=$($_.pid)" }) -join ', ')"
 
@@ -134,22 +161,26 @@ try {
 finally {
   foreach ($o in $own) { L (CloseOwn $o) }
   $vivos = @($own | Where-Object { IsAlive $_ })
-  $allClosed = ($vivos.Count -eq 0)
+  # R2 y R14: logs finales solo con todo lo propio cerrado y todas las identidades acreditadas.
+  $allClosed = ($vivos.Count -eq 0) -and (-not $identityProblem)
   if (Test-Path $evAbs) {
     $logs = "$evAbs\logs"; New-Item -ItemType Directory -Force $logs | Out-Null
-    $inv = @{}
+    # R3: por perfil, su carpeta y todos sus logs; y la correspondencia de cada copia.
+    $perPeer = @{}
+    $copies = @()
     foreach ($pair in @(@('server', $S), @('client', $C))) {
-      $files = @(Get-ChildItem $pair[1] -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.log', '.RPT' })
-      $inv[$pair[0]] = @($files | ForEach-Object { $_.Name })
+      $files = @(Get-ChildItem $pair[1] -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.log', '.RPT', '.ADM', '.mdmp' })
+      $perPeer[$pair[0]] = [ordered]@{ dir = (Resolve-Path $pair[1]).Path; files = @($files | ForEach-Object { $_.Name } | Sort-Object) }
       $sl = @($files | Where-Object { $_.Name -like 'script_*.log' })
-      if ($sl.Count -eq 1) { Copy-Item $sl[0].FullName "$logs\$($pair[0])_script.log" -Force }
+      if ($sl.Count -eq 1) { Copy-Item $sl[0].FullName "$logs\$($pair[0])_script.log" -Force; $copies += [ordered]@{ dest = "$($pair[0])_script.log"; peer = $pair[0]; src = $sl[0].Name } }
       elseif ($sl.Count -gt 1) { L "$($pair[0]): $($sl.Count) script_*.log de la sesion (log_ambiguous): no copio ninguno" }
       $rpt = @($files | Where-Object { $_.Extension -eq '.RPT' })
-      if ($rpt.Count -eq 1) { Copy-Item $rpt[0].FullName "$logs\$($pair[0]).RPT" -Force }
+      if ($rpt.Count -eq 1) { Copy-Item $rpt[0].FullName "$logs\$($pair[0]).RPT" -Force; $copies += [ordered]@{ dest = "$($pair[0]).RPT"; peer = $pair[0]; src = $rpt[0].Name } }
       elseif ($rpt.Count -gt 1) { L "$($pair[0]): $($rpt.Count) RPT de la sesion: no copio ninguno" }
     }
+    $inv = [ordered]@{ client = $perPeer['client']; copies = @($copies); server = $perPeer['server'] }
     WriteJson "$logs\inventory.json" $inv
-    WriteJson "$evAbs\logs_ready.json" @{ all_closed = $allClosed }
+    WriteJson "$evAbs\logs_ready.json" ([ordered]@{ all_closed = $allClosed })
     if ($h -and -not $h.HasExited) { $h.WaitForExit(15 * 60000) | Out-Null }
     if ($h) { L "orquestador exit $($h.ExitCode)" }
     & $Py (Join-Path $WS 'qa\live\f1bp_eval.py') $evAbs 2>&1 | ForEach-Object { L "eval: $_" }
@@ -158,6 +189,9 @@ finally {
   if ($allClosed) {
     $so = & $Py -I $Lease soltar --sesion $LeaseSesion 2>&1 | Out-String
     L "gpu_lease soltar (exit $LASTEXITCODE): $($so.Trim())"
+  } elseif ($identityProblem) {
+    L "IDENTIDAD DE PROCESOS SIN ACREDITAR (R14): NO suelto el lease; revisar a mano los DayZ abiertos"
+    exit 5
   } else {
     L "QUEDAN PROCESOS PROPIOS VIVOS ($(($vivos | ForEach-Object { "$($_.role)=$($_.pid)" }) -join ', ')): NO suelto el lease"
     exit 5
