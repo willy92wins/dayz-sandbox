@@ -241,5 +241,111 @@ class F1bPeersDryRun(unittest.TestCase):
             self.assertFalse(os.path.exists(tmp), "la carpeta temporal no se borro")
 
 
+class F1bPeersDryRunG4G8(unittest.TestCase):
+    def test_dryrun_g4_g8(self):
+        live = _load_module("f1bp_live_dryrun_g4g8", LIVE_PATH)
+        tmp = tempfile.mkdtemp(prefix="dsbx-f1bp-dry-")
+        ev = os.path.join(tmp, "evidence")
+        try:
+            args = argparse.Namespace(
+                build="diag",
+                evidence=ev,
+                server_profile=os.path.join(tmp, "server"),
+                client_profile=os.path.join(tmp, "client"),
+                pids_file=os.path.join(tmp, "pids.json"),
+                scenarios="G4,G8",
+                pbo=None,
+                fake=True,
+            )
+            rc = live.run(args)
+            # G4 acaba aborted a proposito con el falso: (a) y (c) necesitan el motor.
+            self.assertEqual(rc, 2, "el orquestador salio con %r" % rc)
+
+            g4 = _load_jsonl(os.path.join(ev, "samples", "G4.jsonl"))
+            g8 = _load_jsonl(os.path.join(ev, "samples", "G8.jsonl"))
+
+            # --- G4 ---
+            end4 = [e for e in g4 if e.get("ev") == "end"]
+            self.assertTrue(end4, "G4 sin end")
+            self.assertEqual(end4[-1].get("status"), "aborted")
+            self.assertEqual(end4[-1].get("reason"), "fake: G4 (a) y (c) necesitan el motor")
+
+            index = {}
+            for idx, event in enumerate(g4):
+                index.setdefault(event.get("ev"), []).append(idx)
+            self.assertIn("backend_restart", index, "G4 sin backend_restart")
+            self.assertIn("stale_order", index, "G4 sin stale_order")
+            self.assertIn("rules_active", index, "G4 sin rules_active")
+            stale = g4[index["stale_order"][0]]
+            self.assertLess(min(index["rules_active"]), index["stale_order"][0],
+                            "rules_active no precede al stale_order")
+            stale_op = stale.get("op_id")
+            self.assertTrue(stale_op, "stale_order sin op_id")
+            self.assertTrue(stale.get("old_session"), "stale_order sin old_session")
+            restart = g4[index["backend_restart"][0]]
+            self.assertEqual(restart.get("old_session"), stale.get("old_session"))
+            self.assertNotEqual(restart.get("new_session"), restart.get("old_session"))
+
+            server_log = os.path.join(ev, "logs", "server_script.log")
+            with open(server_log, "r", encoding="utf-8") as fh:
+                log_lines = [line.strip() for line in fh]
+            stale_effects = [
+                line for line in log_lines
+                if "[DSBX] effect " in line and (" op=%s " % stale_op) in (line + " ")
+            ]
+            self.assertEqual(stale_effects, [], "la orden vieja tiene effect")
+
+            for event in g4:
+                if event.get("ev") == "result_seen" and event.get("op_id") == stale_op:
+                    self.assertEqual(event.get("status"), "rejected", event)
+                    self.assertEqual(event.get("reason"), "stale_session", event)
+
+            recoveries = [e for e in g4 if e.get("ev") == "recovery"]
+            self.assertTrue(recoveries, "G4 sin recovery")
+            self.assertTrue(
+                any(
+                    e.get("ev") == "op_state" and e.get("op_id") == recoveries[-1].get("op_id")
+                    and e.get("state") == "observado"
+                    for e in g4
+                ),
+                "la recovery de G4 no llego a observado",
+            )
+
+            # --- G8 ---
+            cases = {e.get("name"): e for e in g8 if e.get("ev") == "case"}
+            for name in ("a", "b", "c"):
+                self.assertIn(name, cases, "G8 sin caso %s" % name)
+            op_b = cases["b"].get("op_id")
+            self.assertTrue(
+                any(
+                    e.get("ev") == "result_seen" and e.get("op_id") == op_b and e.get("dup") is True
+                    for e in g8
+                ),
+                "G8 caso b sin result_seen con dup true",
+            )
+            self.assertEqual(cases["c"].get("op_id"), "op-1")
+
+            # --- evaluador real: PASA en G8 ---
+            evaluator = _load_module("f1bp_eval_dryrun_g4g8", EVAL_PATH)
+            result = evaluator.evaluate(ev)
+            row = result.get("rows", {}).get("G8")
+            self.assertIsInstance(row, dict, "evaluador sin fila G8")
+            self.assertEqual(row.get("verdict"), "PASA", "evaluador G8: %r" % (row,))
+
+            # --- ninguna clave en ningun fichero ---
+            secrets_used = tuple(getattr(live, "LAST_SECRETS", ()))
+            self.assertGreaterEqual(len(secrets_used), 3)
+            for root, _dirs, files in os.walk(tmp):
+                for name in files:
+                    path = os.path.join(root, name)
+                    with open(path, "rb") as fh:
+                        data = fh.read()
+                    for secret in secrets_used:
+                        self.assertNotIn(secret.encode("utf-8"), data, "clave en %s" % path)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+            self.assertFalse(os.path.exists(tmp), "la carpeta temporal no se borro")
+
+
 if __name__ == "__main__":
     unittest.main()

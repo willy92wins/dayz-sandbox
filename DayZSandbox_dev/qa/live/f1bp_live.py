@@ -697,6 +697,9 @@ class LiveRun:
         poller = RingPoller(self.backend, self.writer, stop_event)
         poller.start()
         try:
+            # result_seen es un evento comun (EVIDENCIA): el envoltorio de handle_result va en todo
+            # escenario, no solo en G4/G8. Es idempotente por bridge y restart_backend lo reengancha.
+            self._l2b2_hook(self.bridge)
             local_aborted, reason = body()
         except Exception as exc:
             local_aborted = True
@@ -795,21 +798,442 @@ class LiveRun:
         return False, None
 
     # === L2b2: G4 y G8 ===
+    def _l2b2_state(self):
+        # Estado propio de este bloque, creado a demanda: __init__ queda fuera de mi write-set.
+        if not hasattr(self, "_l2b2_results"):
+            self._l2b2_results = []
+            self._l2b2_results_lock = threading.Lock()
+            self._l2b2_pollers = []
+            self._l2b2_restarts = 0
+
+    def _l2b2_hook(self, bridge):
+        """Envuelve bridge.handle_result para escribir result_seen y guardarlo en memoria.
+
+        Idempotente por bridge. Se escribe todo cuerpo con op_id, tambien si el bridge lo
+        rechaza (un resultado `rejected/stale_session` llega con un 400, y es evidencia).
+        """
+        self._l2b2_state()
+        if getattr(bridge, "_l2b2_hooked", False):
+            return
+        original = bridge.handle_result
+
+        def wrapped(query, body):
+            t_ms = _now_ms()
+            try:
+                return original(query, body)
+            finally:
+                try:
+                    if isinstance(body, dict) and isinstance(body.get("op_id"), str):
+                        item = {
+                            "t_ms": t_ms,
+                            "op_id": body.get("op_id"),
+                            "status": body.get("status"),
+                            "reason": body.get("reason"),
+                            "dup": body.get("dup") is True,
+                        }
+                        with self._l2b2_results_lock:
+                            self._l2b2_results.append(item)
+                        self.writer.emit(
+                            "result_seen",
+                            t_ms=t_ms,
+                            op_id=item["op_id"],
+                            status=item["status"],
+                            reason=item["reason"],
+                            dup=item["dup"],
+                        )
+                except Exception:
+                    pass
+
+        bridge.handle_result = wrapped
+        bridge._l2b2_hooked = True
+
+    def _l2b2_results_for(self, op_id, since_ms):
+        self._l2b2_state()
+        with self._l2b2_results_lock:
+            return [r for r in self._l2b2_results if r["op_id"] == op_id and r["t_ms"] >= since_ms]
+
+    def _l2b2_stop_pollers(self):
+        self._l2b2_state()
+        pollers, self._l2b2_pollers = self._l2b2_pollers, []
+        for poller, stop_event in pollers:
+            try:
+                poller.drain()
+            except Exception:
+                pass
+            stop_event.set()
+            try:
+                poller.join(timeout=1.0)
+            except Exception:
+                pass
+
+    def _l2b2_new_web(self):
+        web = WebClient(self.backend, self.secrets[1])
+        web.open_session()
+        return web
+
+    def _l2b2_bump_ops(self, n=100):
+        """Adelanta el contador de ops del backend: el op_id de una orden que no debe tener
+        `effect` no se reutiliza despues con efecto en otra sesion (el evaluador cuenta por op)."""
+        with self.store.lock:
+            self.backend._op_n += int(n)
+
+    def _l2b2_clear_rules(self):
+        return self.set_rules(self.next_rules_version(), [], [])
+
+    def _l2b2_sleep_until(self, t_ms):
+        while True:
+            left = t_ms - _now_ms()
+            if left <= 0:
+                return
+            time.sleep(min(0.25, left / 1000.0))
+
+    def _l2b2_apply_ttl(self, web, name, ttl_ms, emit_case=True):
+        """apply con un TTL propio: se cambia bajo bridge.cond justo antes y se restaura justo
+        despues. El evento apply (apply_case) lleva ese ttl_ms."""
+        bridge = self.bridge
+        with bridge.cond:
+            previous = bridge.ttl_ms
+            bridge.ttl_ms = int(ttl_ms)
+        try:
+            if emit_case:
+                return self.apply_case(web, name)
+            status, op_id = web.apply()
+            self.writer.emit(
+                "apply", op_id=op_id, http_status=int(status), ttl_ms=int(bridge.ttl_ms)
+            )
+            return op_id
+        finally:
+            with bridge.cond:
+                bridge.ttl_ms = previous
+
+    def restart_backend(self, bump_ops=True, before_hello=None):
+        """Cierra el backend y crea otro en los mismos puertos (como BR7H1).
+
+        bump_ops: adelanta el contador de ops de la sesion nueva (G8 c lo pone a False: su
+        op-1 tiene que ser el primero de la sesion). before_hello: funcion sin argumentos que
+        corre con el backend nuevo ya arriba y antes de esperar el hello; devuelve bool.
+        Devuelve True si el servidor se presento en la sesion nueva.
+        """
+        self._l2b2_state()
+        old = self.backend
+        old_bridge = self.bridge
+        old_session = old_bridge.session
+        web_port = int(old.port)
+        bridge_port = int(old_bridge.port)
+        old_ops = int(getattr(old, "_op_n", 0))
+        t_start = _now_ms()
+        try:
+            old.shutdown()
+        except Exception:
+            pass
+        if self.backend_thread is not None:
+            try:
+                self.backend_thread.join(timeout=10)
+            except Exception:
+                pass
+        with open(ROOT / "fixtures" / "catalog-m1.json", "r", encoding="utf-8") as fh:
+            catalog = json.load(fh)
+        self._l2b2_restarts += 1
+        store = Store(os.path.join(self.tempdir, "scene-r%d.json" % self._l2b2_restarts), catalog)
+        backend = None
+        deadline = time.monotonic() + 10.0
+        while backend is None:
+            try:
+                backend = Backend(
+                    store,
+                    self.secrets[1],
+                    self.secrets[2],
+                    port=web_port,
+                    log=io.StringIO(),
+                    clock=time.monotonic,
+                    bridge_port=bridge_port,
+                    peer_key=self.secrets[0],
+                    bridge_kwargs={"lease_ms": LEASE_MS, "hold_ms": HOLD_MS, "ttl_ms": TTL_MS},
+                )
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.1)
+        backend.httpd.handle_error = lambda *a: None
+        if bump_ops:
+            backend._op_n = old_ops + 100
+        self.backend = backend
+        self.bridge = backend.bridge
+        self.store = store
+        self.backend_thread = threading.Thread(
+            target=backend.serve_forever, daemon=True, name="f1bp-backend"
+        )
+        self.backend_thread.start()
+        self._l2b2_hook(self.bridge)
+        stop_event = threading.Event()
+        poller = RingPoller(backend, self.writer, stop_event)
+        poller.start()
+        self._l2b2_pollers.append((poller, stop_event))
+
+        if before_hello is not None and not before_hello():
+            return False
+
+        new_session = self.bridge.session
+        deadline = time.monotonic() + OBSERVED_WAIT_S
+        found = False
+        while time.monotonic() < deadline and not found:
+            for line in _read_jsonl(self.proxy_log):
+                if (
+                    line.get("route") == "hello"
+                    and line.get("peer") == "server"
+                    and line.get("upstream_status") == 200
+                    and isinstance(line.get("t_ms"), (int, float))
+                    and line["t_ms"] >= t_start
+                ):
+                    found = True
+                    break
+            if not found:
+                time.sleep(0.1)
+        if not found:
+            return False
+        self.writer.emit("backend_restart", old_session=old_session, new_session=new_session)
+        return True
+
+    def _l2b2_write_peer_key(self, profile, key):
+        """Escribe dsbx_peer.json del servidor con `key` (peer_config.main) y anota el config."""
+        cfg_path = os.path.join(self.tempdir, "backend_l2b2.json")
+        _atomic_write_json(cfg_path, {"peer_key": key, "bridge_port": int(self.proxy.port)})
+        try:
+            rc = peer_config.main(["--config", cfg_path, "--profile", profile])
+        finally:
+            try:
+                os.remove(cfg_path)
+            except OSError:
+                pass
+        if rc != 0:
+            return False
+        self.writer.emit("config", peer="server", qa_step_gap_ms=0, key_sha256=_sha256(key))
+        return True
+
+    def _l2b2_add_manifest_key(self, key):
+        path = os.path.join(self.evidence, "manifest.json")
+        manifest = _read_json(path)
+        if not isinstance(manifest, dict):
+            return
+        hashes = list(manifest.get("key_sha256") or [])
+        digest = _sha256(key)
+        if digest not in hashes:
+            hashes.append(digest)
+        manifest["key_sha256"] = hashes
+        _atomic_write_json(path, manifest)
+
+    # --- G4 ---
+    def _g4_case_a(self):
+        global LAST_SECRETS
+        profile = getattr(self.args, "server_profile", None)
+        if not profile:
+            return "falta el perfil del servidor"
+        bad = secrets.token_urlsafe(32)
+        self.secrets = self.secrets + (bad,)
+        LAST_SECRETS = self.secrets
+        self._l2b2_add_manifest_key(bad)
+        web = self._l2b2_new_web()
+        restored = False
+        try:
+            if not self._l2b2_write_peer_key(profile, bad):
+                return "peer_config fallo con la clave mala"
+            rule = {
+                "id": "g4a_409",
+                "match": {"route": "poll", "peer": "server", "count": 1},
+                "action": {"type": "status", "code": 409, "error": "session_mismatch"},
+            }
+            if not self.set_rules(self.next_rules_version(), [rule], ["g4a_409"]):
+                return "rules_not_active"
+            t_start = _now_ms()
+            op_a = self._l2b2_apply_ttl(web, "a", 2000, emit_case=False)
+            self._l2b2_sleep_until(t_start + 60000.0)
+            t_end = _now_ms()
+            self.writer.emit("bad_key_window", t_start_ms=t_start, t_end_ms=t_end)
+            # El case va al cierre de la ventana: el evaluador mide la recuperacion desde el
+            # evento case y la ventana ya dura 60 s.
+            self.writer.emit("case", name="a", op_id=op_a)
+            if not self._l2b2_clear_rules():
+                return "rules_not_active"
+            if not self._l2b2_write_peer_key(profile, self.secrets[0]):
+                return "peer_config fallo al restaurar la clave"
+            restored = True
+            self.recovery(web)
+            return None
+        finally:
+            if not restored:
+                try:
+                    self._l2b2_write_peer_key(profile, self.secrets[0])
+                except Exception:
+                    pass
+
+    def _g4_case_b(self):
+        # La orden de la sesion vieja no puede tener `effect` ni en la sesion vieja ni despues:
+        # se contiene (los polls se rechazan mientras se encola y se reinicia) y su op_id se
+        # aparta del rango que reutilizaran las sesiones siguientes.
+        web = self._l2b2_new_web()
+        self._l2b2_bump_ops(100)
+        hold = {
+            "id": "g4b_hold",
+            "abort_inflight": True,
+            "match": {"route": "poll", "peer": "server"},
+            "action": {"type": "refuse"},
+        }
+        if not self.set_rules(self.next_rules_version(), [hold], ["g4b_hold"]):
+            return "rules_not_active"
+        op_b = self.apply_case(web, "b")
+        if not op_b:
+            self._l2b2_clear_rules()
+            return "apply fallo en el caso b"
+        with self.bridge.cond:
+            old_session = self.bridge.session
+            order = self.bridge.orders.get((old_session, op_b))
+            stale = self.bridge._public_order(order, self.bridge._now_ms()) if order else None
+        if stale is None:
+            self._l2b2_clear_rules()
+            return "la orden del caso b no esta en el bridge"
+
+        def release():
+            return self._l2b2_clear_rules()
+
+        if not self.restart_backend(bump_ops=True, before_hello=release):
+            return "restart_failed"
+        web = self._l2b2_new_web()
+        self.recovery(web)
+
+        stale_rule = {
+            "id": "g4b_stale",
+            # Sin "deliver": el poll que entrega no lleva el parametro y el proxy lo deja en
+            # null, asi que deliver=1 no casa nunca; un poll de mantenimiento ignora las ops.
+            "match": {"route": "poll", "peer": "server", "count": 1},
+            "action": {"type": "rewrite", "set": {"ops": [stale]}},
+        }
+        t_arm = _now_ms()
+        if not self.set_rules(self.next_rules_version(), [stale_rule], ["g4b_stale"]):
+            return "rules_not_active"
+        self.writer.emit("stale_order", op_id=op_b, old_session=old_session)
+        deadline = time.monotonic() + 30.0
+        next_rearm = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            if self._l2b2_results_for(op_b, t_arm):
+                break
+            if time.monotonic() >= next_rearm:
+                # Un poll de mantenimiento pudo gastar la regla: se rearma (version nueva).
+                self.set_rules(self.next_rules_version(), [stale_rule], ["g4b_stale"])
+                next_rearm = time.monotonic() + 8.0
+            time.sleep(0.05)
+        if not self._l2b2_clear_rules():
+            return "rules_not_active"
+        self.recovery(web)
+        return None
+
+    def _g4_case_c(self):
+        web = self._l2b2_new_web()
+        cut = {
+            "id": "g4c_cut",
+            "abort_inflight": True,
+            "match": {"route": "poll", "peer": "server"},
+            "action": {"type": "refuse"},
+        }
+        if not self.set_rules(self.next_rules_version(), [cut], ["g4c_cut"]):
+            return "rules_not_active"
+        t_active = _now_ms()
+        op_c = self._l2b2_apply_ttl(web, "c", 30000)
+        self._l2b2_sleep_until(t_active + 4500.0)
+        if not self._l2b2_clear_rules():
+            return "rules_not_active"
+        if op_c:
+            self.wait_op(op_c, {"fallido"}, 30.0)
+        self.recovery(web)
+        return None
+
+    def run_g4_body(self):
+        self._l2b2_state()
+        self._l2b2_hook(self.bridge)
+        try:
+            if self.fake_mode:
+                reason = self._g4_case_b()
+                if reason:
+                    return True, reason
+                return True, "fake: G4 (a) y (c) necesitan el motor"
+            for case in (self._g4_case_a, self._g4_case_b, self._g4_case_c):
+                reason = case()
+                if reason:
+                    return True, reason
+            return False, None
+        finally:
+            self._l2b2_stop_pollers()
+
+    # --- G8 ---
+    def _g8_wait_second_result(self, op_id, since_ms, timeout):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if len(self._l2b2_results_for(op_id, since_ms)) >= 2:
+                return True
+            time.sleep(0.05)
+        return False
+
+    def run_g8_body(self):
+        self._l2b2_state()
+        self._l2b2_hook(self.bridge)
+        try:
+            web = self._l2b2_new_web()
+
+            # a: drop_resp al primer resultado; el peer lo repite y no cambia nada
+            rule = {
+                "id": "g8a_drop",
+                "match": {"route": "result", "peer": "server", "count": 1},
+                "action": {"type": "drop_resp"},
+            }
+            if not self.set_rules(self.next_rules_version(), [rule], ["g8a_drop"]):
+                return True, "rules_not_active"
+            t0 = _now_ms()
+            op_a = self.apply_case(web, "a")
+            if op_a:
+                self.wait_op(op_a, {"observado"}, OBSERVED_WAIT_S)
+                self._g8_wait_second_result(op_a, t0, 10.0)
+            if not self._l2b2_clear_rules():
+                return True, "rules_not_active"
+            self.recovery(web)
+
+            # b: cuatro 503 al resultado; el peer abandona y el backend reentrega (dup:true)
+            rule = {
+                "id": "g8b_503",
+                "match": {"route": "result", "peer": "server", "count": 4},
+                "action": {"type": "status", "code": 503, "error": "unavailable"},
+            }
+            if not self.set_rules(self.next_rules_version(), [rule], ["g8b_503"]):
+                return True, "rules_not_active"
+            t0 = _now_ms()
+            op_b = self.apply_case(web, "b")
+            if op_b:
+                deadline = time.monotonic() + OBSERVED_WAIT_S
+                while time.monotonic() < deadline:
+                    if any(r["dup"] for r in self._l2b2_results_for(op_b, t0)):
+                        break
+                    time.sleep(0.05)
+                self.wait_op(op_b, {"observado"}, OBSERVED_WAIT_S)
+            if not self._l2b2_clear_rules():
+                return True, "rules_not_active"
+            self.recovery(web)
+
+            # c: backend reiniciado; el op-1 de la sesion nueva (sin adelantar el contador)
+            if not self.restart_backend(bump_ops=False):
+                return True, "restart_failed"
+            web = self._l2b2_new_web()
+            op_c = self.apply_case(web, "c")
+            if op_c:
+                self.wait_op(op_c, {"observado"}, OBSERVED_WAIT_S)
+            self.recovery(web)
+            return False, None
+        finally:
+            self._l2b2_stop_pollers()
     # === fin L2b2 ===
 
     def confirm_gap_zero(self, profile):
         if not profile:
             return False
-        logs = glob.glob(os.path.join(profile, "script_*.log"))
-        for path in logs:
-            try:
-                with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                    for line in fh:
-                        if "config qa_step_gap_ms=0" in line:
-                            return True
-            except OSError:
-                continue
-        return False
+        # Solo cuenta la ULTIMA linea `config qa_step_gap_ms=` del script_*.log mas reciente.
+        return self._g56_last_gap(profile) == 0
 
     def run_g9_body(self):
         web = WebClient(self.backend, self.secrets[1])
@@ -840,7 +1264,639 @@ class LiveRun:
 
     # --- cierre --------------------------------------------------------------
     # === L2b3: G5, G6 y G7 ===
+    # --- L2b3a: G5 y G6 (ayudantes _g56_*) ---
+    @staticmethod
+    def _g56_last_gap(profile):
+        """Ultimo `config qa_step_gap_ms=<n>` del script_*.log mas reciente del perfil, o None."""
+        import re
+
+        if not profile:
+            return None
+        try:
+            logs = [p for p in glob.glob(os.path.join(profile, "script_*.log")) if os.path.isfile(p)]
+        except OSError:
+            return None
+        if not logs:
+            return None
+        try:
+            newest = max(logs, key=lambda p: os.path.getmtime(p))
+        except OSError:
+            return None
+        pattern = re.compile(r"\bconfig qa_step_gap_ms=(\d+)")
+        last = None
+        try:
+            with open(newest, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    found = pattern.search(line)
+                    if found:
+                        last = int(found.group(1))
+        except OSError:
+            return None
+        return last
+
+    def _g56_mark(self):
+        try:
+            return os.path.getsize(self.proxy_log)
+        except OSError:
+            return 0
+
+    def _g56_wait_fire(self, rule_id, mark, timeout_s):
+        """Linea de proxy.jsonl con ese rule_id (a partir de `mark`), sondeando cada 5 ms.
+
+        Devuelve la de menor t_ms entre las vistas en una gracia de 40 ms (la del disparo
+        empieza antes que cualquiera de su ventana), o None si no aparece.
+        """
+        deadline = time.monotonic() + timeout_s
+        offset = int(mark)
+        buf = b""
+        found = []
+        grace_until = None
+        while time.monotonic() < deadline:
+            try:
+                with open(self.proxy_log, "rb") as fh:
+                    fh.seek(offset)
+                    chunk = fh.read()
+            except OSError:
+                chunk = b""
+            if chunk:
+                buf += chunk
+                offset += len(chunk)
+                cut = buf.rfind(b"\n")
+                if cut >= 0:
+                    complete, buf = buf[: cut + 1], buf[cut + 1:]
+                    for raw in complete.split(b"\n"):
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            obj = json.loads(raw.decode("utf-8", errors="replace"))
+                        except ValueError:
+                            continue
+                        if isinstance(obj, dict) and obj.get("rule_id") == rule_id:
+                            found.append(obj)
+            if found and grace_until is None:
+                grace_until = time.monotonic() + 0.04
+            if grace_until is not None and time.monotonic() >= grace_until:
+                break
+            time.sleep(0.005)
+        if not found:
+            return None
+        found = [f for f in found if isinstance(f.get("t_done_ms"), (int, float))] or found
+        return min(found, key=lambda f: f.get("t_ms") if isinstance(f.get("t_ms"), (int, float)) else 0)
+
+    def _g56_sleep_until(self, t_ms):
+        while True:
+            left = t_ms - _now_ms()
+            if left <= 0:
+                return
+            time.sleep(min(0.25, left / 1000.0))
+
+    def _g56_clear_rules(self):
+        if not self.set_rules(self.next_rules_version(), [], []):
+            raise RuntimeError("rules_not_cleared")
+
+    def _g56_apply_case(self, web, name, peer):
+        status, op_id = web.apply()
+        self.writer.emit(
+            "apply", op_id=op_id, http_status=int(status), ttl_ms=int(self.bridge.ttl_ms)
+        )
+        self.writer.emit("case", name=name, peer=peer, op_id=op_id)
+        return op_id
+
+    def _g56_set_gap(self, gap):
+        """Pone qa_step_gap_ms en dsbx_peer.json del servidor y espera a que el log lo diga."""
+        profile = getattr(self.args, "server_profile", None)
+        if not profile:
+            return False
+        path = os.path.join(profile, "dsbx_peer.json")
+        with open(path, "r", encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        if not isinstance(cfg, dict) or not isinstance(cfg.get("key"), str):
+            raise RuntimeError("dsbx_peer.json del servidor no es valido")
+        cfg["qa_step_gap_ms"] = int(gap)
+        data = json.dumps(cfg).encode("utf-8")
+        tmp = "%s.tmp.%d" % (path, os.getpid())
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        last_error = None
+        for _ in range(50):
+            try:
+                os.replace(tmp, path)
+                last_error = None
+                break
+            except PermissionError as exc:
+                last_error = exc
+                time.sleep(0.02)
+        if last_error is not None:
+            raise RuntimeError("no se pudo reescribir dsbx_peer.json del servidor")
+        self.writer.emit(
+            "config", peer="server", qa_step_gap_ms=int(gap), key_sha256=_sha256(cfg["key"])
+        )
+        # Un hello fuerza que el peer relea la configuracion: un 409 al siguiente poll.
+        rule_id = "g56_gap_%d_%d" % (int(gap), self.rules_version + 1)
+        rule = {
+            "id": rule_id,
+            "match": {"route": "poll", "peer": "server", "count": 1},
+            "action": {"type": "status", "code": 409, "error": "session_mismatch"},
+        }
+        mark = self._g56_mark()
+        if not self.set_rules(self.next_rules_version(), [rule], [rule_id]):
+            raise RuntimeError("rules_not_active")
+        fired = self._g56_wait_fire(rule_id, mark, 30.0)
+        self._g56_clear_rules()
+        if fired is None:
+            return False
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            if self._g56_last_gap(profile) == int(gap):
+                return True
+            time.sleep(0.2)
+        return False
+
+    def _g56_case_a(self, web, peer, ms):
+        name = "a%d" % ms
+        rule_id = "g5a_%s_%d" % (peer, ms)
+        rule = {
+            "id": rule_id,
+            "match": {"route": "poll", "peer": peer, "count": 1},
+            "action": {"type": "then_hold_ms", "ms": ms, "routes": ["hello", "poll"]},
+        }
+        problem = None
+        mark = self._g56_mark()
+        try:
+            if not self.set_rules(self.next_rules_version(), [rule], [rule_id]):
+                raise RuntimeError("rules_not_active")
+            self._g56_apply_case(web, name, peer)
+            fired = self._g56_wait_fire(rule_id, mark, 30.0)
+            if fired is None:
+                problem = "%s_%s: regla sin disparar" % (name, peer)
+            else:
+                t_start = float(fired["t_done_ms"])
+                self.writer.emit("window", t_start_ms=t_start, t_end_ms=t_start + ms)
+                self._g56_sleep_until(t_start + ms + 3000.0)
+        finally:
+            self._g56_clear_rules()
+        self.recovery(web)
+        return problem
+
+    def _g56_case_b(self, web, gap):
+        name = "b%d" % gap
+        rule_id = "g5b_cut_%d" % gap
+        rule = {
+            "id": rule_id,
+            "match": {"route": "poll", "peer": "server", "resp_has_op": True, "count": 1},
+            "action": {"type": "then_cut_ms", "ms": 6000, "routes": ["hello", "poll"]},
+        }
+        if not self._g56_set_gap(gap):
+            return "%s: qa_step_gap_ms=%d sin confirmar en el log" % (name, gap)
+        problem = None
+        mark = self._g56_mark()
+        try:
+            if not self.set_rules(self.next_rules_version(), [rule], [rule_id]):
+                raise RuntimeError("rules_not_active")
+            op_id = self._g56_apply_case(web, name, "server")
+            fired = self._g56_wait_fire(rule_id, mark, 30.0)
+            if fired is None:
+                problem = "%s: regla sin disparar" % name
+            else:
+                t_start = float(fired["t_done_ms"])
+                self.writer.emit("window", t_start_ms=t_start, t_end_ms=t_start + 6000.0)
+                if op_id:
+                    states = {"observado", "fallido"} if gap == 2500 else {"parcial", "fallido", "observado"}
+                    self.wait_op(op_id, states, 60.0)
+                self._g56_sleep_until(t_start + 6000.0)
+        finally:
+            self._g56_clear_rules()
+        self.recovery(web)
+        return problem
+
+    def run_g5_body(self):
+        if self.fake_mode:
+            return True, "fake: G5 necesita el motor"
+        web = WebClient(self.backend, self.secrets[1])
+        web.open_session()
+        problems = []
+        try:
+            for peer in ("server", "client"):
+                for ms in (2500, 4500):
+                    problem = self._g56_case_a(web, peer, ms)
+                    if problem:
+                        problems.append(problem)
+            for gap in (2500, 4000):
+                problem = self._g56_case_b(web, gap)
+                if problem:
+                    problems.append(problem)
+        except RuntimeError as exc:
+            problems.append(_redact(exc, self.secrets))
+        finally:
+            confirmed = False
+            try:
+                if not self._g56_set_gap(0):
+                    problems.append("qa_step_gap_ms=0 sin confirmar al reponerlo")
+                confirmed = self.confirm_gap_zero(getattr(self.args, "server_profile", None))
+            except Exception as exc:
+                problems.append("gap_reset: " + _redact(exc, self.secrets))
+            self.writer.emit("gap_reset", confirmed=bool(confirmed))
+        return (bool(problems), "; ".join(problems) if problems else None)
+
+    # -- G6: suspension del servidor (solo el PID propio, identidad comprobada) --
+    @staticmethod
+    def _g56_parse_iso_utc(text):
+        """'2026-11-15T10:00:00.1234567Z' (formato 'o' de PowerShell) -> datetime con tz, o None."""
+        import datetime
+        import re
+
+        if not isinstance(text, str):
+            return None
+        found = re.fullmatch(
+            r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?",
+            text.strip(),
+        )
+        if not found:
+            return None
+        year, month, day, hour, minute, second = (int(found.group(i)) for i in range(1, 7))
+        frac = (found.group(7) or "0")[:6].ljust(6, "0")
+        zone = found.group(8)
+        tz = datetime.timezone.utc
+        if zone and zone != "Z":
+            sign = 1 if zone[0] == "+" else -1
+            tz = datetime.timezone(sign * datetime.timedelta(hours=int(zone[1:3]), minutes=int(zone[4:6])))
+        try:
+            return datetime.datetime(year, month, day, hour, minute, second, int(frac), tzinfo=tz)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _g56_win():
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        k32.CloseHandle.restype = wintypes.BOOL
+        k32.GetProcessTimes.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+        ]
+        k32.GetProcessTimes.restype = wintypes.BOOL
+        ntdll = ctypes.WinDLL("ntdll")
+        ntdll.NtSuspendProcess.argtypes = [wintypes.HANDLE]
+        ntdll.NtSuspendProcess.restype = ctypes.c_long
+        ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+        ntdll.NtResumeProcess.restype = ctypes.c_long
+        return ctypes, wintypes, k32, ntdll
+
+    @staticmethod
+    def _g56_creation_time(handle):
+        """Instante de creacion (datetime UTC) del proceso de ese handle, o None."""
+        import datetime
+        from ctypes import byref
+
+        _ctypes, wintypes, k32, _ntdll = LiveRun._g56_win()
+        created = wintypes.FILETIME()
+        other = [wintypes.FILETIME() for _ in range(3)]
+        if not k32.GetProcessTimes(handle, byref(created), byref(other[0]), byref(other[1]), byref(other[2])):
+            return None
+        ticks = (int(created.dwHighDateTime) << 32) | int(created.dwLowDateTime)
+        epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
+        return epoch + datetime.timedelta(microseconds=ticks // 10)
+
+    @staticmethod
+    def _g56_open_if_own(pid, start_time, access, tol_s=2.0):
+        """Abre `pid` con `access` y devuelve el handle solo si su creacion casa con `start_time`.
+
+        Si no casa (otro proceso reutilizo el PID), o falta start_time, cierra y devuelve None.
+        """
+        expected = LiveRun._g56_parse_iso_utc(start_time)
+        if expected is None or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return None
+        _ctypes, _wintypes, k32, _ntdll = LiveRun._g56_win()
+        handle = k32.OpenProcess(access, False, pid)
+        if not handle:
+            return None
+        actual = LiveRun._g56_creation_time(handle)
+        if actual is not None and abs((actual - expected).total_seconds()) <= tol_s:
+            return handle
+        k32.CloseHandle(handle)
+        return None
+
+    def _g56_server_entry(self):
+        path = getattr(self.args, "pids_file", None)
+        data = _read_json(path) if path else None
+        procs = data.get("processes") if isinstance(data, dict) else data
+        if isinstance(procs, dict):
+            if "pid" in procs:
+                procs = [procs]
+            else:
+                items = []
+                for key, val in procs.items():
+                    if isinstance(val, dict):
+                        items.append(dict(val, role=val.get("role", key)))
+                    elif isinstance(val, int):
+                        items.append({"role": key, "pid": val})
+                procs = items
+        if not isinstance(procs, list):
+            return None
+        for item in procs:
+            if isinstance(item, dict) and item.get("role") == "server":
+                return item
+        return None
+
+    def _g56_suspend_server(self, hold_ms):
+        """Suspende el servidor hold_ms. Devuelve (T_s_ms, T_e_ms, aviso) o (None, None, motivo)."""
+        entry = self._g56_server_entry()
+        if entry is None:
+            return None, None, "sin rol server en pids.json"
+        pid = entry.get("pid")
+        if pid == os.getpid():
+            return None, None, "el PID del servidor es el del arnes"
+        access = 0x0800 | 0x1000  # PROCESS_SUSPEND_RESUME | PROCESS_QUERY_LIMITED_INFORMATION
+        handle = self._g56_open_if_own(pid, entry.get("start_time"), access)
+        if handle is None:
+            return None, None, "identidad del servidor no comprobada (PID o start_time no casan)"
+        _ctypes, _wintypes, k32, ntdll = self._g56_win()
+        t_s = None
+        t_e = None
+        suspended = False
+        problem = None
+        try:
+            rc = ntdll.NtSuspendProcess(handle)
+            if rc != 0:
+                return None, None, "NtSuspendProcess devolvio 0x%08x" % (rc & 0xFFFFFFFF)
+            suspended = True
+            t_s = _now_ms()
+            time.sleep(hold_ms / 1000.0)
+        finally:
+            if suspended:
+                for _ in range(5):
+                    if ntdll.NtResumeProcess(handle) == 0:
+                        break
+                    time.sleep(0.05)
+                else:
+                    problem = "NtResumeProcess fallo"
+                t_e = _now_ms()
+            k32.CloseHandle(handle)
+        return t_s, t_e, problem
+
+    def run_g6_body(self):
+        if self.fake_mode:
+            return True, "fake: G6 necesita el motor"
+        web = WebClient(self.backend, self.secrets[1])
+        web.open_session()
+        clock_s = float(getattr(self.args, "g6_clock_s", 600.0))
+        t_start = _now_ms()
+        time.sleep(max(0.0, clock_s))
+        self.writer.emit("clock_run", t_start_ms=t_start, t_end_ms=_now_ms())
+
+        rule_id = "g6_deliver"
+        # Una regla de respuesta `pass` deja su rule_id en proxy.jsonl (fault_proxy.py, _forward_and_serve).
+        rule = {
+            "id": rule_id,
+            "match": {"route": "poll", "peer": "server", "resp_has_op": True, "count": 1},
+            "action": {"type": "pass"},
+        }
+        problems = []
+        original_ttl = self.bridge.ttl_ms
+        # result_seen lo escribe el envoltorio comun (_l2b2_hook), que run_scenario instala en todo
+        # escenario; un segundo envoltorio aqui duplicaria los eventos (integracion de L2b2 y L2b3a).
+        self._l2b2_hook(self.bridge)
+        op_id = None
+        try:
+            mark = self._g56_mark()
+            if not self.set_rules(self.next_rules_version(), [rule], [rule_id]):
+                raise RuntimeError("rules_not_active")
+            with self.bridge.cond:
+                self.bridge.ttl_ms = 1500
+            try:
+                t_apply = _now_ms()
+                status, op_id = web.apply()
+                t_after = _now_ms()
+            finally:
+                with self.bridge.cond:
+                    self.bridge.ttl_ms = original_ttl
+            self.writer.emit("apply", op_id=op_id, http_status=int(status), ttl_ms=1500)
+            self.writer.emit("case", name="pause", peer="server", op_id=op_id)
+            fired = self._g56_wait_fire(rule_id, mark, 20.0)
+            if fired is None or not op_id:
+                problems.append("g6: orden sin entregar (regla sin disparar)")
+            else:
+                t_d = float(fired["t_done_ms"])
+                t_s, t_e, why = self._g56_suspend_server(2000)
+                if t_s is None:
+                    problems.append("g6: sin suspension: %s" % why)
+                else:
+                    if why:
+                        problems.append("g6: " + why)
+                    deadline_ms = self._g56_deadline(op_id, t_apply, t_after, 1500)
+                    self.writer.emit(
+                        "pause_order",
+                        op_id=op_id,
+                        T_d_ms=t_d,
+                        T_s_ms=float(t_s),
+                        T_e_ms=float(t_e),
+                        D_ms=float(deadline_ms),
+                    )
+                    self.wait_op(op_id, {"observado", "fallido", "parcial"}, 30.0)
+                    self._g56_wait_result_seen(op_id, 30.0)
+        finally:
+            with self.bridge.cond:
+                self.bridge.ttl_ms = original_ttl
+            try:
+                self._g56_clear_rules()
+            except RuntimeError as exc:
+                problems.append(str(exc))
+        self.recovery(web)
+        return (bool(problems), "; ".join(problems) if problems else None)
+
+    def _g56_deadline(self, op_id, t_apply, t_after, ttl_ms):
+        """D = emision + TTL en el reloj del arnes (time.monotonic()*1000).
+
+        Se usa issued_ms del bridge solo si su reloj es time.monotonic (el mismo del arnes) y la
+        emision cae entre el inicio y el fin del apply; si no, el instante del apply mas el TTL.
+        """
+        try:
+            with self.bridge.cond:
+                order = self.bridge.orders.get((self.bridge.session, op_id))
+                issued = order.get("issued_ms") if order else None
+                order_ttl = order.get("ttl_ms") if order else None
+                t0 = float(self.bridge._t0)
+                same_clock = self.bridge.clock is time.monotonic
+            if same_clock and isinstance(issued, int) and order_ttl == ttl_ms:
+                emitted = t0 * 1000.0 + issued
+                if t_apply - 2.0 <= emitted <= t_after + 2.0:
+                    return emitted + ttl_ms
+        except Exception:
+            pass
+        return t_apply + ttl_ms
+
+    def _g56_wait_result_seen(self, op_id, timeout_s):
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            with self.bridge.cond:
+                order = self.bridge.orders.get((self.bridge.session, op_id))
+                seen = bool(order and order.get("result_seen"))
+            if seen:
+                return True
+            time.sleep(0.05)
+        return False
     # === fin L2b3 ===
+
+    # === L2b3b: G7 ===
+    def _g7_scale(self, seconds):
+        # Con el mod falso solo importa la estructura: las esperas se acortan.
+        return min(seconds, 0.2) if self.fake_mode else seconds
+
+    def _g7_rule(self, rule_id, route, action, peer="server", count=1, **extra):
+        match = {"route": route, "peer": peer}
+        if count is not None:
+            match["count"] = count
+        match.update(extra)
+        return {"id": rule_id, "match": match, "action": action}
+
+    def _g7_wait_fired(self, rule_id, timeout):
+        # Disparo = linea de proxy.jsonl con ese rule_id; se sondea cada 5 ms.
+        deadline = time.monotonic() + timeout
+        while True:
+            for line in _read_jsonl(self.proxy_log):
+                if line.get("rule_id") == rule_id:
+                    return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.005)
+
+    def _g7_apply(self, web):
+        status, op_id = web.apply()
+        self.writer.emit(
+            "apply",
+            op_id=op_id,
+            http_status=int(status),
+            ttl_ms=int(self.bridge.ttl_ms),
+        )
+        return op_id
+
+    def _g7_case(self, web, name, rule, after_fire=3.0, apply=False, op_states=None, hold_s=None):
+        # Devuelve False si las reglas no se confirmaron (el escenario acaba aborted).
+        rule_id = rule["id"]
+        if not self.set_rules(self.next_rules_version(), [rule], [rule_id]):
+            return False
+        self.writer.emit("case", name=name, rule_id=rule_id)
+        fire_timeout = self._g7_scale(30.0)
+        op_id = self._g7_apply(web) if apply else None
+        if hold_s is not None:
+            # Caso de duracion fija (invalid_all_P): sin esperar disparo.
+            time.sleep(self._g7_scale(hold_s))
+        elif op_states is not None:
+            if op_id:
+                self.wait_op(op_id, op_states, self._g7_scale(OBSERVED_WAIT_S))
+        else:
+            self._g7_wait_fired(rule_id, fire_timeout)
+            time.sleep(self._g7_scale(after_fire))
+        self.set_rules(self.next_rules_version(), [], [])
+        self.recovery(web)
+        return True
+
+    def run_g7_body(self):
+        web = WebClient(self.backend, self.secrets[1])
+        web.open_session()
+        final_states = {"observado", "fallido", "parcial"}
+
+        for code in (400, 401, 409, 413, 500):
+            act = {"type": "status", "code": code, "error": "fault"}
+            rule = self._g7_rule("g7-status%d-P" % code, "poll", act)
+            if not self._g7_case(web, "status%d_P" % code, rule):
+                return True, "rules_not_active"
+        for code in (400, 401, 409, 413, 500):
+            act = {"type": "status", "code": code, "error": "fault"}
+            rule = self._g7_rule("g7-status%d-R" % code, "result", act)
+            if not self._g7_case(
+                web, "status%d_R" % code, rule, apply=True, op_states=final_states
+            ):
+                return True, "rules_not_active"
+
+        rule = self._g7_rule("g7-timeout-P", "poll", {"type": "hold_resp_ms", "ms": 5000})
+        if not self._g7_case(web, "timeout_P", rule, after_fire=8.0):
+            return True, "rules_not_active"
+
+        rule = self._g7_rule("g7-r-held", "result", {"type": "hold_resp_ms", "ms": 4000})
+        if not self._g7_case(
+            web, "r_held", rule, apply=True, op_states={"observado"}
+        ):
+            return True, "rules_not_active"
+
+        invalid = (
+            ("invalid_no_ok_P", {"ok": {"$delete": True}}, {}, False),
+            ("invalid_ok_false_P", {"ok": False}, {}, False),
+            ("invalid_now_decimal_P", {"now_ms": 1234.5}, {}, False),
+            ("invalid_now_text_P", {"now_ms": "1234"}, {}, False),
+            (
+                "invalid_no_args_P",
+                {"ops.0.args": {"$delete": True}},
+                {"resp_has_op": True},
+                True,
+            ),
+        )
+        for name, setv, extra, apply in invalid:
+            rule = self._g7_rule(
+                "g7-" + name.replace("_", "-"),
+                "poll",
+                {"type": "rewrite", "set": setv},
+                **extra,
+            )
+            if apply:
+                ok = self._g7_case_apply_p(web, name, rule)
+            else:
+                ok = self._g7_case(web, name, rule, after_fire=3.0)
+            if not ok:
+                return True, "rules_not_active"
+
+        # Todas las respuestas de P no validas durante mas que lease_ms (peer: lease lost).
+        rule = self._g7_rule(
+            "g7-invalid-all-P",
+            "poll",
+            {"type": "rewrite", "set": {"ok": False}},
+            count=None,
+        )
+        if not self._g7_case(web, "invalid_all_P", rule, hold_s=4.5):
+            return True, "rules_not_active"
+
+        rule = self._g7_rule("g7-measure-ok1-P", "poll", {"type": "rewrite", "set": {"ok": 1}})
+        if not self._g7_case(web, "measure_ok1_P", rule):
+            return True, "rules_not_active"
+        rule = self._g7_rule(
+            "g7-measure-args-empty-P",
+            "poll",
+            {"type": "rewrite", "set": {"ops.0.args": {}}},
+            resp_has_op=True,
+        )
+        if not self._g7_case_apply_p(web, "measure_args_empty_P", rule):
+            return True, "rules_not_active"
+
+        rule = self._g7_rule("g7-late-cb", "poll", {"type": "hold_resp_ms", "ms": 8000})
+        if not self._g7_case(web, "late_cb", rule, after_fire=12.0):
+            return True, "rules_not_active"
+        return False, None
+
+    def _g7_case_apply_p(self, web, name, rule):
+        # Regla sobre un poll con orden (resp_has_op): hace falta un apply; se espera el disparo
+        # y 3 s mas.
+        rule_id = rule["id"]
+        if not self.set_rules(self.next_rules_version(), [rule], [rule_id]):
+            return False
+        self.writer.emit("case", name=name, rule_id=rule_id)
+        self._g7_apply(web)
+        self._g7_wait_fired(rule_id, self._g7_scale(30.0))
+        time.sleep(self._g7_scale(3.0))
+        self.set_rules(self.next_rules_version(), [], [])
+        self.recovery(web)
+        return True
+    # === fin L2b3b ===
 
     def write_scenarios_done(self):
         obj = {
@@ -910,7 +1966,8 @@ class LiveRun:
                 continue
             for secret in self.secrets:
                 hits += data.count(secret.encode("utf-8"))
-        self.writer.append(self.scenarios[-1], "key_scan", files=files, hits=hits)
+        target = "G4" if "G4" in self.scenarios else self.scenarios[-1]
+        self.writer.append(target, "key_scan", files=files, hits=hits)
         if hits:
             print("f1bp_live: AVISO: %d apariciones de clave en los logs copiados" % hits, file=sys.stderr)
         return hits
@@ -1008,6 +2065,7 @@ def build_parser():
     run_parser.add_argument("--scenarios", required=True)
     run_parser.add_argument("--pbo", default=None)
     run_parser.add_argument("--fake", action="store_true")
+    run_parser.add_argument("--g6-clock-s", type=float, default=600.0)
     return parser
 
 

@@ -412,7 +412,9 @@ class FaultProxy:
                 raw_deliver = query.get("deliver")
                 if raw_deliver == "0":
                     deliver = 0
-                elif raw_deliver == "1":
+                elif raw_deliver in (None, "1"):
+                    # Como el bridge (bridge.py:476-488): el poll normal del mod no lleva deliver y entrega;
+                    # solo el de mantenimiento manda deliver=0 (DSBX_Peer.c:1390 y 1395).
                     deliver = 1
             session = query.get("session")
             body = _read_body(handler)

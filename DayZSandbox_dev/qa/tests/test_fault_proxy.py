@@ -603,6 +603,25 @@ class HelloPeerFromBodyTests(FaultProxyTestBase):
         self.assertNotIn("K7", json.dumps(self.read_log()))
 
 
+class PollDeliverDefaultTests(FaultProxyTestBase):
+    """El poll normal del mod no lleva deliver y entrega, como en el bridge (partida diag, 15-nov)."""
+
+    def test_poll_sin_deliver_cuenta_como_entrega(self):
+        self.start_proxy([{
+            "id": "d1",
+            "match": {"route": "poll", "peer": "server", "deliver": 1, "count": 1},
+            "action": {"type": "status", "code": 409, "error": "x"},
+        }])
+        self.wait_active(1)
+        status, _ = request(self.proxy.port, "GET", "/poll?key=K8&peer=server&deliver=0")
+        self.assertEqual(status, 200)
+        status, _ = request(self.proxy.port, "GET", "/poll?key=K8&peer=server")
+        self.assertEqual(status, 409)
+        lines = self.wait_log(2)
+        self.assertEqual([line["deliver"] for line in lines[-2:]], [0, 1])
+        self.assertNotIn("K8", json.dumps(self.read_log()))
+
+
 class CounterTests(FaultProxyTestBase):
     def test_nth_count_acts_exactly_count_times_under_concurrency(self):
         self.start_proxy(
