@@ -27,6 +27,7 @@ import s_persist_eval
 import s_persist_mutants
 import wire
 from s_persist_eval import _unpack_any_payload
+from tests import e2e_witness
 
 
 def _surface_y(x: float, z: float) -> float:
@@ -2554,7 +2555,7 @@ class TestSPersistOracleOffline(unittest.TestCase):
         expected_parts = ["run"] + [f"mut-{m}" for m in s_persist_mutants.EXPECTED_MUTANTS]
         with tempfile.TemporaryDirectory() as tmp:
             ev_dir = Path(tmp) / "e2e_offline"
-            with _CoreTap() as tap:
+            with _CoreTap() as tap, e2e_witness.Witness() as witness:
                 rc = m1_gate.main([
                     "spike",
                     "S-persist",
@@ -2571,6 +2572,10 @@ class TestSPersistOracleOffline(unittest.TestCase):
             # BLOQ-3: el trafico de cada parte es el que registro el nucleo (bridge de la parte y PID de los
             # peers falsos lanzados por PartContext), no lo que el runner dejo escrito en disco.
             self.assertEqual(tap.problems(ev_dir, expected_parts), [])
+            # Testigo comun del nucleo (E9, PR #17): cada fila de bridge.jsonl la emitio el bridge desde un origen
+            # real, toda orden entregada/resuelta paso por un socket y esta en la traza de un proceso peer lanzado
+            # por PartContext, con los mismos digests; y el runner no se conecto al bridge.
+            self.assertEqual(witness.verify(ev_dir), [])
             # BLOQ 1: Re-evaluate every part and re-aggregate with the frozen oracle
             verified_agg = self._verify_gate_evidence_with_frozen_oracle(ev_dir)
             self.assertEqual(verified_agg["exit_code"], 0, msg=json.dumps(verified_agg, indent=2))
@@ -3945,7 +3950,7 @@ class TestSPersistOracleOffline(unittest.TestCase):
             pbo=None,
             fault=None,
         )
-        with tempfile.TemporaryDirectory() as tmp, _CoreTap() as tap:
+        with tempfile.TemporaryDirectory() as tmp, _CoreTap() as tap, e2e_witness.Witness() as witness:
             base = Path(tmp)
             with f03_common.PartContext(
                 base_dir=base, part_name="run", spike_id="S-persist", args=args, argv=[]
@@ -3958,11 +3963,14 @@ class TestSPersistOracleOffline(unittest.TestCase):
             # Trafico real: hellos de ambos peers, PID de ambos y disco == registro. Aqui no se aplico ninguna
             # escena, y es lo unico que falta.
             self.assertEqual(tap.problems(base, ["run"]), ["run:no_real_per_apply_scene_done"])
+            # El testigo comun no ve nada fabricado en el trafico honesto.
+            self.assertEqual(witness.verify(base), [])
             # Un runner que reescribe bridge.jsonl despues de cerrar el contexto queda al descubierto.
             events = _read_events(base / "run")
             events.append({"ev": "result", "peer": "server", "inst": "x", "results": [{"op_id": "forged", "verb": "per_apply_scene", "status": "done", "read": {}}]})
             _write_events(base / "run", events)
             self.assertIn("run:disk_rows_differ_from_core_registry", tap.problems(base, ["run"]))
+            self.assertIn("unwitnessed_row", {p.code for p in witness.verify(base)})
 
     def test_neg_bloq3_fabricator_runner_without_peers_detected_by_empty_core_registry(self) -> None:
         """BLOQ-3: runner que escribe en cada parte la evidencia sintetica sana, sin peers.
@@ -4008,7 +4016,7 @@ class TestSPersistOracleOffline(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 ev_dir = Path(tmp) / "fabricated"
-                with _CoreTap() as tap:
+                with _CoreTap() as tap, e2e_witness.Witness() as witness:
                     rc = m1_gate.main(["spike", "S-persist", "--both", "--build", "offline", "--evidence", str(ev_dir)])
                 # La evidencia fabricada pasa el oraculo: eso solo no acredita la procedencia...
                 self.assertEqual(rc, 0)
@@ -4017,6 +4025,10 @@ class TestSPersistOracleOffline(unittest.TestCase):
                     sorted(tap.problems(ev_dir, expected_parts)),
                     sorted(f"{p}:no_part_context_opened" for p in expected_parts),
                 )
+                # El testigo comun lo ve igual: ninguna fila la emitio el bridge y no hay peers reales.
+                codes = {p.code for p in witness.verify(ev_dir)}
+                self.assertIn("no_peer_process", codes)
+                self.assertIn("unwitnessed_row", codes)
         finally:
             if saved is None:
                 sys.modules.pop("s_persist_run", None)
