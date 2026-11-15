@@ -1338,8 +1338,7 @@ def evaluate(
                 "terminal_state": terminal_state,
                 "terminal_num": terminal_num,
                 "rows": raw_rows_list,
-                "freed": (job_id in job_frees_by_id)
-                or (float(terminal_num.get("released_tick_ms", 0.0)) > 0.0),
+                "freed": job_id in job_frees_by_id,
                 "h_span_ms": poll_h_span_ms,
                 "is_neg_probe": bool(
                     w_op["raw"].get("subcase") == "N1a"

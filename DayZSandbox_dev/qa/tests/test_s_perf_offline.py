@@ -1685,40 +1685,58 @@ class TestSPerfOffline(unittest.TestCase):
             self.assertEqual(verdict["checks"]["PRF-05"], "fail")
 
     def test_prf05_k_star_derivation_certified_budget(self):
-        """k* derivation exports certified_budget metrics when all 4 steps valid."""
+        """k* derivation exports certified_budget metrics when all 4 steps valid (k*=3)."""
         with tempfile.TemporaryDirectory() as td:
             part = Path(td) / "part"
-            bridge = []
-            # All 4 steps with healthy windows
+            bridge = [_preflight_done()]
+            # All 4 steps with healthy windows (all > 35 FPS -> k*=3)
             for s in STEP_ORDER:
                 ws = _window_start_done(s, job_id=f"job-{s}")
                 rows = _build_window_rows(s, fps_mean=51.0 if s == "fixture" else 44.0 if s == "inc1" else 38.5 if s == "inc2" else 58.0, fps_counter=51.0 if s == "fixture" else 44.0 if s == "inc1" else 38.5 if s == "inc2" else 58.0)
                 bridge.extend([
-                    _preflight_done() if s == "base" else None,
                     _step_apply_done(s),
                     ws,
                     _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
+                    _job_free_done(f"job-{s}"),
                 ])
                 for cp in range(EXPECTED_SNAP_CHECKPOINTS):
                     bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            # Budget check at fixture cap (k*=1)
-            bridge.append(_budget_check_done(accepted=True, max_vals=STEP_SPEC["fixture"], cand_vals=STEP_SPEC["fixture"]))
-            # Filter None
-            bridge = [b for b in bridge if b is not None]
+            # Budget check at inc2 cap (k*=3) - build proper max_vals/cand_vals
+            spec = STEP_SPEC["inc2"]
+            max_vals = {
+                "max_objects_n": spec["objects_n"],
+                "max_infected_n": spec["infected_n"],
+                "max_animals_n": spec["animals_n"],
+                "max_actors_n": spec["actors_n"],
+                "max_wardrobe_per_actor_n": spec["wardrobe_per_actor_n"],
+                "max_children_n": spec["children_n"],
+                "max_combined_roots_n": spec["roots_n"],
+                "max_combined_entities_n": spec["entities_n"],
+            }
+            cand_vals = {
+                "cand_objects_n": spec["objects_n"],
+                "cand_infected_n": spec["infected_n"],
+                "cand_animals_n": spec["animals_n"],
+                "cand_actors_n": spec["actors_n"],
+                "cand_wardrobe_total_n": spec["children_n"],
+                "cand_wardrobe_max_per_actor_n": spec["wardrobe_per_actor_n"],
+                "cand_extra_children_n": 0,
+            }
+            bridge.append(_budget_check_done(accepted=True, max_vals=max_vals, cand_vals=cand_vals))
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
             self.assertEqual(verdict["checks"]["PRF-05"], "pass")
             self.assertIn("certified_budget", verdict["metrics"])
             cb = verdict["metrics"]["certified_budget"]
-            self.assertEqual(cb["certified_step_id"], "fixture")
-            self.assertEqual(cb["certified_step_index"], 1)
+            self.assertEqual(cb["certified_step_id"], "inc2")
+            self.assertEqual(cb["certified_step_index"], 3)
             self.assertEqual(cb["floor_fps"], 35.0)
 
     def test_prf05_k_star_2_when_inc1_above_floor(self):
         """k* = 2 when fixture and inc1 > 35.0 but inc2 <= 35.0."""
         with tempfile.TemporaryDirectory() as td:
             part = Path(td) / "part"
-            bridge = []
+            bridge = [_preflight_done()]
             fps_map = {"base": 58.0, "fixture": 51.0, "inc1": 44.0, "inc2": 30.0}
             for s in STEP_ORDER:
                 ws = _window_start_done(s, job_id=f"job-{s}")
@@ -1727,10 +1745,32 @@ class TestSPerfOffline(unittest.TestCase):
                     _step_apply_done(s),
                     ws,
                     _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
+                    _job_free_done(f"job-{s}"),
                 ])
                 for cp in range(EXPECTED_SNAP_CHECKPOINTS):
                     bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
-            bridge.append(_budget_check_done(accepted=True, max_vals=STEP_SPEC["inc1"], cand_vals=STEP_SPEC["inc1"]))
+            # Budget check at inc1 cap (k*=2) - build proper max_vals/cand_vals
+            spec = STEP_SPEC["inc1"]
+            max_vals = {
+                "max_objects_n": spec["objects_n"],
+                "max_infected_n": spec["infected_n"],
+                "max_animals_n": spec["animals_n"],
+                "max_actors_n": spec["actors_n"],
+                "max_wardrobe_per_actor_n": spec["wardrobe_per_actor_n"],
+                "max_children_n": spec["children_n"],
+                "max_combined_roots_n": spec["roots_n"],
+                "max_combined_entities_n": spec["entities_n"],
+            }
+            cand_vals = {
+                "cand_objects_n": spec["objects_n"],
+                "cand_infected_n": spec["infected_n"],
+                "cand_animals_n": spec["animals_n"],
+                "cand_actors_n": spec["actors_n"],
+                "cand_wardrobe_total_n": spec["children_n"],
+                "cand_wardrobe_max_per_actor_n": spec["wardrobe_per_actor_n"],
+                "cand_extra_children_n": 0,
+            }
+            bridge.append(_budget_check_done(accepted=True, max_vals=max_vals, cand_vals=cand_vals))
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
             self.assertEqual(verdict["checks"]["PRF-05"], "pass")
@@ -1742,7 +1782,7 @@ class TestSPerfOffline(unittest.TestCase):
         """Missing accepted perf_budget_check at certified cap fails PRF-05."""
         with tempfile.TemporaryDirectory() as td:
             part = Path(td) / "part"
-            bridge = []
+            bridge = [_preflight_done()]
             for s in STEP_ORDER:
                 ws = _window_start_done(s, job_id=f"job-{s}")
                 rows = _build_window_rows(s, fps_mean=51.0 if s == "fixture" else 44.0 if s == "inc1" else 38.5 if s == "inc2" else 58.0, fps_counter=51.0 if s == "fixture" else 44.0 if s == "inc1" else 38.5 if s == "inc2" else 58.0)
@@ -1750,6 +1790,7 @@ class TestSPerfOffline(unittest.TestCase):
                     _step_apply_done(s),
                     ws,
                     _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
+                    _job_free_done(f"job-{s}"),
                 ])
                 for cp in range(EXPECTED_SNAP_CHECKPOINTS):
                     bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
@@ -1891,6 +1932,8 @@ class TestSPerfOffline(unittest.TestCase):
                 _preflight_done(),
                 _step_apply_done("fixture"),
             ]
+            # Pre-N5 snapshot (checkpoint)
+            bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0, rows=_build_snap_rows("fixture", cp_index=0, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
             for reason in N5_REQUIRED_REASONS:
                 bridge.append(_budget_check_done(accepted=False, violation_path=reason))
             # Add N2, N1a, N1b, N4
@@ -1901,7 +1944,9 @@ class TestSPerfOffline(unittest.TestCase):
             bridge.append(_job_free_done("job-n1a"))
             bridge.append(_window_start_rejected("fixture", req_expected_modset_sig="wrong"))
             bridge.append(_preflight_rejected(reason="area_not_clear"))
-            # Now N6 injection with DIFFERENT census (breaks invariance)
+            # Post-N5, pre-N6 snapshot (for census invariance check) - DIFFERENT census to test invariance check
+            bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=75000.0, census_dynamic_n=999, rows=_build_snap_rows("fixture", cp_index=13, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
+            # N6 injection with foreign cargo
             bridge.append(_snap_done("fixture", inject_foreign_cargo_b=1, foreign_injected_b=1, census_foreign_n=2, census_dynamic_n=999, rows=_build_snap_rows("fixture", foreign_content_b=1)))
             _write_part(part, bridge)
             verdict = s_perf_eval.evaluate(part)
@@ -1916,9 +1961,53 @@ class TestSPerfOffline(unittest.TestCase):
                 _preflight_done(),
                 _step_apply_done("fixture"),
             ]
-            # N5 - all 8
+            # 13 checkpoints for the step (pre-N5 snapshots for census invariance)
+            for cp in range(EXPECTED_SNAP_CHECKPOINTS):
+                bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows("fixture", cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
+            # N5 - all 8 with proper fixture max_vals/cand_vals
+            spec = STEP_SPEC["fixture"]
+            base_max_vals = {
+                "max_objects_n": spec["objects_n"],
+                "max_infected_n": spec["infected_n"],
+                "max_animals_n": spec["animals_n"],
+                "max_actors_n": spec["actors_n"],
+                "max_wardrobe_per_actor_n": spec["wardrobe_per_actor_n"],
+                "max_children_n": spec["children_n"],
+                "max_combined_roots_n": spec["roots_n"],
+                "max_combined_entities_n": spec["entities_n"],
+            }
             for reason in N5_REQUIRED_REASONS:
-                bridge.append(_budget_check_done(accepted=False, violation_path=reason))
+                cat = reason.split(":")[1]
+                max_vals = dict(base_max_vals)
+                # Base candidate at fixture limits (all categories at max)
+                cand_vals = {
+                    "cand_objects_n": spec["objects_n"],
+                    "cand_infected_n": spec["infected_n"],
+                    "cand_animals_n": spec["animals_n"],
+                    "cand_actors_n": spec["actors_n"],
+                    "cand_wardrobe_total_n": spec["children_n"],
+                    "cand_wardrobe_max_per_actor_n": spec["wardrobe_per_actor_n"],
+                    "cand_extra_children_n": 0,
+                }
+                if cat == "objects":
+                    cand_vals["cand_objects_n"] = max_vals["max_objects_n"] + 1
+                elif cat == "infected":
+                    cand_vals["cand_infected_n"] = max_vals["max_infected_n"] + 1
+                elif cat == "animals":
+                    cand_vals["cand_animals_n"] = max_vals["max_animals_n"] + 1
+                elif cat == "actors":
+                    cand_vals["cand_actors_n"] = max_vals["max_actors_n"] + 1
+                elif cat == "wardrobe_per_actor":
+                    cand_vals["cand_wardrobe_max_per_actor_n"] = max_vals["max_wardrobe_per_actor_n"] + 1
+                elif cat == "children_total":
+                    cand_vals["cand_extra_children_n"] = max_vals["max_children_n"] + 1
+                elif cat == "combined_roots":
+                    # Candidate: all categories at max (roots=35), but max_combined_roots_n=34
+                    max_vals["max_combined_roots_n"] = max_vals["max_combined_roots_n"] - 1
+                elif cat == "combined_entities":
+                    # Candidate: all categories at max (entities=45), but max_combined_entities_n=44
+                    max_vals["max_combined_entities_n"] = max_vals["max_combined_entities_n"] - 1
+                bridge.append(_budget_check_done(accepted=False, violation_path=reason, max_vals=max_vals, cand_vals=cand_vals))
             # N2
             bridge.append(_snap_rejected("fixture", peer="client"))
             # N1a
@@ -1930,12 +2019,25 @@ class TestSPerfOffline(unittest.TestCase):
             bridge.append(_window_start_rejected("fixture", req_expected_modset_sig="wrong"))
             # N4
             bridge.append(_preflight_rejected(reason="area_not_clear"))
-            # N6 injection
-            bridge.append(_snap_done("fixture", inject_foreign_cargo_b=1, foreign_injected_b=1, census_foreign_n=2, rows=_build_snap_rows("fixture", foreign_content_b=1, actor_foreign_idx=STEP_SPEC["fixture"]["objects_n"])))
+            # Post-N5, pre-N6 snapshot (for census invariance check)
+            bridge.append(_snap_done("fixture", page_n=0, pages_n=1, tick_ms=75000.0, rows=_build_snap_rows("fixture", cp_index=13, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
+            # N6 injection - mark both SeaChest (idx 0) and first actor (idx 33) with foreign_content_b=1
+            fixture_spec = STEP_SPEC["fixture"]
+            actor_foreign_idx = fixture_spec["objects_n"] + fixture_spec["infected_n"] + fixture_spec["animals_n"]  # 20+10+3=33
+            bridge.append(_snap_done("fixture", inject_foreign_cargo_b=1, foreign_injected_b=1, census_foreign_n=2, rows=_build_snap_rows("fixture", foreign_content_b=1, actor_foreign_idx=actor_foreign_idx)))
             # Cleanup partial
             bridge.append(_step_apply_done("cleanup", cleanup_status="partial_foreign_content", requested_counts={c: 0 for c in ("objects_n", "infected_n", "animals_n", "actors_n", "wardrobe_per_actor_n")}, alive_counts={"objects_alive_n": 1, "infected_alive_n": 0, "animals_alive_n": 0, "actors_alive_n": 1, "roots_alive_n": 2, "children_alive_n": 1, "entities_alive_n": 3}, director_orig_allow_damage_b=1, director_allow_damage_b=1, skipped_foreign_containers_n=2, preserved_ancestors_n=1))
-            # Cleanup snap
-            bridge.append(_snap_done("fixture", tick_ms=80000.0, counts={"roots_alive_n": 2, "children_alive_n": 1, "entities_alive_n": 3}, census_foreign_n=2, director_allow_damage_b=1, director_orig_allow_damage_b=1, rows=_build_snap_rows("fixture")[:2]))
+            # Cleanup snap - must show both SeaChest (idx 0) and actor (idx 33) as survivors
+            # Actor should have only 1 garment (the one with foreign cargo), so wardrobe_n=1
+            cleanup_snap_rows = _build_snap_rows("fixture", foreign_content_b=1, actor_foreign_idx=actor_foreign_idx)
+            # Modify actor's wardrobe_n to 1 (only the garment with foreign cargo)
+            for r in cleanup_snap_rows:
+                if r["entity_idx_n"] == actor_foreign_idx:
+                    r["wardrobe_n"] = 1
+                    break
+            # Filter to only the two survivors: SeaChest (idx 0) and actor (idx 33)
+            survivor_rows = [cleanup_snap_rows[0], cleanup_snap_rows[actor_foreign_idx]]
+            bridge.append(_snap_done("fixture", tick_ms=80000.0, counts={"roots_alive_n": 2, "children_alive_n": 1, "entities_alive_n": 3}, census_foreign_n=2, director_allow_damage_b=1, director_orig_allow_damage_b=1, rows=survivor_rows))
             # Bench closure
             bridge.append(_step_apply_done("cleanup", cleanup_status="clean", requested_counts={c: 0 for c in ("objects_n", "infected_n", "animals_n", "actors_n", "wardrobe_per_actor_n")}, alive_counts={"objects_alive_n": 0, "infected_alive_n": 0, "animals_alive_n": 0, "actors_alive_n": 0, "roots_alive_n": 0, "children_alive_n": 0, "entities_alive_n": 0}, director_orig_allow_damage_b=1, director_allow_damage_b=1))
             bridge.append(_snap_done("fixture", tick_ms=85000.0, counts={"roots_alive_n": 0, "children_alive_n": 0, "entities_alive_n": 0}, census_dynamic_n=0, census_foreign_n=0, director_allow_damage_b=1, director_orig_allow_damage_b=1, rows=[]))
@@ -2258,9 +2360,10 @@ class TestSection81Offline(unittest.TestCase):
                     _step_apply_done(s),
                     ws,
                     _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
+                    _job_free_done(f"job-{s}"),
                 ])
                 for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s)))
+                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
             # Budget check at fixture cap (k*=1)
             spec = STEP_SPEC["fixture"]
             max_vals = {
@@ -2303,9 +2406,10 @@ class TestSection81Offline(unittest.TestCase):
                     _step_apply_done(s),
                     ws,
                     _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
+                    _job_free_done(f"job-{s}"),
                 ])
                 for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s)))
+                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
             # Budget check at inc1 cap (k*=2)
             spec = STEP_SPEC["inc1"]
             max_vals = {
@@ -2347,9 +2451,10 @@ class TestSection81Offline(unittest.TestCase):
                     _step_apply_done(s),
                     ws,
                     _job_read_done(f"job-{s}", rows=rows, end_tick_ms=131000.0, onjobend_tick_ms=131100.0, released_tick_ms=131200.0),
+                    _job_free_done(f"job-{s}"),
                 ])
                 for cp in range(EXPECTED_SNAP_CHECKPOINTS):
-                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s)))
+                    bridge.append(_snap_done(s, page_n=0, pages_n=1, tick_ms=70000.0 + cp * 5000.0, rows=_build_snap_rows(s, cp_index=cp, total_cps=EXPECTED_SNAP_CHECKPOINTS)))
             # Budget check at inc2 cap (k*=3)
             spec = STEP_SPEC["inc2"]
             max_vals = {
