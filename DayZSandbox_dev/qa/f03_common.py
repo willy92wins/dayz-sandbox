@@ -61,6 +61,9 @@ _F03_COMMON_PATHS = (
     "qa/f03_common.py",
 )
 
+# Nombre exacto del script log de una sesion de DayZ (Sol r5 N1: otros nombres no son logs de sesion y se ignoran).
+_DAYZ_SCRIPT_LOG_RE = re.compile(r"^script_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.log$")
+
 # D12 (brief F0.3-0, §15): en la parte probe-budget el log se lee cada PROBE_BUDGET_LOG_POLL_MS y la sonda reintenta
 # cada PROBE_BUDGET_RETRY_MS (reintentos escasos: el caso sano no cae en el intervalo de orden incierto). Van en
 # identity.params y verify_eval_params_at_commit los compara con los que define git_head.
@@ -728,14 +731,26 @@ class PartContext:
                 candidates.append((role, self.peer_logs[role]))
             prof = self.profiles.get(role)
             if prof is not None and prof.is_dir():
-                # Solo el script log de la sesion de juego en curso: el mas reciente (DayZ lo nombra
-                # script_<AAAA-MM-DD_HH-MM-SS>.log, asi que el orden por nombre es el cronologico). Las carpetas de perfil
-                # se reutilizan entre partidas y los logs viejos traen lineas de agotamiento de sesiones anteriores
-                # (partida diag de f997534: BASE-12 de run/ en missing y dos lineas por peer en probe-budget). No se usa
-                # la fecha de modificacion: en Windows puede no avanzar mientras DayZ tiene el log abierto.
-                scripts = sorted(p for p in prof.glob("script_*.log") if p.is_file())
-                if scripts:
-                    candidates.append((role, scripts[-1]))
+                # Solo el script log de DayZ de la sesion en curso, y solo si es INEQUIVOCO. Las carpetas de perfil se
+                # reutilizan entre partidas y los logs viejos traen lineas de agotamiento de sesiones anteriores (partida
+                # diag de f997534). Elegir el de nombre mayor no basta (Sol r5 N1: con el reloj atrasado o una copia, el
+                # mayor no es el del proceso actual), asi que:
+                # - solo cuentan los nombres con el formato exacto de DayZ, script_<AAAA-MM-DD_HH-MM-SS>.log;
+                # - con mas de uno no se adivina: se marca log_ambiguous y BASE-12 queda missing (INCONCLUSO).
+                # El lanzador de la partida archiva los logs viejos antes de arrancar, asi que lo normal es uno solo.
+                # No se usa la fecha de modificacion: en Windows puede no avanzar mientras DayZ tiene el log abierto.
+                scripts = sorted(p for p in prof.glob("script_*.log") if p.is_file() and _DAYZ_SCRIPT_LOG_RE.match(p.name))
+                if len(scripts) == 1:
+                    candidates.append((role, scripts[0]))
+                elif len(scripts) > 1:
+                    rows.append(
+                        {
+                            "ev": "probe_log",
+                            "files": [p.name for p in scripts],
+                            "peer": role,
+                            "tag": "log_ambiguous",
+                        }
+                    )
         seen = set()
         for role, lpath in candidates:
             if not lpath.is_file():

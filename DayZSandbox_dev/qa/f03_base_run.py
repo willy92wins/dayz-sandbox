@@ -814,7 +814,8 @@ def _run_probe_budget_part(ctx: f03_common.PartContext) -> None:
         read_start_ms = ctx.now_h_ms()
         rows = ctx.collect_probe_budget_logs()
         read_end_ms = ctx.now_h_ms()
-        seen = {r["peer"] for r in rows}
+        # Solo cuenta una linea de agotamiento real; una marca log_ambiguous (Sol r5 N1) no es agotamiento.
+        seen = {r["peer"] for r in rows if r.get("tag") == "callback_budget_exhausted"}
         for p in ctx.required_peers():
             if p in exhausted_ms:
                 continue

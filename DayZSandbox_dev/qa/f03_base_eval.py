@@ -811,6 +811,10 @@ def _eval_base_12(
     idx: dict,
     req_peers: tuple[str, ...],
 ) -> dict:
+    # Sol r5 N1: si el arnes no pudo identificar sin ambiguedad el script log de la sesion en curso de algun peer (mas de
+    # un script_<fecha>.log en el perfil), no se sabe si hubo agotamiento ni de cuando: missing, nunca PASS.
+    if any(r.get("tag") == "log_ambiguous" for r in probe_logs):
+        return _chk("BASE-12", "missing", "probe_logs_ambiguous")
     budget_logs = [r for r in probe_logs if r.get("tag") == "callback_budget_exhausted"]
     scen_12 = [r for r in scen_rows if r.get("check") == "BASE-12"]
 

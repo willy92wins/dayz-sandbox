@@ -2598,38 +2598,79 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             self.assertEqual(results["edge"]["status"], "pass")
             self.assertEqual((results["out"]["status"], results["out"]["detail"]), ("fail", "result_body_len_out_of_range:3449"))
 
-    def test_probe_budget_logs_only_from_newest_script_log_per_profile(self):
+    def test_probe_budget_logs_only_from_an_unambiguous_session_script_log(self):
         # Perfiles reutilizados entre partidas (partida diag de f997534): el script log de una sesion anterior ya trae
-        # su linea de agotamiento. Solo cuenta el script_*.log mas reciente de cada perfil.
+        # su linea de agotamiento. Solo cuenta un script log de sesion de DayZ, y solo si es el unico del perfil; con
+        # mas de uno no se adivina (Sol r5 N1: reloj atrasado o copias) y se marca log_ambiguous.
         self._require_f03()
-        with tempfile.TemporaryDirectory() as tmp:
-            t = Path(tmp)
-            profs = {}
-            for role in ("server", "client"):
-                p = t / role
-                p.mkdir()
-                (p / "script_2026-11-15_03-59-15.log").write_text(
-                    "04:15:14.636 SCRIPT       : [DSBX_QA] callback_budget_exhausted created_n=126 budget_n=30\n", encoding="utf-8"
-                )
-                (p / "script_2026-11-15_05-59-35.log").write_text("05:59:40.000 SCRIPT       : [DSBX_QA] hello\n", encoding="utf-8")
-                (p / "error_2026-11-15_03-59-15.log").write_text("[DSBX_QA] callback_budget_exhausted created_n=1 budget_n=30\n", encoding="utf-8")
-                profs[role] = p
+        exh = "[DSBX_QA] callback_budget_exhausted created_n={n} budget_n=30\n"
 
+        def _collect(profs):
             class _Ctx:
                 pass
 
             ctx = _Ctx()
             ctx.peer_logs = {}
             ctx.profiles = profs
-            ctx.samples_dir = t / "samples"
-            ctx.samples_dir.mkdir()
+            ctx.samples_dir = Path(tempfile.mkdtemp(dir=tmp))
             ctx.required_peers = lambda: ("server", "client")
-            self.assertEqual(f03_common.PartContext.collect_probe_budget_logs(ctx), [])
-            (profs["server"] / "script_2026-11-15_05-59-35.log").write_text(
-                "06:14:00.000 SCRIPT       : [DSBX_QA] callback_budget_exhausted created_n=200 budget_n=30\n", encoding="utf-8"
+            return f03_common.PartContext.collect_probe_budget_logs(ctx)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+
+            def _profiles(name, files_by_role):
+                profs = {}
+                for role in ("server", "client"):
+                    p = t / name / role
+                    p.mkdir(parents=True)
+                    for fname, text in files_by_role.get(role, {}).items():
+                        (p / fname).write_text(text, encoding="utf-8")
+                    profs[role] = p
+                return profs
+
+            # 1) Reproduccion de Sol con el reloj atrasado: queda un log anterior _06-00-00 limpio y la sesion actual crea
+            #    _05-59-00 con el agotamiento. Antes se elegia el de nombre mayor (el viejo) y se perdia la linea.
+            p1 = _profiles(
+                "clock_back",
+                {"server": {"script_2026-11-15_06-00-00.log": "06:00:01 hello\n", "script_2026-11-15_05-59-00.log": exh.format(n=200)}},
             )
-            rows = f03_common.PartContext.collect_probe_budget_logs(ctx)
-            self.assertEqual([(r["peer"], r["created_n"], r["budget_n"]) for r in rows], [("server", 200, 30)])
+            r1 = _collect(p1)
+            self.assertEqual([(r["peer"], r["tag"]) for r in r1], [("server", "log_ambiguous")])
+            # 2) Un nombre fuera del formato de DayZ (copia) no cuenta, ni para elegir ni con su linea; un error_*.log tampoco.
+            p2 = _profiles(
+                "foreign",
+                {
+                    "server": {
+                        "script_2026-11-15_05-59-35.log": "05:59:40 hello\n",
+                        "script_z_backup.log": exh.format(n=126),
+                        "error_2026-11-15_03-59-15.log": exh.format(n=1),
+                    }
+                },
+            )
+            self.assertEqual(_collect(p2), [])
+            # 3) Un unico script log de sesion por perfil: su linea de agotamiento cuenta.
+            p3 = _profiles("single", {"server": {"script_2026-11-15_05-59-35.log": "06:14:00.000 SCRIPT : " + exh.format(n=200)}})
+            r3 = _collect(p3)
+            self.assertEqual([(r["peer"], r["tag"], r["created_n"], r["budget_n"]) for r in r3], [("server", "callback_budget_exhausted", 200, 30)])
+
+    def test_probe_budget_ambiguous_logs_make_base12_missing(self):
+        # Sol r5 N1: con el script log de la sesion sin identificar (log_ambiguous), BASE-12 no puede acreditar nada:
+        # missing (probe_logs_ambiguous) y el agregado da 2, nunca 0.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            head = _init_temp_git_repo(root)
+            stamp = f03_common.compute_probe_stamp_at_commit(head, repo_root=root)
+            part = Path(tmp) / "probe-budget"
+            _write_synthetic_probe_budget_part(part, git_head=head, probe_stamp=stamp)
+            plog = part / "samples" / "probe_log.jsonl"
+            rows = f03_common.read_jsonl(plog)
+            rows.append({"ev": "probe_log", "files": ["script_a.log", "script_b.log"], "peer": "server", "tag": "log_ambiguous"})
+            _write_jsonl(plog, rows)
+            c12 = next(c for c in f03_base_eval.evaluate(part, repo_root=root)["checks"] if c["id"] == "BASE-12")
+            self.assertEqual((c12["status"], c12["detail"]), ("missing", "probe_logs_ambiguous"))
 
     def test_d12_probe_budget_params_verified_against_git_head(self):
         # D12: si git_head define PROBE_BUDGET_LOG_POLL_MS y PROBE_BUDGET_RETRY_MS, identity.params tiene que traerlos
