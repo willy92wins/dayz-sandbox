@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.1, con la ronda 1 de Sol aplicada (§12); pendiente de las interfaces de F0.3 de §11 antes de la ronda 2. 2026-11-15, por el orquestador de F2.
+- **Versión:** v1.2, con la ronda 1 de Sol aplicada y las interfaces de F0.3 fijadas (§12). Para la ronda 2 de Sol. 2026-11-15, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -237,13 +237,25 @@ Todas van por el bridge de la sonda (`qa0`), así que quedan en la evidencia.
   - el resultado se deduplica por `net_id`.
 
   **La cobertura es parte de la evidencia:** si una entidad seguida falta de todos los discos y podía haber salido de lo cubierto (criatura, o a menos de 15 m del borde), la comprobación da **INCONCLUSO**, nunca «borrada».
-- **Testigo de creación (P-03):** interfaz pendiente de F0.3 (§11). Es un trabajo de la sonda que, mientras está activo, registra cada `EntityAI` que se inicializa dentro de un radio: clase, `net_id`, pose y tick. Es la observación independiente de las 33 posiciones en el momento de crear, **criaturas incluidas**.
+- **Testigo de creación (P-03):** `per_witness_start`, que añade F0.3 (pendiente del OK de la principal, §11).
+  - Es un trabajo `per_witness`, exclusivo, con páginas de 5 y hasta 4096 filas.
+  - `nk`: `center_x_m`, `center_z_m`, `radius_m` (120) y `window_ms`, que cubre el apply con margen.
+  - Columnas: `scol` `class_name`, `net_id` y `parent_net_id`; `ncol` `pos_x_m`, `pos_y_m`, `pos_z_m`, `yaw_deg`, `tick_ms`, `frame` y `ai_agent_b`. Hay una fila por cada `EntityAI` que pasa por `EEInit` dentro del radio.
+  - Es la observación independiente de las 33 posiciones en el momento de crear, **criaturas incluidas**.
+  - `[verify F2 en partida]`: que en `EEInit` la posición ya sea la final. Lo contrasta F2P-12.
 - **Ajenos:** `per_spawn_raw`.
   - En el suelo, `foreign_ground`.
   - En el cargo, `foreign_in_container` con `target_net_id`, el `net_id` del contenedor sacado del censo.
   - Hay que comprobar `obs_parent_net_id`.
-- **Borrar ajenos (P-07):** interfaz pendiente de F0.3 (§11), por `net_id` y solo para entidades fuera de `m_Records`.
-- **Control persistente (P-06):** interfaz pendiente de F0.3 (§11). Es una entidad que **tiene** que reaparecer tras reiniciar el servidor, para demostrar que el storage se recargó. Sin ella, P4b y P4c dan INCONCLUSO.
+- **Borrar ajenos (P-07):** `per_cleanup_qa`, que ya existe (brief de S-persist `:189`).
+  - `sk cleanup_tag`, y una tabla de discos `scol ["area_tag"]`, `ncol ["center_x_m", "center_z_m", "radius_m"]`.
+  - Solo borra lo creado por `per_spawn_raw`, identificado por `net_id`, `pers_id` o la marca de clase y `health_hp`.
+  - Devuelve `cleaned_raw_n`, que tiene que ser igual al número de ajenos puestos. Después se repite el censo.
+- **Control persistente (P-06):** `per_spawn_raw` con `mode = "persistent_control"`, que ya existe y es el mismo del PER-06 de S-persist.
+  - Se crea sin `ECE_NOPERSISTENCY_WORLD`, con un hijo en el cargo.
+  - Tras el reinicio se reconoce por clase y marca de `health_hp`, porque el `net_id` cambia.
+  - **Tiene** que reaparecer, para demostrar que el storage se recargó. Si no, P4b y P4c dan INCONCLUSO.
+  - Se pone en P1 y lo borra `per_cleanup_qa` al final.
 
 ### 5.4 Evidencia (`samples/`)
 - **Del bridge del producto, la traza completa** (P-08): las entregas por `(session, op_id)` con su `conn`, los resultados recibidos con su `dup`, los acuses y las lecturas de reconciliación con su orden temporal. Sale de un registro JSONL del runner, al que se suscribe por el log del backend.
@@ -290,6 +302,7 @@ Es un estímulo que el motor real hace fallar **antes del checkpoint**, sin inye
   | F2P-09 | A4 (-), en P5: hubo efecto antes del corte (K > 0 según el testigo), no llegó la respuesta, la lectura de reconciliación va antes del apply nuevo, y el total es 33, no `33 + K` | traza, testigo y censo |
   | F2P-10 | DP-6: cada borrado que el mod da por confirmado falta en el censo siguiente, dentro de lo cubierto; cada `delete_failed` sigue vivo. Informa del tick medido | log, censo y cobertura |
   | F2P-11 | El modo de censo y el testigo funcionan: hay filas, están los edificios de referencia de P1 (por clase y pose) y `surface_y_m` varía con la posición | censo y testigo |
+  | F2P-12 | El testigo es fiable: en los **objetos** de P2, que no se mueven, su posición coincide con la del censo posterior a menos de 0,05 m `[verify F2 en partida]`. Si no, F2P-02 da INCONCLUSO para las criaturas, porque la posición de `EEInit` no sería la final | testigo y censo |
 
 - **Negativas contra la fabricación,** obligatorias, que dan FALLA o INCONCLUSO y nunca PASA:
   - filas sin respuesta cruda de la sonda que las respalde, o con trabajo, página, epoch o sello que no casan, o tomadas antes del efecto (frescura);
@@ -311,12 +324,16 @@ Es un estímulo que el motor real hace fallar **antes del checkpoint**, sin inye
   - borrado «confirmado» que sigue vivo;
   - **copia de las lecturas del mod con una perturbación por debajo de la tolerancia** (P-10);
   - una sola entrega en P2;
-  - corte antes del primer efecto en P5.
+  - corte antes del primer efecto en P5;
+  - testigo cuya posición en `EEInit` no es la final: los objetos estáticos discrepan del censo y F2P-12 da INCONCLUSO, no PASA.
 - **Revisión y congelado:** Sol, como mucho 2 rondas; después se congela (commit y sha).
-- **Gate y CLI (DP-13, P-11):** la forma la decide F0.3, porque es su núcleo (§11):
-  - una entrada que corre las partes, evalúa y agrega;
-  - **antes de evaluar**, comprueba byte a byte los ficheros del oráculo frente al commit congelado y, si no coinciden, sale INCONCLUSO `oracle_modified`;
-  - no puede haber ninguna vía de aceptación que se salte esa comprobación.
+- **Gate y CLI (DP-13, P-11):** la forma que propone F0.3 para su núcleo (§11):
+  - **`F2P` en `SPIKE_REGISTRY`** (`qa/gate_core.py:14`), con `qa/f2p_run.py`, `qa/f2p_eval.py` y `qa/f2p_mutants.py`. Hereda el despacho, las partes, `--evaluate-only` y la agregación;
+  - **`m1_gate.py spike F2P --oracle-commit <sha>`:** antes de correr o evaluar nada, compara byte a byte los ficheros del oráculo frente al commit congelado. Si no coinciden, INCONCLUSO `oracle_modified` y sale 2, también con `--evaluate-only`;
+  - **`--product-pbo <ruta>`,** junto al `--pbo` de la sonda. En el manifest van `identity.pbo_sha256` (sonda) e `identity.product_pbo_sha256` (producto);
+  - la única vía de aceptación es esa entrada con `--oracle-commit`: un `f2p_eval` suelto no cuenta.
+
+  Es un PR de núcleo de F0.3, con su Sol. Quién lo hace lo decide la principal.
 
 ## 7. Aceptación
 - **T1:** §3.9.
@@ -331,7 +348,7 @@ Es un estímulo que el motor real hace fallar **antes del checkpoint**, sin inye
   - la revisión del Experto de Enforce (§9.3).
 - **T4:**
   - el oráculo congelado, comprobado antes de evaluar (DP-13);
-  - P1 a P5, en el orden de §5.2, en diag y después en retail, por la entrada del gate de §6: PASA en F2P-01 a F2P-11;
+  - P1 a P5, en el orden de §5.2, en diag y después en retail, por la entrada del gate de §6: PASA en F2P-01 a F2P-12;
   - INCONCLUSO solo con su motivo escrito: cobertura, control persistente o el estímulo de P2n.
   - La parte de A3 de los hijos propios es N/A con motivo en M1 (§5.2).
 
@@ -384,13 +401,12 @@ Es un estímulo que el motor real hace fallar **antes del checkpoint**, sin inye
 
 ## 11. Preguntas abiertas a otras sesiones
 1. **F0.3, ajenos:** **resuelto.** `per_spawn_raw`, en modo `foreign_ground` y `foreign_in_container` con `target_net_id`, lo añade F0.3 en el commit del modo de censo (`censo-interfaz-f03.md`).
-2. **F0.3, preguntado el 15-nov tras Sol r1:**
-   - (a) **testigo de creación** (P-03);
-   - (b) borrar por `net_id` los ajenos de `per_spawn_raw` (P-07);
-   - (c) control persistente (P-06);
-   - (d) forma del registro de F2P en el gate, con la comprobación de `oracle_modified` y los dos PBO (P-11).
+2. **F0.3, respondido el 15-nov tras Sol r1:**
+   - (b) **resuelto:** `per_cleanup_qa`, que ya existe;
+   - (c) **resuelto:** `per_spawn_raw` en modo `persistent_control`, que ya existe;
+   - (a) testigo `per_witness_start` y (d) registro `F2P` con `--oracle-commit` y `--product-pbo`: la interfaz está fijada (§5.3, §6), **pendiente del OK de la principal**, porque amplía la sonda y el núcleo del gate.
 
-   T2 no se congela sin (a).
+   El oráculo (T2) se escribe contra estas interfaces. La partida (T4) espera a que estén en `main`.
 3. **F1b-peers:** ¿aceptáis los ganchos de §4.2? ¿Cambia algo de `StartOrderExecution`, `AdvanceExecution`, `WorldReadJson`, `HelloBody` o del camino de `result_too_large` después de `525da99`?
 
 ## 12. Registro de cambios
@@ -411,3 +427,8 @@ Es un estímulo que el motor real hace fallar **antes del checkpoint**, sin inye
   | P-10 | independencia por la captura cruda de la sonda; mutante «copia con perturbación» (§6) |
   | P-11 | entrada de gate con comprobación previa de bytes y los dos PBO; la forma la fija F0.3 (§6, §11) |
   | P-12 | una sola dependencia normativa para T2; T4 lo hace una familia de implementación (§0, §1) |
+- v1.2 (2026-11-15): las interfaces de F0.3 en §5.3, §6 y §11:
+  - el testigo `per_witness_start`, con F2P-12 contrastando testigo y censo;
+  - `per_cleanup_qa`;
+  - el control persistente `persistent_control`;
+  - `F2P` en `SPIKE_REGISTRY`, con `--oracle-commit` y `--product-pbo`.
