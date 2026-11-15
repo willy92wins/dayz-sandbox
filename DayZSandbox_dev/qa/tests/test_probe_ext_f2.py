@@ -235,7 +235,8 @@ class CensusSelectAllE2E(_E2EBase):
         # Edificios y objetos del mapa que S-persist no registra ni lista: ahora entran.
         self.assertIn("Land_Mil_Barracks1", by_class)
         self.assertIn("Land_Garage_Row", by_class)
-        self.assertEqual(by_class["Land_Mil_Barracks1"][0]["net_id"], "0:0")
+        self.assertEqual(by_class["Land_Mil_Barracks1"][0]["net_id"], fake_ext_persist.BARRACKS_NET_ID)
+        self.assertNotEqual(by_class["Land_Mil_Barracks1"][0]["net_id"], "0:0")  # los edificios tienen net_id real
         self.assertEqual(by_class["Zmbf_PoliceCopBlue"][0]["ai_agent_b"], 1.0)
         self.assertEqual({r["own_b"] for r in pages["rows"]}, {0.0})  # S-persist no registra nada de esto
         # Raices: parent_net_id vacio y loc_kind ground. Inventario: padre inmediato real.
@@ -252,7 +253,7 @@ class CensusSelectAllE2E(_E2EBase):
         self.assertEqual(new_rag["parent_net_id"], "1:50")
         self.assertEqual(new_rag["loc_kind"], "cargo")
         self.assertEqual(new_rag["own_b"], 0.0)
-        by_net = {r["net_id"]: r for r in pages["rows"] if r["net_id"] != "0:0"}
+        by_net = {r["net_id"]: r for r in pages["rows"]}
         apple = by_net["1:54"]  # anidado: Apple dentro de Pot dentro de WoodenCrate
         self.assertEqual(apple["parent_net_id"], "1:53")
         self.assertEqual(apple["parent_class"], "Pot")
@@ -269,7 +270,7 @@ class CensusSelectAllE2E(_E2EBase):
         proxy = by_net["1:65"]
         self.assertEqual(
             (proxy["loc_kind"], proxy["parent_net_id"], proxy["parent_class"], proxy["slot_name"]),
-            ("cargo", "0:0", "Land_Mil_Barracks1", "Cargo:2:1:3"),
+            ("cargo", fake_ext_persist.BARRACKS_NET_ID, "Land_Mil_Barracks1", "Cargo:2:1:3"),
         )
         wheel = by_class["HatchbackWheel"][0]
         self.assertEqual(wheel["loc_kind"], "attachment")
@@ -369,7 +370,7 @@ class SpawnTargetNetIdE2E(_E2EBase):
 
     def test_target_not_found_has_no_effect(self):
         before, pages_before = self._children_of("1:50")
-        for bad in ("1:9999", "0:0", "7:7"):
+        for bad in ("1:9999", "0:0", "7:7", "-5:5"):
             res = _spawn(self.ctx, "nf", "foreign_in_container", "Rag", target_net_id=bad)
             self.assertEqual((res.status, res.reason), ("rejected", "target_not_found"), bad)
         after, pages_after = self._children_of("1:50")
@@ -476,6 +477,9 @@ class WitnessE2E(_E2EBase):
             # Frames consecutivos 0, 1, ..., K: sample_idx 1 es el frame siguiente al de EEInit.
             self.assertEqual(frames, [frames[0] + i for i in range(4)], net_id)
             self.assertEqual(len({r["pos_x_m"] for r in samples}), 1)
+            # Las muestras 0..K comparten net_id (el de la fila 0 se lee en el primer tick, no en EEInit) y no es 0:0.
+            self.assertEqual(len({r["net_id"] for r in samples}), 1, net_id)
+            self.assertNotEqual(samples[0]["net_id"], "0:0")
         g = by_net[ground.payload["str"]["net_id"]]
         self.assertEqual(g[0]["class_name"], "Barrel_Yellow")
         self.assertEqual(g[0]["parent_net_id"], "")
@@ -687,6 +691,28 @@ class WitnessInProcess(unittest.TestCase):
         self.assertEqual({(r["pos_x_m"], r["pos_z_m"]) for r in rows}, {(6180.0, 7650.0)})  # ultima posicion conocida
         self.assertEqual([r["frame"] for r in rows], [rows[0]["frame"] + i for i in range(4)])  # 0, 1, 2, 3 consecutivos
         self.assertIsNone(self.ext.witness)
+
+    def test_sample0_carries_the_net_id_of_the_first_tick(self):
+        job_id = self._start(window_ms=500.0, k=2)
+        ent = self._new()
+        self.assertEqual(self.ext.witness["buf"][0]["net_id"], "0:0")  # en EEInit el motor aun no lo asigno
+        _tick(self.peer, self.jobs, self.ext)
+        rows = _job_rows(self.jobs, job_id)
+        self.assertEqual([r["sample_idx"] for r in rows], [0.0, 1.0])
+        self.assertEqual({r["net_id"] for r in rows}, {ent["net_id"]})
+        self.assertNotEqual(rows[0]["net_id"], "0:0")
+        # Posicion y frame de EEInit en la fila 0; sample 1 sigue siendo el frame siguiente.
+        self.assertEqual(rows[1]["frame"], rows[0]["frame"] + 1)
+
+    def test_sample0_of_an_entity_gone_before_the_first_tick(self):
+        job_id = self._start(window_ms=500.0, k=1)
+        ent = self._new()
+        self.ext._delete_entity(ent)
+        _tick(self.peer, self.jobs, self.ext)
+        rows = _job_rows(self.jobs, job_id)
+        self.assertEqual([r["sample_idx"] for r in rows], [0.0, 1.0])
+        self.assertEqual([(r["net_id"], r["alive_b"]) for r in rows], [("0:0", 0.0), ("0:0", 0.0)])
+        self.assertEqual((rows[0]["pos_x_m"], rows[0]["pos_z_m"]), (6180.0, 7650.0))
 
     def test_class_without_hooked_root_is_not_seen(self):
         job_id = self._start(window_ms=200.0, k=1)
@@ -1357,6 +1383,15 @@ class StaticPersistExtensionTests(unittest.TestCase):
         row = _block_after(self.code, r"protected\s+void\s+AppendEntityCensusRow\s*\([^)]*\)\s*\{")
         self.assertRegex(row, r"if\s*\(withSurface\)\s*\{[^}]*g_Game\.SurfaceY\(pos\[0\],\s*pos\[2\]\)")
         self.assertIn("ReadRealLocation(obj,", row)  # parent_net_id, parent_class, slot_name y loc_kind reales
+
+    def test_sample0_row_uses_ids_read_at_the_first_tick(self):
+        tick = _block_after(self.code, r"protected\s+void\s+TickWitness\s*\(\s*\)\s*\{")
+        self.assertIn("s0Net = FormatNetId(s0.m_Ent)", tick)
+        self.assertRegex(tick, r"AppendWitnessRow\(jid,\s*0,\s*s0\.m_ClassName,\s*s0Net,\s*s0Parent,")
+        self.assertNotRegex(tick, r"AppendWitnessRow\(jid,\s*0,[^;]*cap\.m_NetId")
+        self.assertLess(tick.index("s0Net = FormatNetId"), tick.index("for (int f = 0"))  # las filas 0 van antes que el seguimiento
+        raw = WITNESS_C.read_bytes().decode("utf-8")
+        self.assertIn("ECE_INITAI", raw)  # limitacion de ai_agent_b documentada
 
     def test_follow_after_capture_order_in_tick(self):
         tick = _block_after(self.code, r"protected\s+void\s+TickWitness\s*\(\s*\)\s*\{")

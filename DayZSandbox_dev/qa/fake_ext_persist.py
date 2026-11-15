@@ -140,13 +140,16 @@ CARGO_SIZE = {
 }
 
 # Objetos del mapa simulado (no los crea S-persist ni los toca cleanup/reinicio): solo los ve el censo con
-# select_all_entityai_b = 1. net_id "0:0" es el de un edificio estatico (GetObjectByNetworkId no lo resuelve).
+# select_all_entityai_b = 1. Los edificios tienen net_id real (medido en partida: parte alta negativa, p. ej.
+# -2147225600:847447385), nunca 0:0.
 # El slot "Cargo:idx:fila:col" coloca el hijo en la rejilla del padre (fila y columna de su esquina).
 # (net_id, class_name, parent_net_id, slot_name, x, z, ai_agent)
+BARRACKS_NET_ID = "-2147225600:847447385"
+GARAGE_NET_ID = "-2147225344:847447400"
 MAP_OBJECT_SPECS = (
-    ("0:0", "Land_Mil_Barracks1", "", "", 6170.0, 7643.0, False),
-    ("1:65", "Rag", "0:0", "Cargo:2:1:3", 6170.0, 7643.0, False),  # cargo proxy del edificio (PROXYCARGO)
-    ("1:49", "Land_Garage_Row", "", "", 6120.0, 7600.0, False),
+    (BARRACKS_NET_ID, "Land_Mil_Barracks1", "", "", 6170.0, 7643.0, False),
+    ("1:65", "Rag", BARRACKS_NET_ID, "Cargo:2:1:3", 6170.0, 7643.0, False),  # cargo proxy del edificio (PROXYCARGO)
+    (GARAGE_NET_ID, "Land_Garage_Row", "", "", 6120.0, 7600.0, False),
     ("1:50", "Barrel_Blue", "", "", 6190.0, 7650.0, False),
     ("1:51", "Rag", "1:50", "Cargo:0:0:0", 6190.0, 7650.0, False),
     ("1:52", "WoodenCrate", "", "", 6150.0, 7620.0, False),
@@ -459,7 +462,7 @@ class PersistFakeExt(FakeExt):
             ))
 
     def _find_by_net_id(self, net_id):
-        # GetObjectByNetworkId: 0:0 no es un id de red valido (edificios estaticos del mapa).
+        # GetObjectByNetworkId: 0:0 es "sin id de red asignado", no resuelve nada.
         if net_id == "0:0":
             return None
         ent = self.world.get(net_id)
@@ -1330,11 +1333,12 @@ class PersistFakeExt(FakeExt):
             return
         if _dist2(ent["pos"][0], ent["pos"][2], wit["cx"], wit["cz"]) > wit["radius"]:
             return
+        # En EEInit el motor aun no ha asignado el net_id (0:0): se lee en el primer tick de servidor.
         wit["buf"].append({
             "ent": ent,
             "class_name": ent["class_name"],
-            "net_id": ent["net_id"],
-            "parent_net_id": ent["parent_net_id"],
+            "net_id": "0:0",
+            "parent_net_id": "",
             "pos": tuple(ent["pos"]),
             "yaw": float(ent["ori"][0]),
             "tick_ms": now_ms,
@@ -1438,16 +1442,12 @@ class PersistFakeExt(FakeExt):
         now_ms = float(self.peer.local_ms())
         frame = int(self.peer.frame)
         wit["frame"] = frame
-        # 1) capturas de EEInit acumuladas desde el tick anterior (sample_idx 0); van ANTES del seguimiento: su
-        #    sample_idx 1 sale en este mismo tick, el frame siguiente (frames consecutivos 0, 1, ..., K)
+        # 1) capturas de EEInit acumuladas desde el tick anterior; van ANTES del seguimiento: su sample_idx 1 sale en este
+        #    mismo tick, el frame siguiente (frames consecutivos 0, 1, ..., K). La fila sample_idx 0 sale en este primer tick
+        #    con la posicion, el tick_ms y el frame de EEInit pero con el net_id y el parent_net_id leidos ahora.
+        fresh = []
         for cap in wit["buf"]:
-            row = self._witness_row(
-                0, cap["class_name"], cap["net_id"], cap["parent_net_id"],
-                cap["pos"], cap["yaw"], cap["tick_ms"], cap["frame"], cap["ai"], True,
-            )
-            if not self._witness_append(jid, row):
-                return
-            wit["follow"].append({
+            fol = {
                 "ent": cap["ent"],
                 "class_name": cap["class_name"],
                 "net_id": cap["net_id"],
@@ -1455,9 +1455,28 @@ class PersistFakeExt(FakeExt):
                 "pos": cap["pos"],
                 "yaw": cap["yaw"],
                 "ai": cap["ai"],
+                "tick_ms": cap["tick_ms"],
+                "frame": cap["frame"],
                 "next": 1,
-            })
+            }
+            wit["follow"].append(fol)
+            fresh.append(fol)
         wit["buf"] = []
+        for fol in fresh:
+            ent = fol["ent"]
+            alive = self._witness_alive(ent)
+            if alive:
+                fol["net_id"] = ent["net_id"]
+                fol["parent_net_id"] = ent["parent_net_id"]
+            else:
+                fol["net_id"] = "0:0"
+                fol["parent_net_id"] = ""
+            row = self._witness_row(
+                0, fol["class_name"], fol["net_id"], fol["parent_net_id"],
+                fol["pos"], fol["yaw"], fol["tick_ms"], fol["frame"], fol["ai"], alive,
+            )
+            if not self._witness_append(jid, row):
+                return
         # 2) muestras de seguimiento (sample_idx 1..K), incluidas las recien capturadas
         keep = []
         for fol in list(wit["follow"]):

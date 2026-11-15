@@ -15,6 +15,10 @@
 // NO CUBIERTO (limitacion del contrato): lo que no deriva de esas raices no se ve: jugadores (ManBase), barcos y
 // helicopteros (BoatScript, Helicopter), edificios que derivan directo de Building (AnniversaryMusicSource, ...),
 // AdvancedCommunication, ScriptedEntity, EffecterBase y las clases de mods de terceros.
+// net_id: en EEInit el motor aun no lo ha asignado (0:0); por eso la fila sample_idx 0 se emite en el primer tick de
+// servidor con el net_id y el parent_net_id leidos entonces (posicion, orientacion, tick_ms y frame, los de EEInit).
+// ai_agent_b: depende de que la entidad se cree con ECE_INITAI. per_spawn_raw foreign_ground crea sin IA y una criatura
+// asi sale con ai_agent_b = 0 (medido en partida: la gallina).
 //
 // API verificada en P:\scripts:
 //   EntityAI.EEInit()                   3_game/entities/entityai.c:905

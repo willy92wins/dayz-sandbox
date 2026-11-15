@@ -125,6 +125,10 @@ class DSBX_QA_PersistWitnessFollow : Managed
 	float m_LastY;
 	float m_LastZ;
 	float m_LastYawDeg;
+	float m_EEInitTickMs;
+	int m_EEInitFrame;
+	int m_AiAgentB;
+	bool m_PendingSample0;
 	int m_NextSample;
 
 	void DSBX_QA_PersistWitnessFollow()
@@ -137,6 +141,10 @@ class DSBX_QA_PersistWitnessFollow : Managed
 		m_LastY = 0.0;
 		m_LastZ = 0.0;
 		m_LastYawDeg = 0.0;
+		m_EEInitTickMs = 0.0;
+		m_EEInitFrame = 0;
+		m_AiAgentB = 0;
+		m_PendingSample0 = false;
 		m_NextSample = 1;
 	}
 }
@@ -1958,16 +1966,16 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		// Frame que se apunta en las capturas de EEInit del proximo intervalo.
 		DSBX_QA_Witness.s_Frame = frame;
 
-		// 1) Capturas de EEInit acumuladas desde el tick anterior (sample_idx 0). Se incorporan ANTES del seguimiento: su
-		//    sample_idx 1 sale en este mismo tick, el frame siguiente al de EEInit (frames consecutivos 0, 1, ..., K).
+		// 1) Capturas de EEInit acumuladas desde el tick anterior. Se incorporan ANTES del seguimiento: su sample_idx 1 sale
+		//    en este mismo tick, el frame siguiente al de EEInit (frames consecutivos 0, 1, ..., K). La fila sample_idx 0 se
+		//    emite en este primer tick con la posicion, la orientacion, el tick_ms y el frame de EEInit, pero con el net_id y
+		//    el parent_net_id leidos AHORA: en EEInit el motor aun no ha asignado el net_id (sale 0:0).
 		int capN = DSBX_QA_Witness.s_Buf.Count();
 		for (int c = 0; c < capN; c++)
 		{
 			DSBX_QA_WitnessCapture cap = DSBX_QA_Witness.s_Buf.Get(c);
 			if (!cap)
 				continue;
-			if (!AppendWitnessRow(jid, 0, cap.m_ClassName, cap.m_NetId, cap.m_ParentNetId, cap.m_PosX, cap.m_PosY, cap.m_PosZ, cap.m_YawDeg, cap.m_TickMs, cap.m_Frame, cap.m_AiAgentB, 1))
-				return;
 			DSBX_QA_PersistWitnessFollow nf = new DSBX_QA_PersistWitnessFollow();
 			nf.m_Ent = cap.m_Ent;
 			nf.m_ClassName = cap.m_ClassName;
@@ -1977,10 +1985,39 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			nf.m_LastY = cap.m_PosY;
 			nf.m_LastZ = cap.m_PosZ;
 			nf.m_LastYawDeg = cap.m_YawDeg;
+			nf.m_EEInitTickMs = cap.m_TickMs;
+			nf.m_EEInitFrame = cap.m_Frame;
+			nf.m_AiAgentB = cap.m_AiAgentB;
+			nf.m_PendingSample0 = true;
 			nf.m_NextSample = 1;
 			m_WitnessFollow.Insert(nf);
 		}
 		DSBX_QA_Witness.s_Buf.Clear();
+
+		// 1b) Filas sample_idx 0 (antes que ninguna muestra de seguimiento: el orden de las filas no cambia).
+		int s0Count = m_WitnessFollow.Count();
+		for (int z = 0; z < s0Count; z++)
+		{
+			DSBX_QA_PersistWitnessFollow s0 = m_WitnessFollow.Get(z);
+			if (!s0 || !s0.m_PendingSample0)
+				continue;
+			string s0Net = "0:0";
+			string s0Parent = "";
+			int s0Alive = 0;
+			if (IsObjectAlive(s0.m_Ent))
+			{
+				s0Alive = 1;
+				s0Net = FormatNetId(s0.m_Ent);
+				EntityAI s0Ent = EntityAI.Cast(s0.m_Ent);
+				if (s0Ent && s0Ent.GetHierarchyParent())
+					s0Parent = FormatNetId(s0Ent.GetHierarchyParent());
+			}
+			s0.m_NetId = s0Net;
+			s0.m_ParentNetId = s0Parent;
+			s0.m_PendingSample0 = false;
+			if (!AppendWitnessRow(jid, 0, s0.m_ClassName, s0Net, s0Parent, s0.m_LastX, s0.m_LastY, s0.m_LastZ, s0.m_LastYawDeg, s0.m_EEInitTickMs, s0.m_EEInitFrame, s0.m_AiAgentB, s0Alive))
+				return;
+		}
 
 		// 2) Muestras de seguimiento (sample_idx 1..K), incluidas las recien capturadas.
 		//    Si un AppendRow falla, el trabajo ya acabo (failed/rows_cap) y OnJobEnd limpio el estado: salir sin tocar nada.
