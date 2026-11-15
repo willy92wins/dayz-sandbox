@@ -1692,12 +1692,21 @@ class _SyntheticPartBuilder:
             "kind": "spike",
             "build": "offline",
             "both": True,
-            "params": {"wire_cap": wire.WIRE_CAP},
+            "params": {
+                "wire_cap": wire.WIRE_CAP,
+                "probe_budget_log_poll_ms": f03_common.PROBE_BUDGET_LOG_POLL_MS,
+                "probe_budget_retry_ms": f03_common.PROBE_BUDGET_RETRY_MS,
+            },
             "identity": {
                 "build": "offline",
                 "git_dirty": False,
                 "git_head": self.git_head,
-                "params": {"wire_cap": wire.WIRE_CAP},
+                # D12 del núcleo final: la identidad trae los parámetros de probe-budget de git_head.
+                "params": {
+                    "wire_cap": wire.WIRE_CAP,
+                    "probe_budget_log_poll_ms": f03_common.PROBE_BUDGET_LOG_POLL_MS,
+                    "probe_budget_retry_ms": f03_common.PROBE_BUDGET_RETRY_MS,
+                },
                 "pbo_sha256": None,
                 "peer_builds": {"server": "offline", "client": "offline"},
                 "probe_stamp": self.probe_stamp,
