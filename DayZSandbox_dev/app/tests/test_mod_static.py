@@ -301,6 +301,23 @@ def check_m3_fifo(mod_dir: Path) -> list[str]:
     return violations
 
 
+def _log_call_args(code: str) -> list[str]:
+    """Argumentos de cada llamada a Log(...) (sin la definicion de Log), con parentesis equilibrados."""
+    out = []
+    for m in re.finditer(r"\bLog\s*\(", code):
+        if re.search(r"\bvoid\s+$", code[max(0, m.start() - 12):m.start()]):
+            continue
+        depth, j = 1, m.end()
+        while j < len(code) and depth:
+            if code[j] == "(":
+                depth += 1
+            elif code[j] == ")":
+                depth -= 1
+            j += 1
+        out.append(code[m.end():j - 1])
+    return out
+
+
 def check_m4_clave(mod_dir: Path) -> list[str]:
     violations = []
     c_files = _read_stripped_c_files(mod_dir)
@@ -311,6 +328,12 @@ def check_m4_clave(mod_dir: Path) -> list[str]:
     for rel, code in c_files.items():
         if rel != "scripts/3_Game/DSBX_Peer.c" and re.search(r"\bm_Key\b", code):
             violations.append(f"M4: m_Key aparece fuera de DSBX_Peer.c en {rel}")
+
+    # Ningun Log lleva la clave, la consulta con la clave ni la ruta (P-09, §3.12)
+    for rel, code in c_files.items():
+        for arg in _log_call_args(code):
+            if re.search(r"\bm_Key\b|\bKeyQuery\b|\.\s*key\b|\bruta\b", arg):
+                violations.append(f"M4: un Log lleva la clave o la ruta en {rel}: Log({arg.strip()[:60]})")
 
     load_body = _find_method_body(peer_code, "LoadConfig")
     key_query_body = _find_method_body(peer_code, "KeyQuery")
@@ -652,6 +675,13 @@ def check_m9_contrato_cable(mod_dir: Path) -> list[str]:
     for key in ('"proto"', '"dsbx1"', '"peer"', '"inst"', '"epoch"', '"mod_ver"', '"build"', '"map"', '"world_size"', '"modset"', '"actor_engine"', '"none"'):
         if not _has_wire_key(hello_body, key):
             violations.append(f"M9: falta {key} en HelloBody")
+    m_loop = re.search(r"while\s*\(\s*i\s*<\s*modset\.Count\(\)\s*\)\s*\{", hello_body)
+    if not m_loop:
+        violations.append("M9: HelloBody debe recorrer el modset entero con while (i < modset.Count())")
+    else:
+        loop_block = _extract_block(hello_body, hello_body.find("{", m_loop.start()))
+        if re.search(r"\b(?:break|return)\b", loop_block):
+            violations.append("M9: el bucle del modset de HelloBody no puede cortar (break/return): nada se recorta")
     if '",\\"map\\":" + WireText(mapName)' not in hello_body:
         violations.append("M9: map debe escribirse con WireText(mapName) en HelloBody")
     if "WireText(modVer)" not in hello_body or "WireText(build)" not in hello_body or "WireText(modset.Get(" not in hello_body:
@@ -755,6 +785,14 @@ def check_m11_errores(mod_dir: Path) -> list[str]:
             violations.append("M11: el canal R no debe mirar el codigo de error del motor (D1)")
         if "m_RMaxFailures" not in r_err_body or "RetryGapR(" not in r_err_body:
             violations.append("M11: OnChannelRError debe reintentar con RetryGapR y abandonar en m_RMaxFailures")
+        # abandona al cuarto fallo: solo se compara con m_RMaxFailures, que vale R_MAX_FAILURES = 4 (D1)
+        if len(re.findall(r">=\s*m_RMaxFailures\b", r_err_body)) < 2 \
+                or re.search(r"(?:m_Attempts|m_CatFailures)\s*>=?\s*\d", r_err_body):
+            violations.append("M11: OnChannelRError debe abandonar resultados y paginas solo con >= m_RMaxFailures")
+    const_code = c_files.get("scripts/3_Game/DSBX_Const.c", "")
+    if not re.search(r"\bconst\s+int\s+R_MAX_FAILURES\s*=\s*4\s*;", const_code) \
+            or not re.search(r"\bm_RMaxFailures\s*=\s*DSBX_Const\.R_MAX_FAILURES\s*;", peer_code):
+        violations.append("M11: R_MAX_FAILURES debe valer 4 y asignarse a m_RMaxFailures")
 
     if not lease_body:
         violations.append("M11: falta CheckLeaseTimeout en DSBX_Peer.c")
@@ -1028,6 +1066,27 @@ class TestModStatic(unittest.TestCase):
                 "scripts/3_Game/DSBX_Wire.c",
                 "int i = 0;\n\t\t\t\twhile (i < modset.Count())",
                 "if (modset.Count() > 16) { modset.RemoveOrdered(0); }\n\t\t\t\tint i = 0;\n\t\t\t\twhile (i < modset.Count())",
+                "M9",
+            ),
+            # Del orquestador (X4 propio): un Log con la clave de la configuracion
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "m_Key = cfg.key;",
+                'm_Key = cfg.key; Log("key " + cfg.key);',
+                "M4",
+            ),
+            # Del orquestador: R abandona al primer fallo
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "if (m_SendingEntry.m_Attempts >= m_RMaxFailures)",
+                "if (m_SendingEntry.m_Attempts >= 1)",
+                "M11",
+            ),
+            # Del orquestador: el hello deja de anadir nombres del modset sin quitarlos del array
+            (
+                "scripts/3_Game/DSBX_Wire.c",
+                "\t\t\t\twhile (i < modset.Count())\n\t\t\t\t{\n",
+                "\t\t\t\twhile (i < modset.Count())\n\t\t\t\t{\n\t\t\t\t\tif (modsetItems.Length() > 2000) { break; }\n",
                 "M9",
             ),
         ]
