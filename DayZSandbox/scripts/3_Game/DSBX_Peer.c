@@ -39,6 +39,10 @@ class DSBX_Callback : RestCallback
 	{
 		if (m_Done)
 		{
+			if (m_Peer)
+			{
+				m_Peer.LogRepeat(m_Channel, m_Kind, "success");
+			}
 			return;
 		}
 		m_Done = true;
@@ -53,6 +57,10 @@ class DSBX_Callback : RestCallback
 	{
 		if (m_Done)
 		{
+			if (m_Peer)
+			{
+				m_Peer.LogRepeat(m_Channel, m_Kind, "error");
+			}
 			return;
 		}
 		m_Done = true;
@@ -67,6 +75,10 @@ class DSBX_Callback : RestCallback
 	{
 		if (m_Done)
 		{
+			if (m_Peer)
+			{
+				m_Peer.LogRepeat(m_Channel, m_Kind, "timeout");
+			}
 			return;
 		}
 		m_Done = true;
@@ -1433,6 +1445,17 @@ class DSBX_Peer
 	int TickMs()
 	{
 		return (int)NowMs();
+	}
+
+	// El motor invoco otra vez un callback ya cerrado o retirado: se descarta (brief en partida, L-15).
+	void LogRepeat(int channel, int kind, string via)
+	{
+		string ch = "R";
+		if (channel == DSBX_Const.CH_P)
+		{
+			ch = "P";
+		}
+		Log("rest repeat ch=" + ch + " kind=" + kind + " via=" + via + " tick_ms=" + TickMs());
 	}
 
 	// Diagnostico de partida (brief en partida D-P4): R lo registra pero no lo mira (D1).
