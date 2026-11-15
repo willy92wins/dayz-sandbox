@@ -582,6 +582,27 @@ class HoldWindowV12Tests(FaultProxyTestBase):
         self.assertNotIn("K9", json.dumps(self.read_log()))
 
 
+class HelloPeerFromBodyTests(FaultProxyTestBase):
+    """El hello del mod real lleva el peer en el cuerpo JSON, no en la URL (humo diag, 15-nov)."""
+
+    def test_hello_sin_peer_en_la_url_se_atribuye_por_el_cuerpo(self):
+        self.start_proxy([{
+            "id": "h401",
+            "match": {"route": "hello", "peer": "server", "count": 1},
+            "action": {"type": "status", "code": 401, "error": "bad_key"},
+        }])
+        self.wait_active(1)
+        status, _ = request(self.proxy.port, "POST", "/hello?key=K7",
+                            json.dumps({"peer": "client", "inst": "i"}).encode("utf-8"))
+        self.assertEqual(status, 200)
+        status, _ = request(self.proxy.port, "POST", "/hello?key=K7",
+                            json.dumps({"peer": "server", "inst": "i"}).encode("utf-8"))
+        self.assertEqual(status, 401)
+        lines = self.wait_log(2)
+        self.assertEqual([line["peer"] for line in lines[-2:]], ["client", "server"])
+        self.assertNotIn("K7", json.dumps(self.read_log()))
+
+
 class CounterTests(FaultProxyTestBase):
     def test_nth_count_acts_exactly_count_times_under_concurrency(self):
         self.start_proxy(

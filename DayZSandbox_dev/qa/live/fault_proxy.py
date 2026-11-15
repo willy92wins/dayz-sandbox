@@ -187,6 +187,18 @@ def _read_body(handler):
         return b""
 
 
+def _hello_peer(body):
+    """El hello del mod lleva el peer en el cuerpo JSON ("peer", como lee bridge.handle_hello), no en
+    la URL. Sin esto, las reglas y las ventanas de un peer no casan con sus hellos (humo diag, 15-nov).
+    Solo se lee ese campo; el cuerpo no se registra."""
+    try:
+        doc = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    value = doc.get("peer") if isinstance(doc, dict) else None
+    return value if value in ("server", "client") else None
+
+
 class _RulesState:
     def __init__(self):
         self.version = None
@@ -404,6 +416,8 @@ class FaultProxy:
                     deliver = 1
             session = query.get("session")
             body = _read_body(handler)
+            if peer is None and route == "hello":
+                peer = _hello_peer(body)
             with self._lock:
                 req_id = self._req_counter
                 self._req_counter += 1
