@@ -2381,6 +2381,391 @@ async function runS5(browser) {
       }
     }
 
+    // ---- Regresiones de la pasada de Sol tras el merge (SEG-01, SEG-02, SEG-03) ----
+    const reopenOnEntity = async () => {
+      await page.goto(BASE + "/");
+      await loginIfNeeded(context, page);
+      await page.locator('[data-panel="jerarquia"] [data-entity-id="' + eid + '"]').click();
+      await activatePanel(page, "propiedades");
+    };
+
+    // SEG-03: una respuesta con las cabeceras y sin el cuerpo entero no deja la fila parada. La
+    // interceptación de Playwright entrega las respuestas enteras, así que el cuerpo que no termina se
+    // simula en la página: el primer POST de la escena devuelve un 200 cuyo cuerpo nunca acaba y que,
+    // como uno de verdad, se corta solo cuando se aborta la petición.
+    await reopenOnEntity();
+    {
+      await page.evaluate(() => {
+        const orig = window.fetch;
+        let armed = true;
+        window.fetch = (input, init) => {
+          const url = typeof input === "string" ? input : input.url;
+          if (armed && url.endsWith("/api/scene/ops") && init && init.method === "POST") {
+            armed = false;
+            const signal = init.signal;
+            const body = new ReadableStream({
+              start(ctrl) {
+                ctrl.enqueue(new TextEncoder().encode('{"ok":tr'));
+                if (signal) {
+                  signal.addEventListener("abort", () => ctrl.error(new DOMException("Aborted", "AbortError")));
+                }
+              },
+            });
+            return Promise.resolve(
+              new Response(body, { status: 200, headers: { "Content-Type": "application/json; charset=utf-8" } })
+            );
+          }
+          return orig(input, init);
+        };
+      });
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7700");
+        await page.keyboard.press("Enter");
+        await page
+          .locator('[data-aviso="sin-respuesta"]')
+          .first()
+          .waitFor({ state: "visible", timeout: 16000 })
+          .catch(() => {
+            throw new Error("S5(-): con las cabeceras y sin el cuerpo no salio el aviso sin-respuesta en 16 s (SEG-03)");
+          });
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7701");
+        await page.keyboard.press("Enter");
+        await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.x === 7701;
+        }, "SEG-03: X=7701 tras el plazo", 10000).catch(async (err) => {
+          const e = await xOf();
+          throw new Error("S5(-): tras un cuerpo que no llega, la fila siguio parada (SEG-03): x=" + (e && e.x) + " · " + err.message);
+        });
+      } finally {
+        await page.locator("#f-x").evaluate((el) => el.blur());
+        await sleep(200);
+      }
+    }
+
+    // SEG-02: tras un plazo vencido, la tanda en duda se vuelve a mandar con su request_id antes de la
+    // siguiente. Aquí la primera llega tarde al backend (antes de que se procese la siguiente
+    // petición) y la siguiente no puede pisar su X. Esc antes de pasar a Z, para que salir de X no la
+    // reconfirme.
+    await reopenOnEntity();
+    {
+      let releaseNever;
+      const neverGate = new Promise((r) => {
+        releaseNever = r;
+      });
+      let firstBody = null;
+      let firstCsrf = "";
+      let replayed = false;
+      let heldS2 = null;
+      const lateFirst = async (route) => {
+        const req = route.request();
+        if (req.method() !== "POST") {
+          await continueSafe(route);
+          return;
+        }
+        if (firstBody === null) {
+          firstBody = req.postData();
+          const h = await req.allHeaders();
+          firstCsrf = h["x-csrf-token"] || "";
+          heldS2 = route;
+          await neverGate; // por este camino no llega nunca al backend
+          return;
+        }
+        if (!replayed) {
+          replayed = true;
+          const late = await context.request.post(BASE + "/api/scene/ops", {
+            headers: { "Content-Type": "application/json", "X-CSRF-Token": firstCsrf, Origin: BASE },
+            data: firstBody,
+          });
+          assert(late.ok(), "S5(-): SEG-02: la llegada tardia de la primera tanda dio " + late.status());
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", lateFirst);
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7811");
+        await page.keyboard.press("Enter");
+        await page
+          .locator('[data-aviso="sin-respuesta"]')
+          .first()
+          .waitFor({ state: "visible", timeout: 16000 })
+          .catch(() => {
+            throw new Error("S5(-): SEG-02: la primera tanda retenida no dio el aviso sin-respuesta en 16 s");
+          });
+        await page.keyboard.press("Escape");
+        await page.keyboard.press("Tab");
+        await waitEditable(page, "#f-z");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7822");
+        await page.keyboard.press("Enter");
+        const finS2 = await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.z === 7822;
+        }, "SEG-02: Z=7822", 10000);
+        const eS2 = finS2.doc.entities.find((x) => x.id === eid);
+        await sleep(500);
+        const eS2b = await xOf();
+        assert(
+          eS2.x === 7811 && eS2b.x === 7811 && eS2b.z === 7822,
+          "S5(-): la tanda en duda llego tarde y la siguiente piso su X (SEG-02): " + JSON.stringify({ x: eS2b.x, z: eS2b.z })
+        );
+      } finally {
+        releaseNever();
+        if (heldS2) {
+          try {
+            await heldS2.abort();
+          } catch (e) {
+            // la página ya canceló esa petición
+          }
+        }
+        await page.unroute("**/api/scene/ops", lateFirst);
+        await page.locator("#f-z").evaluate((el) => el.blur());
+        await sleep(200);
+      }
+    }
+
+    // SEG-02 (2): un 500 al reintentar la tanda en duda no la da por resuelta. Z no sale con la X
+    // vieja y, cuando la primera llega de verdad al backend, Intro otra vez deja X y Z bien.
+    await reopenOnEntity();
+    {
+      let releaseNever2;
+      const neverGate2 = new Promise((r) => {
+        releaseNever2 = r;
+      });
+      let firstBody2 = null;
+      let firstCsrf2 = "";
+      let heldS22 = null;
+      let posts2 = 0;
+      let replayed2 = false;
+      const retry500 = async (route) => {
+        const req = route.request();
+        if (req.method() !== "POST") {
+          await continueSafe(route);
+          return;
+        }
+        posts2 += 1;
+        if (posts2 === 1) {
+          firstBody2 = req.postData();
+          const h = await req.allHeaders();
+          firstCsrf2 = h["x-csrf-token"] || "";
+          heldS22 = route;
+          await neverGate2; // por este camino no llega nunca al backend
+          return;
+        }
+        if (posts2 === 2) {
+          // el reintento de la tanda en duda: el backend falla sin aplicarla
+          await route.fulfill({
+            status: 500,
+            contentType: "application/json; charset=utf-8",
+            body: JSON.stringify({ ok: false, code: "internal", pointer: "", msg: "Error interno" }),
+          });
+          return;
+        }
+        if (!replayed2) {
+          replayed2 = true;
+          const late = await context.request.post(BASE + "/api/scene/ops", {
+            headers: { "Content-Type": "application/json", "X-CSRF-Token": firstCsrf2, Origin: BASE },
+            data: firstBody2,
+          });
+          assert(late.ok(), "S5(-): SEG-02 (500): la llegada tardia de la primera tanda dio " + late.status());
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", retry500);
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7911");
+        await page.keyboard.press("Enter");
+        await page
+          .locator('[data-aviso="sin-respuesta"]')
+          .first()
+          .waitFor({ state: "visible", timeout: 16000 })
+          .catch(() => {
+            throw new Error("S5(-): SEG-02 (500): la primera tanda retenida no dio el aviso sin-respuesta en 16 s");
+          });
+        await page.keyboard.press("Escape");
+        await page.keyboard.press("Tab");
+        await waitEditable(page, "#f-z");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7922");
+        await page.keyboard.press("Enter");
+        await sleep(1500);
+        await page.keyboard.press("Enter");
+        const finS22 = await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.z === 7922;
+        }, "SEG-02 (500): Z=7922", 10000);
+        const eS22 = finS22.doc.entities.find((x) => x.id === eid);
+        await sleep(500);
+        const eS22b = await xOf();
+        assert(
+          eS22.x === 7911 && eS22b.x === 7911 && eS22b.z === 7922,
+          "S5(-): un 500 al reintentar dio por resuelta la tanda en duda y Z piso su X (SEG-02, 500): " +
+            JSON.stringify({ x: eS22b.x, z: eS22b.z })
+        );
+      } finally {
+        releaseNever2();
+        if (heldS22) {
+          try {
+            await heldS22.abort();
+          } catch (e) {
+            // la página ya canceló esa petición
+          }
+        }
+        await page.unroute("**/api/scene/ops", retry500);
+        await page.locator("#f-z").evaluate((el) => el.blur());
+        await sleep(200);
+      }
+    }
+
+    // SEG-02 (3): después de resolver la tanda en duda, la reconfirmación que se encoló al salir del
+    // campo no vuelve a mandar su valor: si la IA cambió X entretanto, su cambio se queda
+    await reopenOnEntity();
+    {
+      let releaseNever3;
+      const neverGate3 = new Promise((r) => {
+        releaseNever3 = r;
+      });
+      let heldS23 = null;
+      let posts3 = 0;
+      let aiOk3 = null;
+      const retryThenAi = async (route) => {
+        const req = route.request();
+        if (req.method() !== "POST") {
+          await continueSafe(route);
+          return;
+        }
+        posts3 += 1;
+        if (posts3 === 1) {
+          heldS23 = route;
+          await neverGate3; // por este camino no llega nunca al backend
+          return;
+        }
+        if (posts3 === 2) {
+          // el reintento llega al backend; antes de devolver su respuesta, la IA mueve la entidad
+          const resp = await route.fetch();
+          const snapNow = await cmd({ cmd: "snapshot" });
+          const zNow = snapNow.doc.entities.find((x) => x.id === eid).z;
+          const rAi = await cmd({
+            cmd: "ai_ops",
+            label: "IA mueve tras el reintento",
+            ops: [{ name: "entity.move", target: eid, args: { x: 7150, z: zNow } }],
+          });
+          aiOk3 = !!(rAi && rAi.ok);
+          await route.fulfill({ response: resp });
+          return;
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", retryThenAi);
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7100");
+        await page.keyboard.press("Enter");
+        await page.locator("#f-x").evaluate((el) => el.blur()); // encola la reconfirmación
+        // Se espera al reintento (el segundo POST), no al aviso: la reconfirmación encolada resuelve la
+        // duda en seguida y el aviso dura muy poco.
+        const dl3 = Date.now() + 22000;
+        while (aiOk3 === null && Date.now() < dl3) await sleep(100);
+        assert(aiOk3 === true, "S5(-): SEG-02 (3): el reintento no llego o el ai_ops de la IA fallo");
+        await sleep(1500);
+        const eS23 = await xOf();
+        assert(
+          eS23.x === 7150,
+          "S5(-): tras resolver la tanda en duda, la reconfirmacion piso el cambio de la IA (SEG-02, reconfirmacion): x=" + eS23.x
+        );
+      } finally {
+        releaseNever3();
+        if (heldS23) {
+          try {
+            await heldS23.abort();
+          } catch (e) {
+            // la página ya canceló esa petición
+          }
+        }
+        await page.unroute("**/api/scene/ops", retryThenAi);
+        await sleep(200);
+      }
+    }
+
+    // SEG-01: una tanda que quedó en la fila de una sesión no sale en la siguiente. Rumbo con la
+    // petición retenida, Borrar detrás en la fila, la sesión caduca (401 en un préstamo) y se vuelve a
+    // entrar; al soltar la petición, la entidad sigue ahí.
+    await reopenOnEntity();
+    {
+      let releaseS1;
+      const gateS1 = new Promise((r) => {
+        releaseS1 = r;
+      });
+      let heldS1 = false;
+      const holdFirstS1 = async (route) => {
+        if (route.request().method() === "POST" && !heldS1) {
+          heldS1 = true;
+          await gateS1; // la petición no llega al backend hasta soltarla
+        }
+        await continueSafe(route);
+      };
+      let lease401 = 0;
+      const leaseOnce401 = async (route) => {
+        if (route.request().method() === "POST" && lease401 === 0) {
+          lease401 += 1;
+          await route.fulfill({
+            status: 401,
+            contentType: "application/json; charset=utf-8",
+            body: JSON.stringify({ ok: false, code: "unauthorized", pointer: "", msg: "sesion caducada" }),
+          });
+          return;
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", holdFirstS1);
+      try {
+        await page.locator("#f-yaw").focus();
+        await waitEditable(page, "#f-yaw");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("44");
+        await page.keyboard.press("Enter");
+        const dS1 = Date.now() + 3000;
+        while (!heldS1 && Date.now() < dS1) await sleep(50);
+        assert(heldS1, "S5(-): SEG-01: no salio el POST del rumbo");
+        const row = page.locator('[data-panel="jerarquia"] [data-entity-id="' + eid + '"]');
+        await row.click();
+        await page.keyboard.press("Delete");
+        await sleep(300);
+        await page.route("**/api/lease", leaseOnce401);
+        await row.click();
+        await activatePanel(page, "propiedades");
+        await page.locator("#f-name").focus();
+        await page.locator("#human-key").waitFor({ state: "visible", timeout: 8000 }).catch(() => {
+          throw new Error("S5(-): SEG-01: el 401 del prestamo no llevo a volver a entrar");
+        });
+        await page.unroute("**/api/lease", leaseOnce401);
+        await loginIfNeeded(context, page);
+        releaseS1();
+        await sleep(1500);
+        const snapS1 = await cmd({ cmd: "snapshot" });
+        assert(
+          snapS1.doc.entities.some((e) => e.id === eid),
+          "S5(-): un Borrar de la sesion anterior salio en la nueva y borro la entidad (SEG-01)"
+        );
+      } finally {
+        releaseS1();
+        await sleep(200);
+        await page.unroute("**/api/scene/ops", holdFirstS1);
+      }
+    }
+
     console.log("S5 OK");
   } finally {
     await context.close();
