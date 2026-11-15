@@ -74,10 +74,18 @@ def wit_digest(obj):
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def wit_line(**fields):
-    """Traza para el testigo de los e2e: una linea por stdout, con flush. No cambia el cable ni la conducta."""
-    line = WIT_PREFIX + json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+_NO_DIGEST = object()
+
+
+def wit_line(digest_of=_NO_DIGEST, **fields):
+    """Traza para el testigo de los e2e: una linea por stdout, con flush. No cambia el cable ni la conducta.
+
+    Todo (digest, serializacion y escritura) va dentro del ``try``: la traza nunca puede romper al peer.
+    """
     try:
+        if digest_of is not _NO_DIGEST:
+            fields["digest"] = wit_digest(digest_of)
+        line = WIT_PREFIX + json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         with _WIT_LOCK:
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
@@ -1437,7 +1445,7 @@ class Peer:
                 op_id=body.get("op_id"),
                 verb=body.get("verb"),
                 status=body.get("status"),
-                digest=wit_digest(body),
+                digest_of=body,
             )
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
@@ -1471,7 +1479,7 @@ class Peer:
                         op_id=op.get("op_id"),
                         verb=op.get("verb"),
                         status=None,
-                        digest=wit_digest(op.get("args")),
+                        digest_of=op.get("args"),
                     )
         return code, payload
 
