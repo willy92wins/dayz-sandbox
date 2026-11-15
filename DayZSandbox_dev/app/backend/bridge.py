@@ -77,6 +77,10 @@ class Bridge:
         self.backend = backend
         self._peer_key = peer_key
         self.clock = clock if clock is not None else backend.clock
+        # Origen de los ms publicos (now_ms, issued_ms): el arranque del bridge. Asi son enteros
+        # pequenos que un peer de Enforce lee en int de 32 bits sin perder las diferencias
+        # (brief de F1b-peers, P-02); la logica interna de TTL sigue en segundos absolutos.
+        self._t0 = float(self.clock())
         self.log = log if log is not None else getattr(backend, "log", sys.stderr)
         self.lease_ms = int(lease_ms)
         self.hold_ms = int(hold_ms)
@@ -154,7 +158,11 @@ class Bridge:
         return float(self.clock())
 
     def _now_ms(self):
-        return int(self._now() * 1000)
+        return self._ms(self._now())
+
+    def _ms(self, t):
+        """ms enteros desde el arranque del bridge para un instante t del reloj (segundos)."""
+        return int((t - self._t0) * 1000)
 
     def _log_line(self, line):
         try:
@@ -216,7 +224,7 @@ class Bridge:
                 "role": "server", "internal": bool(internal),
                 "conn": int(srv.get("conn", 0)),
                 "epoch": srv.get("epoch"), "inst": srv.get("inst"),
-                "session": self.session, "issued_ms": int(now * 1000),
+                "session": self.session, "issued_ms": self._ms(now),
                 "enqueued_mono": now, "ttl_ms": int(ttl_ms if ttl_ms is not None else self.ttl_ms),
                 "bstate": "pendiente", "delivered_inst": None, "last_delivery": None,
                 "result_seen": False, "priority": 0 if internal else 1,
@@ -225,8 +233,8 @@ class Bridge:
             self._seq += 1
             if verb == "state.read":
                 order["priority"] = 0
-            public = self._public_order(order, int(now * 1000))
-            if self._wire_poll_len(public, int(now * 1000)) > WIRE_CAP:
+            public = self._public_order(order, self._ms(now))
+            if self._wire_poll_len(public, self._ms(now)) > WIRE_CAP:
                 return False, "wire_cap_exceeded"
             self.orders[(self.session, op_id)] = order
             self.cond.notify_all()

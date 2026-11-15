@@ -900,6 +900,25 @@ class IntegracionOrquestador(BridgeBase):
             self.assertEqual(env.bridge._conns, set())
 
 
+class MsDesdeElArranque(BridgeBase):
+    """Los ms publicos cuentan desde el arranque del bridge (brief de F1b-peers, P-02 de Sol)."""
+
+    def test_ms_pequenos_y_diferencia_exacta_con_reloj_enorme(self):
+        # 4294967,5 s y 0,5 s son exactos en binario: la diferencia esperada es exactamente 500.
+        env = self.make_env(clock=FakeClock(4294967.5), lease_ms=60000)
+        env.hello()
+        env.reconcile()
+        env.apply_direct()
+        env.clock.advance(0.5)
+        st, poll, _ = env.poll()
+        env.assert_poll_order(st, poll, "scene.apply")
+        order = poll["ops"][0]
+        # Un peer de Enforce los lee en int de 32 bits; por debajo de 2^24 tambien caben exactos en float.
+        self.assertTrue(0 <= order["issued_ms"] < 2 ** 24, order["issued_ms"])
+        self.assertTrue(0 <= poll["now_ms"] < 2 ** 24, poll["now_ms"])
+        self.assertEqual(poll["now_ms"] - order["issued_ms"], 500)
+
+
 class ArranqueConBridge(unittest.TestCase):
     """`server.py --config` con bridge: guarda peer_key y con --port 0 no usa el puerto fijo."""
 
