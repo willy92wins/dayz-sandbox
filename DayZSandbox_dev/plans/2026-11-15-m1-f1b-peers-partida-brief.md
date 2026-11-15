@@ -1,6 +1,6 @@
 # F1b-peers en partida: arnés G1-G9 y partidas
 
-2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.2, `48452b7`). **v1.5, congelada: ronda 1 de Sol aplicada, ronda 2 arbitrada por el orquestador con el tope cumplido, arbitrajes tras los humos de G1 en partida y sobre el reloj de las líneas del log, y la ronda 1 de Sol sobre el código del arnés (§10).**
+2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.2, `48452b7`). **v1.6, congelada: rondas 1 y 2 de Sol sobre el brief y sobre el código del arnés, con el tope cumplido y el resto arbitrado por el orquestador, más los arbitrajes de las partidas en DayZ (§10).**
 
 **Por qué ahora.** F0.3-0 pasó su gate en partida en diag y en retail (`origin/main` `4f18c62`): `WIRE_CAP = 3500` está validado (G10 cumplido). La sesión principal ordenó arrancar las partidas el 2026-11-15. El PR de F1b-peers no se mergea hasta que G1-G9 pasen, porque toca el PBO.
 
@@ -279,3 +279,24 @@ Cada tanda trabaja en una copia del commit congelado. El orquestador revisa, cor
 **H-09, la inyección observada (R9):**
 - **El problema:** el `rules_active` lo anota el orquestador al ver el fichero, con su retraso de sondeo. Un long-poll recibido antes del caso actúa al servir la respuesta (G3 c en el seco). Comparar la línea del proxy con ese `t_ms` daba «no observada» en falso.
 - **El arbitraje:** cuenta la versión con que el proxy etiqueta la línea, servida después de escribirse esa versión.
+
+**v1.6: ronda 2 de Sol sobre el código del arnés** (sobre `5804459`; UNSOUND). Cierra 12 de 15 Q y deja abiertas Q-01, Q-02 y Q-05. Está de acuerdo con H-07 y H-08, y con H-09 solo a medias. Era la última ronda: arbitra el orquestador. Todos los hallazgos son reales y baratos, así que se aplican todos; las reglas están en EVIDENCIA, «v1.6», R16-R27:
+
+| Hallazgo | Regla |
+|---|---|
+| Z-01 · bloqueante (Q-01) · se adoptaba el cliente retail por cercanía en el tiempo | R16: solo un descendiente del lanzador BattlEye |
+| Z-02 · bloqueante (Q-02) · una petición ya enviada podía cruzar la barrera | R17 |
+| Z-03 · `invalid_all_P` pasaba con respuestas no válidas espaciadas | R22 |
+| Z-04 · G8 a pasaba sin ver el resultado repetido | R23 |
+| Z-05 · un callback tardío con efecto no tumbaba G7 | R24 |
+| Z-06 (Q-05) · medidas de G7 sin inyección observada | R21 |
+| Z-07 (Q-05, H-09) · el proxy anotaba la versión de recepción, no la de la acción | R18 |
+| Z-08 · G4 a podía fallar por un poll anterior autenticado | R25 |
+| Z-09 · un escaneo incompleto podía acabar en PASA | R26 |
+| Z-10 · la retención de 1500 ms no garantizaba el orden | R27 |
+
+**H-10 y H-11, de la partida diag final (`5804459`).** El arbitraje es del orquestador:
+- **Resultado:** G1, G2, G3, G8 y G9 PASA; G5 y G7 FALLA; G6 INCONCLUSO.
+- **H-10:** la regla `resp_has_op` de G5 b se disparó con `rd-4`, la lectura interna con que el backend reconcilia tras un hello, y no con la orden del caso. El corte empezó antes de entregarla, y la orden acabó en `conexion_perdida`. Corregido con R19, el prefijo `op-`.
+- **H-11:** las recuperaciones que fallaron acabaron en `fallido/conexion_perdida`. Se encolaron mientras el servidor volvía a presentarse: tras un lease vencido, o tras un paro del servidor de ~1,7 s después de a2500, con `clock` y `lease lost` en el mismo tick. El bridge falla lo pendiente cuando cambia la `conn` (§2.5.3). Corregido con R20.
+- **G6:** su INCONCLUSO es Z-07. La línea de `g6_deliver` llevaba la versión de recepción (67) y no la de la regla (68). La pausa en sí fue válida: suspensión 73 ms después de la entrega, 2156 ms de pausa y el plazo `D` dentro.

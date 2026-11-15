@@ -1,6 +1,6 @@
 # Evidencia de F1b-peers en partida
 
-Contrato entre `f1bp_live.py` (la escribe) y `f1bp_eval.py` (la juzga, sin efectos). Lo exige el brief `plans/2026-11-15-m1-f1b-peers-partida-brief.md` (v1.5), §5 y §6.
+Contrato entre `f1bp_live.py` (la escribe) y `f1bp_eval.py` (la juzga, sin efectos). Lo exige el brief `plans/2026-11-15-m1-f1b-peers-partida-brief.md` (v1.6), §5 y §6.
 
 ## Carpeta
 `DayZSandbox_dev/evidence/m1/F1b-peers/<build>-<UTC>/`, nueva y vacía en cada corrida:
@@ -188,3 +188,39 @@ Mandan sobre lo anterior cuando choquen. Quién lo hace: **L** = lanzador (`run_
   - Con cero o varios candidatos no se adopta ninguno, no se cierra ninguno y **no se suelta el lease**.
   - Una identidad sin instante de creación nunca se cierra y bloquea la suelta del lease mientras su PID exista.
 - **R15, ensayo en seco (Q-06; O).** El seco no añade `peer` a la URL del hello: el proxy lo saca del cuerpo, como con el mod real.
+
+## v1.6: reglas tras la ronda 2 de Sol y la partida diag final (brief §10, Z-01..Z-10, H-10, H-11)
+Mandan sobre lo anterior cuando choquen. Las letras son las de v1.5: **L** lanzador, **O** orquestador, **E** evaluador, **P** proxy.
+
+- **R16, cliente retail (Z-01; L).**
+  - Solo se adopta un `DayZ_x64` que **desciende del lanzador BattlEye**: la cadena de `ParentProcessId`, hasta 3 niveles, llega al PID de `DayZ_BE.exe`.
+  - Sin esa procedencia no se adopta ni se cierra nada, y no se suelta el lease. No hay adopción por tiempo.
+- **R17, reenvío y barrera (Z-02; P).**
+  - El proxy marca la petición como reenviada **bajo el candado y antes de mandarla** al upstream.
+  - No la manda si ya estaba abortada.
+  - La barrera aborta toda petición reenviada o a punto de reenviarse.
+- **R18, versión de la acción (Z-07; P, E).**
+  - Cada línea del proxy lleva `rule_version`: la versión vigente cuando su regla actuó, sobre la petición o sobre la respuesta.
+  - R9 usa `rule_version`, y `rules_version` si falta.
+- **R19, prefijo de op (H-10; P, O).**
+  - Una regla de respuesta con `resp_op_prefix` solo actúa si `ops[0].op_id` empieza por él.
+  - El arnés usa `"op-"` en G3 c, G5 b, G6 y las medidas de G7 con orden, para que las lecturas internas del backend (`rd-*`) no las disparen.
+- **R20, recuperación (H-11; O, E).**
+  - El orquestador encola la orden de recuperación solo con el servidor presentado y estable: está en `bridge.peers`, no está `lost` y su `conn` no ha cambiado en 1 s.
+  - Si la orden acaba en `fallido/conexion_perdida`, reintenta con otra `recovery`, dentro de 60 s desde el caso.
+  - La recuperación del caso vale si **alguna** de sus `recovery` (entre el caso y el siguiente) llega a `observado` dentro de 60 s desde el ancla del caso.
+- **R21, medidas con disparo (Z-06; E).** Las medidas (`status*`, `measure_*`) también exigen la inyección observada de R9. Su resultado medido puede ser cualquiera.
+- **R22, `invalid_all_P` (Z-03; E).**
+  - Del proxy sale el mayor tramo sin respuestas válidas de P al servidor durante el caso: un 200 que la regla no reescribió.
+  - Si supera `lease_ms`, se exige un `lease lost` en la ventana.
+  - Si no lo supera, el caso es INCONCLUSO («la ventana no superó el lease»).
+- **R23, G8 a (Z-04; O, E).**
+  - Exige al menos 2 `result_seen` de la op (el que perdió su acuse y la repetición) y una sola transición a `observado`.
+  - Si la repetición no llega, el orquestador acaba G8 `aborted`.
+- **R24, `late_cb` (Z-05; E).** Además de no haber cambios de `op_state`, no hay ninguna línea `effect` en su ventana, salvo las de las ops de recuperación.
+- **R25, aislamiento de G4 a (Z-08; O).**
+  - Antes de abrir la ventana, el orquestador corta los polls del servidor en vuelo (`abort_inflight`).
+  - Espera a ver en el proxy un hello del servidor con `upstream_status` 401, la clave mala rechazada.
+  - Solo entonces abre `bad_key_window` y encola la orden.
+- **R26, escaneo incompleto (Z-09; O, E).** Un `key_scan.unreadable` no vacío hace **INCONCLUSO el agregado**, salvo que ya sea FALLA por una clave encontrada.
+- **R27, orden de los eventos (Z-10; O).** El escritor guarda los eventos de cada escenario y los escribe ordenados por `t_ms` al cerrarlo (`end`), sin ventana de retención.
