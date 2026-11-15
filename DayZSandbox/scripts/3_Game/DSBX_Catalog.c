@@ -13,7 +13,8 @@ class DSBX_Catalog
 	ref array<string> m_CurBases;
 	ref array<ref array<string>> m_PageClasses;
 	ref array<ref array<string>> m_PageBases;
-	ref array<string> m_Pages;
+	int m_EmptyPageBytes;
+	int m_CurBytes;
 
 	void DSBX_Catalog()
 	{
@@ -30,7 +31,8 @@ class DSBX_Catalog
 		m_CurBases = new array<string>();
 		m_PageClasses = new array<ref array<string>>();
 		m_PageBases = new array<ref array<string>>();
-		m_Pages = new array<string>();
+		m_EmptyPageBytes = 0;
+		m_CurBytes = 0;
 	}
 
 	void StartScan(string buildStr, array<string> sortedModset)
@@ -53,17 +55,28 @@ class DSBX_Catalog
 		m_CurBases = new array<string>();
 		m_PageClasses = new array<ref array<string>>();
 		m_PageBases = new array<ref array<string>>();
-		m_Pages = new array<string>();
+		// tamano de una pagina vacia con los marcadores de 5 cifras: las paginas reales nunca miden mas
+		m_EmptyPageBytes = 0;
+		array<string> noClasses = new array<string>();
+		array<string> noBases = new array<string>();
+		string emptyBody = DSBX_Wire.CatalogPageBody(m_CatalogId, 99999, 99999, m_Build, m_ModsetHash, noClasses, noBases);
+		if (emptyBody != "")
+		{
+			m_EmptyPageBytes = emptyBody.Length();
+		}
+		m_CurBytes = m_EmptyPageBytes;
 	}
 
-	bool FitsCurrentPage()
+	// Bytes que anade [cls,base] a la pagina: dos pares de comillas, corchetes y la coma interna (7),
+	// mas la coma que lo separa del anterior. WireId solo admite ASCII sin escape.
+	int PairBytes(string clsName, string baseName, bool first)
 	{
-		string candidate = DSBX_Wire.CatalogPageBody(m_CatalogId, 99999, 99999, m_Build, m_ModsetHash, m_CurClasses, m_CurBases);
-		if (candidate == "")
+		int n = clsName.Length() + baseName.Length() + 7;
+		if (!first)
 		{
-			return false;
+			n = n + 1;
 		}
-		return candidate.Length() <= DSBX_WIRE_CAP;
+		return n;
 	}
 
 	void FlushCurrentPage()
@@ -72,38 +85,30 @@ class DSBX_Catalog
 		m_PageBases.Insert(m_CurBases);
 		m_CurClasses = new array<string>();
 		m_CurBases = new array<string>();
+		m_CurBytes = m_EmptyPageBytes;
 	}
 
 	void AddClassPair(string clsName, string baseName)
 	{
-		if (DSBX_Wire.WireId(clsName) == "" || DSBX_Wire.WireId(baseName) == "")
+		if (m_EmptyPageBytes <= 0 || DSBX_Wire.WireId(clsName) == "" || DSBX_Wire.WireId(baseName) == "")
+		{
+			m_SkippedCount = m_SkippedCount + 1;
+			return;
+		}
+		int add = PairBytes(clsName, baseName, m_CurClasses.Count() == 0);
+		if (m_CurBytes + add > DSBX_WIRE_CAP && m_CurClasses.Count() > 0)
+		{
+			FlushCurrentPage();
+			add = PairBytes(clsName, baseName, true);
+		}
+		if (m_CurBytes + add > DSBX_WIRE_CAP)
 		{
 			m_SkippedCount = m_SkippedCount + 1;
 			return;
 		}
 		m_CurClasses.Insert(clsName);
 		m_CurBases.Insert(baseName);
-		if (FitsCurrentPage())
-		{
-			return;
-		}
-		int last = m_CurClasses.Count() - 1;
-		m_CurClasses.RemoveOrdered(last);
-		m_CurBases.RemoveOrdered(last);
-		if (m_CurClasses.Count() == 0)
-		{
-			m_SkippedCount = m_SkippedCount + 1;
-			return;
-		}
-		FlushCurrentPage();
-		m_CurClasses.Insert(clsName);
-		m_CurBases.Insert(baseName);
-		if (!FitsCurrentPage())
-		{
-			m_CurClasses.RemoveOrdered(0);
-			m_CurBases.RemoveOrdered(0);
-			m_SkippedCount = m_SkippedCount + 1;
-		}
+		m_CurBytes = m_CurBytes + add;
 	}
 
 	void FinalizePages()
@@ -111,14 +116,6 @@ class DSBX_Catalog
 		if (m_CurClasses.Count() > 0 || m_PageClasses.Count() == 0)
 		{
 			FlushCurrentPage();
-		}
-		int totalPages = m_PageClasses.Count();
-		int p = 0;
-		while (p < totalPages)
-		{
-			string body = DSBX_Wire.CatalogPageBody(m_CatalogId, p + 1, totalPages, m_Build, m_ModsetHash, m_PageClasses.Get(p), m_PageBases.Get(p));
-			m_Pages.Insert(body);
-			p = p + 1;
 		}
 		m_ScanDone = true;
 	}
@@ -173,11 +170,16 @@ class DSBX_Catalog
 
 	int GetPageCount()
 	{
-		return m_Pages.Count();
+		if (!m_ScanDone)
+		{
+			return 0;
+		}
+		return m_PageClasses.Count();
 	}
 
+	// Se construye al enviarla: el trabajo se reparte entre envios y no cae entero en un tick.
 	string GetPage(int idx)
 	{
-		return m_Pages.Get(idx);
+		return DSBX_Wire.CatalogPageBody(m_CatalogId, idx + 1, m_PageClasses.Count(), m_Build, m_ModsetHash, m_PageClasses.Get(idx), m_PageBases.Get(idx));
 	}
 }

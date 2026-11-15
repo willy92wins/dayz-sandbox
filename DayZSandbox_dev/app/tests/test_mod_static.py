@@ -280,6 +280,9 @@ def check_m2_tokens_prohibidos(mod_dir: Path) -> list[str]:
         for tok in FORBIDDEN_TOKENS:
             if tok in code:
                 violations.append(f"M2: {rel} contiene token prohibido '{tok}'")
+    for rel, code in _read_stripped_c_files(mod_dir).items():
+        for bad in re.finditer(r"(?<!ERestResultState\.)\bEREST_[A-Z_]+|(?<!ERestOption\.)\bERESTOPTION_[A-Z_]+", code):
+            violations.append(f"M2: miembro de enum sin calificar en {rel}: {bad.group(0)}")
     return violations
 
 
@@ -757,7 +760,7 @@ def check_m11_errores(mod_dir: Path) -> list[str]:
         violations.append("M11: falta OnChannelPError en DSBX_Peer.c")
     else:
         m_ce = re.search(
-            r"if\s*\(\s*!isTimeout\s*&&\s*errorCode\s*==\s*EREST_ERROR_CLIENTERROR\s*\)\s*\{",
+            r"if\s*\(\s*!isTimeout\s*&&\s*errorCode\s*==\s*(?:ERestResultState\s*\.\s*)?EREST_ERROR_CLIENTERROR\s*\)\s*\{",
             p_err_body,
         )
         if not m_ce:
@@ -777,6 +780,13 @@ def check_m11_errores(mod_dir: Path) -> list[str]:
             f"M11: EREST_ERROR_CLIENTERROR solo puede aparecer 1 vez y dentro de OnChannelPError "
             f"(total={total_ce}, en_P={in_p_ce})"
         )
+
+    ctor = _find_method_body(peer_code, "DSBX_Peer")
+    code_no_ctor = peer_code.replace(ctor, "", 1) if ctor else peer_code
+    resets = [m.start() for m in re.finditer(r"\bm_ClientErrCountP\s*=\s*0\s*;", code_no_ctor)]
+    valid_poll = code_no_ctor.find("ValidPoll(")
+    if len(resets) != 1 or valid_poll < 0 or resets[0] < valid_poll:
+        violations.append("M11: m_ClientErrCountP solo vuelve a 0 una vez, tras un poll valido (ValidPoll)")
 
     if not r_err_body:
         violations.append("M11: falta OnChannelRError en DSBX_Peer.c")
@@ -1051,7 +1061,7 @@ class TestModStatic(unittest.TestCase):
             (
                 "scripts/3_Game/DSBX_Peer.c",
                 "void OnChannelRError(int kind, float now)\n\t{",
-                "void OnChannelRError(int kind, float now)\n\t{\n\t\tif (EREST_ERROR_CLIENTERROR == 0) { return; }",
+                "void OnChannelRError(int kind, float now)\n\t{\n\t\tif (ERestResultState.EREST_ERROR_CLIENTERROR == 0) { return; }",
                 "M11",
             ),
             # (y) M4: un Log("send " + ruta); dentro de Send
@@ -1088,6 +1098,20 @@ class TestModStatic(unittest.TestCase):
                 "\t\t\t\twhile (i < modset.Count())\n\t\t\t\t{\n",
                 "\t\t\t\twhile (i < modset.Count())\n\t\t\t\t{\n\t\t\t\t\tif (modsetItems.Length() > 2000) { break; }\n",
                 "M9",
+            ),
+            # Del orquestador: un miembro de enum sin calificar
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "api.SetOption(ERestOption.ERESTOPTION_CONNECTION, 3);",
+                "api.SetOption(ERESTOPTION_CONNECTION, 3);",
+                "M2",
+            ),
+            # Del orquestador: el hello vuelve a poner a cero la cuenta de 4xx
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "\t\t\tm_FailCountP = 0;\n\t\t\tm_HelloTooLargeLogged = false;\n",
+                "\t\t\tm_FailCountP = 0;\n\t\t\tm_ClientErrCountP = 0;\n\t\t\tm_HelloTooLargeLogged = false;\n",
+                "M11",
             ),
         ]
         for rel_file, old, new, expected_rule in cases:

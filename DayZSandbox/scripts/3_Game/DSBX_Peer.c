@@ -89,6 +89,8 @@ class DSBX_Peer
 	string m_Inst;
 	string m_Epoch;
 	string m_Session;
+	string m_CatSession;
+	string m_HelloEpoch;
 	int m_Conn;
 	int m_State;
 
@@ -502,8 +504,8 @@ class DSBX_Peer
 			{
 				if (!s_RestOptionsSet)
 				{
-					api.SetOption(ERESTOPTION_READOPERATION, 3);
-					api.SetOption(ERESTOPTION_CONNECTION, 3);
+					api.SetOption(ERestOption.ERESTOPTION_READOPERATION, 3);
+					api.SetOption(ERestOption.ERESTOPTION_CONNECTION, 3);
 					s_RestOptionsSet = true;
 				}
 				if (m_CtxUrl != newUrl || !m_Ctx)
@@ -697,7 +699,7 @@ class DSBX_Peer
 
 	void OnChannelPError(int errorCode, bool isTimeout)
 	{
-		if (!isTimeout && errorCode == EREST_ERROR_CLIENTERROR)
+		if (!isTimeout && errorCode == ERestResultState.EREST_ERROR_CLIENTERROR)
 		{
 			m_Session = "";
 			m_Conn = 0;
@@ -861,7 +863,7 @@ class DSBX_Peer
 				OnChannelPError(0, false);
 				return;
 			}
-			bool isNewSession = m_Session != resp.session;
+			bool isNewSession = m_CatSession != resp.session;
 			m_Session = resp.session;
 			m_Conn = resp.conn;
 			m_LeaseMs = resp.lease_ms;
@@ -870,15 +872,23 @@ class DSBX_Peer
 			m_LastOkPollMs = now;
 			m_HasLastOkPoll = true;
 			m_FailCountP = 0;
-			m_ClientErrCountP = 0;
 			m_HelloTooLargeLogged = false;
 			if (!m_IsClient && isNewSession)
 			{
+				m_CatSession = resp.session;
 				m_CatPageIdx = 0;
 				m_CatFailures = 0;
 				m_CatNextTryMs = 0.0;
 				m_CatComplete = false;
 				m_CatAbandoned = false;
+			}
+			if (m_IsClient && m_HelloEpoch != m_Epoch)
+			{
+				m_Session = "";
+				m_Conn = 0;
+				m_NextTryMsP = 0.0;
+				Log("state HELLO: epoch changed during hello");
+				return;
 			}
 			m_State = DSBX_Const.ST_LISTO;
 			Log("hello accepted session=" + m_Session + " conn=" + m_Conn);
@@ -1142,7 +1152,7 @@ class DSBX_Peer
 			return;
 		}
 		m_NextEpochReqMs = now + m_EpochReqMs;
-		g_Game.RPCSingleParam(null, DSBX_RPC_EPOCH_REQ, null, true, null);
+		g_Game.RPCSingleParam(null, DSBX_RPC_EPOCH_REQ, new Param1<bool>(true), true, null);
 	}
 
 	void SendEpochToIdentity(PlayerIdentity identity)
@@ -1186,6 +1196,7 @@ class DSBX_Peer
 		}
 		bool hadEpoch = m_Epoch != "";
 		m_Epoch = newEpoch;
+		m_NextConfigMs = 0.0;
 		Log("client epoch received");
 		if (hadEpoch && m_State == DSBX_Const.ST_LISTO)
 		{
@@ -1226,6 +1237,7 @@ class DSBX_Peer
 		{
 			return;
 		}
+		m_NextConfigMs = now + m_RetryMs;
 		if (!LoadConfig())
 		{
 			m_NextConfigMs = now + m_RetryMs;
@@ -1259,6 +1271,7 @@ class DSBX_Peer
 			return;
 		}
 		string body = DSBX_Wire.HelloBody(m_Role, m_Inst, m_Epoch, DSBX_Const.MOD_VER, BuildName(), m_MapName, m_WorldSize, m_Modset);
+		m_HelloEpoch = m_Epoch;
 		if (body == "")
 		{
 			m_NextTryMsP = now + m_RetryMs;
@@ -1326,6 +1339,7 @@ class DSBX_Peer
 			}
 			string body = DSBX_Wire.ResultBody(entry.m_Order.op_id, entry.m_Order.session, entry.m_Order.epoch, entry.m_Status, entry.m_Reason, entry.m_SendDup, entry.m_ReadJson);
 			m_NextKindR = DSBX_Const.KIND_RESULT;
+			m_SendingEntry = entry;
 			int rc = Send(DSBX_Const.CH_R, "result?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&session=" + m_Session, body);
 			if (rc == -2)
 			{
@@ -1336,11 +1350,7 @@ class DSBX_Peer
 				m_NextKindR = DSBX_Const.KIND_RESULT;
 				rc = Send(DSBX_Const.CH_R, "result?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&session=" + m_Session, subBody);
 			}
-			if (rc == 0)
-			{
-				m_SendingEntry = entry;
-			}
-			else
+			if (rc != 0)
 			{
 				OnChannelRError(DSBX_Const.KIND_RESULT, now);
 			}
