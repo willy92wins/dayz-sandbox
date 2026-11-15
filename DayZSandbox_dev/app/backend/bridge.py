@@ -272,10 +272,20 @@ class Bridge:
                 if order["bstate"] in ("pendiente", "ejecutando"):
                     order["bstate"] = "descartada"
                 continue
-            if order["bstate"] not in ("pendiente", "ejecutando"):
+            if order["bstate"] not in ("pendiente", "ejecutando", "parcial"):
                 continue
             reason = "mundo_reiniciado" if (order["epoch"] and new_epoch
                                             and order["epoch"] != new_epoch) else "conexion_perdida"
+            if order["bstate"] == "parcial":
+                # §4.4 (solo F2): un `parcial` de otro `epoch` se queda
+                # `parcial/mundo_reiniciado` y no se reconcilia ni se compensa. Con el
+                # mismo epoch, la lectura del mismo mundo puede reconciliarlo. Las
+                # ordenes F1 siguen como en F1b-bridge.
+                sl = getattr(self.backend, "scene_live", None)
+                if reason == "mundo_reiniciado" and sl is not None and sl.is_f2_order(order) \
+                        and order["op_id"] in self.backend.ops:
+                    self.backend.set_op_state(order["op_id"], "parcial", "backend", reason)
+                continue
             if order["bstate"] == "pendiente":
                 order["bstate"] = "terminal"
                 if order["verb"] in ("scene.apply", "scene.reset") and order["op_id"] in self.backend.ops:
@@ -360,8 +370,7 @@ class Bridge:
             if srv3 and not srv3.get("lost") and self._read_next_at is not None \
                     and t >= self._read_next_at and self._active_read_locked() is None:
                 if not self.reconciled or self._has_live_parcial_locked():
-                    self._read_next_at = None
-                    self.enqueue_order("state.read", {}, internal=True)
+                    self._trigger_state_read_locked()
             self.cond.notify_all()
 
     def _has_live_parcial_locked(self):

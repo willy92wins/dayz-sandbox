@@ -142,6 +142,8 @@ class _Peer:
         self.annotate_rev_delta = 0
         self.state_read_mode = "ok"
         self.drop_all_results = False
+        # solo pruebas: op_id cuyos resultados se pierden siempre (las lecturas no)
+        self.drop_results_for = set()
         self._drop_next_result = False
         self._lose_next_ack = False
         self._cut_until = 0.0
@@ -547,6 +549,8 @@ class _Peer:
                     "epoch": entry.order["epoch"], "status": "error",
                     "reason": "result_too_large", "dup": bool(entry.send_dup), "read": {}}
         if self.drop_all_results:
+            return "fail"
+        if entry.order["op_id"] in self.drop_results_for:
             return "fail"
         if self._drop_next_result:
             self._drop_next_result = False

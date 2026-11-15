@@ -98,6 +98,7 @@ class Backend:
         self.httpd.backend = self
         self.bridge = None
         self.scene_live = None
+        self.observation = None
         if bridge_port is not None:
             self.bridge = Bridge(self, peer_key, port=bridge_port, clock=self.clock,
                                  log=self.log, **(bridge_kwargs or {}))
@@ -313,8 +314,12 @@ class Backend:
                 return fail("scene_unsupported", "El servidor no soporta escena F2")
             return self.scene_live.request_observe_locked(doc_id)
 
-    def observation(self):
-        """GET /api/observation (§4.2): ultima lectura `now` y su antiguedad."""
+    def get_observation(self):
+        """GET /api/observation (§4.2): ultima lectura `now` y su antiguedad.
+
+        SceneLive guarda el objeto en el campo `Backend.observation` (§4.2); el
+        metodo no puede llamarse igual que el campo o lo sombrearia en la instancia.
+        """
         with self.store.lock:
             if self.scene_live is None:
                 return {"ok": True, "observation": None, "age_ms": None}
@@ -585,7 +590,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/events":
             self.stream_events()
         elif url.path == "/api/observation":
-            self.send_json(200, self.backend.observation())
+            self.send_json(200, self.backend.get_observation())
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 
