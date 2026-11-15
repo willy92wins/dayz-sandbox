@@ -2619,5 +2619,120 @@ class TestCase10Vuelta4(TestFakeWorldBaseMixin, unittest.TestCase):
         self.assertEqual((st, rsn), ("done", None))
 
 
+class TestCase11SolR1C05(TestFakeWorldBaseMixin, unittest.TestCase):
+    """C-05 (§3.3 y §3.6): suelo fuera de rango o no finito cuenta como creacion fallida."""
+
+    def test_suelo_fuera_de_rango_en_todas_partes_rechaza_en_la_primera_creacion(self) -> None:
+        world = FakeWorld(ground=10000)
+        plan = build_plan(self.doc, rev=1, catalog=self.catalog)
+        st, rsn, rd = world.apply(
+            _make_order(world, "scene.apply", plan, op_id="op-gy-10000"),
+            check=lambda: None,
+            tick=lambda: None,
+        )
+        self.assertEqual((st, rsn), ("rejected", "create_failed"))
+        self.assertEqual(
+            world.effects(SESS_A, "op-gy-10000"),
+            {"created": 0, "deleted": 0},
+        )
+        self.assertEqual([c for c in world.census() if c["scene"] == self.doc["doc_id"]], [])
+        self.assertEqual(world.census(), [])
+        self.assertEqual(world.registry_snapshot(), [])
+        self.assertIsNone(rd["generation"])
+        self.assertIsNone(rd["scene"]["pending"])
+        self.assertIsNone(rd["scene"]["last"])
+        self.assertEqual(rd["scene"]["n"], 0)
+        self.assertEqual(world._scenes[self.doc["doc_id"]].pending_orders, [])
+
+    def test_suelo_fuera_de_rango_en_fila_12_compensa_las_11_creadas_sin_tocar_resto(self) -> None:
+        ent12 = self.doc["entities"][11]
+        self.assertEqual(ent12["id"], "obj-12")
+        x12, z12 = float(ent12["x"]), float(ent12["z"])
+
+        def ground_fail_row12(x: float, z: float) -> float:
+            if (float(x), float(z)) == (x12, z12):
+                return 10000.0
+            return _custom_ground(x, z)
+
+        world = FakeWorld(ground=ground_fail_row12)
+        world.spawn_foreign("SeaChest", 6194.2, 7638.2, 15.0)
+        world.seed_scene(
+            "d-0a0e0001",
+            [
+                ["obj-01", "WoodenCrate", 6150.0, 7650.0, 0.0],
+                ["obj-02", "Barrel_Red", 6152.0, 7650.0, 0.0],
+            ],
+        )
+        before_foreign = _foreign_snapshot(world.census())
+
+        plan = build_plan(self.doc, rev=1, catalog=self.catalog)
+        st, rsn, rd = world.apply(
+            _make_order(world, "scene.apply", plan, op_id="op-gy-12"),
+            check=lambda: None,
+            tick=lambda: None,
+        )
+        self.assertEqual((st, rsn), ("error", "create_failed"))
+        self.assertEqual(
+            world.effects(SESS_A, "op-gy-12"),
+            {"created": 11, "deleted": 11},
+        )
+        self.assertIsNone(rd["generation"])
+        self.assertIsNone(rd["scene"]["pending"])
+        self.assertEqual(rd["scene"]["n"], 0)
+        self.assertEqual(rd["scene"]["retained_n"], 0)
+        self.assertEqual(rd["scene"]["retained"], [])
+        self.assertEqual(
+            rd["scene"]["last"],
+            {
+                "session": SESS_A,
+                "op_id": "op-gy-12",
+                "verb": "scene.apply",
+                "outcome": "compensated",
+            },
+        )
+
+        census = world.census()
+        self.assertEqual([c for c in census if c["scene"] == self.doc["doc_id"]], [])
+        self.assertEqual(len([c for c in census if c["scene"] == "d-0a0e0001"]), 2)
+        self.assertForeignUntouched(before_foreign, census)
+
+    def test_limites_exactos_de_gy_crean_y_nan_e_inf_fallan(self) -> None:
+        plan = build_plan(self.doc, rev=1, catalog=self.catalog)
+
+        for idx, bound in enumerate((-9999.999, 9999.999)):
+            world = FakeWorld(ground=bound)
+            st, rsn, rd = world.apply(
+                _make_order(world, "scene.apply", plan, op_id=f"op-gy-ok-{idx}"),
+                check=lambda: None,
+                tick=lambda: None,
+            )
+            self.assertEqual((st, rsn), ("done", None))
+            self.assertIsNotNone(rd["generation"])
+            self.assertEqual(rd["scene"]["n"], 33)
+            self.assertEqual(len(world.census()), 33)
+            for row in rd["obs"]["rows"]:
+                self.assertEqual(row[3], bound)
+                self.assertEqual(row[6], bound)
+
+        for idx, bad_gy in enumerate(
+            (float("nan"), float("inf"), float("-inf"), -10000.0, -9999.9991, 9999.9991)
+        ):
+            world = FakeWorld(ground=bad_gy)
+            st, rsn, rd = world.apply(
+                _make_order(world, "scene.apply", plan, op_id=f"op-gy-bad-{idx}"),
+                check=lambda: None,
+                tick=lambda: None,
+            )
+            self.assertEqual((st, rsn), ("rejected", "create_failed"))
+            self.assertEqual(
+                world.effects(SESS_A, f"op-gy-bad-{idx}"),
+                {"created": 0, "deleted": 0},
+            )
+            self.assertEqual(world.census(), [])
+            self.assertIsNone(rd["generation"])
+            self.assertIsNone(rd["scene"]["pending"])
+            self.assertIsNone(rd["scene"]["last"])
+
+
 if __name__ == "__main__":
     unittest.main()

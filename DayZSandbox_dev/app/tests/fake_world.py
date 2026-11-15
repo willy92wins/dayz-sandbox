@@ -61,6 +61,7 @@ _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 _DOC_ID_RE = re.compile(r"^d-[0-9a-f]{8}$")
 _LID_RE = re.compile(r"^(obj|zmb|ani)-(0[1-9]|[1-9][0-9]+)$")
 _MAX_REV = 999999999  # 9 digitos (§3.6, M14)
+_MAX_Y = 9999.999  # rango normativo de y y gy (§3.6)
 _PREFIX_KIND = {
     "obj": "objeto",
     "zmb": "infectado",
@@ -1263,15 +1264,20 @@ class FakeWorld:
                 # M3: antes de cada efecto, con el cerrojo, si el mundo reinicio
                 if self.epoch != order_epoch:
                     return ("error" if had_effect else "rejected"), "stale_epoch", self.read(doc_id)
-                if self._hook_hit(self._fail_create, doc_id, lid):
+                fx, fz, fyaw = float(x), float(z), float(yaw)
+                gy = float(self.ground_y(fx, fz))
+                if (
+                    self._hook_hit(self._fail_create, doc_id, lid)
+                    or not math.isfinite(gy)
+                    or gy < -_MAX_Y
+                    or gy > _MAX_Y
+                ):
                     create_failed_now = True
                 else:
                     st = self._scene_state_locked(doc_id, create=True)
                     if (session, op_id) not in st.pending_orders:
                         st.pending_orders.append((session, op_id))
                     cls_name = classes[ci]
-                    fx, fz, fyaw = float(x), float(z), float(yaw)
-                    gy = float(self.ground_y(fx, fz))
                     prefix = lid.split("-", 1)[0]
                     is_creature = prefix in ("zmb", "ani")
                     flags = FLAGS_CREATURE if is_creature else FLAGS_ROOT
