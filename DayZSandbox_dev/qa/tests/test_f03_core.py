@@ -2598,6 +2598,39 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             self.assertEqual(results["edge"]["status"], "pass")
             self.assertEqual((results["out"]["status"], results["out"]["detail"]), ("fail", "result_body_len_out_of_range:3449"))
 
+    def test_probe_budget_logs_only_from_newest_script_log_per_profile(self):
+        # Perfiles reutilizados entre partidas (partida diag de f997534): el script log de una sesion anterior ya trae
+        # su linea de agotamiento. Solo cuenta el script_*.log mas reciente de cada perfil.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            profs = {}
+            for role in ("server", "client"):
+                p = t / role
+                p.mkdir()
+                (p / "script_2026-11-15_03-59-15.log").write_text(
+                    "04:15:14.636 SCRIPT       : [DSBX_QA] callback_budget_exhausted created_n=126 budget_n=30\n", encoding="utf-8"
+                )
+                (p / "script_2026-11-15_05-59-35.log").write_text("05:59:40.000 SCRIPT       : [DSBX_QA] hello\n", encoding="utf-8")
+                (p / "error_2026-11-15_03-59-15.log").write_text("[DSBX_QA] callback_budget_exhausted created_n=1 budget_n=30\n", encoding="utf-8")
+                profs[role] = p
+
+            class _Ctx:
+                pass
+
+            ctx = _Ctx()
+            ctx.peer_logs = {}
+            ctx.profiles = profs
+            ctx.samples_dir = t / "samples"
+            ctx.samples_dir.mkdir()
+            ctx.required_peers = lambda: ("server", "client")
+            self.assertEqual(f03_common.PartContext.collect_probe_budget_logs(ctx), [])
+            (profs["server"] / "script_2026-11-15_05-59-35.log").write_text(
+                "06:14:00.000 SCRIPT       : [DSBX_QA] callback_budget_exhausted created_n=200 budget_n=30\n", encoding="utf-8"
+            )
+            rows = f03_common.PartContext.collect_probe_budget_logs(ctx)
+            self.assertEqual([(r["peer"], r["created_n"], r["budget_n"]) for r in rows], [("server", 200, 30)])
+
     def test_d12_probe_budget_params_verified_against_git_head(self):
         # D12: si git_head define PROBE_BUDGET_LOG_POLL_MS y PROBE_BUDGET_RETRY_MS, identity.params tiene que traerlos
         # iguales; en un commit que no los define (evidencia historica) no se exigen.

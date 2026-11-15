@@ -728,8 +728,14 @@ class PartContext:
                 candidates.append((role, self.peer_logs[role]))
             prof = self.profiles.get(role)
             if prof is not None and prof.is_dir():
-                for rpt in sorted(prof.glob("*.log")) + sorted(prof.glob("script_*.log")):
-                    candidates.append((role, rpt))
+                # Solo el script log de la sesion de juego en curso: el mas reciente (DayZ lo nombra
+                # script_<AAAA-MM-DD_HH-MM-SS>.log, asi que el orden por nombre es el cronologico). Las carpetas de perfil
+                # se reutilizan entre partidas y los logs viejos traen lineas de agotamiento de sesiones anteriores
+                # (partida diag de f997534: BASE-12 de run/ en missing y dos lineas por peer en probe-budget). No se usa
+                # la fecha de modificacion: en Windows puede no avanzar mientras DayZ tiene el log abierto.
+                scripts = sorted(p for p in prof.glob("script_*.log") if p.is_file())
+                if scripts:
+                    candidates.append((role, scripts[-1]))
         seen = set()
         for role, lpath in candidates:
             if not lpath.is_file():
