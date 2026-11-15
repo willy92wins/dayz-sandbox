@@ -1,6 +1,8 @@
 """Reglas del CLI (brief F0.1 §3 y §10.1 punto 3)."""
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -146,22 +148,42 @@ class GateCliTests(unittest.TestCase):
             self.assertFalse(unknown.exists())
 
     def test_registered_skeleton_spike_evaluate_only_reaches_its_own_evaluate(self):
-        # Brief F0.3-0 §5.1: --evaluate-only llama al evaluate del spike registrado (aqui el esqueleto de S3), no a un
-        # not_implemented del nucleo. Asi cada spike se activa desde su write-set sin tocar gate_core.IMPLEMENTED_SPIKES.
-        with tempfile.TemporaryDirectory() as tmp:
+        # Brief F0.3-0 §5.1: --evaluate-only llama al evaluate del spike registrado, no a un not_implemented del nucleo.
+        # Asi cada spike se activa desde su write-set sin tocar gate_core.IMPLEMENTED_SPIKES. El spike es SINTETICO y vive
+        # solo en esta prueba (modulos esqueleto propios), para no depender de que un spike real siga sin implementar: con
+        # S3 ya implementado, la version que usaba S3 se rompia (aviso de la sesion de F0.3).
+        import types
+
+        sid = "S-test-skel"
+        calls = []
+
+        def _evaluate(part_dir):
+            calls.append(Path(part_dir).name)
+            return gate_core.make_verdict(sid, 2, reasons=["not_implemented"])
+
+        eval_mod = types.ModuleType("s_test_skel_eval")
+        eval_mod.evaluate = _evaluate
+        mut_mod = types.ModuleType("s_test_skel_mutants")
+        mut_mod.EXPECTED_MUTANTS = {}
+        mut_mod.EXPECTED_HARNESS_TESTS = {}
+        run_mod = types.ModuleType("s_test_skel_run")
+        run_mod.run = lambda args, evidence, argv: 2
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            sys.modules, {"s_test_skel_eval": eval_mod, "s_test_skel_mutants": mut_mod, "s_test_skel_run": run_mod}
+        ), mock.patch.dict(
+            gate_core.SPIKE_REGISTRY, {sid: ("s_test_skel_run", "s_test_skel_eval", "s_test_skel_mutants")}
+        ), mock.patch.dict(os.environ, {"DSBX_QA_TEST_UNIMPL_SPIKE": sid}):
             evidence = Path(tmp) / "ev"
             run_dir = evidence / "run"
             (run_dir / "samples").mkdir(parents=True)
             (run_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
-            proc = _run(["spike", "S3", "--build", "offline", "--evidence", str(evidence), "--evaluate-only"])
-            self.assertEqual(proc.returncode, 2, proc.stderr)
-            part_verdict = run_dir / "verdict.json"
-            self.assertTrue(part_verdict.is_file(), "el evaluate de S3 no llego a correr sobre run/")
-            pv = json.loads(part_verdict.read_text(encoding="utf-8"))
-            self.assertEqual(pv["id"], "S3")
-            self.assertEqual(pv["exit_code"], 2)
-            self.assertEqual(pv["reasons"], ["not_implemented"])
-            self.assertTrue(gate_core.IMPLEMENTED_SPIKES >= set(gate_core.SPIKE_REGISTRY))
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                code = m1_gate.main(["spike", sid, "--build", "offline", "--evidence", str(evidence), "--evaluate-only"])
+            self.assertEqual(code, 2)
+            self.assertEqual(calls, ["run"], "el evaluate del spike registrado no llego a correr sobre run/")
+            pv = json.loads((run_dir / "verdict.json").read_text(encoding="utf-8"))
+            self.assertEqual((pv["id"], pv["exit_code"], pv["reasons"]), (sid, 2, ["not_implemented"]))
+        self.assertTrue(gate_core.IMPLEMENTED_SPIKES >= set(gate_core.SPIKE_REGISTRY))
 
     def test_rule4_usage_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
