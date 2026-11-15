@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.0, borrador para la ronda 1 de Sol. 2026-11-15, por el orquestador de F2.
+- **Versión:** v1.1, con la ronda 1 de Sol aplicada (§12); pendiente de las interfaces de F0.3 de §11 antes de la ronda 2. 2026-11-15, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -16,9 +16,9 @@
 | Tanda | Qué | Depende de | Cuándo |
 |---|---|---|---|
 | **T1** | Contrato v1.3 del cable `dsbx1` (§3): enteros y columnas. Backend, mundo falso, mod falso y pruebas. **Sin DayZ.** | nada | ya |
-| **T2** | Oráculo E9 de la partida (§6): evaluador, mutantes, pruebas y fixtures | este brief congelado y T1 en `main` | ya, tras congelar |
-| **T3** | Mod núcleo en Enforce (§4): `scene.apply`, `scene.reset` y `scene.observe` sobre los peers de F1b-peers | F1b-peers en `main`, S-persist con su gate pasado, T2 congelado | después |
-| **T4** | Runner de la partida (§5) y la partida: A2, A3 y A4 con censo independiente | T3, el censo de F0.3 en `main` | después |
+| **T2** | Oráculo E9 de la partida (§6): evaluador, mutantes, pruebas y fixtures | **solo** este brief congelado y las interfaces de F0.3 de §5.3 fijadas por escrito. Se escribe contra la spec de §3 y §5-§6, sin esperar a que T1 esté en `main` (P-12) | tras congelar |
+| **T3** | Mod núcleo en Enforce (§4): `scene.apply`, `scene.reset` y `scene.observe` sobre los peers de F1b-peers | F1b-peers en `main`, S-persist con su gate pasado, T1 en `main`, T2 congelado | después |
+| **T4** | Runner de la partida (§5) y la partida: A2, A3 y A4 con censo, testigo e independencia | T3, y las interfaces de F0.3 de §5.3 en `main` | después |
 
 **Qué no es:**
 - **Actores** (F3): la escena es `fixtures/escena-sin-actores.json`, con 33 raíces (20 objetos, 10 infectados y 3 animales).
@@ -48,7 +48,7 @@
   |---|---|
   | Sol (OpenAI) | revisa el brief, el oráculo y el código |
   | DS4.1 (GX10) | T2, el oráculo |
-  | Claude por `agy` (desde las 20:10) o Muse (desde la 01:00) | T1 y T3; ninguna de esas tandas puede ser DS4.1 ni OpenAI |
+  | Claude por `agy` (desde las 20:10) o Muse (desde la 01:00) | T1, T3 y T4, que son implementación; ninguna de esas tandas puede ser DS4.1 ni OpenAI (P-12) |
   | F0.3 (Claude) | el modo de censo (§5.3), que verifica el oráculo |
 
   En el GX10, como mucho 3 corridas largas en total; S-persist va primero.
@@ -63,7 +63,7 @@
 | DP-3 | **`registry_sha256` pasa a ser un resumen opaco de 64 hex** del JSON canónico del registro. En el mod son 8 `Hash()` salados, como `ModsetHash`; el mundo falso puede seguir usando SHA-256. El nombre del campo se queda, porque es de F1b-bridge. | Enforce no tiene SHA-256 (solo `string.Hash()`, de 32 bits), y el backend solo valida la forma (`app/backend/bridge.py:59`). Sirve para detectar cambios, no para verificar. |
 | DP-4 | **El mod no recalcula `plan_sha256`:** lo guarda con la generación y lo devuelve. | Solo se compara como identidad (`scene_live.py:737`, `scene_plan.py:800`). El backend lo calcula sobre el plan v1.3 (`scene_plan.py:201`). |
 | DP-5 | **D1 por la orden, con marca:** las órdenes F2 llevan `args.f2 = 1`, y las de F1 lo traen ausente, que llega como 0. Sin `scene: 1` en el hello, el backend manda F1 como hoy. | DP-2. Sustituye a la detección por `rows`/`plan_sha256` de `scene_live.is_f2_order` en el cable; dentro del backend, la marca `f2` de la orden ya existe. |
-| DP-6 | **Confirmación del borrado (D5):** tras `Delete()`, la entidad cuenta como borrada cuando, en un tick posterior y en un máximo de `DEL_CONFIRM_TICKS`, `GetGame().GetObjectByNetworkId(low, high)` devuelve `null`. Si no, el registro se queda y la orden da `delete_failed` (F2b §3.3 paso 4). `[verify F2 en partida]` | Nadie lo ha medido (`hechos-enforce.md` §4). La partida registra por tick las tres señales (referencia, `IsPendingDeletion`/`IsSetForDeletion` y `GetObjectByNetworkId`), y el censo independiente juzga (§5.2, F2P-07). |
+| DP-6 | **Confirmación del borrado (D5):** tras `Delete()`, la entidad cuenta como borrada cuando, en un tick posterior y en un máximo de `DEL_CONFIRM_TICKS`, `GetGame().GetObjectByNetworkId(low, high)` devuelve `null`. Si no, el registro se queda y la orden da `delete_failed` (F2b §3.3 paso 4). `[verify F2 en partida]` | Nadie lo ha medido (`hechos-enforce.md` §4). La partida registra por tick las tres señales (referencia, `IsPendingDeletion`/`IsSetForDeletion` y `GetObjectByNetworkId`), y el censo independiente juzga (§5.4, F2P-10). |
 | DP-7 | **El mod escribe sus JSON a mano, solo con enteros y textos.** Nunca `WriteToString` sobre floats o bools. | `hechos-enforce.md` §2; es lo que ya hace F1b-peers (`DSBX_Wire.c`). |
 | DP-8 | **`result_too_large` por verbo:** `scene.observe` da `rejected`; `scene.apply` y `scene.reset` siguen la regla de `GuardFailed`: `error` si hubo efecto y `rejected` si no. | F2b §3.5. Hoy F1b-peers da siempre `error` (`DSBX_Peer.c:1498-1506`). |
 | DP-9 | **La lógica de escena va en ficheros nuevos** (`DSBX_Scene*.c`). En los de F1b-peers, solo ganchos (§4.2). | Igual que en F2 sin juego (F2b §4.6); así no hay choques con F1b-peers. |
@@ -103,7 +103,13 @@ Es un delta sobre F2b §3. Solo cambia la **forma** de lo que viaja por `dsbx1`;
 `args` `{f2: 1, doc_id, at}`, con `at` `"checkpoint"` o `"now"`.
 
 ### 3.5 `state.read`
-`args` `{f2: 1, doc_id}` con un peer con escena. Si no, `{}`, como hoy.
+`args` `{f2: 1, doc_id}` con un peer con escena; si no, `{}`, como hoy. La marca le sirve **solo al mod**, para añadir el bloque `scene`.
+
+**En el backend, `state.read` nunca es una orden F2 (P-01):**
+- su resultado sigue por el camino común de lecturas (`bridge.py`, `_handle_read_result_locked`), que pone `reconciled` y llama a `SceneLive.on_world_read_locked`;
+- `is_f2_order` no mira `args.f2` en `state.read`; la marca solo cuenta para `scene.apply`, `scene.reset` y `scene.observe`.
+
+Si `state.read` se clasificara como F2, su resultado iría a `SceneLive.on_result_locked`, la lectura no reconciliaría nunca y no se entregaría ni un apply.
 
 ### 3.6 Filas de las lecturas (del mod al backend)
 El mod las escribe a mano. Python las lee sin problema aunque mezclen tipos.
@@ -126,7 +132,7 @@ T1 la recalcula con un script, como `sizes5.py`, con los rangos v1.3 y 33-34 ra�
 - **La API HTTP no cambia.** `/api/observation` y `op.state` devuelven metros, como en v1.2.2: el backend convierte al recibir.
 - **Cambian:**
   - `scene_plan.py`: el plan, la validación de lecturas y los predicados en mm;
-  - `scene_live.py`: `is_f2_order` también por `args.f2` y la conversión de `obs`;
+  - `scene_live.py`: `is_f2_order` también por `args.f2`, pero **solo** en los verbos `scene.*` (§3.5), y la conversión de `obs`;
   - `bridge.py`: `state.read` con `f2: 1`;
   - `fake_world.py`: lee y escribe v1.3;
   - `fake_mod.py`: lo que haga falta;
@@ -141,7 +147,8 @@ T1 la recalcula con un script, como `sizes5.py`, con los rangos v1.3 y 33-34 ra�
    - (c) una orden sin alguna clave (DP-2) → el backend no la manda: lo afirma una prueba del constructor del plan;
    - (d) filas v1.2.2 → `bad_plan`;
    - (e) una lectura con floats → no reconcilia;
-   - (f) la API devuelve metros: las pruebas de F6 siguen igual.
+   - (f) la API devuelve metros: las pruebas de F6 siguen igual;
+   - (g) regresión de P-01: con un peer con escena, el primer hello y un reinicio del backend reconcilian (`reconciled` en `True`) y el apply se entrega. Un `state.read` con `args.f2 = 1` clasificado como F2 tiene que tumbar la prueba.
 3. X4: la conversión con el factor mal (×100), el redondeo cambiado (`floor`), una columna desalineada y `total` ausente tratado como 0 son mutaciones que las pruebas matan.
 
 ## 4. Mod núcleo en Enforce (T3)
@@ -170,7 +177,13 @@ Se acuerdan con su sesión antes de tocarlos. Las citas son del `525da99`.
   - `gy = SurfaceY(x, z)`, guardada en mm;
   - si devuelve `null`, o la clase o la posición no cuadran, la creación ha fallado (F2b §3.3 paso 5);
   - el checkpoint se toma por la vía de Q9 que decida S-persist `[verify S-persist]`.
-- **Retención:** es ajeno todo lo que hay en el inventario de una entidad borrable y que no está en el registro. Se recorre con `EnumerateInventory(PREORDER)`, como en S-persist §3.3.
+- **Conjunto borrable y retención (F2b D5, P-02):**
+  - el conjunto borrable de una operación son **solo** sus registros:
+    - en un apply o un reset, los de esa escena en el epoch;
+    - en una compensación, los de esa orden (`session`, `op_id`);
+  - es **ajena** cualquier entidad que no esté en ese conjunto, **aunque esté en el registro global**. Por ejemplo, un objeto de la escena B metido en un contenedor de A es ajeno para el reset de A, y un registro de otra orden es ajeno para una compensación;
+  - una entidad borrable con algo ajeno dentro (`EnumerateInventory(PREORDER)`, como en S-persist §3.3) se retiene, y se retienen con ella sus antepasados borrables;
+  - el cálculo se rehace con el cerrojo antes de **cada** borrado (F2b §3.3 paso 4).
 - **Borrar:**
   - primero los hijos y después las raíces (M1);
   - `Delete()` y, después, la confirmación de DP-6;
@@ -183,7 +196,7 @@ Se acuerdan con su sesión antes de tocarlos. Las citas son del `525da99`.
 | Constante | Valor | Estado |
 |---|---|---|
 | `SCENE_BATCH` | 8 | `[verify S-perf]` |
-| `DEL_CONFIRM_TICKS` | 10 | `[verify F2 en partida]`: lo mide F2P-07 |
+| `DEL_CONFIRM_TICKS` | 10 | `[verify F2 en partida]`: lo mide F2P-10 |
 | `FLAGS_ROOT` | 29361188 (= 1060 + 4194304 + 8388608 + 16777216) | `[verify S-persist]` PER-01, 07 y 08 |
 | `FLAGS_CREATURE` | 29363236 (más `ECE_INITAI`), vía (a) de Q9 | `[verify S-persist]` PER-01 y 02 |
 | `ECE_DYNAMIC_PERSISTENCY` | nunca | — |
@@ -194,42 +207,65 @@ Si S-persist decide otros valores, se cambia la constante y se anota su commit e
 
 ### 5.1 Montaje
 - **DayZ** (diag, después retail, como en F1b-peers) con `-mod=@DayZSandbox;@DayZSandbox_QA`.
-- **El backend real** (`app/backend/server.py`) con el bridge en `127.0.0.1`, y como escena `fixtures/escena-sin-actores.json` copiada al directorio de la parte.
-- **`PartContext` de F0.3** (`qa/f03_common.py:504-549`) para la sonda y el censo.
+- **El backend real** (`app/backend/server.py`) con el bridge en `127.0.0.1`. La escena 1 es `fixtures/escena-sin-actores.json`, copiada al directorio de la parte. La escena 2 es una fixture nueva y pequeña, `fixtures/escena-f2p-2.json`: 3 objetos dentro del disco de censo, con otro `doc_id`.
+- **`PartContext` de F0.3** (`qa/f03_common.py:504-549`) para la sonda: censo, testigo, ajenos y control persistente (§5.3).
 - **El lanzador** sigue el modelo de `qa/live/run_f1bp_partida.ps1` de F1b-peers: WMI, `-mod=`, `--min-vram-libre 4000` y el lease soltado cuando no queda ningún PID propio.
+- **Un solo mundo y un solo storage** para toda la partida. El orden de las partes es normativo, y cada una deja el estado que pide la siguiente (P-07).
 
-### 5.2 Partes
-Cada parte es una carpeta con `samples/` y el manifest de F0.3.
+### 5.2 Partes, en orden
 
-| Parte | Qué | Fila |
-|---|---|---|
-| P1 | censo de referencia (`per_census_start`, §5.3) antes de nada | base |
-| P2 | `POST /api/apply` → `observado`; censo; segunda entrega del mismo `op_id`, forzada por el runner → ni una entidad de más | A2 |
-| P3 | se pone algo ajeno en el suelo y otro ajeno dentro del contenedor de `obj-17`; se siembra una segunda escena; `POST /api/reset` → `parcial/contenido_ajeno` con `obj-17` retenido; censo; segundo reset → otra vez `parcial` | A3 |
-| P4 | reinicio **solo del backend** (mismo epoch) → apply → reconcilia, el reset borra la generación viva y el censo no tiene extras. Después, reinicio del **servidor** (epoch nuevo) → censo: nada de F2 reaparece; apply → 33 | A4 |
-| P5 | reinicio del backend tras un efecto con la respuesta perdida: el runner corta al bridge a mitad del apply → reconcilia antes de aplicar, 33 y no 66 | A4 (-) |
+| Parte | Qué hace el runner | Estado al terminar | Fila |
+|---|---|---|---|
+| P1 | censo de referencia y control persistente puesto (§5.3) | mundo sin nada de F2 | base |
+| P2 | testigo activo → `POST /api/apply` → `observado`; segunda entrega forzada del mismo `(session, op_id)` dentro de la retención; censo | escena 1 aplicada (33) | A2 |
+| P2n | **negativa real:** apply de una variante de la escena 1 con un estímulo que tiene que acabar en `parcial` o `fallido` (§5.5) | escena 1 limpia otra vez (reset) | A2 (-) |
+| P3 | apply de la escena 1; reinicio del backend con la escena 2 → apply de la escena 2; reinicio con la escena 1; ajeno en el suelo y ajeno dentro de `obj-17` (§5.3); un objeto de la escena 2 dentro de un contenedor de la escena 1, puesto por la sonda (P-02); reset → `parcial/contenido_ajeno`; censo; segundo reset → igual | `obj-17` y el otro contenedor retenidos | A3 |
+| P3c | limpieza: la sonda borra sus ajenos (§5.3); el objeto de la escena 2 vuelve al suelo; reset de la escena 1 → `observado`; censo | escena 1 vacía; escena 2 aplicada | A3 |
+| P4a | reinicio **solo del backend** (mismo epoch): apply de la escena 1 → reconcilia; el reset borra la generación viva; apply → 33; censo sin extras | escena 1 aplicada | A4 |
+| P4b | reinicio del **servidor** sin reset (epoch nuevo, mismo storage): censo → nada de F2 reaparece y el control persistente sí; apply → 33 | escena 1 aplicada | A3, A4 |
+| P4c | reset de la escena 1 y de la escena 2 → reinicio del servidor con reset previo: censo → nada de F2 reaparece y el control sí | sin F2 | A3 |
+| P5 | apply cortado: el runner corta el bridge después de un efecto observado y antes del resultado, y reinicia el backend → lectura de reconciliación **antes** del apply nuevo → `33 + 0` | escena 1 aplicada | A4 (-) |
 
-- **Cómo se pone lo ajeno en P3:** con un verbo de la sonda que F0.3 indique (§11, pregunta 1). Este brief no lo inventa.
-- **Lo que no se puede provocar en el juego** lo cubren los mutantes del oráculo sobre evidencia alterada (§6): una creación suprimida, una entidad movida 0,6 m y el ajeno sacado al suelo.
+- **Lo que no se puede provocar en el juego** lo cubren además los mutantes del oráculo (§6): metatests del evaluador, que no sustituyen a P2n (P-04).
+- **Hijos propios (P-09):** en M1 el producto solo crea raíces (sin actores, D3), así que no hay hijos propios que resetear en partida. Esa parte de A3 se acredita offline (F2b, filas F2-A3) y aquí queda **N/A con motivo**. F3 la lleva a partida con el equipo de los actores.
 
-### 5.3 Censo independiente
-`per_census_start` en el peer `server` de la sonda, con:
-- `select_all_entityai_b = 1`;
-- `center` (6170, 7643), `radius_m = 115` e `include_director_b = 0`;
-- `area_tag = "f2p-<parte>"`.
+### 5.3 Sonda (interfaces de F0.3)
+Todas van por el bridge de la sonda (`qa0`), así que quedan en la evidencia.
+- **Censo:** `per_census_start`, con:
+  - `select_all_entityai_b = 1` e `include_director_b = 1`, para los inventarios de jugador;
+  - `radius_m = 120`, centrado en (6170, 7643), más un disco de 60 m por cada entidad seguida cuya última posición quede a menos de 15 m del borde de lo cubierto (P-05);
+  - el resultado se deduplica por `net_id`.
 
-Las filas traen clase, padre, `net_id` (`high:low`), pose, vida y `surface_y_m`.
-- **Ciclo:** `issue_one` → `read_job_pages` → `job_free`.
-- **Un censo a la vez.**
-- **La identidad:**
-  - lo creado en la sesión se reconoce por `net_id`;
-  - lo que tenga `net_id` 0 (edificios del mapa, sin verificar) se reconoce por clase y pose redondeada.
+  **La cobertura es parte de la evidencia:** si una entidad seguida falta de todos los discos y podía haber salido de lo cubierto (criatura, o a menos de 15 m del borde), la comprobación da **INCONCLUSO**, nunca «borrada».
+- **Testigo de creación (P-03):** interfaz pendiente de F0.3 (§11). Es un trabajo de la sonda que, mientras está activo, registra cada `EntityAI` que se inicializa dentro de un radio: clase, `net_id`, pose y tick. Es la observación independiente de las 33 posiciones en el momento de crear, **criaturas incluidas**.
+- **Ajenos:** `per_spawn_raw`.
+  - En el suelo, `foreign_ground`.
+  - En el cargo, `foreign_in_container` con `target_net_id`, el `net_id` del contenedor sacado del censo.
+  - Hay que comprobar `obs_parent_net_id`.
+- **Borrar ajenos (P-07):** interfaz pendiente de F0.3 (§11), por `net_id` y solo para entidades fuera de `m_Records`.
+- **Control persistente (P-06):** interfaz pendiente de F0.3 (§11). Es una entidad que **tiene** que reaparecer tras reiniciar el servidor, para demostrar que el storage se recargó. Sin ella, P4b y P4c dan INCONCLUSO.
 
 ### 5.4 Evidencia (`samples/`)
+- **Del bridge del producto, la traza completa** (P-08): las entregas por `(session, op_id)` con su `conn`, los resultados recibidos con su `dup`, los acuses y las lecturas de reconciliación con su orden temporal. Sale de un registro JSONL del runner, al que se suscribe por el log del backend.
 - **Del backend:** los eventos `op.state`, `GET /api/ops` y `GET /api/observation` (metros).
-- **De la sonda:** las páginas del censo, tal cual.
-- **Del mod,** en su log de script: las líneas `DSBX_SCENE_DEL` con las señales de borrado por tick (DP-6), y nada más.
-- **Del manifest:** la identidad de F0.3 (commits, `pbo_sha256`) más `oracle_commit`.
+- **De la sonda:** las respuestas crudas de `QABridge`, cada página del censo y del testigo con su trabajo, página, epoch, sello de sonda y marca de tiempo (P-10).
+- **Del mod:** las líneas `DSBX_SCENE_DEL` de su log de script, con las señales de borrado por tick (DP-6).
+- **Del manifest:**
+  - la identidad de F0.3;
+  - **los dos PBO por separado** (`product_pbo_sha256` y `probe_pbo_sha256`, P-11);
+  - la ruta y el identificador del storage del servidor (P-06);
+  - `oracle_commit`.
+
+### 5.5 La negativa real de P2n (P-04)
+Es un estímulo que el motor real hace fallar **antes del checkpoint**, sin inyectar fallos en el producto. Se prueba en este orden y vale el primero que funcione:
+1. una clase que está en el catálogo del mundo pero que `CreateObjectEx` no puede instanciar (devuelve `null`) → `create_failed` → la orden queda `parcial/compensada`;
+2. una entidad colocada donde el motor la desplaza 0,5 m o más al crearla, por ejemplo solapada con un edificio estático → el checkpoint no cumple → `fallido/lectura_no_cumple`.
+
+`[verify F2 en partida]`. Si ninguno de los dos falla en el motor real, la comprobación F2P-03 da **INCONCLUSO con su motivo**, nunca PASA. Las dos variantes se preparan como fixtures separadas: `fixtures/escena-f2p-neg-*.json`.
+
+### 5.6 Storage (P-09)
+- **Comprobación estática**, en el gate de T3: los `DSBX_Scene*.c` no usan las API de persistencia (`OnStoreSave`, `OnStoreLoad` y las de la CE de storage). Hay una lista de búsqueda en el gate.
+- **En partida:** P4b y P4c, con el control persistente reaparecido y nada de F2 reaparecido.
 
 ## 6. Oráculo E9 (T2)
 - **Ficheros:**
@@ -237,38 +273,50 @@ Las filas traen clase, padre, `net_id` (`high:low`), pose, vida y `surface_y_m`.
   - `qa/f2p_mutants.py`;
   - `qa/tests/test_f2p_offline.py`;
   - `qa/fixtures/f2p_*.json`, con evidencia sintética de cada parte.
-- **Contrato:** `evaluate(part_dir)` lee solo `samples/` y los campos del manifest de F0.3-0 §5.2. Sale 0 PASA, 1 FALLA y 2 INCONCLUSO (`gate_core.py:73-82`).
+- **Contrato:** `evaluate(part_dir)` lee solo `samples/` y los campos del manifest de F0.3-0 §5.2, más los de §5.4. Sale 0 PASA, 1 FALLA y 2 INCONCLUSO (`gate_core.py:73-82`).
+- **Independencia (DP-12, P-10):** cada fila del mundo sale de una respuesta cruda de la sonda, identificada por trabajo, página, epoch, sello y frescura (tomada después del efecto que juzga). El oráculo **no** mira si los valores tienen ruido.
 - **Comprobaciones:**
 
   | Id | Qué decide | Con qué |
   |---|---|---|
-  | F2P-01 | A2: 33 raíces nuevas (diferencia con P1); el multiconjunto de clases es el del documento | censo |
-  | F2P-02 | A2: cada objeto a menos de 0,5 m de `(x_doc, surface_y_m, z_doc)`. Las criaturas solo cuentan, vivas y como `ai_agent_b` | censo |
-  | F2P-03 | A2 (-): la segunda entrega no deja ni una entidad de más | censo |
-  | F2P-04 | A3: tras el reset, 0 propias vivas, salvo `obj-17` retenido; el ajeno, intacto en clase, pose y padre; la segunda escena, intacta; la op, `parcial/contenido_ajeno` | censo y API |
-  | F2P-05 | A3: tras el reinicio del servidor, nada de F2 reaparece | censo |
-  | F2P-06 | A4: tras el reinicio del backend, mismos conteos y posiciones, sin extras; 33 y no 66 en P5 | censo y API |
-  | F2P-07 | DP-6: cada borrado que el mod da por confirmado falta en el censo siguiente; cada `delete_failed` sigue vivo. Informa del tick medido | log y censo |
-  | F2P-08 | El modo de censo funciona: hay filas, están los edificios de referencia y `surface_y_m` varía con la posición | censo |
+  | F2P-01 | A2: el testigo ve 33 creaciones nuevas en P2, con el multiconjunto de clases del documento, y el censo posterior las tiene (diferencia con P1 por `net_id`) | testigo y censo |
+  | F2P-02 | A2: **cada una de las 33**, criaturas incluidas, nace a menos de 0,5 m de `(x_doc, surface_y, z_doc)` según el testigo; los objetos siguen a menos de 0,5 m en el censo | testigo y censo |
+  | F2P-03 | A2 (-), en P2n: el estímulo ocurrió (testigo o traza), la op quedó `parcial` o `fallida`, y el censo lo confirma | traza, API y censo |
+  | F2P-04 | A2: en P2 hay **dos entregas** del mismo `(session, op_id)` y la segunda respuesta lleva `dup: true`, y no aparece ninguna entidad de más | traza y censo |
+  | F2P-05 | A3, en P3: tras el reset, las propias retenidas son solo los contenedores con algo ajeno; los ajenos, intactos en clase, pose y padre; el objeto de la escena 2, intacto; la op, `parcial/contenido_ajeno`; segundo reset, igual | censo y API |
+  | F2P-06 | A3, en P3c: tras la limpieza, 0 propias vivas de la escena 1 | censo |
+  | F2P-07 | A3, en P4b y P4c: nada de F2 reaparece, con reset y sin él, **y el control persistente reaparece**; si el control no reaparece, INCONCLUSO | censo y manifest |
+  | F2P-08 | A4, en P4a: tras el reinicio del backend, reconciliación antes del apply; mismos conteos y posiciones; sin extras | traza y censo |
+  | F2P-09 | A4 (-), en P5: hubo efecto antes del corte (K > 0 según el testigo), no llegó la respuesta, la lectura de reconciliación va antes del apply nuevo, y el total es 33, no `33 + K` | traza, testigo y censo |
+  | F2P-10 | DP-6: cada borrado que el mod da por confirmado falta en el censo siguiente, dentro de lo cubierto; cada `delete_failed` sigue vivo. Informa del tick medido | log, censo y cobertura |
+  | F2P-11 | El modo de censo y el testigo funcionan: hay filas, están los edificios de referencia de P1 (por clase y pose) y `surface_y_m` varía con la posición | censo y testigo |
 
 - **Negativas contra la fabricación,** obligatorias, que dan FALLA o INCONCLUSO y nunca PASA:
-  - filas del censo copiadas de las lecturas del mod (mismos valores en mm en todas);
+  - filas sin respuesta cruda de la sonda que las respalde, o con trabajo, página, epoch o sello que no casan, o tomadas antes del efecto (frescura);
   - `net_id` `0:0` en lo creado;
   - `surface_y_m` constante;
   - un `op.state` sin su evento;
-  - el sello de la sonda o el commit del oráculo que no coinciden;
-  - las posiciones exactamente iguales a las del documento con `y` igual a `gy` en todas (sin ruido de float32).
-- **Mutantes** (`f2p_mutants.py`), uno por cada caso:
+  - una traza de entregas que no cuadra con las respuestas;
+  - el commit del oráculo o los sellos de los PBO que no coinciden.
+- **Mutantes** (`f2p_mutants.py`). Cada uno tiene que tumbar su comprobación:
   - creación suprimida;
-  - entidad movida 0,6 m;
+  - entidad movida 0,6 m, en el testigo y en el censo;
+  - criatura que nace a 1 m;
   - ajeno sacado al suelo;
   - contenedor ajeno borrado;
-  - duplicado (66);
+  - objeto de la escena 2 borrado;
+  - duplicado (`33 + K`);
   - algo que reaparece tras el reinicio;
-  - borrado «confirmado» que sigue vivo.
-
-  Cada mutante tiene que tumbar su comprobación.
-- **Revisión y congelado:** Sol, como mucho 2 rondas; después se congela (commit y sha). El gate de T4 comprueba esos bytes (DP-13).
+  - control persistente ausente;
+  - borrado «confirmado» que sigue vivo;
+  - **copia de las lecturas del mod con una perturbación por debajo de la tolerancia** (P-10);
+  - una sola entrega en P2;
+  - corte antes del primer efecto en P5.
+- **Revisión y congelado:** Sol, como mucho 2 rondas; después se congela (commit y sha).
+- **Gate y CLI (DP-13, P-11):** la forma la decide F0.3, porque es su núcleo (§11):
+  - una entrada que corre las partes, evalúa y agrega;
+  - **antes de evaluar**, comprueba byte a byte los ficheros del oráculo frente al commit congelado y, si no coinciden, sale INCONCLUSO `oracle_modified`;
+  - no puede haber ninguna vía de aceptación que se salte esa comprobación.
 
 ## 7. Aceptación
 - **T1:** §3.9.
@@ -278,12 +326,14 @@ Las filas traen clase, padre, `net_id` (`high:low`), pose, vida y `surface_y_m`.
   - con la evidencia sintética de una partida buena, PASA.
 - **T3:**
   - el linter offline con 0 errores nuevos frente a la base (DP-14);
+  - la comprobación estática de storage de §5.6;
   - la revisión de Sol;
   - la revisión del Experto de Enforce (§9.3).
 - **T4:**
-  - el oráculo congelado (DP-13);
-  - P1-P5 en diag y después en retail, con `m1_gate`/`f2p_eval`: PASA en F2P-01 a F2P-08;
-  - INCONCLUSO solo con su motivo escrito.
+  - el oráculo congelado, comprobado antes de evaluar (DP-13);
+  - P1 a P5, en el orden de §5.2, en diag y después en retail, por la entrada del gate de §6: PASA en F2P-01 a F2P-11;
+  - INCONCLUSO solo con su motivo escrito: cobertura, control persistente o el estímulo de P2n.
+  - La parte de A3 de los hijos propios es N/A con motivo en M1 (§5.2).
 
 ## 8. Ficheros y write-set por tanda
 - **T1:**
@@ -292,15 +342,19 @@ Las filas traen clase, padre, `net_id` (`high:low`), pose, vida y `surface_y_m`.
   - este brief (§12).
 - **T2:** `qa/f2p_eval.py`, `qa/f2p_mutants.py`, `qa/tests/test_f2p_offline.py` y `qa/fixtures/f2p_*.json`.
 - **T3:** `DayZSandbox/scripts/3_Game/DSBX_Scene*.c` y los ganchos de §4.2.
-- **T4:** `qa/f2p_run.py` (o `qa/live/run_f2p_partida.ps1` y un `.py`) y `evidence/m1/F2P/…`.
+- **T4:**
+  - `qa/f2p_run.py` (o `qa/live/run_f2p_partida.ps1` y un `.py`);
+  - las fixtures `fixtures/escena-f2p-2.json` y `fixtures/escena-f2p-neg-*.json`;
+  - `evidence/m1/F2P/…`;
+  - el registro en el gate, con la forma que fije F0.3 (§11).
 
 ## 9. Entrega
 ### 9.1 Orden
 1. Brief: Sol r1 → arreglos → Sol r2 → arbitraje → congelado.
-2. T1 y T2 en paralelo. T2 se escribe contra el contrato v1.3 de §3 y la interfaz de censo; no espera a que T1 esté en `main`.
+2. T1 y T2 en paralelo, con la única dependencia normativa de la tabla de §0. T2 arranca cuando F0.3 fije por escrito las interfaces de §5.3 que siguen pendientes.
 3. Sol sobre T1 → PR → merge. Sol sobre T2 → congelado.
-4. T3 cuando F1b-peers esté en `main` y S-persist haya pasado su gate.
-5. T4 con el censo de F0.3 en `main`.
+4. T3 cuando F1b-peers esté en `main`, S-persist haya pasado su gate y T1 esté en `main`.
+5. T4 con las interfaces de F0.3 en `main`.
 6. La partida.
 
 ### 9.2 PR
@@ -308,7 +362,7 @@ Las filas traen clase, padre, `net_id` (`high:low`), pose, vida y `surface_y_m`.
 - Las PR se mergean con merge commit, y el merge lo hace la sesión principal.
 
 ### 9.3 Texto para el Experto de Enforce (lo pasa Guillermo)
-> Hola. Te paso para revisión el mod núcleo de DayZ Studio, fase F2 (escena viva): rama `claude/f2-partida`, ficheros `DayZSandbox/scripts/3_Game/DSBX_Scene*.c` más ganchos en `DSBX_Peer.c`, `DSBX_Wire.c` y `DSBX_Messages.c`. Hace `scene.apply` (crea entidades por lotes por tick con `CreateObjectEx` y los flags de S-persist), `scene.reset` (borra lo de la escena: primero los hijos y después las raíces; confirma cada borrado con `GetObjectByNetworkId`; retiene los contenedores con contenido ajeno) y `scene.observe`. Me interesa sobre todo:
+> Hola. Te paso para revisión el mod núcleo de DayZ Studio, fase F2 (escena viva): rama `claude/f2-partida`, ficheros `DayZSandbox/scripts/3_Game/DSBX_Scene*.c` más ganchos en `DSBX_Peer.c`, `DSBX_Wire.c` y `DSBX_Messages.c`. Hace `scene.apply` (crea entidades por lotes por tick con `CreateObjectEx` y los flags de S-persist), `scene.reset` (borra solo los registros de la escena: primero los hijos y después las raíces; confirma cada borrado con `GetObjectByNetworkId`; retiene los contenedores con algo fuera de lo borrable dentro, también objetos de otra escena) y `scene.observe`. Me interesa sobre todo:
 > 1. `Delete()` y su confirmación;
 > 2. `EnumerateInventory` para detectar lo ajeno;
 > 3. lectura de JSON con `JsonSerializer` y escritura a mano solo con enteros;
@@ -317,17 +371,43 @@ Las filas traen clase, padre, `net_id` (`high:low`), pose, vida y `surface_y_m`.
 > El contrato está en `DayZSandbox_dev/plans/2026-11-15-m1-f2-partida-brief.md` §3-§4.
 
 ## 10. Riesgos y lo que no se ha medido
-- **DP-6:** la confirmación del borrado no está medida. Si `GetObjectByNetworkId` tarda más de `DEL_CONFIRM_TICKS`, salen `delete_failed` falsos; los ve F2P-07 y se ajusta la constante con el dato.
+- **DP-6:** la confirmación del borrado no está medida. Si `GetObjectByNetworkId` tarda más de `DEL_CONFIRM_TICKS`, salen `delete_failed` falsos; los ve F2P-10 y se ajusta la constante con el dato.
 - **El `net_id` de los edificios del mapa** puede ser 0: se identifican por clase y pose (§5.3).
-- **Las filas del censo a 115 m:** F0.3 calcula unas cientos, sin medir; el tope es 4096.
+- **Las filas del censo a 120 m más los discos extra:** F0.3 calcula unas cientos, sin medir; el tope es 4096 por trabajo.
+- **Cobertura (P-05):** las criaturas que se alejan pueden dejar la comprobación en INCONCLUSO. Es lo honesto; los discos extra lo reducen.
+- **P2n (P-04):** puede que ningún estímulo natural haga fallar al motor. Entonces la negativa del producto queda INCONCLUSA y se queda con los mutantes y con lo acreditado offline (F2b F2-A2).
+- **El testigo de creación (P-03) y el control persistente (P-06)** dependen de F0.3. Sin ellos, T2 no se congela y P4b/P4c dan INCONCLUSO.
 - **TTL:** el plazo cuenta desde el envío del poll (F1b-peers). Un apply de 33 son unos 10 ticks `[verify S-perf]`.
 - **Una orden a la vez en el mod:** las lecturas no se entregan durante un apply. Es coherente con el backend, porque la guarda «en vuelo» de C-01 sigue siendo válida.
 - **`registry_sha256` opaco (DP-3):** no se puede verificar de forma independiente. Nadie lo consume.
 - **El orden en la caja:** F2 va detrás de F1b-peers y de S-persist. Si S-persist cambia los flags o la vía de Q9, T3 cambia constantes y T2 no cambia.
 
 ## 11. Preguntas abiertas a otras sesiones
-1. **F0.3:** ¿con qué verbo de la sonda se pone un objeto ajeno en el suelo y otro dentro del cargo de un contenedor de la escena (P3)? ¿Lo trae S-persist?
-2. **F1b-peers:** ¿aceptáis los ganchos de §4.2? ¿Cambia algo de `StartOrderExecution`, `AdvanceExecution`, `WorldReadJson`, `HelloBody` o del camino de `result_too_large` después de `525da99`?
+1. **F0.3, ajenos:** **resuelto.** `per_spawn_raw`, en modo `foreign_ground` y `foreign_in_container` con `target_net_id`, lo añade F0.3 en el commit del modo de censo (`censo-interfaz-f03.md`).
+2. **F0.3, preguntado el 15-nov tras Sol r1:**
+   - (a) **testigo de creación** (P-03);
+   - (b) borrar por `net_id` los ajenos de `per_spawn_raw` (P-07);
+   - (c) control persistente (P-06);
+   - (d) forma del registro de F2P en el gate, con la comprobación de `oracle_modified` y los dos PBO (P-11).
+
+   T2 no se congela sin (a).
+3. **F1b-peers:** ¿aceptáis los ganchos de §4.2? ¿Cambia algo de `StartOrderExecution`, `AdvanceExecution`, `WorldReadJson`, `HelloBody` o del camino de `result_too_large` después de `525da99`?
 
 ## 12. Registro de cambios
 - v1.0 (2026-11-15): primer borrador.
+- v1.1 (2026-11-15): ronda 1 de Sol (UNSOUND, con 3 BLOQ, 8 MAY y 1 MEN), todo aplicado:
+
+  | Hallazgo | Arreglo |
+  |---|---|
+  | P-01 | `state.read` nunca es una orden F2 en el backend (§3.5); regresión (§3.9 g) |
+  | P-02 | lo ajeno es lo que está fuera del conjunto borrable de la operación, aunque esté en el registro global (§4.3) |
+  | P-03 | testigo de creación de la sonda para las 33 raíces, criaturas incluidas (§5.3, F2P-01 y F2P-02) |
+  | P-04 | negativa real P2n antes del checkpoint (§5.5, F2P-03) |
+  | P-05 | cobertura con disco de 120 m más discos por entidad, e INCONCLUSO si falta cobertura (§5.3) |
+  | P-06 | control persistente y mismo storage; P4b sin reset y P4c con reset (§5.2, F2P-07) |
+  | P-07 | ciclo de vida normativo entre partes y limpieza P3c (§5.2) |
+  | P-08 | traza completa de entregas y respuestas (§5.4); F2P-04 y F2P-09 acreditan el estímulo; el duplicado es `33 + K` |
+  | P-09 | hijos propios N/A con motivo en M1; storage con comprobación estática más P4b/P4c (§5.2, §5.6) |
+  | P-10 | independencia por la captura cruda de la sonda; mutante «copia con perturbación» (§6) |
+  | P-11 | entrada de gate con comprobación previa de bytes y los dos PBO; la forma la fija F0.3 (§6, §11) |
+  | P-12 | una sola dependencia normativa para T2; T4 lo hace una familia de implementación (§0, §1) |
