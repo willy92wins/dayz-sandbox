@@ -22,8 +22,8 @@ API publica para los ganchos de §4.6 (todos los metodos `*_locked` suponen
   servidor presentado ahora.
 - `server_has_scene_locked() -> bool`: indica si hay un peer servidor activo
   y no perdido con capacidad `scene` exactamente `1` (D1, A7).
-- `state_read_args_locked() -> dict`: devuelve `{"doc_id": doc_id}` si el
-  servidor soporta escena o `{}` si no (§3.2, D1).
+- `state_read_args_locked() -> dict`: devuelve `{"f2": 1, "doc_id": doc_id}` si el
+  servidor soporta escena o `{}` si no (§3.2, D1; v1.3 §3.5).
 - `prepare_apply_locked(doc, rev, hash_) -> dict`: valida el documento
   congelado con §4.1; devuelve `{"ok": True, "plan": ..., "expectation": ...,
   "envelope": ...}` o `{"ok": False, "code": ..., "http": ..., "pointer": ...,
@@ -48,7 +48,8 @@ API publica para los ganchos de §4.6 (todos los metodos `*_locked` suponen
 - `observation_locked() -> dict`: devuelve `{"ok": True, "observation": ...,
   "age_ms": ...}` con `age_ms` medido con el reloj del bridge (§4.2).
 - `is_f2_order(order) -> bool`: determina por la propia orden si su contrato
-  es F2 (D1). Un `scene.apply` F1 (solo `doc_id`, `rev`, `hash`) no lo es.
+  es F2 (D1, DP-5). Solo los verbos `scene.*`; `state.read` nunca (P-01). Un
+  `scene.apply` F1 (solo `doc_id`, `rev`, `hash`, sin `args.f2`) no lo es.
 - `valid_read(order, read) -> bool`: valida la forma y los rangos de §3.2 y
   §3.6 para el resultado de una orden F2. Acepta `generation.rev` de hasta 9
   digitos (A2).
@@ -91,9 +92,26 @@ from app.backend.scene_plan import (
     check_apply_predicate,
     evaluate_compensation_predicate,
     evaluate_reset_predicate,
+    obs_now_row_to_m,
+    plan_args_error,
     valid_scene_read,
     validate_for_apply,
 )
+
+# Contrato v1.3 (brief de F2-partida §3.5, P-01): la marca `args.f2 == 1` solo cuenta en
+# estos verbos. `state.read` nunca es una orden F2 en el backend, lleve o no `f2`.
+F2_VERBS = ("scene.apply", "scene.reset", "scene.observe")
+# §3.3 v1.3: `if_pending` va siempre (DP-2); vacio es un reset normal.
+EMPTY_IF_PENDING = {"session": "", "op_id": ""}
+
+
+def _if_pending_target(args):
+    """`if_pending` de una compensacion, o None si es un reset normal (vacio o ausente)."""
+    ip = args.get("if_pending") if isinstance(args, dict) else None
+    if isinstance(ip, dict) and (ip.get("session") or ip.get("op_id")):
+        return ip
+    return None
+
 
 # Terminales para la reconciliacion (§4.4/§4.5). `mundo_reiniciado` no se
 # reconcilia ni se compensa: la orden es de otro epoch. `superada` es la salida
@@ -292,11 +310,15 @@ class SceneLive:
         return 0
 
     def state_read_args_locked(self):
-        """Devuelve `{"doc_id": ...}` si el servidor tiene escena o `{}` si no (§3.2, D1)."""
+        """Devuelve `{"f2": 1, "doc_id": ...}` si el servidor tiene escena o `{}` si no.
+
+        v1.3 (§3.5): la marca le sirve solo al mod, para anadir el bloque `scene`. En el
+        backend `state.read` nunca es F2 (P-01): `is_f2_order` no mira su `args.f2`.
+        """
         if not self.server_has_scene_locked():
             return {}
         snap = self.backend.store.snapshot()
-        return {"doc_id": snap["doc_id"]}
+        return {"f2": 1, "doc_id": snap["doc_id"]}
 
     # --- Preparacion y encolado de ordenes F2 -----------------------------
 
@@ -367,6 +389,10 @@ class SceneLive:
         if not isinstance(plan, dict) or not isinstance(expectation, dict):
             # A6: la expectativa sale siempre del documento congelado; no hay plan B.
             return False, self._error("bad_args", 422, "Falta la expectativa del documento congelado", "/expectation")
+        bad_key = plan_args_error(plan)
+        if bad_key is not None:
+            # DP-2 (v1.3): una orden sin alguna clave, o con columnas desalineadas, no se manda.
+            return False, self._error("bad_plan", 422, "El plan no tiene la forma v1.3 completa", bad_key)
         op_id, _op, _new = self._new_api_op(
             op_id, plan.get("rev"), plan.get("hash"), verb=None,
         )
@@ -398,7 +424,9 @@ class SceneLive:
         if self._scene_queue_len_locked() >= self.bridge.queue_max:
             return False, self._error("queue_full", 409, "Cola del bridge llena", "")
         op_id, _op, _new = self._new_api_op(op_id, None, None, verb="scene.reset")
-        ok, order = self.bridge.enqueue_order("scene.reset", {"doc_id": doc_id}, op_id=op_id, internal=False)
+        # §3.3 v1.3: todas las claves siempre; `if_pending` vacio es un reset normal.
+        args = {"f2": 1, "doc_id": doc_id, "if_pending": dict(EMPTY_IF_PENDING)}
+        ok, order = self.bridge.enqueue_order("scene.reset", args, op_id=op_id, internal=False)
         if not ok:
             return False, self._error("wire_cap_exceeded", 500, "La orden no cabe en el cable")
         order["f2"] = True
@@ -420,7 +448,7 @@ class SceneLive:
             self._observe_now_op_id = None
         ok, order = self.bridge.enqueue_order(
             "scene.observe",
-            {"doc_id": doc_id, "at": "now"},
+            {"f2": 1, "doc_id": doc_id, "at": "now"},
             internal=True,
         )
         if not ok:
@@ -444,18 +472,26 @@ class SceneLive:
     # --- Clasificacion y validacion de resultados F2 ----------------------
 
     def is_f2_order(self, order):
-        """Determina si una orden tiene contrato F2 (D1)."""
+        """Determina si una orden tiene contrato F2 (D1, DP-5).
+
+        Solo los verbos `scene.apply`, `scene.reset` y `scene.observe` pueden ser F2.
+        `state.read` nunca lo es, aunque lleve `args.f2 = 1` (P-01, §3.5): su resultado
+        sigue el camino comun de lecturas del bridge, que pone `reconciled` y llama a
+        `on_world_read_locked`. En los verbos de escena cuenta la marca de la orden del
+        backend y, en el cable, `args.f2 == 1` (DP-5); un `scene.apply` F1 (solo `doc_id`,
+        `rev` y `hash`) no la lleva.
+        """
         if not isinstance(order, dict):
+            return False
+        verb = order.get("verb")
+        if verb not in F2_VERBS:
             return False
         if "f2" in order:
             return bool(order["f2"])
-        verb = order.get("verb")
-        if verb in ("scene.reset", "scene.observe"):
+        args = order.get("args")
+        if isinstance(args, dict) and _is_int(args.get("f2")) and args["f2"] == 1:
             return True
-        if verb == "scene.apply":
-            args = order.get("args")
-            return isinstance(args, dict) and ("rows" in args or "plan_sha256" in args)
-        return False
+        return verb in ("scene.reset", "scene.observe")
 
     def valid_read(self, order, read):
         """Valida la forma y los rangos del `read` de una orden F2 (§3.2, §3.6, A2)."""
@@ -555,7 +591,8 @@ class SceneLive:
                 "doc_id": read["scene"]["doc_id"],
                 "epoch": read["epoch"],
                 "generation": copy.deepcopy(read["generation"]),
-                "rows": copy.deepcopy(read["obs"]["rows"]),
+                # §3.8 v1.3: la API sigue en metros; las filas llegan en mm y se convierten aqui.
+                "rows": [obs_now_row_to_m(r) for r in read["obs"]["rows"]],
                 "at_ms": _now_ms(),
                 "origin": "servidor",
             }
@@ -588,12 +625,13 @@ class SceneLive:
             target["bstate"] = "terminal"
             return
 
-        if verb == "scene.reset" and "if_pending" in args:
+        if verb == "scene.reset" and _if_pending_target(args) is not None:
             # A13: el conteo de compensaciones entregadas se hace en la lectura
             # (§4.5), no aqui. C-02: una compensacion que resuelve en `fallido`
-            # tambien deja la orden del bridge en `terminal`.
+            # tambien deja la orden del bridge en `terminal`. v1.3: un `if_pending`
+            # vacio es un reset normal, no una compensacion.
             target = self._find_unresolved_order_locked(
-                order.get("target_op_id") or (args.get("if_pending") or {}).get("op_id")
+                order.get("target_op_id") or _if_pending_target(args).get("op_id")
             )
             if target is None or target.get("verb") != "scene.apply":
                 return
@@ -741,7 +779,7 @@ class SceneLive:
                 if self._active_internal_reconcile_locked() is None:
                     ok, internal_order = self.bridge.enqueue_order(
                         "scene.observe",
-                        {"doc_id": order_doc_id or doc_id, "at": "checkpoint"},
+                        {"f2": 1, "doc_id": order_doc_id or doc_id, "at": "checkpoint"},
                         internal=True,
                     )
                     if ok:
@@ -776,6 +814,7 @@ class SceneLive:
                     ok, internal_order = self.bridge.enqueue_order(
                         "scene.reset",
                         {
+                            "f2": 1,
                             "doc_id": order_doc_id or doc_id,
                             "if_pending": {"session": sess, "op_id": op_id},
                         },

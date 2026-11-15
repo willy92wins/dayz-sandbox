@@ -150,9 +150,12 @@ class LiveEnv:
         return {"session": order["session"], "op_id": order["op_id"], "rev": args["rev"],
                 "hash": args["hash"], "plan_sha256": args["plan_sha256"]}
 
-    def ckpt_rows(self, order, y=0.0):
+    def ckpt_rows(self, order, y=0):
+        # v1.3 §3.6: filas de checkpoint en enteros (mm y milesimas de grado)
         rows = []
-        for lid, ci, x, z, yaw in order["args"]["rows"]:
+        args = order["args"]
+        for lid, ci, x, z, yaw in zip(args["lid"], args["ci"], args["x_mm"],
+                                      args["z_mm"], args["yaw_mdeg"]):
             rows.append([lid, ci, x, y, z, yaw, y])
         return rows
 
@@ -182,7 +185,7 @@ class LiveEnv:
             last = {"session": order["session"], "op_id": order["op_id"],
                     "verb": "scene.apply", "outcome": "done"}
         if n == "auto":
-            n = len(order["args"]["rows"])
+            n = len(order["args"]["lid"])
         read = self.scene_read(order["epoch"], order["args"]["doc_id"], generation, pending,
                                last, n, retained_n, retained)
         read["obs"] = {"at": "checkpoint",
@@ -279,7 +282,7 @@ class CatalogD4(SceneLiveBase):
         self.assertTrue(env.live.catalog_ok_locked())
         res = env.prepare()
         self.assertTrue(res["ok"], res)
-        self.assertEqual(len(res["plan"]["rows"]), 33)
+        self.assertEqual(len(res["plan"]["lid"]), 33)
         self.assertEqual(len(res["plan"]["classes"]), len(set(res["plan"]["classes"])))
         self.assertRegex(res["plan"]["plan_sha256"], r"^[0-9a-f]{64}$")
 
@@ -385,7 +388,7 @@ class ApplyDirecto(SceneLiveBase):
         _res, order = env.apply()
         env.deliver(order)
         rows = env.ckpt_rows(order)
-        rows[0][2] = rows[0][2] + 1.0
+        rows[0][2] = rows[0][2] + 1000
         env.send(order, "done", None, env.apply_read(order, rows=rows))
         op = env.backend.ops["op-1"]
         self.assertEqual((op["state"], op["reason"]), ("fallido", "lectura_no_cumple"))
@@ -492,7 +495,7 @@ class Reconciliacion(SceneLiveBase):
         env.world(read)
         internals = [o for o in env.f2_internals() if o.get("purpose") == "reconcile_checkpoint"]
         self.assertEqual(len(internals), 1)
-        self.assertEqual(internals[0]["args"], {"doc_id": env.doc_id, "at": "checkpoint"})
+        self.assertEqual(internals[0]["args"], {"f2": 1, "doc_id": env.doc_id, "at": "checkpoint"})
         self.assertEqual(internals[0]["target_op_id"], "op-1")
         env.deliver(internals[0])
         env.send(internals[0], "done", None, env.apply_read(order))
@@ -508,7 +511,7 @@ class Reconciliacion(SceneLiveBase):
         internal = [o for o in env.f2_internals() if o.get("purpose") == "reconcile_checkpoint"][0]
         env.deliver(internal)
         rows = env.ckpt_rows(order)
-        rows[0][2] = rows[0][2] + 5.0
+        rows[0][2] = rows[0][2] + 5000
         env.send(internal, "done", None, env.apply_read(order, rows=rows))
         self.assertEqual(env.backend.ops["op-1"]["state"], "fallido")
         self.assertEqual(env.backend.ops["op-1"]["reason"], "lectura_no_cumple")
@@ -542,7 +545,7 @@ class Reconciliacion(SceneLiveBase):
         env.world(env.scene_read(order["epoch"], env.doc_id, None, pending, last, 10))
         comp = self.compensation(env)
         self.assertIsNotNone(comp)
-        self.assertEqual(comp["args"], {"doc_id": env.doc_id,
+        self.assertEqual(comp["args"], {"f2": 1, "doc_id": env.doc_id,
                                         "if_pending": {"session": order["session"], "op_id": "op-1"}})
         env.deliver(comp)
         done = env.scene_read(order["epoch"], env.doc_id, None, None,
@@ -877,10 +880,12 @@ class D1SinEscena(SceneLiveBase):
         self.assertEqual(env.backend.ops["op-1"]["state"], "parcial")
         self.assertEqual(env.f2_internals(), [])
 
-    def test_aa1_scene_apply_con_plan_sin_marca_f2_es_f2(self):
+    def test_aa1_scene_apply_con_plan_v13_sin_marca_en_la_orden_es_f2(self):
+        # DP-5: en el cable, la marca es `args.f2 == 1`, aunque la orden del backend no la lleve
         env = self.ready()
         res = env.prepare()
         self.assertTrue(res["ok"], res)
+        self.assertEqual(res["plan"]["f2"], 1)
         ok, order = env.bridge.enqueue_order(
             "scene.apply", res["plan"], op_id="op-5", internal=False
         )
@@ -915,16 +920,18 @@ class Observe(SceneLiveBase):
         self.assertEqual(len(env.orders("scene.observe")), 1)
         order = env.orders("scene.observe")[0]
         self.assertTrue(order["internal"])
-        self.assertEqual(order["args"], {"doc_id": env.doc_id, "at": "now"})
+        self.assertEqual(order["args"], {"f2": 1, "doc_id": env.doc_id, "at": "now"})
         env.deliver(order)
-        rows = [["obj-01", 6188.0, 0.0, 7626.0, 62.0, 1.0, 0, 0]]
+        # v1.3: el cable trae mm y milesimas; la API sigue en metros (§3.8)
+        rows = [["obj-01", 6188000, 0, 7626000, 62000, 1000, 0, 0]]
+        rows_m = [["obj-01", 6188.0, 0.0, 7626.0, 62.0, 1.0, 0, 0]]
         self.assertIsNone(env.live.observation_locked()["observation"])
         env.send(order, "done", None, env.now_read(order, rows))
         obs = env.live.observation_locked()
         self.assertEqual(obs["observation"]["read_id"], order["op_id"])
-        self.assertEqual(obs["observation"]["rows"], rows)
+        self.assertEqual(obs["observation"]["rows"], rows_m)
         self.assertEqual(obs["observation"]["origin"], "servidor")
-        self.assertEqual(env.backend.observation["rows"], rows)
+        self.assertEqual(env.backend.observation["rows"], rows_m)
         self.assertEqual(obs["age_ms"], 0)
         env.clock.advance(5)
         self.assertEqual(env.live.observation_locked()["age_ms"], 5000)
@@ -1007,6 +1014,145 @@ class FallaCerradoA6(SceneLiveBase):
         self.assertEqual(res["http"], 422)
         self.assertEqual(res["pointer"], "/entities/%d" % idx)
         self.assertEqual(env.orders("scene.apply"), [])
+
+
+class ContratoV13(SceneLiveBase):
+    """Contrato v1.3 del cable (brief de F2-partida §3): marca f2, DP-2, P-01 y unidades."""
+
+    def _result(self, env, order, read, status="done"):
+        srv = env.bridge.peers["server"]
+        query = {"peer": "server", "inst": srv["inst"], "session": env.bridge.session}
+        body = {"op_id": order["op_id"], "session": env.bridge.session, "epoch": order["epoch"],
+                "status": status, "reason": None, "dup": False, "read": read}
+        return env.bridge.handle_result(query, body)
+
+    def test_g_state_read_con_escena_lleva_f2_y_no_es_orden_f2(self):
+        env = self.ready()
+        self.assertEqual(env.live.state_read_args_locked(), {"f2": 1, "doc_id": env.doc_id})
+        with env.bridge.cond:
+            order = env.bridge._trigger_state_read_locked()
+        self.assertIsNotNone(order)
+        self.assertEqual(order["args"], {"f2": 1, "doc_id": env.doc_id})
+        self.assertFalse(env.live.is_f2_order(order))
+
+    def test_g_is_f2_order_solo_en_verbos_de_escena(self):
+        env = self.make_env()
+        live = env.live
+        args_f2 = {"f2": 1, "doc_id": env.doc_id}
+        # P-01: state.read nunca es F2, ni con args.f2 = 1 ni con la marca de la orden
+        self.assertFalse(live.is_f2_order({"verb": "state.read", "args": args_f2}))
+        self.assertFalse(live.is_f2_order({"verb": "state.read", "args": args_f2, "f2": True}))
+        self.assertFalse(live.is_f2_order({"verb": "otro.verbo", "args": args_f2}))
+        # DP-5: en los verbos de escena la marca del cable cuenta
+        self.assertTrue(live.is_f2_order({"verb": "scene.apply", "args": dict(args_f2, rev=1)}))
+        self.assertTrue(live.is_f2_order({"verb": "scene.reset", "args": args_f2}))
+        self.assertTrue(live.is_f2_order({"verb": "scene.observe", "args": args_f2}))
+        # un scene.apply F1 (sin f2) no es F2; f2 = 0, True o 1.0 tampoco
+        f1 = {"doc_id": env.doc_id, "rev": 1, "hash": "a" * 64}
+        self.assertFalse(live.is_f2_order({"verb": "scene.apply", "args": f1}))
+        for bad in (0, True, 1.0, "1"):
+            self.assertFalse(live.is_f2_order({"verb": "scene.apply", "args": dict(f1, f2=bad)}), bad)
+
+    def test_g_lectura_de_state_read_con_f2_reconcilia_por_el_camino_comun(self):
+        env = self.ready()
+        order = self.partial_apply(env)
+        self.assertFalse(env.bridge.reconciled)
+        with env.bridge.cond:
+            rd = env.bridge._trigger_state_read_locked()
+        self.assertEqual(rd["args"], {"f2": 1, "doc_id": env.doc_id})
+        env.deliver(rd)
+        read = env.scene_read(order["epoch"], env.doc_id, env.apply_gen(order), None, None, 33)
+        st, resp = self._result(env, rd, read)
+        self.assertEqual(st, 200, resp)
+        # camino comun del bridge: reconciled y on_world_read_locked (la generacion encola el checkpoint)
+        self.assertTrue(env.bridge.reconciled)
+        internals = [o for o in env.f2_internals() if o.get("purpose") == "reconcile_checkpoint"]
+        self.assertEqual(len(internals), 1)
+        self.assertEqual(internals[0]["args"], {"f2": 1, "doc_id": env.doc_id, "at": "checkpoint"})
+
+    def test_c_enqueue_no_manda_un_plan_sin_alguna_clave(self):
+        env = self.ready()
+        res = env.prepare()
+        self.assertTrue(res["ok"], res)
+        before_events = len(env.backend.ring)
+        for key in ("f2", "caps", "lid", "x_mm", "yaw_mdeg", "plan_sha256"):
+            plan = copy.deepcopy(res["plan"])
+            del plan[key]
+            ok, err = env.live.enqueue_apply_locked("op-8", plan, res["expectation"])
+            self.assertFalse(ok, key)
+            self.assertEqual((err["code"], err["pointer"]), ("bad_plan", "/plan/%s" % key))
+        no_total = copy.deepcopy(res["plan"])
+        del no_total["caps"]["total"]
+        ok, err = env.live.enqueue_apply_locked("op-8", no_total, res["expectation"])
+        self.assertFalse(ok)
+        self.assertEqual(err["code"], "bad_plan")
+        misaligned = copy.deepcopy(res["plan"])
+        misaligned["ci"] = misaligned["ci"][:-1]
+        ok, err = env.live.enqueue_apply_locked("op-8", misaligned, res["expectation"])
+        self.assertFalse(ok)
+        self.assertEqual(env.orders("scene.apply"), [])
+        self.assertNotIn("op-8", env.backend.ops)
+        self.assertEqual(len(env.backend.ring), before_events)
+        # el plan completo si se manda
+        ok, order = env.live.enqueue_apply_locked("op-8", res["plan"], res["expectation"])
+        self.assertTrue(ok, order)
+        self.assertEqual(order["args"]["caps"]["total"], -1)
+
+    def test_reset_normal_manda_if_pending_vacio_y_se_juzga_como_reset(self):
+        env = self.ready()
+        ok, order = env.live.enqueue_reset_locked("op-2", env.doc_id)
+        self.assertTrue(ok, order)
+        self.assertEqual(order["args"], {"f2": 1, "doc_id": env.doc_id,
+                                         "if_pending": {"session": "", "op_id": ""}})
+        env.deliver(order)
+        env.send(order, "done", None, env.reset_read(order))
+        op = env.backend.ops["op-2"]
+        self.assertEqual((op["state"], op["reason"]), ("observado", None))
+
+    def test_e_checkpoint_con_floats_no_reconcilia(self):
+        env = self.ready()
+        order = self.partial_apply(env)
+        env.world(env.scene_read(order["epoch"], env.doc_id, env.apply_gen(order), None, None, 33))
+        internal = [o for o in env.f2_internals() if o.get("purpose") == "reconcile_checkpoint"][0]
+        env.deliver(internal)
+        rows = env.ckpt_rows(order)
+        rows[0][2] = float(rows[0][2])
+        bad = env.apply_read(order, rows=rows)
+        self.assertFalse(env.live.valid_read(internal, bad))
+        st, resp = self._result(env, internal, bad)
+        self.assertEqual(st, 400, resp)
+        op = env.backend.ops["op-1"]
+        self.assertEqual((op["state"], op["reason"]), ("parcial", "sin_resultado"))
+        self.assertTrue(env.live.has_unresolved_locked())
+        # con enteros, la misma lectura reconcilia
+        st, resp = self._result(env, internal, env.apply_read(order))
+        self.assertEqual(st, 200, resp)
+        op = env.backend.ops["op-1"]
+        self.assertEqual((op["state"], op["reason"]), ("observado", "reconciliada"))
+
+    def test_e_lectura_del_mundo_con_floats_no_juzga(self):
+        env = self.ready()
+        order = self.partial_apply(env)
+        pending = {"session": order["session"], "op_id": "op-1", "n": 10}
+        read = env.scene_read(order["epoch"], env.doc_id, None, pending, None, 10)
+        read["obs"] = {"at": "now", "rows": [["obj-01", 1000.0, 0, 0, 0, 1000, 0, 0]]}
+        env.world(read)
+        self.assertEqual(env.f2_internals(), [])
+        self.assertEqual(env.backend.ops["op-1"]["state"], "parcial")
+        read["obs"]["rows"][0][1] = 1000
+        env.world(read)
+        self.assertIsNotNone(self.compensation(env))
+
+    def test_f_observe_now_con_floats_no_cambia_la_observacion(self):
+        env = self.ready()
+        res = env.live.request_observe_locked(env.doc_id)
+        order = env.orders("scene.observe")[0]
+        self.assertEqual(order["op_id"], res["read_id"])
+        env.deliver(order)
+        rows = [["obj-01", 6188.0, 0.0, 7626.0, 62.0, 1.0, 0, 0]]  # forma v1.2.2: metros
+        env.send(order, "done", None, env.now_read(order, rows))
+        self.assertIsNone(env.live.observation_locked()["observation"])
+        self.assertIsNone(env.backend.observation)
 
 
 if __name__ == "__main__":
