@@ -448,11 +448,14 @@ def _eval_base_08(scen_rows: list[dict], bridge_rows: list[dict], idx: dict, req
         if meta_a is None or perr:
             return _chk("BASE-08", "fail", perr or "bad_job_a_pages")
 
-        # D8: anclar el corte al reloj del peer con el ultimo poll 200 previo al corte (cota baja).
+        # D8 (con D9, brief v4.5.3): anclar el corte al reloj del peer con el ultimo poll 200 previo al corte (cota baja).
+        # El bridge retiene el poll hasta hold_ms: tick_s es de cuando el peer lo envio y t_ms de la respuesta, asi que
+        # la llegada al bridge es t_ms - held_ms. Sin tick_s o sin held_ms no hay ancla: missing (fallo cerrado).
         pre_poll = _find_pre_cut_poll(bridge_rows, peer, cut_start_ms)
-        if pre_poll is None:
+        if pre_poll is None or "tick_s" not in pre_poll or "held_ms" not in pre_poll:
             return _chk("BASE-08", "missing", "no_pre_cut_poll")
-        cut_start_peer = float(pre_poll.get("tick_s", 0.0)) * 1000.0 + (cut_start_ms - float(pre_poll.get("t_ms", 0.0)))
+        poll_recv_ms = float(pre_poll.get("t_ms", 0.0)) - float(pre_poll["held_ms"])
+        cut_start_peer = float(pre_poll["tick_s"]) * 1000.0 + (cut_start_ms - poll_recv_ms)
 
         start_t = float(meta_a["num"].get("start_tick_ms", 0.0))
         end_t = float(meta_a["num"].get("end_tick_ms", 0.0))

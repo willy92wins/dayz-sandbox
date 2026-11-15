@@ -2390,6 +2390,72 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             self.assertEqual(v_shift["exit_code"], 0)
             self.assertEqual(v_shift, v_base)
 
+    @staticmethod
+    def _append_server_poll_before_cut(part: Path, *, before_cut_ms: float, held_ms: float | None) -> None:
+        """Anade un poll 200 del servidor justo antes del corte de BASE-08, retenido held_ms por el bridge.
+
+        Como el bridge real, tick_s es de cuando el peer envio el poll y t_ms de la respuesta.
+        """
+        scen = f03_common.read_jsonl(part / "samples" / "scenario.jsonl")
+        b08 = [r for r in scen if r.get("check") == "BASE-08" and r.get("peer") == "server"]
+        cut_start_ms = float(b08[-1]["cut_start_ms"])  # el evaluador usa la ultima fila de cada peer
+        t_resp = round(cut_start_ms - before_cut_ms, 3)
+        poll = {
+            "body_len": 25,
+            "ev": "poll",
+            "frame": 800,
+            "http": 200,
+            "inst": "srv-inst-1",
+            "n_ops": 0,
+            "now_ms": t_resp,
+            "op_ids": [],
+            "peer": "server",
+            "t_ms": t_resp,
+            "tick_s": round((t_resp - (held_ms or 0.0)) / 1000.0, 3),
+        }
+        if held_ms is not None:
+            poll["held_ms"] = held_ms
+        bridge_path = part / "samples" / "bridge.jsonl"
+        rows = f03_common.read_jsonl(bridge_path)
+        rows.append(poll)
+        _write_jsonl(bridge_path, rows)
+
+    def test_base08_held_pre_cut_poll_does_not_hide_a_that_ended_before_cut(self):
+        # D9 (dentro de D8, brief v4.5.3): el poll previo al corte estuvo retenido 1200 ms, asi que su tick_s es de
+        # 1200 ms antes de su t_ms. A dura 101 ms y acaba antes de corte+250: tiene que fallar job_a_ended_before_cut.
+        # Con el ancla sin held_ms, (a) y (b) pasaban con unos +1000 ms de margen (medido en mut-early_end offline).
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            head = _init_temp_git_repo(root)
+            stamp = f03_common.compute_probe_stamp_at_commit(head, repo_root=root)
+            part = Path(tmp) / "case_held"
+            _write_synthetic_base_part(part, git_head=head, probe_stamp=stamp)
+            _set_base08_trace(part, peer="server", a_start_offset_ms=-11.0, a_end_offset_ms=90.0)
+            self._append_server_poll_before_cut(part, before_cut_ms=25.0, held_ms=1200.0)
+            verdict = f03_base_eval.evaluate(part, repo_root=root)
+            self.assertEqual(verdict["exit_code"], 1)
+            c8 = next(c for c in verdict["checks"] if c["id"] == "BASE-08")
+            self.assertEqual((c8["status"], c8["detail"]), ("fail", "job_a_ended_before_cut"))
+
+    def test_base08_pre_cut_poll_without_held_ms_is_missing(self):
+        # D9: un poll previo al corte sin held_ms no da ancla fiable -> BASE-08 missing (no_pre_cut_poll), la parte da 2.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            head = _init_temp_git_repo(root)
+            stamp = f03_common.compute_probe_stamp_at_commit(head, repo_root=root)
+            part = Path(tmp) / "case_noheld"
+            _write_synthetic_base_part(part, git_head=head, probe_stamp=stamp)
+            _set_base08_trace(part, peer="server")
+            self._append_server_poll_before_cut(part, before_cut_ms=25.0, held_ms=None)
+            verdict = f03_base_eval.evaluate(part, repo_root=root)
+            self.assertEqual(verdict["exit_code"], 2)
+            c8 = next(c for c in verdict["checks"] if c["id"] == "BASE-08")
+            self.assertEqual((c8["status"], c8["detail"]), ("missing", "no_pre_cut_poll"))
+
     def test_check_12_evaluators_are_blind_to_mutants_and_faults(self):
         self._require_f03()
         mutant_names = set()
