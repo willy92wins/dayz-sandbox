@@ -45,7 +45,11 @@ un ``str`` con el codigo estable (``p.detail`` lleva el contexto):
 * ``order_digest_mismatch``: el peer recibio unos args distintos de los que el bridge encolo.
 * ``result_digest_mismatch``: el resultado enviado por el peer no es el que el bridge recibio.
 * ``no_peer_process``: parte sin ningun peer real lanzado (o con el PID del propio runner).
-* ``too_few_ops``: menos de ``min_resolved_ops`` resultados aceptados.
+* ``runner_socket_to_bridge``: el proceso del runner abrio una conexion al puerto del bridge (``socket.connect``):
+  los peers legitimos son otros procesos y el nucleo nunca se conecta a su propio bridge.
+* ``trace_reused``: una misma linea de traza del peer tendria que acreditar varias filas (p. ej. un resultado
+  repetido por HTTP): cada ``deliver`` consume un ``recv`` y cada ``result`` un ``sent``.
+* ``too_few_ops``: menos de ``min_resolved_ops`` ops resueltas distintas.
 
 Garantiza: toda fila de la evidencia la emitio el bridge desde un origen real, toda orden entregada/resuelta paso
 por un socket y esta en la traza de un proceso hijo con el PID lanzado por el ``PartContext``, con los mismos
@@ -161,7 +165,8 @@ class Witness:
         self._enqueues: list[dict] = []
         self._http: list[dict] = []
         self._recs: list[_PartRec] = []
-        self._saved: list[tuple[type, str, object]] = []
+        self._conns: list[dict] = []
+        self._saved: list[tuple[type, str, object, bool]] = []
         self._active = False
 
     # ------------------------------------------------------------------ instalacion
@@ -190,14 +195,22 @@ class Witness:
         return False
 
     def _patch(self, cls, name, fn):
-        self._saved.append((cls, name, cls.__dict__[name]))
+        own = name in cls.__dict__
+        self._saved.append((cls, name, cls.__dict__[name] if own else None, own))
         fn.__name__ = name
         setattr(cls, name, fn)
 
     def _uninstall(self):
         while self._saved:
-            cls, name, orig = self._saved.pop()
-            setattr(cls, name, orig)
+            cls, name, orig, own = self._saved.pop()
+            if own:
+                setattr(cls, name, orig)
+            else:
+                # el atributo era heredado (p. ej. socket.socket.connect, de _socket.socket): se quita el parche.
+                try:
+                    delattr(cls, name)
+                except AttributeError:
+                    pass
 
     def _stack(self) -> list:
         st = getattr(self._tl, "stack", None)
@@ -317,6 +330,38 @@ class Witness:
                     ctx._tmp_dir = _TmpProxy(ctx._tmp_dir, rec)
             return result
 
+        # Conexiones de ESTE proceso (el del runner) al puerto de un bridge: los peers legitimos son otros procesos,
+        # y el nucleo nunca se conecta a su propio bridge. Una conexion asi es una suplantacion por HTTP.
+        sock_cls = socket.socket
+        orig_connect = sock_cls.connect
+        orig_connect_ex = sock_cls.connect_ex
+
+        def note_conn(address):
+            try:
+                host, port = address[0], int(address[1])
+            except Exception:
+                return
+            ports = set()
+            for rec in me._recs:
+                b = getattr(rec.ctx, "bridge", None)
+                if b is not None:
+                    try:
+                        ports.add(int(b.port))
+                    except Exception:
+                        pass
+            if port in ports:
+                me._conns.append({"host": host, "port": port, "thread": threading.get_ident()})
+
+        def connect(sock, address):
+            note_conn(address)
+            return orig_connect(sock, address)
+
+        def connect_ex(sock, address):
+            note_conn(address)
+            return orig_connect_ex(sock, address)
+
+        self._patch(sock_cls, "connect", connect)
+        self._patch(sock_cls, "connect_ex", connect_ex)
         self._patch(QB, "enqueue", enqueue)
         self._patch(QB, "force_deliver", simple("force_deliver", "force_deliver"))
         self._patch(QB, "cut", simple("cut", "cut"))
@@ -341,7 +386,7 @@ class Witness:
             problems.append(Problem(code, detail))
 
         files = sorted(Path(evidence_dir).rglob("bridge.jsonl"))
-        resolved_ops = 0
+        resolved_set: set = set()
         enq_seen: dict[str, int] = {}
         for fpath in files:
             key = _resolve(fpath)
@@ -374,6 +419,17 @@ class Witness:
                     if not started:
                         add("peer_pid_mismatch", role=role, pid=pid, why="sin linea wit_start de ese PID")
 
+            # el proceso del runner no se conecta nunca al bridge: eso solo lo hacen los peers, desde otro proceso
+            ports = set()
+            for b in bridges:
+                try:
+                    ports.add(int(b.port))
+                except Exception:
+                    pass
+            hits = [c for c in self._conns if c["port"] in ports]
+            if hits:
+                add("runner_socket_to_bridge", file=str(fpath), connections=len(hits))
+
             # origenes de todo _emit anotado
             for a in anns:
                 code = _origin_problem(a)
@@ -405,6 +461,8 @@ class Witness:
                 t = row.get("t_ms")
                 return isinstance(t, (int, float)) and later_polls.get(row.get("peer"), float("-inf")) > t
 
+            # cada linea de traza acredita UNA fila: una entrega consume un `recv` y un resultado consume un `sent`
+            used = {"recv": set(), "sent": set()}
             for lineno, line in enumerate(raw_lines, 1):
                 if not line.strip():
                     continue
@@ -421,18 +479,18 @@ class Witness:
                 ann = bucket.pop()
                 if row.get("ev") == "enq":
                     enq_seen[row.get("op_id")] = enq_seen.get(row.get("op_id"), 0) + 1
-                self._check_row(row, ann, enqs, logs, real_pids, add, need_recv)
+                self._check_row(row, ann, enqs, logs, real_pids, add, need_recv, used)
                 if row.get("ev") == "result" and row.get("http") == 200:
-                    resolved_ops += 1
+                    resolved_set.add((key, row.get("op_id")))
 
         for oid, n in enq_seen.items():
             if n > 1:
                 add("duplicate_op_id", op_id=oid, times=n)
-        if resolved_ops < int(min_resolved_ops):
-            add("too_few_ops", resolved=resolved_ops, minimum=int(min_resolved_ops))
+        if len(resolved_set) < int(min_resolved_ops):
+            add("too_few_ops", resolved=len(resolved_set), minimum=int(min_resolved_ops))
         return problems
 
-    def _check_row(self, row, ann, enqs, logs, real_pids, add, need_recv):
+    def _check_row(self, row, ann, enqs, logs, real_pids, add, need_recv, used):
         ev = row.get("ev")
         top = ann.stack[-1] if ann.stack else None
         if ev == "enq":
@@ -457,17 +515,17 @@ class Witness:
                 add("deliver_without_enqueue", row=row)
                 return
             if need_recv(row):
-                self._check_trace(row, "recv", enq["args_digest"], logs, real_pids, add, "order_digest_mismatch")
+                self._check_trace(row, "recv", enq["args_digest"], logs, real_pids, add, "order_digest_mismatch", used["recv"])
             return
         if ev == "result" and row.get("http") == 200:
             http = _http_in(ann.stack)
             if http is None or http["kind"] != "http" or http["path"] != "/result" or http["method"] != "POST" or http["peer"] != row.get("peer"):
                 add("result_without_http", row=row)
             self._check_trace(row, "recv", None, logs, real_pids, add, None)
-            self._check_trace(row, "sent", digest(row.get("result")), logs, real_pids, add, "result_digest_mismatch")
+            self._check_trace(row, "sent", digest(row.get("result")), logs, real_pids, add, "result_digest_mismatch", used["sent"])
 
     @staticmethod
-    def _check_trace(row, phase, expect_digest, logs, real_pids, add, digest_code):
+    def _check_trace(row, phase, expect_digest, logs, real_pids, add, digest_code, used=None):
         role = row.get("peer")
         op_id = row.get("op_id")
         lines = [x for x in logs.get(role, []) if x.get("ev") == "wit" and x.get("phase") == phase and x.get("op_id") == op_id]
@@ -478,8 +536,17 @@ class Witness:
         if not mine:
             add("peer_pid_mismatch", phase=phase, role=role, op_id=op_id, pids=sorted({x.get("pid") for x in lines}))
             return
-        if expect_digest is not None and not any(x.get("digest") == expect_digest for x in mine):
+        good = mine if expect_digest is None else [x for x in mine if x.get("digest") == expect_digest]
+        if not good:
             add(digest_code, phase=phase, role=role, op_id=op_id)
+            return
+        if used is not None:
+            # una linea de traza solo acredita una fila: un resultado repetido necesita su propio `sent`
+            free = [x for x in good if id(x) not in used]
+            if not free:
+                add("trace_reused", phase=phase, role=role, op_id=op_id, lines=len(good))
+                return
+            used.add(id(free[0]))
 
 
 def _parse_trace(text: str) -> list[dict]:

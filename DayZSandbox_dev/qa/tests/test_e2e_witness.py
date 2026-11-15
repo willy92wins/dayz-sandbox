@@ -1,9 +1,10 @@
-"""Pruebas del testigo comun de los e2e (tests/e2e_witness.py): una honesta y seis fabricaciones."""
+"""Pruebas del testigo comun de los e2e (tests/e2e_witness.py): una honesta (P1) y ocho fabricaciones (N1-N8)."""
 
 import argparse
 import http.client
 import json
 import shutil
+import socket
 import tempfile
 import unittest
 import urllib.parse
@@ -70,14 +71,19 @@ class E2EWitnessTests(unittest.TestCase):
     def test_restores_class_and_leaves_no_wrapped(self):
         before = {n: bridge_qa.QABridge.__dict__[n] for n in ("enqueue", "_emit", "_dispatch", "_cut_end")}
         pc_before = f03_common.PartContext.__dict__["_spawn_peers"]
+        self.assertNotIn("connect", socket.socket.__dict__)
         with self.assertRaises(ZeroDivisionError):
             with e2e_witness.Witness():
                 self.assertIsNot(bridge_qa.QABridge.__dict__["_emit"], before["_emit"])
                 self.assertFalse(hasattr(bridge_qa.QABridge.__dict__["_emit"], "__wrapped__"))
+                self.assertIn("connect", socket.socket.__dict__)
                 1 / 0
         for n, fn in before.items():
             self.assertIs(bridge_qa.QABridge.__dict__[n], fn)
         self.assertIs(f03_common.PartContext.__dict__["_spawn_peers"], pc_before)
+        # connect/connect_ex son heredados de _socket.socket: al salir se quita el parche, no se deja otra copia
+        self.assertNotIn("connect", socket.socket.__dict__)
+        self.assertNotIn("connect_ex", socket.socket.__dict__)
 
     def test_p1_honest_real_peers_and_orders(self):
         with e2e_witness.Witness() as w:
@@ -165,6 +171,7 @@ class E2EWitnessTests(unittest.TestCase):
                 _real_ops(ctx)  # el peer server si es real
         problems = self._verify(w)
         self.assertIn("op_not_in_peer_log", _codes(problems), problems)
+        self.assertIn("runner_socket_to_bridge", _codes(problems), problems)
         self.assertNotIn("unwitnessed_row", _codes(problems), problems)
         self.assertNotIn("emit_outside_origin", _codes(problems), problems)
 
@@ -208,6 +215,26 @@ class E2EWitnessTests(unittest.TestCase):
         problems = w.verify(new)
         self.assertIn("unwitnessed_row", _codes(problems), problems)
         self.assertIn("duplicate_op_id", _codes(problems), problems)
+
+    def test_n8_runner_replays_a_real_result_over_http(self):
+        # Puntos que Sol dejo apuntados antes del corte del filtro: el origen HTTP solo miraba el puerto local, y
+        # una misma linea `sent` de la traza acreditaba varios resultados repetidos.
+        with e2e_witness.Witness() as w:
+            with _ctx(self.tmp, both=False) as ctx:
+                self.assertIsNone(ctx.startup_reason)
+                _real_ops(ctx)
+                res = next(e for e in ctx.bridge.events if e.get("ev") == "result" and e.get("http") == 200)
+                peer = res["peer"]
+                q = urllib.parse.urlencode({"key": ctx.keys[peer], "peer": peer, "inst": ctx.bridge.registered(peer)})
+                for _ in range(2):
+                    conn = http.client.HTTPConnection("127.0.0.1", ctx.bridge.port, timeout=10)
+                    conn.request("POST", f"/result?{q}", body=json.dumps(res["result"]), headers={"Content-Type": "application/json"})
+                    self.assertEqual(conn.getresponse().status, 200)
+                    conn.close()
+        problems = self._verify(w)
+        self.assertIn("runner_socket_to_bridge", _codes(problems), problems)
+        self.assertIn("trace_reused", _codes(problems), problems)
+        self.assertNotIn("unwitnessed_row", _codes(problems), problems)
 
 
 if __name__ == "__main__":
