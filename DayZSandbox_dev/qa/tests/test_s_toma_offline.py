@@ -555,12 +555,41 @@ def _build_positive_take_rows(
         ),
     ]
 
-    srv_rows = [
+    srv_rows = []
+    
+    # For common_time mode, add prior server frames with ticks < sched_srv_tick
+    # to satisfy the "first frame reaching sched_tick" check (R4-N3)
+    if mode == "common_time":
+        for i in range(5):
+            prior_frame = disp_frame - 5 + i
+            prior_tick = sched_srv_tick - 20.0 + i * 4.0
+            srv_rows.append(
+                _make_srv_row(
+                    prior_frame,
+                    prior_tick,
+                    prior_tick - base_tick_ms,
+                    -20.0 + i * 4.0,
+                    "act_sample",
+                    "actor_1",
+                    "pre_go",
+                    v1=mark1[0],
+                    v2=mark1[1],
+                    v3=mark1[2],
+                    v4=0.0,
+                )
+            )
+    
+    # The frame at disp_frame - 1 must have tick < sched_srv_tick in common_time mode
+    pre_go_tick = sched_srv_tick - 1.0 if mode == "common_time" else disp_tick - 4.0
+    pre_go_dtsum = pre_go_tick - base_tick_ms
+    pre_go_take_dtsum = pre_go_tick - disp_tick
+    
+    srv_rows.extend([
         _make_srv_row(
             disp_frame - 1,
-            disp_tick - 4.0,
-            32.0,
-            0.0,
+            pre_go_tick,
+            pre_go_dtsum,
+            pre_go_take_dtsum,
             "act_sample",
             "actor_1",
             "pre_go",
@@ -595,6 +624,60 @@ def _build_positive_take_rows(
             v3=target1[2],
             v4=1.5,
         ),
+        # Add continuous actor_1 samples between disp+30 and stop_srv_frame
+        # to ensure prior_srv_ticks has values close to stop_srv_tick
+        _make_srv_row(
+            disp_frame + 40,
+            disp_tick + 2000.0,
+            2048.0,
+            2000.0,
+            "act_sample",
+            "actor_1",
+            "rodando",
+            v1=target1[0] - 0.5,
+            v2=target1[1],
+            v3=target1[2],
+            v4=1.5,
+        ),
+        _make_srv_row(
+            disp_frame + 50,
+            disp_tick + 2500.0,
+            2548.0,
+            2500.0,
+            "act_sample",
+            "actor_1",
+            "rodando",
+            v1=target1[0],
+            v2=target1[1],
+            v3=target1[2],
+            v4=1.0,
+        ),
+        _make_srv_row(
+            disp_frame + 55,
+            disp_tick + 2750.0,
+            2798.0,
+            2750.0,
+            "act_sample",
+            "actor_1",
+            "rodando",
+            v1=target1[0] + 0.2,
+            v2=target1[1],
+            v3=target1[2],
+            v4=0.5,
+        ),
+        _make_srv_row(
+            stop_srv_frame - 1,
+            stop_srv_tick - 16.0,
+            3052.0,
+            3004.0,
+            "act_sample",
+            "actor_1",
+            "rodando",
+            v1=target1[0] + 0.5,
+            v2=target1[1],
+            v3=target1[2],
+            v4=0.1,
+        ),
         _make_srv_row(
             stop_srv_frame + 1,
             stop_srv_tick + 16.0,
@@ -623,9 +706,9 @@ def _build_positive_take_rows(
         ),
         _make_srv_row(
             disp_frame - 1,
-            disp_tick - 4.0,
-            32.0,
-            0.0,
+            pre_go_tick,
+            pre_go_dtsum,
+            pre_go_take_dtsum,
             "act_sample",
             "actor_2",
             "pre_go",
@@ -640,7 +723,7 @@ def _build_positive_take_rows(
             v10=2,
             v11=0,
         ),
-    ]
+    ])
     if actor2_lag_ms > 0.0:
         srv_rows.append(
             _make_srv_row(
@@ -797,7 +880,9 @@ def _build_positive_take_rows(
 
     cli_base_frame = 500 + rep * 150
     go_recv_tick = go_send_tick + 5.0
-    go_deliv_tick = disp_tick if mode == "common_time" else (go_recv_tick + go_delay_ms)
+    # In common_time mode, go_deliver must be at or before sched_cli_tick
+    # The client activates camera at first OnUpdate with cli_tick_ms >= sched_cli_tick after go_deliver
+    go_deliv_tick = sched_cli_tick if mode == "common_time" else (go_recv_tick + go_delay_ms)
 
     cli_rows = [
         _make_cli_row(
@@ -1158,8 +1243,21 @@ def build_healthy_part(
         )
         tid = f"{prefix}s1-r{rep}"
         base_t = 10000.0 * rep
-        b.emit_clock_calibration("S1", rep, base_t)
-        lag_a2 = 250.0 if (mutant == "take_actor2_lag_250ms" and rep == 2) else 0.0
+        
+        # Mutaciones para TOM-01
+        if mutant == "despachar_desfasado":
+            # En rpc mode, dispatch frames deben coincidir con go_sent frame.
+            # Hacer que actor_1 y actor_2 se despachen en frames distintos.
+            pass  # Se maneja en _build_positive_take_rows via actor2_lag_ms
+        elif mutant == "jitter_gt_100ms":
+            # Jitter > 100ms en entrega RPC: variar go_deliver_tick entre repeticiones
+            pass  # Se maneja via go_delay_ms variable
+        elif mutant == "fase_muestreo_desplazada":
+            # Fase de muestreo desplazada: calibración de reloj con ancho > 40ms
+            pass  # Se maneja en emit_clock_calibration
+        
+        b.emit_clock_calibration("S1", rep, base_t, width_ms=65.0 if mutant == "fase_muestreo_desplazada" else 2.0)
+        lag_a2 = 250.0 if (mutant == "take_actor2_lag_250ms" and rep == 2) else (500.0 if (mutant == "despachar_desfasado" and rep == 1) else 0.0)
         drift_m = 0.85 if (mutant == "take_cam_path_drift" and rep == 2) else 0.0
         arm_r, srv_r, cli_r, stim_r, meta_r = _build_positive_take_rows(
             fixture,
@@ -1176,6 +1274,20 @@ def build_healthy_part(
             cues_keep_firing=(mutant == "take_cues_keep_firing"),
             no_control_restore=(mutant == "take_no_control_restore"),
         )
+        # Jitter > 100ms: variar go_delay_ms por repetición
+        if mutant == "jitter_gt_100ms":
+            # Modificar cli_rows para tener go_deliver con jitter > 100ms
+            for r in cli_r:
+                if r.get("row_kind") == "go_deliver":
+                    if rep == 1:
+                        r["cli_tick_ms"] = r["cli_tick_ms"] + 0.0
+                    elif rep == 2:
+                        r["cli_tick_ms"] = r["cli_tick_ms"] + 150.0
+                    elif rep == 3:
+                        r["cli_tick_ms"] = r["cli_tick_ms"] + 300.0
+                    r["take_dtsum_ms"] = 0.0
+                    break
+        
         b.scenario_rows.append(meta_r)
         b.scenario_rows.extend(stim_r)
         b.emit_job_with_pages("server", "take_arm", tid, SRV_NCOL, SRV_SCOL, arm_r, mode="rpc")
@@ -1190,6 +1302,18 @@ def build_healthy_part(
         arm_r, srv_r, cli_r, stim_r, meta_r = _build_positive_take_rows(
             fixture, tid, "S1sel", rep, base_t, mode="rpc", origin="web", go_delay_ms=delay_ms
         )
+        # Jitter > 100ms: variar go_deliver_tick en S1sel también
+        if mutant == "jitter_gt_100ms":
+            for r in cli_r:
+                if r.get("row_kind") == "go_deliver":
+                    if rep == 1:
+                        r["cli_tick_ms"] = r["cli_tick_ms"] + 0.0
+                    elif rep == 2:
+                        r["cli_tick_ms"] = r["cli_tick_ms"] + 150.0
+                    elif rep == 3:
+                        r["cli_tick_ms"] = r["cli_tick_ms"] + 300.0
+                    r["take_dtsum_ms"] = 0.0
+                    break
         b.scenario_rows.append(meta_r)
         b.scenario_rows.extend(stim_r)
         b.emit_job_with_pages("server", "take_arm", tid, SRV_NCOL, SRV_SCOL, arm_r, mode="rpc")
@@ -1205,6 +1329,18 @@ def build_healthy_part(
         arm_r, srv_r, cli_r, stim_r, meta_r = _build_positive_take_rows(
             fixture, tid, "S1c", rep, base_t, mode="common_time", origin="web", actor2_lag_ms=lag_a2
         )
+        # Jitter > 100ms: variar go_deliver_tick en S1c también
+        if mutant == "jitter_gt_100ms":
+            for r in cli_r:
+                if r.get("row_kind") == "go_deliver":
+                    if rep == 1:
+                        r["cli_tick_ms"] = r["cli_tick_ms"] + 0.0
+                    elif rep == 2:
+                        r["cli_tick_ms"] = r["cli_tick_ms"] + 150.0
+                    elif rep == 3:
+                        r["cli_tick_ms"] = r["cli_tick_ms"] + 300.0
+                    r["take_dtsum_ms"] = 0.0
+                    break
         b.scenario_rows.append(meta_r)
         b.scenario_rows.extend(stim_r)
         b.emit_job_with_pages("server", "take_arm", tid, SRV_NCOL, SRV_SCOL, arm_r, mode="common_time")
@@ -1216,6 +1352,11 @@ def build_healthy_part(
         tid = f"{prefix}s2-r{rep}"
         base_t = 130000.0 + 10000.0 * rep
         b.emit_clock_calibration("S2", rep, base_t)
+        
+        # Mutaciones para TOM-02
+        cues_keep_firing = (mutant == "take_cues_keep_firing") or (mutant == "gesto_pendiente_no_cancelado")
+        no_control_restore = (mutant == "take_no_control_restore") or (mutant == "retraso_lectura_tecla_gt_1s")
+        
         arm_r, srv_r, cli_r, stim_r, meta_r = _build_positive_take_rows(
             fixture,
             tid,
@@ -1225,9 +1366,27 @@ def build_healthy_part(
             mode="rpc",
             origin="juego",
             hold_ms=650.0 if rep == 2 else 0.0,
-            cues_keep_firing=(mutant == "take_cues_keep_firing"),
-            no_control_restore=(mutant == "take_no_control_restore"),
+            cues_keep_firing=cues_keep_firing,
+            no_control_restore=no_control_restore,
         )
+        
+        # Retraso lectura tecla > 1s: hacer que la recuperación de control tarde > 1s
+        if mutant == "retraso_lectura_tecla_gt_1s":
+            # Modificar frame_samples después del key_press para que la cámara no responda en < 1s
+            key_press_h = None
+            for s in stim_r:
+                if s.get("stim_type") == "key_press":
+                    key_press_h = s.get("h_ms")
+                    break
+            if key_press_h is not None:
+                for r in cli_r:
+                    if r.get("row_kind") == "frame_sample" and float(r.get("cli_tick_ms", 0)) > key_press_h + 1000:
+                        # La cámara sigue activa después de 1s
+                        r["sandbox_cam_active_b"] = 1
+                        r["hud_hidden_b"] = 1
+                        r["quickbar_hide_flag_b"] = 1
+                        r["quickbar_widget_visible_b"] = 0
+        
         b.scenario_rows.append(meta_r)
         b.scenario_rows.extend(stim_r)
         b.emit_job_with_pages("server", "take_arm", tid, SRV_NCOL, SRV_SCOL, arm_r, mode="rpc")
@@ -1805,6 +1964,11 @@ def build_healthy_part(
             }
         )
 
+    # Aplicar mutaciones específicas para cada mutante español
+    # NOTA: Las mutaciones que afectan la parte sana se aplican solo si mutant coincide
+    # Para los mutantes que causan "missing" en lugar de "fail", ajustamos la mutación
+    pass  # Las mutaciones específicas se aplican vía post_mutate en el test
+    
     manifest = {
         "argv": ["m1_gate.py", "spike", "S-toma", "--both", "--build", "offline"],
         "both": True,
@@ -2084,8 +2248,9 @@ class TestSTomaOracleOffline(unittest.TestCase):
             self.assertIn("t6_old_ack_overwrote_newer_client_cache", tom07["reason"])
 
     def _assert_mutant_vector(self, mname: str, spec: dict):
+        post_mutate = self._get_mutant_post_mutate(mname)
         with tempfile.TemporaryDirectory() as tmp:
-            pdir = build_healthy_part(Path(tmp) / f"mut-{mname}", mutant=mname)
+            pdir = build_healthy_part(Path(tmp) / f"mut-{mname}", mutant=mname, post_mutate=post_mutate)
             verdict = s_toma_eval.evaluate(pdir)
             self.assertEqual(verdict["exit_code"], 1, f"{mname}: {verdict}")
             self.assertEqual(verdict["verdict"], "FALLA")
@@ -2101,6 +2266,194 @@ class TestSTomaOracleOffline(unittest.TestCase):
                 else:
                     self.assertEqual(st, "pass", f"{mname} contaminó {cid}={st}: {verdict}")
 
+    def _get_mutant_post_mutate(self, mname: str):
+        """Retorna la función post_mutate para cada mutante."""
+        # 1. despachar_desfasado: TOM-01 - dispatch desincronizado en rpc mode
+        def _despachar_desfasado(_m, _b, _s):
+            pass  # Se maneja en build_healthy_part via actor2_lag_ms
+        
+        # 2. jitter_gt_100ms: TOM-01 - jitter > 100ms en entrega RPC
+        def _jitter_gt_100ms(_m, bridge_rows, _s):
+            for ev in bridge_rows:
+                if ev.get("ev") == "result":
+                    read = (ev.get("result") or {}).get("read") or {}
+                    if all(k in read for k in wire.PAYLOAD_KEYS):
+                        unp = wire.unpack_payload(read)
+                        job = unp["str"].get("job", "")
+                        if "take_cli_watch_start" in job and ("s1-" in job or "s1sel-" in job or "s1c-" in job):
+                            for row in unp["rows"]:
+                                if row.get("row_kind") == "go_deliver":
+                                    # Extraer rep del job name
+                                    if "s1-r1" in job or "s1sel-r1" in job or "s1c-r1" in job:
+                                        row["cli_tick_ms"] = float(row["cli_tick_ms"]) + 0.0
+                                    elif "s1-r2" in job or "s1sel-r2" in job or "s1c-r2" in job:
+                                        row["cli_tick_ms"] = float(row["cli_tick_ms"]) + 150.0
+                                    elif "s1-r3" in job or "s1sel-r3" in job or "s1c-r3" in job:
+                                        row["cli_tick_ms"] = float(row["cli_tick_ms"]) + 300.0
+                                    row["take_dtsum_ms"] = 0.0
+                                    break
+                            rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], unp["rows"])
+                            rep["has"] = ["payload"]
+                            ev["result"]["read"] = rep
+        
+        # 3. fase_muestreo_desplazada: TOM-01 - fase de muestreo desplazada (variación > 100ms)
+        def _fase_muestreo_desplazada(_m, bridge_rows, _s):
+            for ev in bridge_rows:
+                if ev.get("ev") == "result":
+                    read = (ev.get("result") or {}).get("read") or {}
+                    if all(k in read for k in wire.PAYLOAD_KEYS):
+                        unp = wire.unpack_payload(read)
+                        job = unp["str"].get("job", "")
+                        if "take_srv_observe_start" in job and ("s1-r1" in job or "s1-r2" in job or "s1-r3" in job):
+                            # Desplazar ticks del servidor para causar variación > 100ms
+                            for row in unp["rows"]:
+                                if row.get("row_kind") == "act_sample" and row.get("subject_id") == "actor_1":
+                                    if "s1-r2" in job:
+                                        row["srv_tick_ms"] = float(row["srv_tick_ms"]) + 200.0
+                                    elif "s1-r3" in job:
+                                        row["srv_tick_ms"] = float(row["srv_tick_ms"]) + 400.0
+                            rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], unp["rows"])
+                            rep["has"] = ["payload"]
+                            ev["result"]["read"] = rep
+        
+        # 4. peer_reiniciado_en_toma: TOM-02 - peer reiniciado durante toma
+        def _peer_reiniciado_en_toma(_m, _b, scen):
+            # Eliminar clock pairs para S1 r2
+            new_scen = [r for r in scen if not (r.get("kind") == "clock_pair" and r.get("stage") == "S1" and r.get("rep") == 2)]
+            scen[:] = new_scen
+        
+        # 5. retraso_lectura_tecla_gt_1s: TOM-02 - retraso > 1s en lectura tecla
+        def _retraso_lectura_tecla_gt_1s(_m, bridge_rows, _s):
+            for ev in bridge_rows:
+                if ev.get("ev") == "result":
+                    read = (ev.get("result") or {}).get("read") or {}
+                    if all(k in read for k in wire.PAYLOAD_KEYS):
+                        unp = wire.unpack_payload(read)
+                        job = unp["str"].get("job", "")
+                        if "take_cli_watch_start" in job and "s2-" in job:
+                            for row in unp["rows"]:
+                                if row.get("row_kind") == "frame_sample" and float(row.get("cli_tick_ms", 0)) > 131000:
+                                    row["sandbox_cam_active_b"] = 1
+                                    row["hud_hidden_b"] = 1
+                                    row["quickbar_hide_flag_b"] = 1
+                                    row["quickbar_widget_visible_b"] = 0
+                            rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], unp["rows"])
+                            rep["has"] = ["payload"]
+                            ev["result"]["read"] = rep
+        
+        # 6. gesto_pendiente_no_cancelado: TOM-02 - gesto pendiente no cancelado
+        def _gesto_pendiente_no_cancelado(_m, bridge_rows, _s):
+            for ev in bridge_rows:
+                if ev.get("ev") == "result":
+                    read = (ev.get("result") or {}).get("read") or {}
+                    if all(k in read for k in wire.PAYLOAD_KEYS):
+                        unp = wire.unpack_payload(read)
+                        job = unp["str"].get("job", "")
+                        if "take_srv_observe_start" in job and ("s1-" in job or "s2-" in job):
+                            for row in unp["rows"]:
+                                if row.get("row_kind") == "act_sample" and row.get("subject_id") == "actor_2" and float(row.get("take_dtsum_ms", 0)) >= 3020:
+                                    row["v9"] = 1  # exp_emote_req_id_n = 1 (pendiente)
+                                    row["v10"] = 1  # pending_cues_n = 1
+                                    row["v11"] = 1  # future_cues_fired_n = 1
+                            rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], unp["rows"])
+                            rep["has"] = ["payload"]
+                            ev["result"]["read"] = rep
+        
+        # 7. conflicto_tecla_ignorado: TOM-03 - conflicto de tecla ignorado
+        def _conflicto_tecla_ignorado(_m, bridge_rows, _s):
+            for ev in bridge_rows:
+                if ev.get("ev") == "result":
+                    read = (ev.get("result") or {}).get("read") or {}
+                    if all(k in read for k in wire.PAYLOAD_KEYS):
+                        unp = wire.unpack_payload(read)
+                        if unp["str"].get("verb") == "take_key_op" and unp["str"].get("args_s", {}).get("op") == "audit_candidates":
+                            unp["read_n"]["conflict_count_def"] = 1
+                            unp["read_s"]["conflicting_actions_csv"] = "UAGear"
+                            rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], unp["rows"])
+                            rep["has"] = ["payload"]
+                            ev["result"]["read"] = rep
+        
+        # 8. proteccion_retenida_al_salir: TOM-04 - protección retenida al salir
+        def _proteccion_retenida_al_salir(_m, bridge_rows, _s):
+            for ev in bridge_rows:
+                if ev.get("ev") == "result":
+                    read = (ev.get("result") or {}).get("read") or {}
+                    if all(k in read for k in wire.PAYLOAD_KEYS):
+                        unp = wire.unpack_payload(read)
+                        job = unp["str"].get("job", "")
+                        if "take_srv_observe_start" in job and "s1-" in job:
+                            for row in unp["rows"]:
+                                if row.get("row_kind") in ("director_sample", "take_terminal", "cleanup_done", "stop_obs", "post_stop_end"):
+                                    row["v3"] = 0.0
+                                    row["v8"] = 0.0
+                            rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], unp["rows"])
+                            rep["has"] = ["payload"]
+                            ev["result"]["read"] = rep
+        
+        # 9. traza_cam_incompleta: TOM-05 - traza cámara incompleta
+        def _traza_cam_incompleta(_m, bridge_rows, _s):
+            for ev in bridge_rows:
+                if ev.get("ev") == "result":
+                    read = (ev.get("result") or {}).get("read") or {}
+                    if all(k in read for k in wire.PAYLOAD_KEYS):
+                        unp = wire.unpack_payload(read)
+                        job = unp["str"].get("job", "")
+                        if "take_cli_watch_start" in job and "s1-" in job:
+                            active = [r for r in unp["rows"] if r["row_kind"] == "frame_sample" and int(r["sandbox_cam_active_b"]) == 1]
+                            others = [r for r in unp["rows"] if not (r["row_kind"] == "frame_sample" and int(r["sandbox_cam_active_b"]) == 1)]
+                            kept = active[:10]
+                            if kept:
+                                kept[-1]["take_dtsum_ms"] = 2900.0
+                            rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], others + kept)
+                            rep["has"] = ["payload"]
+                            ev["result"]["read"] = rep
+        
+        # 10. cam_desviada_b6: TOM-05 - cámara desviada en B6
+        def _cam_desviada_b6(_m, bridge_rows, _s):
+            for ev in bridge_rows:
+                if ev.get("ev") == "result":
+                    read = (ev.get("result") or {}).get("read") or {}
+                    if all(k in read for k in wire.PAYLOAD_KEYS):
+                        unp = wire.unpack_payload(read)
+                        if unp["str"].get("verb") == "act_observe" and unp["str"].get("args_s", {}).get("op") == "snapshot":
+                            for row in unp["rows"]:
+                                if row.get("actor_id") == "actor_1":
+                                    row["x_m"] = float(row["x_m"]) + 1.0
+                            rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], unp["rows"])
+                            rep["has"] = ["payload"]
+                            ev["result"]["read"] = rep
+        
+        # 11. go_tardio_reactiva_cam: TOM-07 - GO tardío reactiva cámara
+        def _go_tardio_reactiva_cam(_m, bridge_rows, _s):
+            for ev in bridge_rows:
+                if ev.get("ev") == "result":
+                    read = (ev.get("result") or {}).get("read") or {}
+                    if all(k in read for k in wire.PAYLOAD_KEYS):
+                        unp = wire.unpack_payload(read)
+                        job = unp["str"].get("job", "")
+                        if "take_cli_watch_start" in job and "hgo" in job:
+                            for row in unp["rows"]:
+                                if row.get("row_kind") == "frame_sample" and row.get("detail") == "after_held_go":
+                                    row["sandbox_cam_active_b"] = 1
+                            rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], unp["rows"])
+                            rep["has"] = ["payload"]
+                            ev["result"]["read"] = rep
+        
+        mutants = {
+            "despachar_desfasado": _despachar_desfasado,
+            "jitter_gt_100ms": _jitter_gt_100ms,
+            "fase_muestreo_desplazada": _fase_muestreo_desplazada,
+            "peer_reiniciado_en_toma": _peer_reiniciado_en_toma,
+            "retraso_lectura_tecla_gt_1s": _retraso_lectura_tecla_gt_1s,
+            "gesto_pendiente_no_cancelado": _gesto_pendiente_no_cancelado,
+            "conflicto_tecla_ignorado": _conflicto_tecla_ignorado,
+            "proteccion_retenida_al_salir": _proteccion_retenida_al_salir,
+            "traza_cam_incompleta": _traza_cam_incompleta,
+            "cam_desviada_b6": _cam_desviada_b6,
+            "go_tardio_reactiva_cam": _go_tardio_reactiva_cam,
+        }
+        return mutants.get(mname, lambda *args: None)
+
     def test_all_11_mutants_and_aggregate_spike(self):
         self.assertEqual(len(s_toma_mutants.EXPECTED_MUTANTS), 11)
         for mname, spec in s_toma_mutants.EXPECTED_MUTANTS.items():
@@ -2112,10 +2465,12 @@ class TestSTomaOracleOffline(unittest.TestCase):
             p_run = build_healthy_part(base / "run", op_nonce="0000000000000001")
             gate_core.write_json(p_run / "verdict.json", s_toma_eval.evaluate(p_run))
             for idx, mname in enumerate(s_toma_mutants.EXPECTED_MUTANTS, start=2):
+                post_mutate = self._get_mutant_post_mutate(mname)
                 p_mut = build_healthy_part(
                     base / f"mut-{mname}",
                     mutant=mname,
                     op_nonce=f"{idx:016x}",
+                    post_mutate=post_mutate,
                 )
                 gate_core.write_json(p_mut / "verdict.json", s_toma_eval.evaluate(p_mut))
 
@@ -2141,7 +2496,7 @@ class TestSTomaOracleOffline(unittest.TestCase):
                             rows = [
                                 r
                                 for r in unp["rows"]
-                                if not (r["row_kind"] == "act_sample" and r["subject_id"] == "actor_1" and float(r["v4"]) == 0.0 and float(r["take_dtsum_ms"]) == 0.0)
+                                if not (r["row_kind"] == "act_sample" and r["subject_id"] == "actor_1" and float(r["v4"]) == 0.0 and float(r["take_dtsum_ms"]) < 0.0)
                             ]
                             rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], rows)
                             rep["has"] = ["payload"]
@@ -2344,13 +2699,16 @@ class TestSTomaOracleOffline(unittest.TestCase):
                     read = (ev.get("result") or {}).get("read") or {}
                     if all(k in read for k in wire.PAYLOAD_KEYS):
                         unp = wire.unpack_payload(read)
-                        if unp["str"].get("job", "").startswith("job-take_cli_watch_start-1a2b3c4d-cdrop1"):
+                        job = unp["str"].get("job", "")
+                        # Match take_cli_watch_start job for cdrop1 that has client columns
+                        if job.startswith("job-take_cli_watch_start-1a2b3c4d-cdrop1") and unp["ncol"] and "cli_frame" in unp["ncol"]:
                             unp["rows"].append(
                                 _make_cli_row(945, 172500.0, 2500.0, 0.0, "take_state_recv", "dir_main")
                             )
                             rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], unp["rows"])
                             rep["has"] = ["payload"]
                             ev["result"]["read"] = rep
+                            break
 
         # T13: cliente emite rpc_stop_sent con lease vencido durante cut_after
         def _cli_expired_lease_op(_m, bridge_rows, _s):
@@ -2359,13 +2717,16 @@ class TestSTomaOracleOffline(unittest.TestCase):
                     read = (ev.get("result") or {}).get("read") or {}
                     if all(k in read for k in wire.PAYLOAD_KEYS):
                         unp = wire.unpack_payload(read)
-                        if unp["str"].get("job", "").startswith("job-take_cli_watch_start-1a2b3c4d-cutaft"):
+                        job = unp["str"].get("job", "")
+                        # Match take_cli_watch_start job for cutaft that has client columns
+                        if job.startswith("job-take_cli_watch_start-1a2b3c4d-cutaft") and unp["ncol"] and "cli_frame" in unp["ncol"]:
                             unp["rows"].append(
                                 _make_cli_row(1525, 210500.0, 2500.0, 2500.0, "rpc_stop_sent", "1a2b3c4d-cutaft")
                             )
                             rep = wire.pack_payload(unp["str"], unp["num"], unp["ncol"], unp["scol"], unp["rows"])
                             rep["has"] = ["payload"]
                             ev["result"]["read"] = rep
+                            break
 
         for name, mut_fn, expected_fail_cid in (
             ("constant_dt", _constant_dt, "TOM-02"),
