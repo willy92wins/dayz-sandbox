@@ -712,6 +712,93 @@ class AbortInflightTests(FaultProxyTestBase):
         self.state.poll_gate.set()
 
 
+class AbortBarrierOrderTests(FaultProxyTestBase):
+    """R13 (Q-02): la barrera va ANTES de publicar rules_active.json."""
+
+    def test_barrier_aborts_before_publishing_and_late_upstream_reply_is_not_served(self):
+        self.state.retain_poll = True
+        self.state.poll_gate.clear()
+        self.start_proxy([])
+        self.wait_active(1)
+
+        outcome = {}
+
+        def client():
+            outcome["value"] = request_or_none(
+                self.proxy.port, "GET", "/poll?key=K13&peer=client&deliver=1", timeout=15.0
+            )
+
+        thread = threading.Thread(target=client, daemon=True)
+        thread.start()
+        self.assertTrue(self.state.poll_arrived.wait(8.0))
+        with self.proxy._lock:
+            pending = list(self.proxy._inflight.values())
+        self.assertEqual(len(pending), 1)
+        entry = pending[0]
+
+        seen = {}
+        original = fault_proxy._atomic_write_json
+
+        def hook(path, obj):
+            # Gancho de orden: justo antes de publicar la version nueva, el bridge de prueba
+            # contesta al poll retenido y se da tiempo a que el proxy lo sirva si pudiera.
+            if path == self.proxy.active_path and obj.get("version") == 2:
+                seen["aborted_at_publish"] = bool(entry["aborted"])
+                self.state.poll_gate.set()
+                time.sleep(0.5)
+            return original(path, obj)
+
+        fault_proxy._atomic_write_json = hook
+        try:
+            self.write_rules(
+                2,
+                [
+                    {
+                        "id": "cut",
+                        "match": {"route": "poll", "peer": "client"},
+                        "action": {"type": "pass"},
+                        "abort_inflight": True,
+                    }
+                ],
+            )
+            self.wait_active(2)
+            thread.join(timeout=8.0)
+        finally:
+            fault_proxy._atomic_write_json = original
+
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(
+            seen.get("aborted_at_publish"),
+            "rules_active.json se publico antes de abortar el poll en vuelo",
+        )
+        self.assertIsNone(
+            outcome.get("value"), "el cliente recibio la respuesta de un poll abortado"
+        )
+        lines = self.wait_log(1)
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0]["aborted"])
+        self.assertEqual(lines[0]["rules_version"], 1)
+        self.assertEqual(lines[0]["resp_bytes"], 0)
+
+    def test_request_entering_after_install_runs_under_new_version(self):
+        self.start_proxy(
+            [
+                {
+                    "id": "abort",
+                    "match": {"route": "poll", "peer": "client"},
+                    "action": {"type": "pass"},
+                    "abort_inflight": True,
+                }
+            ]
+        )
+        self.wait_active(1)
+        status, _ = request(self.proxy.port, "GET", "/poll?key=K13&peer=client&deliver=1")
+        self.assertEqual(status, 200)
+        lines = self.wait_log(1)
+        self.assertFalse(lines[0]["aborted"])
+        self.assertEqual(lines[0]["rules_version"], 1)
+
+
 class ActivePathTests(FaultProxyTestBase):
     def test_active_path_reflects_activated_version(self):
         self.start_proxy([])

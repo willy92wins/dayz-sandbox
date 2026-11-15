@@ -356,6 +356,12 @@ class FaultProxy:
 
     def _install(self, version, rules):
         clean = [rule for rule in rules if isinstance(rule, dict)]
+        specs = []
+        for rule in clean:
+            if rule.get("abort_inflight") is True:
+                match = _as_dict(rule.get("match"))
+                specs.append((match.get("peer", "any"), match.get("route", "any")))
+        targets = []
         with self._lock:
             previous = self._state.version
             self._state.version = version
@@ -363,31 +369,35 @@ class FaultProxy:
             if version != previous:
                 self._state.counters = {}
                 self._windows = []
+                # R13: la barrera se decide en el mismo tramo bajo candado que la version nueva. Toda
+                # peticion que entre despues ya lleva la version nueva y no se toca; las anteriores que
+                # casan y ya se reenviaron se marcan abortadas aqui, de modo que _serve no las servira.
+                if specs:
+                    targets = self._mark_aborted_locked(specs, version)
         if version == previous:
             return
+        # Primero se cierran las conexiones; solo despues se publica rules_active.json (R13).
+        self._close_aborted(targets)
         try:
             _atomic_write_json(
                 self.active_path, {"version": version, "t_ms": _now_ms()}
             )
         except OSError:
             pass
-        specs = []
-        for rule in clean:
-            if rule.get("abort_inflight") is True:
-                match = _as_dict(rule.get("match"))
-                specs.append((match.get("peer", "any"), match.get("route", "any")))
-        if specs:
-            self._abort_inflight(specs)
 
-    def _abort_inflight(self, specs):
-        with self._lock:
-            targets = []
-            for entry in self._inflight.values():
-                if entry["done"] or entry["aborted"] or not entry["forwarded"]:
-                    continue
-                if _matches_spec(specs, entry):
-                    entry["aborted"] = True
-                    targets.append(entry)
+    def _mark_aborted_locked(self, specs, version):
+        targets = []
+        for entry in self._inflight.values():
+            if entry["done"] or entry["aborted"] or entry["serving"] or not entry["forwarded"]:
+                continue
+            if entry["rules_version"] == version:
+                continue
+            if _matches_spec(specs, entry):
+                entry["aborted"] = True
+                targets.append(entry)
+        return targets
+
+    def _close_aborted(self, targets):
         for entry in targets:
             _shutdown(entry.get("client"))
             upstream = entry.get("upstream")
@@ -424,30 +434,30 @@ class FaultProxy:
                 req_id = self._req_counter
                 self._req_counter += 1
                 version = self._state.version
-            entry = {
-                "req_id": req_id,
-                "rule_id": None,
-                "rules_version": version,
-                "t_ms": int(round(t0 * 1000.0)),
-                "method": method,
-                "route": route,
-                "peer": peer,
-                "deliver": deliver,
-                "session": session,
-                "action": "pass",
-                "req_bytes": len(body),
-                "upstream_status": None,
-                "resp_bytes": 0,
-                "held_ms": 0,
-                "aborted": False,
-                "done": False,
-                "forwarded": False,
-                "client": handler.connection,
-                "upstream": None,
-            }
-            req = {"route": route, "peer": peer, "deliver": deliver}
-            with self._lock:
+                entry = {
+                    "req_id": req_id,
+                    "rule_id": None,
+                    "rules_version": version,
+                    "t_ms": int(round(t0 * 1000.0)),
+                    "method": method,
+                    "route": route,
+                    "peer": peer,
+                    "deliver": deliver,
+                    "session": session,
+                    "action": "pass",
+                    "req_bytes": len(body),
+                    "upstream_status": None,
+                    "resp_bytes": 0,
+                    "held_ms": 0,
+                    "aborted": False,
+                    "done": False,
+                    "forwarded": False,
+                    "serving": False,
+                    "client": handler.connection,
+                    "upstream": None,
+                }
                 self._inflight[req_id] = entry
+            req = {"route": route, "peer": peer, "deliver": deliver}
             self._dispatch(handler, entry, req, method, url, body, t0)
         except Exception:
             pass
@@ -488,7 +498,7 @@ class FaultProxy:
                 time.sleep(wait_s)
             entry["held_ms"] = int(round((time.monotonic() - start) * 1000.0))
             entry["resp_bytes"] = len(data)
-            self._serve(handler, status, ctype, data)
+            self._serve(handler, entry, status, ctype, data)
             self._finish(entry, t0)
             return
 
@@ -514,7 +524,7 @@ class FaultProxy:
                 separators=(",", ":"),
             ).encode("utf-8")
             entry["resp_bytes"] = len(payload)
-            self._serve(handler, code, "application/json; charset=utf-8", payload)
+            self._serve(handler, entry, code, "application/json; charset=utf-8", payload)
             self._finish(entry, t0)
             return
 
@@ -547,7 +557,7 @@ class FaultProxy:
             entry["held_ms"] = int(round((time.monotonic() - start) * 1000.0))
             status, ctype, data = result
             entry["resp_bytes"] = len(data)
-            self._serve(handler, status, ctype, data)
+            self._serve(handler, entry, status, ctype, data)
             self._finish(entry, t0)
             return
 
@@ -573,7 +583,7 @@ class FaultProxy:
             status, ctype, data = result
             data = self._rewrite(data, action.get("set"))
             entry["resp_bytes"] = len(data)
-            self._serve(handler, status, ctype, data)
+            self._serve(handler, entry, status, ctype, data)
             self._finish(entry, t0)
             return
 
@@ -590,7 +600,7 @@ class FaultProxy:
             # inmediatamente posterior ya la vea; el desfase con "tras servir"
             # es de milisegundos.
             self._open_window(rule, action)
-            self._serve(handler, status, ctype, data)
+            self._serve(handler, entry, status, ctype, data)
             self._finish(entry, t0)
             return
 
@@ -622,11 +632,11 @@ class FaultProxy:
                 if atype in ("then_cut_ms", "then_hold_ms"):
                     self._open_window(rule, action)
                 entry["resp_bytes"] = len(data)
-                self._serve(handler, status, ctype, data)
+                self._serve(handler, entry, status, ctype, data)
                 self._finish(entry, t0)
                 return
         entry["resp_bytes"] = len(data)
-        self._serve(handler, status, ctype, data)
+        self._serve(handler, entry, status, ctype, data)
         self._finish(entry, t0)
 
     def _select_request_rule(self, req):
@@ -797,7 +807,20 @@ class FaultProxy:
             _apply_set(obj, path, value)
         return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
-    def _serve(self, handler, status, ctype, data):
+    def _serve(self, handler, entry, status, ctype, data):
+        # Puerta de entrega (R13): o la respuesta sale ya (y la barrera deja de poder abortar esta
+        # peticion), o la barrera ya la abortó y no sale nunca, conteste el upstream cuando conteste.
+        with self._lock:
+            if entry["aborted"]:
+                entry["upstream_status"] = None
+                entry["resp_bytes"] = 0
+                allowed = False
+            else:
+                entry["serving"] = True
+                allowed = True
+        if not allowed:
+            self._close_client(handler)
+            return
         try:
             handler.send_response(status)
             handler.send_header("Content-Type", ctype)
