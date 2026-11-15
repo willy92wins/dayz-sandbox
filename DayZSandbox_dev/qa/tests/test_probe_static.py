@@ -458,6 +458,156 @@ def _find_methods_in_c(code_no_strings, method_name):
     return results
 
 
+def _strip_directive_lines(code):
+    """Sustituye por espacios las lineas de preprocesador (#...) conservando longitud y saltos de linea."""
+    out = list(code)
+    pos = 0
+    n = len(code)
+    while pos < n:
+        end = code.find("\n", pos)
+        if end == -1:
+            end = n
+        if code[pos:end].lstrip().startswith("#"):
+            for k in range(pos, end):
+                out[k] = " "
+        pos = end + 1
+    return "".join(out)
+
+
+_METHOD_DEF_RE = re.compile(
+    r"(?<![.\w])(?:(?:protected|private|override|static)\s+)*"
+    r"(?:ref\s+)?(?:void|bool|string|int|float|[A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^;{}]*>)?\s+"
+    r"(~?[A-Za-z_][A-Za-z0-9_]*)\s*\(([^;{}()]*)\)\s*\{"
+)
+
+_TYPE_MODIFIER_RE = re.compile(r"^(?:(?:ref|out|autoptr|notnull|const|private|protected|static)\s+)+")
+
+_LOCAL_DECL_RE = re.compile(
+    r"(?<![.\w])((?:ref\s+)?[A-Za-z_][A-Za-z0-9_]*\s*(?:<[^;{}()]*>)?)\s+"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*(?==|;)"
+)
+
+_MEMBER_DECL_RE = re.compile(
+    r"(?<![.\w])((?:ref\s+)?[A-Za-z_][A-Za-z0-9_]*\s*(?:<[^;{}()]*>)?)\s+"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*;"
+)
+
+
+def _decl_type(raw_type):
+    norm = re.sub(r"\s+", " ", raw_type.strip())
+    return _TYPE_MODIFIER_RE.sub("", norm).strip()
+
+
+def _is_restcontext_type(raw_type):
+    return _decl_type(raw_type) == "RestContext"
+
+
+def _find_methods_with_bodies(code_no_strings, start=0, end=None):
+    """Devuelve (name, params, header_span, body_span, full_span) de cada metodo con cuerpo en [start, end)."""
+    if end is None:
+        end = len(code_no_strings)
+    results = []
+    pos = start
+    while pos < end:
+        m = _METHOD_DEF_RE.search(code_no_strings, pos, end)
+        if not m:
+            break
+        open_brace = m.end() - 1
+        close_brace = _find_matching_brace(code_no_strings, open_brace)
+        if close_brace == -1 or close_brace > end:
+            break
+        results.append(
+            {
+                "name": m.group(1),
+                "params": m.group(2),
+                "header_span": (m.start(), open_brace),
+                "body_span": (open_brace + 1, close_brace),
+                "full_span": (m.start(), close_brace + 1),
+            }
+        )
+        pos = close_brace + 1
+    return results
+
+
+def _parse_param_decls(params_text):
+    decls = {}
+    for s, e in _split_top_level_spans(params_text, 0, len(params_text), sep=","):
+        part = params_text[s:e].strip()
+        if not part:
+            continue
+        part = part.split("=", 1)[0].strip()
+        m = re.match(r"^(.+?)\s+([A-Za-z_][A-Za-z0-9_]*)$", part)
+        if m:
+            decls[m.group(2)] = m.group(1)
+    return decls
+
+
+def _collect_member_decls(code_no_strings, class_body_start, class_body_end):
+    methods = _find_methods_with_bodies(code_no_strings, class_body_start, class_body_end)
+    masked = list(code_no_strings[class_body_start:class_body_end])
+    for meth in methods:
+        s = max(0, meth["full_span"][0] - class_body_start)
+        e = min(len(masked), meth["full_span"][1] - class_body_start)
+        for k in range(s, e):
+            if masked[k] != "\n":
+                masked[k] = " "
+    decls = {}
+    for m in _MEMBER_DECL_RE.finditer("".join(masked)):
+        decls[m.group(2)] = m.group(1)
+    return decls
+
+
+def _receiver_is_restcontext(code_no_strings, call_offset, recv_id):
+    """Comprueba que recv_id esta declarado RestContext en el ambito efectivo de la llamada."""
+    class_span = None
+    for cname, _hdr, bs, be in _extract_named_blocks(code_no_strings, "class"):
+        if bs <= call_offset <= be:
+            class_span = (cname, bs, be)
+            break
+    if class_span is None:
+        return False, "no se pudo determinar la clase que contiene la llamada"
+    cname, bs, be = class_span
+
+    method = None
+    for meth in _find_methods_with_bodies(code_no_strings, bs, be):
+        if meth["body_span"][0] <= call_offset <= meth["body_span"][1]:
+            method = meth
+            break
+
+    if method is not None:
+        param_type = _parse_param_decls(method["params"]).get(recv_id)
+        if param_type is not None:
+            if _is_restcontext_type(param_type):
+                return True, None
+            return False, (
+                f"en {cname}::{method['name']} el parametro {recv_id!r} es de tipo "
+                f"{_decl_type(param_type)!r}, no RestContext"
+            )
+        body_start, body_end = method["body_span"]
+        local_type = None
+        for m in _LOCAL_DECL_RE.finditer(code_no_strings, body_start, body_end):
+            if m.start() >= call_offset:
+                break
+            if m.group(2) == recv_id:
+                local_type = m.group(1)
+        if local_type is not None:
+            if _is_restcontext_type(local_type):
+                return True, None
+            return False, (
+                f"en {cname}::{method['name']} la local {recv_id!r} es de tipo "
+                f"{_decl_type(local_type)!r}, no RestContext"
+            )
+
+    member_type = _collect_member_decls(code_no_strings, bs, be).get(recv_id)
+    if member_type is None:
+        return False, f"{recv_id!r} no esta declarado en la clase {cname}"
+    if _is_restcontext_type(member_type):
+        return True, None
+    return False, (
+        f"en {cname}, el miembro {recv_id!r} es de tipo {_decl_type(member_type)!r}, no RestContext"
+    )
+
+
 def _line_no(text, offset):
     return text.count("\n", 0, offset) + 1
 
@@ -852,24 +1002,22 @@ def check_5_key_containment(probe_dir):
     total_keyquery_calls = 0
     total_loadfile_calls = 0
 
-    # 5h (H7 de Sol r1): el flujo de la clave solo puede ir al RestContext nativo. Se recogen los identificadores
-    # declarados como RestContext en toda la sonda; un .GET/.POST con KeyQuery() sobre otro receptor es violacion,
-    # y la sonda no puede definir metodos propios GET/POST (un envoltorio podria registrar la peticion con la clave).
-    restcontext_decl_re = re.compile(r"\bRestContext\s+([A-Za-z_][A-Za-z0-9_]*)\s*[;=]")
+    # 5h (H7 de Sol r1, N3 de Sol r3): el flujo de la clave solo puede ir al RestContext nativo. El receptor de
+    # cada .GET/.POST con KeyQuery() tiene que estar declarado RestContext en su ambito efectivo (parametro/local
+    # del metodo o miembro de la clase que contiene la llamada), y la sonda no puede definir metodos propios
+    # GET/POST (un envoltorio podria registrar la peticion con la clave). Las lineas de preprocesador se ignoran
+    # al buscar la firma y la llave, conservando la numeracion de linea.
     http_method_def_re = re.compile(r"(?<![.\w])(GET|POST)\s*\([^;{}()]*\)\s*\{")
-    restcontext_ids = set()
-    for _rel_rc, path_rc in c_files:
-        code_rc = _strip_comments(path_rc.read_text(encoding="utf-8", errors="replace"), blank_strings=True)
-        restcontext_ids.update(restcontext_decl_re.findall(code_rc))
 
     for rel, path in c_files:
         text = path.read_text(encoding="utf-8", errors="replace")
         code_with_str = _strip_comments(text, blank_strings=False)
         code_no_str = _strip_comments(text, blank_strings=True)
+        code_no_directives = _strip_directive_lines(code_no_str)
         lines_no_str = code_no_str.splitlines()
         lines_with_str = code_with_str.splitlines()
 
-        for hm in http_method_def_re.finditer(code_no_str):
+        for hm in http_method_def_re.finditer(code_no_directives):
             violations.append(
                 f"{rel}:{_line_no(code_no_str, hm.start())}: la sonda no puede definir un metodo propio {hm.group(1)}() "
                 "(un envoltorio de RestContext podria registrar la peticion con la clave)"
@@ -1172,12 +1320,21 @@ def check_5_key_containment(probe_dir):
                 )
                 continue
 
-            # 5h: el receptor tiene que ser una variable declarada RestContext (no un envoltorio con GET/POST propio)
-            recv_txt = re.sub(r"\s+", "", code_no_str[hc["call_span"][0] : hc["paren_span"][0]])
+            # 5h: el receptor tiene que estar declarado RestContext en su ambito efectivo (no un envoltorio
+            # con GET/POST propio); una declaracion homonima en otra clase no cuenta.
+            recv_txt = re.sub(r"\s+", "", code_no_directives[hc["call_span"][0] : hc["paren_span"][0]])
             recv_id = recv_txt.rsplit(".", 1)[0]
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", recv_id) or recv_id not in restcontext_ids:
+            if recv_id.startswith("this."):
+                recv_id = recv_id[len("this.") :]
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", recv_id):
                 violations.append(
-                    f"{rel}:{lineno}: KeyQuery() en .{hc['method']}() sobre {recv_id!r}, que no es una variable RestContext declarada"
+                    f"{rel}:{lineno}: KeyQuery() en .{hc['method']}() sobre un receptor no identificable ({recv_txt!r})"
+                )
+                continue
+            recv_ok, recv_reason = _receiver_is_restcontext(code_no_directives, hc["call_span"][0], recv_id)
+            if not recv_ok:
+                violations.append(
+                    f"{rel}:{lineno}: KeyQuery() en .{hc['method']}() sobre {recv_id!r}, que no es una variable RestContext declarada ({recv_reason})"
                 )
                 continue
 
@@ -2766,6 +2923,77 @@ class ProbeStaticTests(unittest.TestCase):
             files["scripts/5_Mission/DSBX_QA_Probe.c"] = wrapper + files["scripts/5_Mission/DSBX_QA_Probe.c"]
 
         self._assert_mutation_caught_by(mut_def_only, check_5_key_containment)
+
+    def test_neg_check5_wrapper_get_hidden_by_directive(self):
+        # N3: un metodo GET propio cuya firma y llave estan separadas por directivas vacias en lineas
+        # propias (#ifdef DIAG_DEVELOPER / #endif) sigue siendo un metodo propio y debe detectarse.
+        wrapper = (
+            b"class DSBX_QA_HttpWrapDiag\n"
+            b"{\n"
+            b"    DSBX_QA_Probe m_P;\n"
+            b"    RestContext m_Inner;\n"
+            b"    void GET(DSBX_QA_Callback cb, string request)\n"
+            b"#ifdef DIAG_DEVELOPER\n"
+            b"#endif\n"
+            b"    {\n"
+            b"        m_P.Log(request);\n"
+            b"        m_Inner.GET(cb, request);\n"
+            b"    }\n"
+            b"}\n\n"
+        )
+
+        def mut(files):
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = (
+                wrapper + files["scripts/5_Mission/DSBX_QA_Probe.c"]
+            )
+
+        self._assert_mutation_caught_by(mut, check_5_key_containment)
+
+    def test_neg_check5_wrapper_receiver_homonym_in_other_class(self):
+        # N3: la clase que hace el poll declara DSBX_QA_Wrap m_Wrap y llama a m_Wrap.GET(...);
+        # que otra clase declare RestContext m_Wrap no debe acreditar el receptor: manda el ambito.
+        wrapper_c = (
+            b"class DSBX_QA_Wrap\n"
+            b"{\n"
+            b"    RestContext m_Inner;\n"
+            b"    void GET(DSBX_QA_Callback cb, string request)\n"
+            b"    {\n"
+            b"        m_Inner.GET(cb, request);\n"
+            b"    }\n"
+            b"}\n\n"
+            b"class DSBX_QA_OtherHolder\n"
+            b"{\n"
+            b"    RestContext m_Wrap;\n"
+            b"}\n"
+        )
+        old_call = b'        m_Ctx.GET(cb, "poll?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&frame=" + m_Frame.ToString() + "&tick_s=" + tick_s.ToString());'
+
+        def mut(files):
+            src = files["scripts/5_Mission/DSBX_QA_Probe.c"]
+            assert old_call in src
+            files["scripts/5_Mission/DSBX_QA_Probe.c"] = src.replace(
+                b"    RestContext m_Ctx;\n",
+                b"    RestContext m_Ctx;\n    DSBX_QA_Wrap m_Wrap;\n",
+            ).replace(old_call, old_call.replace(b"m_Ctx.GET(", b"m_Wrap.GET("))
+            files["scripts/4_World/DSBX_QA_W_Actor_Wrap.c"] = wrapper_c
+
+        with tempfile.TemporaryDirectory() as tmp:
+            files = make_synthetic_files()
+            mut(files)
+            write_probe_tree(tmp, files)
+            violations = check_5_key_containment(tmp)
+            self.assertTrue(
+                any("no es una variable RestContext declarada" in v for v in violations),
+                f"check_5 debio rechazar el receptor m_Wrap por ambito y devolvio {violations!r}",
+            )
+            for other_fn in ALL_CHECKS:
+                if other_fn is check_5_key_containment:
+                    continue
+                self.assertEqual(
+                    other_fn(tmp),
+                    [],
+                    f"{other_fn.__name__} debio seguir en [] sobre la mutacion de receptor homonimo",
+                )
 
     def test_neg_check5_log_err_inside_load_config(self):
         def mut(files):
