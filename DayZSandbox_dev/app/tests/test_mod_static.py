@@ -517,7 +517,8 @@ def check_m6_validadores(mod_dir: Path) -> list[str]:
         for need in REQUIRED_GUARDS[vname]:
             if need not in have:
                 violations.append(f"M6: {vname} no tiene la guarda if ({need}) {{ return false; }}")
-        if len(re.findall(r"\breturn\s+true\s*;", vbody)) != 1:
+        if len(re.findall(r"\breturn\s+true\s*;", vbody)) != 1 \
+                or not re.search(r"\breturn\s+true\s*;\s*\}?\s*$", vbody.strip()):
             violations.append(f"M6: {vname} debe tener un solo return true, al final")
 
     if not vh:
@@ -685,8 +686,12 @@ def check_m9_contrato_cable(mod_dir: Path) -> list[str]:
 
     wt_body = _find_method_body(wire_code, "WireText")
     if wt_body:
-        if "int n = s.Length();" not in wt_body or len(re.findall(r"\bn\s*=(?!=)", wt_body)) != 1:
+        n_mods = re.findall(r"\bn\s*[-+*/%]?=(?!=)|\bn\s*(?:\+\+|--)|(?:\+\+|--)\s*n\b", wt_body)
+        if "int n = s.Length();" not in wt_body or len(n_mods) != 1:
             violations.append("M9: WireText debe recorrer la cadena entera: int n = s.Length(); y n no se toca")
+        i_mods = re.findall(r"\bi\s*[-+*/%]?=(?!=)|\bi\s*(?:\+\+|--)|(?:\+\+|--)\s*i\b", wt_body)
+        if "int i = 0;" not in wt_body or "i = i + 1;" not in wt_body or len(i_mods) != 2:
+            violations.append("M9: WireText debe empezar en i = 0 y avanzar de uno en uno (i = i + 1)")
         m_wl = re.search(r"while\s*\(\s*i\s*<\s*n\s*\)\s*\{", wt_body)
         if not m_wl:
             violations.append("M9: WireText debe recorrer con while (i < n)")
@@ -841,9 +846,15 @@ def check_m11_errores(mod_dir: Path) -> list[str]:
         violations.append("M11: R_MAX_FAILURES debe valer 4 y asignarse a m_RMaxFailures")
 
     ok_body = _find_method_body(peer_code, "HandleChannelRSuccess")
-    stale = "if (m_CatSendSession != m_CatSession)"
-    if stale not in ok_body or stale not in r_err_body or "m_CatSendSession = m_CatSession;" not in peer_code:
-        violations.append("M11: el acuse y el error de una pagina de otra sesion se descartan (m_CatSendSession)")
+    stale_re = re.compile(r"if\s*\(\s*m_CatSendSession\s*!=\s*m_CatSession\s*\)\s*\{\s*return\s*;\s*\}")
+    stale_ok = True
+    for body in (ok_body, r_err_body or ""):
+        m_st = stale_re.search(body)
+        first_mod = body.find("m_CatFailures =")
+        if not m_st or first_mod < 0 or m_st.start() > first_mod:
+            stale_ok = False
+    if not stale_ok or "m_CatSendSession = m_CatSession;" not in peer_code:
+        violations.append("M11: el acuse y el error de una pagina de otra sesion se descartan con return (m_CatSendSession)")
 
     if not lease_body:
         violations.append("M11: falta CheckLeaseTimeout en DSBX_Peer.c")
@@ -941,6 +952,32 @@ class TestModStatic(unittest.TestCase):
                 [expected_rule],
                 f"Mutacion en {rel_file} debia tumbar solo {expected_rule}, pero tumbo {failed}",
             )
+
+    def _assert_only_rule_fails_multi(self, rel_file: str, pairs, expected_rule: str):
+        with tempfile.TemporaryDirectory() as tmp:
+            copy_dir = Path(tmp) / "DayZSandbox"
+            shutil.copytree(REAL_MOD_DIR, copy_dir)
+            target = copy_dir / rel_file
+            content = target.read_bytes().decode("utf-8")
+            for old, new in pairs:
+                self.assertEqual(content.count(old), 1, f"El fragmento a mutar no es unico en {rel_file}: {old[:60]!r}")
+                content = content.replace(old, new, 1)
+            target.write_bytes(content.encode("utf-8"))
+            failed = [name for name, fn in ALL_CHECKS.items() if fn(copy_dir)]
+            self.assertEqual(failed, [expected_rule], f"Mutacion en {rel_file} debia tumbar solo {expected_rule}, pero tumbo {failed}")
+
+    def test_x4_return_true_al_principio(self):
+        # Sol r2 C-03: el unico return true se mueve al principio de ValidHello
+        self._assert_only_rule_fails_multi(
+            "scripts/3_Game/DSBX_Messages.c",
+            [
+                ("\t\tif (resp.wire_cap < 1024)\n\t\t{\n\t\t\treturn false;\n\t\t}\n\t\treturn true;\n",
+                 "\t\tif (resp.wire_cap < 1024)\n\t\t{\n\t\t\treturn false;\n\t\t}\n"),
+                ("static bool ValidHello(DSBX_HelloResp resp)\n\t{\n",
+                 "static bool ValidHello(DSBX_HelloResp resp)\n\t{\n\t\treturn true;\n"),
+            ],
+            "M6",
+        )
 
     def test_x4_mutations_a_to_z(self):
         cases = [
@@ -1181,6 +1218,27 @@ class TestModStatic(unittest.TestCase):
                 "if (resp.ops.Count() > 1)",
                 "if (false)",
                 "M6",
+            ),
+            # Sol r2 C-02: n acotado con una asignacion compuesta
+            (
+                "scripts/3_Game/DSBX_Wire.c",
+                "\t\tint n = s.Length();\n\t\tint i = 0;\n\t\twhile (i < n)\n\t\t{\n\t\t\tstring ch = s.Substring(i, 1);\n\t\t\tint c = ch.ToAscii();\n\t\t\tif (c == 34)",
+                "\t\tint n = s.Length();\n\t\tif (n > 100) { n -= n - 100; }\n\t\tint i = 0;\n\t\twhile (i < n)\n\t\t{\n\t\t\tstring ch = s.Substring(i, 1);\n\t\t\tint c = ch.ToAscii();\n\t\t\tif (c == 34)",
+                "M9",
+            ),
+            # Sol r2 C-02: el recorrido salta bytes
+            (
+                "scripts/3_Game/DSBX_Wire.c",
+                "\t\t\t\toutStr = outStr + ch;\n\t\t\t}\n\t\t\ti = i + 1;\n",
+                "\t\t\t\toutStr = outStr + ch;\n\t\t\t}\n\t\t\ti = i + 2;\n",
+                "M9",
+            ),
+            # Sol r2 C-05: la guarda de sesion del acuse sin return
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "if (m_CatSendSession != m_CatSession)\n\t\t\t{\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tm_CatFailures = 0;",
+                "if (m_CatSendSession != m_CatSession)\n\t\t\t{\n\t\t\t}\n\t\t\tm_CatFailures = 0;",
+                "M11",
             ),
             # C-01: el acuse de una pagina de otra sesion ya no se descarta
             (
