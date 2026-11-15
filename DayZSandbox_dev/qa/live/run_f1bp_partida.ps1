@@ -13,7 +13,8 @@ param(
   [Parameter(Mandatory = $true)][string]$Scenarios,    # p. ej. 'G1,G2,G3'
   [string]$Root = 'C:\tmp\dsbx-f1bpeers-work\partida',
   [string]$WS = 'C:\tmp\dsbx-f1bpeers\DayZSandbox_dev',
-  [int]$RunTimeoutMin = 120
+  [int]$RunTimeoutMin = 120,
+  [string]$Orchestrator = 'qa/live/f1bp_live.py'   # otro orquestador con el mismo protocolo (p. ej. una prueba de humo)
 )
 $ErrorActionPreference = 'Continue'
 . 'C:\Users\guill\MCPTest_autotest\harness\probe-lib.ps1'
@@ -88,7 +89,7 @@ try {
   $pidsFile = "$Root\pids_$Build.json"
   Remove-Item $pidsFile -ErrorAction SilentlyContinue
   $out = "$Root\orq_$Build.out"; $err = "$Root\orq_$Build.err"
-  $orqArgs = @('qa/live/f1bp_live.py', 'run', '--build', $Build, '--evidence', $ev, '--server-profile', $S, '--client-profile', $C, '--pids-file', $pidsFile, '--scenarios', $Scenarios, '--pbo', $pbo)
+  $orqArgs = @($Orchestrator, 'run', '--build', $Build, '--evidence', $ev, '--server-profile', $S, '--client-profile', $C, '--pids-file', $pidsFile, '--scenarios', $Scenarios, '--pbo', $pbo)
   $h = Start-Process -FilePath $Py -ArgumentList $orqArgs -WorkingDirectory $WS -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -NoNewWindow
   $null = $h.Handle
   L "orquestador pid=$($h.Id): $($orqArgs -join ' ')"
