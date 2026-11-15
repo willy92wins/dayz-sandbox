@@ -216,6 +216,7 @@ class _SyntheticPartBuilder:
         restart_gap_ms: float = 800.0,
         new_epoch_tick0_ms: float = 200.0,
         old_keepalive_after_stop: bool = True,
+        t5_radius_m: float = 60.0,
     ) -> None:
         self.t2_hold_ms = t2_hold_ms
         # N49: hueco del bridge entre el keepalive viejo y el hello nuevo, tick_ms del peer nuevo en su hello
@@ -223,6 +224,8 @@ class _SyntheticPartBuilder:
         self.restart_gap_ms = restart_gap_ms
         self.new_epoch_tick0_ms = new_epoch_tick0_ms
         self.old_keepalive_after_stop = old_keepalive_after_stop
+        # radio de los discos del censo t5 (Sol delta r2 MEN: el alcance de la cobertura N49 depende de el)
+        self.t5_radius_m = t5_radius_m
         self.part_name = part_name
         self.nonce = nonce
         self.fault_code = fault_code
@@ -392,12 +395,13 @@ class _SyntheticPartBuilder:
         area_tag = area_id if stage == "t5_post_restart_census" and area_id.startswith("t5_track_") else f"{stage}:{area_id}"
         if stage == "contention_probe":
             area_tag = f"contention_probe:{area_id}"
+        radius_m = self.t5_radius_m if stage == "t5_post_restart_census" else 60.0
         in_args = self._pack_ext_args(
             strings={"area_tag": area_tag},
             numbers={
                 "center_x_m": center_x,
                 "center_z_m": center_z,
-                "radius_m": 60.0,
+                "radius_m": radius_m,
                 "include_director_b": float(include_director_b),
             },
         )
@@ -419,7 +423,7 @@ class _SyntheticPartBuilder:
                 "rows_captured_n": float(len(rows)),
                 "center_x_m": center_x,
                 "center_z_m": center_z,
-                "radius_m": 60.0,
+                "radius_m": radius_m,
                 "director_present_b": float(director_present_b),
                 "director_alive_b": float(director_present_b),
                 "director_inv_readable_b": float(director_inv_readable_b),
@@ -4402,6 +4406,28 @@ class TestSPersistOracleOffline(unittest.TestCase):
             verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
             self.assertEqual(verdict["exit_code"], 2)
             self.assertEqual(_checks_by_id(verdict)["PER-09"]["status"], "missing")
+            # Sol delta r2 BLOQ 2: el rechazo `busy` posterior a la liberacion de A no lo explica ningun censo
+            # activo: ese motivo (mas especifico) tiene precedencia sobre el de la readquisicion.
+            self.assertEqual(_checks_by_id(verdict)["PER-09"]["detail"], "census_busy_without_active_holder")
+        # (g) tras liberar, el siguiente censo aceptado no queda integro (sin sus job_read): no se acredita la
+        # readquisicion
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "third_not_intact")
+            events = _read_events(part_dir)
+            b_start = self._census_start_results(events, "t0_baseline_census:area_b")[0]
+            jr_ids = {
+                res["op_id"]
+                for ev in events
+                if ev.get("ev") == "result"
+                for res in ev.get("results") or []
+                if res.get("verb") == "job_read" and _unpack(res["read"])[0].get("job") == b_start["op_id"]
+            }
+            self.assertTrue(jr_ids)
+            _write_events(part_dir, _drop_ops(events, jr_ids))
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 2, msg=json.dumps(verdict["checks"]))
+            self.assertEqual(_checks_by_id(verdict)["PER-09"]["status"], "missing")
             self.assertEqual(_checks_by_id(verdict)["PER-09"]["detail"], "census_not_accepted_after_release")
 
     def test_men8_t0_director_inventory_comes_from_t0_census_not_runner_fallback(self) -> None:
@@ -4574,6 +4600,98 @@ class TestSPersistOracleOffline(unittest.TestCase):
             self.assertNotEqual(_checks_by_id(verdict)["PER-09"]["status"], "pass")
             self.assertEqual(_checks_by_id(verdict)["PER-09"]["detail"], "census_busy_without_active_holder")
 
+    def test_sol3_02b_census_reacquired_after_release_while_first_job_still_retained_pasa(self) -> None:
+        """Sol delta r2 BLOQ 1 (HONESTA): el `job_free` del primer censo se retrasa hasta justo antes del ultimo
+        `per_status` viejo; los censos siguientes arrancan tras `released_tick_ms` con A aun retenido. La
+        readquisicion se acredita por `released_tick_ms`, no por `job_free`: PER-09 pasa."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "long_retention")
+            events = _read_events(part_dir)
+            a_start = self._first_census_by_tag(events, "t0_baseline_census:area_a")
+            a_free_ids = {
+                ev["op_id"] for ev in events
+                if ev.get("ev") == "enq" and ev.get("verb") == "job_free"
+                and _unpack(ev["args"])[0].get("job") == a_start["op_id"]
+            }
+            self.assertEqual(len(a_free_ids), 1)
+            moved = [
+                ev for ev in events
+                if (ev.get("ev") == "enq" and ev.get("op_id") in a_free_ids)
+                or (ev.get("ev") == "poll" and any(o.get("op_id") in a_free_ids for o in ev.get("ops") or []))
+                or (ev.get("ev") == "result" and any(r.get("op_id") in a_free_ids for r in ev.get("results") or []))
+            ]
+            self.assertEqual(len(moved), 3)
+            rest = [ev for ev in events if not any(ev is m for m in moved)]
+            old_status_ids = _status_op_ids(events, builder.server_epoch_old)
+            last_old_status = old_status_ids[-1]
+            pos = next(
+                i for i, ev in enumerate(rest)
+                if ev.get("ev") == "enq" and ev.get("op_id") == last_old_status
+            )
+            prev_res = next(ev for ev in reversed(rest[:pos]) if ev.get("ev") == "result")
+            base_t = float(prev_res["t_ms"]) + 100.0
+            base_h = float(prev_res["results"][0]["done_ms"]) + 100.0
+            enq_ev, poll_ev, res_ev = moved
+            for ev, dt in ((enq_ev, 0.0), (poll_ev, 0.0), (res_ev, 20.0)):
+                ev["t_ms"] = base_t + dt
+                ev["h_ms"] = base_h + dt
+            res_ev["results"][0]["recv_ms"] = base_h
+            res_ev["results"][0]["done_ms"] = base_h + 20.0
+            events2 = rest[:pos] + moved + rest[pos:]
+            _write_events(part_dir, events2)
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 0, msg=json.dumps(verdict["checks"]))
+            self.assertEqual(_checks_by_id(verdict)["PER-09"]["status"], "pass")
+
+    def test_sol3_03b_valid_busy_does_not_cover_impossible_busy(self) -> None:
+        """Sol delta r2 BLOQ 2 (FABRICACION): ademas del `busy` valido, un segundo `per_census_start -> rejected/busy`
+        con todos los censos t0 ya completados y liberados (antes del primer apply, recv=done=1540) no lo explica
+        ningun censo activo: otra prueba valida no lo tapa -> PER-09 no pasa, con el motivo concreto."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "second_busy")
+            events = _read_events(part_dir)
+            busy_enq = next(
+                ev for ev in events if ev.get("ev") == "enq" and ev.get("verb") == "per_census_start"
+                and _unpack(ev["args"])[0].get("area_tag", "").startswith("contention_probe")
+            )
+            busy_poll = next(
+                ev for ev in events if ev.get("ev") == "poll"
+                and any(o.get("op_id") == busy_enq["op_id"] for o in ev.get("ops") or [])
+            )
+            busy_res = next(
+                ev for ev in events if ev.get("ev") == "result"
+                and any(r.get("op_id") == busy_enq["op_id"] for r in ev.get("results") or [])
+            )
+            new_id = f"{builder.nonce}-900"
+            first_apply = next(i for i, ev in enumerate(events) if ev.get("ev") == "enq" and ev.get("verb") == "per_apply_scene")
+            t0 = float(events[first_apply - 1]["t_ms"])
+            clones = []
+            for ev, dt in ((busy_enq, 0.0), (busy_poll, 0.0), (busy_res, 20.0)):
+                c = copy.deepcopy(ev)
+                c["t_ms"] = t0 + dt
+                if "h_ms" in c:
+                    c["h_ms"] = 1540.0 + dt
+                if c.get("ev") == "enq":
+                    c["op_id"] = new_id
+                elif c.get("ev") == "poll":
+                    for o in c["ops"]:
+                        o["op_id"] = new_id
+                else:
+                    r = c["results"][0]
+                    r["op_id"] = new_id
+                    r["recv_ms"] = 1540.0
+                    r["done_ms"] = 1540.0
+                clones.append(c)
+            events2 = events[:first_apply] + clones + events[first_apply:]
+            _write_events(part_dir, events2)
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            c_map = _checks_by_id(verdict)
+            self.assertNotEqual(verdict["exit_code"], 0, msg=json.dumps(verdict["checks"]))
+            self.assertIn(c_map["PER-09"]["status"], ("missing", "fail"))
+            self.assertEqual(c_map["PER-09"]["detail"], "census_busy_without_active_holder")
+
     def test_sol3_04_n49_clocks_of_new_epoch_and_bridge_shifted_60s_not_pasa(self) -> None:
         """Sol delta BLOQ 3: relojes del epoch nuevo y del bridge desplazados 60 s (primera lectura a ~90300 ms): se
         cuenta toda la ventana sin observacion, no solo `hello -> primera lectura` -> INCONCLUSO, nunca PASA."""
@@ -4584,8 +4702,43 @@ class TestSPersistOracleOffline(unittest.TestCase):
             for ev in events[self._new_hello_index(events, builder):]:
                 if _is_finite_t(ev.get("t_ms")):
                     ev["t_ms"] = float(ev["t_ms"]) + 60000.0
+            # Sol delta r2 MEN: tambien los ticks del peer nuevo (su reloj desde el arranque del proceso)
+            self._shift_new_epoch_peer_ticks(events, builder.server_epoch_new, 60000.0)
             _write_events(part_dir, events)
             self._n49_expect_unaccredited_or_unreachable(part_dir, "shift60")
+
+    @staticmethod
+    def _shift_new_epoch_peer_ticks(events: list[dict[str, Any]], inst: str, delta_ms: float) -> None:
+        """Desplaza los ticks del peer del epoch nuevo (h_ms de hello/poll/result, recv/done de cada resultado y los
+        `*_tick_ms` de sus lecturas); no toca el reloj del bridge (`t_ms`)."""
+        for ev in events:
+            if ev.get("inst") != inst:
+                continue
+            if "h_ms" in ev:
+                ev["h_ms"] = float(ev["h_ms"]) + delta_ms
+            for res in ev.get("results") or []:
+                for k in ("recv_ms", "done_ms"):
+                    if k in res:
+                        res[k] = float(res[k]) + delta_ms
+                _shift_result_time_fields(res, delta_ms)
+
+    def test_sol3_04b_n49_restart_60s_initial_age_59s_discs_600m_not_pasa_1000m_pasa(self) -> None:
+        """Sol delta r2 MEN: reinicio de 60 s y edad inicial de 59 s del proceso nuevo. La ventana sin observacion
+        posterior cuenta desde el ARRANQUE del proceso (tick_ms 0), no desde su primera lectura: con discos t5 de
+        600 m no se cubre a la criatura -> INCONCLUSO; con discos de 1000 m si -> PASA."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder(
+                "run", restart_gap_ms=60000.0, new_epoch_tick0_ms=59000.0, t5_radius_m=600.0,
+            )
+            part_dir = builder.build_into(Path(tmp) / "r600")
+            self._n49_expect_unaccredited_or_unreachable(part_dir, "sol3_04b_600")
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder(
+                "run", restart_gap_ms=60000.0, new_epoch_tick0_ms=59000.0, t5_radius_m=1000.0,
+            )
+            part_dir = builder.build_into(Path(tmp) / "r1000")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 0, msg=json.dumps(verdict["checks"]))
 
     def test_sol3_05_n49_complete_silence_before_restart_not_pasa(self) -> None:
         """Sol delta BLOQ 3: silencio completo del peer viejo tras su ultima lectura (ni un keepalive) -> la parada

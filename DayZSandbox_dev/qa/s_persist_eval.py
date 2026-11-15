@@ -2964,17 +2964,21 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         if _first is None or not _first["job_complete"]:
             busy_probe_detail = "census_first_job_not_intact_after_busy"
             continue
-        _later = [
-            op
-            for op in ordered_ops
-            if op.verb == "per_census_start"
-            and op.peer == "server"
-            and op.inst == _pr["inst"]
-            and op.seq_idx > _pr["free_seq"]
+        # Sol delta r2 BLOQ 1: la readquisicion se acredita por `released_tick_ms` del propio peer (snap_tick_ms
+        # del siguiente censo >= liberacion de A), aunque ocurra antes del `job_free` del trabajo retenido.
+        _rej = next((o for o in ordered_ops if o.op_id == _pr["rejected_op_id"]), None)
+        _min_seq = _rej.seq_idx if _rej is not None else _first["seq_idx"]
+        _later_c = [
+            c
+            for c in censuses
+            if c["seq_idx"] > _min_seq
+            and c["inst"] == _pr["inst"]
+            and c["status"] == "done"
+            and float(c["snap_tick_ms"]) > 0.0
+            and float(c["snap_tick_ms"]) >= float(_pr["released_tick_ms"]) - 1e-6
         ]
-        _next = min(_later, key=lambda o: o.seq_idx) if _later else None
-        _next_c = next((c for c in censuses if _next is not None and c["op_id"] == _next.op_id), None)
-        if _next is None or _next.status != "done" or _next_c is None or not _next_c["job_complete"]:
+        _next_c = min(_later_c, key=lambda c: c["seq_idx"]) if _later_c else None
+        if _next_c is None or not _next_c["job_complete"]:
             busy_probe_detail = "census_not_accepted_after_release"
             continue
         busy_probe_ok = True
@@ -3289,8 +3293,13 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     else:
                         checks["PER-09"] = {"status": "pass", "detail": "ok"}
 
-    if checks["PER-09"]["status"] == "pass" and not busy_probe_ok:
-        checks["PER-09"] = {"status": "missing", "detail": busy_probe_detail}
+    # Sol delta r2 BLOQ 2: un busy imposible (sin censo activo que lo explique) tiene precedencia: otra prueba de
+    # contencion valida no lo tapa.
+    if checks["PER-09"]["status"] == "pass" and (not busy_probe_ok or timeline["any_census_busy_without_holder"]):
+        checks["PER-09"] = {
+            "status": "missing",
+            "detail": "census_busy_without_active_holder" if timeline["any_census_busy_without_holder"] else busy_probe_detail,
+        }
 
     # =========================================================================
     # PER-10: Static non-storage analysis on git_head + cold storage restore
