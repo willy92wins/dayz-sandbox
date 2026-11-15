@@ -4791,38 +4791,95 @@ async function runS12(browser) {
       await page.unroute("**/api/reset", resetMock409);
     }
 
-    // Negativo 3: la ruta real (sin page.route, que hoy no existe; en server.py exige cookie+Origin+CSRF antes del 404)
-    // -> 404 not_found y quitar-no-disponible, sin fila nueva
-    const real404RespP = page.waitForResponse(
+    // Negativo 3a: F2 trae la ruta real POST /api/reset en server.py (sin page.route);
+    // exige cookie+Origin+CSRF (un fallo de CSRF daria 403 csrf_failed y una ruta desconocida, 404)
+    // y sin servidor con escena responde 409 scene_unsupported -> apply-error visible, sin quitar-no-disponible ni fila nueva
+    const real409RespP = page.waitForResponse(
       (r) => new URL(r.url()).pathname === "/api/reset" && r.request().method() === "POST",
       { timeout: 5000 }
     );
     await resetBtn.click();
     await page.getByRole("button", { name: "Quitar", exact: true }).click();
-    const real404Resp = await real404RespP;
-    const real404Json = await real404Resp.json().catch(() => ({}));
+    const real409Resp = await real409RespP;
+    const real409Json = await real409Resp.json().catch(() => ({}));
     assert(
-      real404Resp.status() === 404 && real404Json.code === "not_found",
-      "S12(-): la ruta real /api/reset no respondio 404 not_found (comprueba cookie/CSRF): status=" +
-        real404Resp.status() +
+      real409Resp.status() === 409 && real409Json.code === "scene_unsupported",
+      "S12(-): la ruta real /api/reset no respondio 409 scene_unsupported (comprueba cookie/Origin/CSRF): status=" +
+        real409Resp.status() +
         ", body=" +
-        JSON.stringify(real404Json)
+        JSON.stringify(real409Json)
     );
 
-    const noDispAviso = page.locator('[data-aviso="quitar-no-disponible"]');
-    await noDispAviso.first().waitFor({ state: "visible", timeout: 5000 });
-    const noDispRole = await noDispAviso.first().getAttribute("role");
-    assert(noDispRole === "alert" || noDispRole === "status", "S12(-): quitar-no-disponible sin role alert/status");
-    const noDispTxt = await noDispAviso.first().innerText();
+    const applyErrAviso = page.locator('[data-aviso="apply-error"]');
+    await applyErrAviso.first().waitFor({ state: "visible", timeout: 5000 });
+    const applyErrRole = await applyErrAviso.first().getAttribute("role");
+    assert(applyErrRole === "alert", "S12(-): apply-error sin role alert: " + applyErrRole);
+    const applyErrTxt = await applyErrAviso.first().innerText();
     assert(
-      /Quitar del juego llega con F2/.test(noDispTxt),
-      "S12(-): quitar-no-disponible no dice 'Quitar del juego llega con F2': " + noDispTxt
+      applyErrTxt.includes("scene_unsupported"),
+      "S12(-): apply-error no contiene 'scene_unsupported': " + applyErrTxt
+    );
+    assert(
+      (await page.locator('[data-aviso="quitar-no-disponible"]').count()) === 0,
+      "S12(-): aparecio quitar-no-disponible con 409 scene_unsupported"
     );
     await sleep(400);
     assert(
       (await page.locator('[data-panel="actividad"] tbody tr[data-op-id]').count()) === 1,
-      "S12(-): el 404 de /api/reset añadio una fila en Actividad"
+      "S12(-): el 409 scene_unsupported de /api/reset añadio una fila en Actividad"
     );
+    await applyErrAviso.first().getByRole("button", { name: "Cerrar", exact: true }).click();
+    await applyErrAviso.first().waitFor({ state: "hidden", timeout: 5000 });
+
+    // Negativo 3b: como F2 trae la ruta /api/reset, el 404 not_found ya solo se ve con el mock
+    // -> quitar-no-disponible, sin fila nueva
+    const resetMock404 = async (route) => {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({
+          ok: false,
+          code: "not_found",
+          pointer: "",
+          msg: "Ruta desconocida",
+        }),
+      });
+    };
+    await page.route("**/api/reset", resetMock404);
+    try {
+      const r404P = page.waitForResponse(
+        (r) => new URL(r.url()).pathname === "/api/reset" && r.request().method() === "POST",
+        { timeout: 5000 }
+      );
+      await resetBtn.click();
+      await page.getByRole("button", { name: "Quitar", exact: true }).click();
+      const r404Resp = await r404P;
+      const r404Json = await r404Resp.json().catch(() => ({}));
+      assert(
+        r404Resp.status() === 404 && r404Json.code === "not_found",
+        "S12(-): mock 404 de /api/reset no respondio 404 not_found: status=" +
+          r404Resp.status() +
+          ", body=" +
+          JSON.stringify(r404Json)
+      );
+
+      const noDispAviso = page.locator('[data-aviso="quitar-no-disponible"]');
+      await noDispAviso.first().waitFor({ state: "visible", timeout: 5000 });
+      const noDispRole = await noDispAviso.first().getAttribute("role");
+      assert(noDispRole === "alert" || noDispRole === "status", "S12(-): quitar-no-disponible sin role alert/status");
+      const noDispTxt = await noDispAviso.first().innerText();
+      assert(
+        /Quitar del juego llega con F2/.test(noDispTxt),
+        "S12(-): quitar-no-disponible no dice 'Quitar del juego llega con F2': " + noDispTxt
+      );
+      await sleep(400);
+      assert(
+        (await page.locator('[data-panel="actividad"] tbody tr[data-op-id]').count()) === 1,
+        "S12(-): el 404 de /api/reset añadio una fila en Actividad"
+      );
+    } finally {
+      await page.unroute("**/api/reset", resetMock404);
+    }
 
     // Negativo 4: «Resetear» no aparece tampoco en Rodaje, y sin backend «Quitar del juego» queda desactivado
     await switchMode(page, "rodaje");
