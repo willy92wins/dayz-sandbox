@@ -2,6 +2,7 @@
 
 import argparse
 import importlib
+import os
 import subprocess
 import sys
 import traceback
@@ -138,6 +139,24 @@ def _oracle_context():
     return (Path(root) if root else qa_dir.parent), qa_dir
 
 
+def _write_root_file(evidence, name, obj):
+    """Escribe evidence/name sin atravesar enlaces: un enlace (simbolico, duro o que resuelva fuera de la raiz) se
+    desvincula antes y se escribe un fichero nuevo, para no alterar el fichero de una parte."""
+    path = Path(evidence) / name
+    if os.path.lexists(path):
+        real = Path(os.path.realpath(path))
+        ev_real = Path(os.path.realpath(evidence))
+        aliased = path.is_symlink() or real.parent != ev_real or real.name != name
+        if not aliased:
+            try:
+                aliased = os.stat(path).st_nlink > 1
+            except OSError:
+                aliased = True
+        if aliased:
+            path.unlink()
+    gate_core.write_json(path, obj)
+
+
 def _has_valid_f03_parts(evidence: Path, part: str) -> bool:
     if not evidence.is_dir():
         return False
@@ -157,12 +176,24 @@ def main(argv=None):
     try:
         args = parser.parse_args(argv)
         oracle_check = None
+        oracle_collect = {}
         if args.cmd == "spike" and args.oracle_commit is not None:
             entry = gate_core.SPIKE_REGISTRY.get(args.id)
             if entry is not None and entry[2]:
                 # Antes de validate() y de importar nada del spike: un modulo modificado no puede alterar la comprobacion.
-                repo_root, qa_dir = _oracle_context()
-                oracle_check = gate_core.check_oracle_files(args.id, args.oracle_commit, repo_root=repo_root, qa_dir=qa_dir)
+                oracle_collect = {}
+                try:
+                    repo_root, qa_dir = _oracle_context()
+                    oracle_check = gate_core.check_oracle_files(
+                        args.id, args.oracle_commit, repo_root=repo_root, qa_dir=qa_dir, collect=oracle_collect
+                    )
+                except Exception as exc:  # noqa: BLE001 - falla cerrado: INCONCLUSO con evidencia, nunca exit 1
+                    oracle_check = {
+                        "ok": False,
+                        "commit": args.oracle_commit,
+                        "files": [],
+                        "problems": [f"check_error:{type(exc).__name__}"],
+                    }
         validate(parser, args)
     except SystemExit as exc:
         return int(exc.code) if exc.code is not None else 0
@@ -199,14 +230,15 @@ def main(argv=None):
         if args.cmd == "spike" and getattr(args, "oracle_commit", None) is not None:
             # Antes de importar o correr nada del spike: el oraculo debe ser byte a byte el del commit congelado.
             check = oracle_check
-            gate_core.write_json(evidence / "oracle_check.json", check)
+            _write_root_file(evidence, "oracle_check.json", check)
             if not check["ok"]:
-                gate_core.write_json(
-                    evidence / "verdict.json",
-                    gate_core.make_verdict(args.id, 2, reasons=["oracle_modified"]),
+                _write_root_file(
+                    evidence, "verdict.json", gate_core.make_verdict(args.id, 2, reasons=["oracle_modified"])
                 )
                 return 2
             args.oracle_commit = check["commit"]
+            # El codigo que se ejecuta es el comprobado: se carga de los bytes verificados, no por import.
+            gate_core.load_verified_oracle(args.id, oracle_collect, qa_dir=_oracle_context()[1])
             if part != "all" and part not in _valid_parts_for_spike(args.id):
                 return 2
         return execute(args, evidence, argv)

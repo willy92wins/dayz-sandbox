@@ -4,6 +4,7 @@ import json
 import math
 import os
 import platform
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -138,12 +139,29 @@ def oracle_base(spike_id):
     return eval_mod[: -len("_eval")] if eval_mod.endswith("_eval") else eval_mod
 
 
-def check_oracle_files(spike_id, commit, *, repo_root, qa_dir=None):
+_HEX_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+
+def check_oracle_files(spike_id, commit, *, repo_root, qa_dir=None, collect=None):
     """Compara byte a byte los ficheros del oraculo del spike con `commit` (sin normalizar finales de linea).
 
     Devuelve {"ok", "commit", "files": [{"path", "blob_sha", "status"}], "problems": [...]}. Estados:
-    ok / modified / deleted / added / missing_at_commit / head_differs. No importa ningun modulo del spike.
+    ok / modified / deleted / added / missing_at_commit / head_differs; ademas `commit_unavailable`,
+    `enumeration_failed:*`, `shadow_package:*`, `shadow_bytecode:*` y `check_error:<Tipo>`. Cualquier error da
+    ok=False, nunca una excepcion. `commit` debe ser un id hexadecimal de objeto (7-40) y unívoco. No importa
+    ningun modulo del spike. Si `collect` es un dict, se llena con {ruta_relativa_a_qa: bytes verificados} de los
+    ficheros `.py` del oraculo (los que luego se cargan).
     """
+    result = {"ok": False, "commit": commit, "files": [], "problems": []}
+    try:
+        _check_oracle_files(spike_id, commit, repo_root, qa_dir, collect, result)
+    except Exception as exc:  # noqa: BLE001 - el guard falla cerrado, nunca con traza
+        result["problems"].append(f"check_error:{type(exc).__name__}")
+    result["ok"] = not result["problems"]
+    return result
+
+
+def _check_oracle_files(spike_id, commit, repo_root, qa_dir, collect, result):
     import fnmatch
 
     repo_root = Path(os.path.realpath(repo_root))
@@ -151,18 +169,19 @@ def check_oracle_files(spike_id, commit, *, repo_root, qa_dir=None):
     prefix = qa_dir.relative_to(repo_root).as_posix()
     prefix = "" if prefix == "." else prefix + "/"
     base = oracle_base(spike_id)
-    result = {"ok": False, "commit": commit, "files": [], "problems": []}
+    problems = result["problems"]
 
     commit_str = commit if isinstance(commit, str) else ""
-    rc, out = (
-        _git_bytes(repo_root, "rev-parse", "--verify", "--quiet", commit_str + "^{commit}")
-        if commit_str and not commit_str.startswith("-")
-        else (1, b"")
-    )
-    resolved = out.decode("ascii", "replace").strip()
-    if rc != 0 or not resolved:
-        result["problems"].append("commit_unavailable")
-        return result
+    resolved = ""
+    if _HEX_COMMIT_RE.match(commit_str):
+        rc, out = _git_bytes(repo_root, "rev-parse", "--verify", "--quiet", commit_str + "^{commit}")
+        resolved = out.decode("ascii", "replace").strip().lower()
+        # una rama o un tag con nombre hexadecimal no vale: el id resuelto debe empezar por lo dado
+        if rc != 0 or not resolved or not resolved.startswith(commit_str.lower()):
+            resolved = ""
+    if not resolved:
+        problems.append("commit_unavailable")
+        return
     result["commit"] = resolved
 
     def blob_at(rev, path):
@@ -172,43 +191,82 @@ def check_oracle_files(spike_id, commit, *, repo_root, qa_dir=None):
 
     required = [f"{prefix}{base}_eval.py", f"{prefix}{base}_mutants.py", f"{prefix}tests/test_{base}_offline.py"]
     fixtures_dir = f"{prefix}fixtures"
-    pattern = f"{base}_*.json"
-    in_commit = set()
-    code, data = _git_bytes(repo_root, "ls-tree", "--name-only", resolved, f"{fixtures_dir}/")
-    if code == 0:
+    pattern = f"{base}_*.json".lower()
+
+    def census(rev, label):
+        code, data = _git_bytes(repo_root, "ls-tree", "--name-only", rev, f"{fixtures_dir}/")
+        if code != 0:
+            problems.append(f"enumeration_failed:{label}")
+            return set()
+        found = set()
         for line in data.decode("utf-8", "replace").splitlines():
             name = line.strip().rsplit("/", 1)[-1]
-            if name and fnmatch.fnmatchcase(name, pattern):
-                in_commit.add(f"{fixtures_dir}/{name}")
+            if name and fnmatch.fnmatchcase(name.lower(), pattern):
+                found.add(f"{fixtures_dir}/{name}")
+        return found
+
+    in_commit = census(resolved, "commit")
+    in_head = census("HEAD", "head")
     on_disk = set()
     disk_dir = qa_dir / "fixtures"
     if disk_dir.is_dir():
         for child in disk_dir.iterdir():
-            if child.is_file() and fnmatch.fnmatchcase(child.name.lower(), pattern.lower()):
+            if child.is_file() and fnmatch.fnmatchcase(child.name.lower(), pattern):
                 on_disk.add(f"{fixtures_dir}/{child.name}")
 
-    paths = list(required) + sorted((in_commit | on_disk) - set(required))
+    for name in (f"{base}_eval", f"{base}_mutants"):
+        if (qa_dir / name).is_dir():
+            problems.append(f"shadow_package:{prefix}{name}")
+        for ext in (".pyc", ".pyd"):
+            if (qa_dir / f"{name}{ext}").exists():
+                problems.append(f"shadow_bytecode:{prefix}{name}{ext}")
+
+    paths = list(required) + sorted((in_commit | in_head | on_disk) - set(required))
     for path in paths:
         entry = {"path": path, "blob_sha": blob_at(resolved, path), "status": "ok"}
         disk_file = repo_root / path
         if entry["blob_sha"] is None:
             if path in required:
                 entry["status"] = "missing_at_commit"
-            else:
+            elif path in on_disk:
                 entry["status"] = "added"  # fixture del patron en disco y no en el commit
+            else:
+                entry["status"] = "head_differs"  # solo en HEAD
         elif not disk_file.is_file():
             entry["status"] = "deleted"
         else:
             code, blob = _git_bytes(repo_root, "cat-file", "blob", entry["blob_sha"])
-            if code != 0 or blob != disk_file.read_bytes():
+            disk_bytes = disk_file.read_bytes()
+            if code != 0 or blob != disk_bytes:
                 entry["status"] = "modified"
             elif blob_at("HEAD", path) != entry["blob_sha"]:
                 entry["status"] = "head_differs"
+            elif collect is not None and path in required[:2]:
+                collect[path[len(prefix):]] = disk_bytes
         if entry["status"] != "ok":
-            result["problems"].append(f"{entry['status']}:{path}")
+            problems.append(f"{entry['status']}:{path}")
         result["files"].append(entry)
-    result["ok"] = not result["problems"]
-    return result
+
+
+def load_verified_oracle(spike_id, collect, *, qa_dir):
+    """Carga `<base>_eval` y `<base>_mutants` desde los bytes verificados (sin .pyc, sin paquetes) en sys.modules."""
+    import sys
+    import types
+
+    qa_dir = Path(os.path.realpath(qa_dir if qa_dir is not None else Path(__file__).resolve().parent))
+    base = oracle_base(spike_id)
+    for name in (f"{base}_eval", f"{base}_mutants"):
+        source = collect[f"{name}.py"]
+        path = str(qa_dir / f"{name}.py")
+        module = types.ModuleType(name)
+        module.__file__ = path
+        code = compile(source, path, "exec")
+        sys.modules[name] = module
+        try:
+            exec(code, module.__dict__)  # noqa: S102 - bytes ya verificados contra el commit congelado
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
 
 
 def git_harness(repo_root=None):
