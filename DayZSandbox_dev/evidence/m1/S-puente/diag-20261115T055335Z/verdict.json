@@ -1,0 +1,106 @@
+{
+  "checks": [
+    {
+      "detail": "",
+      "id": "C0",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "H1.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "H1.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "M1",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "M2",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N1.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N1.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N2.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N2.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N3.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N3.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N4.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N4.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N5.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N5.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N6",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N6.server",
+      "status": "pass"
+    }
+  ],
+  "error": null,
+  "exit_code": 0,
+  "id": "S-puente",
+  "metrics": {
+    "max_ms": 212.52099999999336,
+    "n_not_observed": 0,
+    "n_timeouts": 0,
+    "p50_ms": 198.8570000000036,
+    "p95_ms": 200.8359999999957,
+    "server_window_accept_max_ms": 3000,
+    "server_window_reject_min_ms": 3300,
+    "window_accept_max_ms": 2745.9921875,
+    "window_reject_min_ms": 3041
+  },
+  "reasons": [],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "PASA"
+}
