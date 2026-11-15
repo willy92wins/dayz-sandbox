@@ -29,3 +29,22 @@ Lo que aparece fuera del alcance de una tanda, o lo que un arbitraje aplaza, se 
   - La sonda mantiene `m_Cache` (1024 entradas) y `m_RpcLog` (512 entradas) durante toda la vida de la misión sin vaciarlos al rotar la clave o la URL (P5(c)).
   - En una segunda corrida contra la misma instancia viva de la sonda, los `op_id` colisionaban con entradas cacheadas (`dup = true`) y `_mix_ok` no comprobaba `dup == false`.
 - **Estado:** anotado por mandato de R1-N3 (§9 de F0.3-0) y cerrado en F0.3-0 mediante ids opacos con nonce aleatorio por parte en `f03_common.py` (§5.3) y `run_id` por corrida, exigencia de `dup == false` en `_mix_ok` y frontera `boundary_ms`/`seq0` en `S-puente` (§14 `F02-H1`).
+
+## 2026-11-15 · S-puente · `test_point7_fault_matrix` falla según la carga de la máquina
+
+- **Origen:** las suites completas que se lanzaron en paralelo, en varios worktrees, al orquestar los oráculos de los spikes de F0.3 (sesión de los spikes; la del núcleo está archivada).
+- **Dónde:** `qa/tests/test_e2e_s_puente.py:220` (`test_point7_fault_matrix`), que corre `qa/s_puente_run.py`.
+- **Qué falló el 15-nov, cuatro veces:**
+  - **09:58, base `0c730f0`:** `fault='ignores_ttl'` da ERROR por `PermissionError [WinError 5]` en `Path.replace` de `dsbx_qa.json.tmp` a `dsbx_qa.json`, dentro de `_write_cfg` (`qa/s_puente_run.py:561`); y `fault='none'` da 1 en vez de 0. Había 3 suites a la vez.
+  - **12:4x, base `0c730f0`:** `fault='wrong_build'` da 1 en vez de 2.
+  - **13:1x, `main` en `7754ac0`:** `fault='wrong_build'` da 1 en vez de 2.
+  - **13:2x, `fc24197` (sin F2), con el test aislado pero a la vez que otro en `7754ac0`:** `none` da 1 en vez de 0, y `wrong_build`, 1 en vez de 2. En `7754ac0` pasó en esa misma ejecución. No lo causa F2.
+- **Hipótesis, sin verificar:**
+  - la matriz de fallos decide con plazos de reloj, que con la CPU cargada se vencen;
+  - `_free_udp_port` suelta el puerto antes de que el peer lo ocupe (`qa/f03_common.py:347`, `qa/s_puente_run.py:566`);
+  - `Path.replace` no reintenta en Windows si otro proceso tiene el fichero abierto.
+- **Arreglo propuesto:**
+  - esperas deterministas (eventos o condiciones) en vez de plazos;
+  - un reintento corto en `_write_cfg`;
+  - una prueba que meta carga o latencia para reproducirlo.
+- **Cuándo:** tarea pequeña para un subagente Sonnet en cuanto haya hueco. La lleva la sesión de los spikes de F0.3.
