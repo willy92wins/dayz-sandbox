@@ -406,6 +406,8 @@ export default function App() {
         const aplicar = cur.keymap["aplicar"];
         if (combo && aplicar && combo === aplicar) {
           e.preventDefault();
+          // Una tecla mantenida no repite Aplicar tampoco desde un campo (§6.2; Sol, F03).
+          if (e.repeat) return;
           void (async () => {
             const ok = await confirmActiveFieldBeforeApply();
             if (ok) await triggerApplyScene();
@@ -445,6 +447,15 @@ export default function App() {
       const active = bound.find((a) => a.ctx !== "toma");
       if (!active) {
         if (bound.length > 0) {
+          // Una tecla que solo es de toma no le quita a un botón, enlace o resumen su activación
+          // nativa: con Colocar fuera de Intro, Intro tiene que seguir pulsando botones.
+          if (
+            (combo === "Enter" || combo === "Space") &&
+            target &&
+            target.matches("button, a[href], summary")
+          ) {
+            return;
+          }
           e.preventDefault();
           setFlash("Llega con F5");
         }

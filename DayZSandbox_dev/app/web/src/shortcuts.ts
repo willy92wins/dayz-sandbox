@@ -169,5 +169,24 @@ export function sanitizeKeymap(raw: unknown): {
     }
   }
 
+  // Reparar un choque puede crear otro: las dos acciones vuelven a su tecla de serie y esa tecla
+  // puede estar ya ocupada. Si queda alguno, se vuelve al mapa de serie entero, que no tiene
+  // choques (revisión de Sol, F09).
+  if (hasKeymapConflicts(out)) {
+    return { keymap: { ...defaults }, corrected: true };
+  }
+
   return { keymap: out, corrected };
+}
+
+export function hasKeymapConflicts(keymap: Record<string, string | null>): boolean {
+  for (let i = 0; i < ACTIONS.length; i++) {
+    for (let j = i + 1; j < ACTIONS.length; j++) {
+      const a = ACTIONS[i];
+      const b = ACTIONS[j];
+      const ka = keymap[a.id];
+      if (ka != null && ka === keymap[b.id] && contextsOverlap(a.ctx, b.ctx)) return true;
+    }
+  }
+  return false;
 }

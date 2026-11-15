@@ -408,6 +408,28 @@ class T8Atomico(ProfileBase):
         after_files = set(os.listdir(self.env.dir))
         self.assertEqual(after_files, before_files)
 
+    def test_fsync_del_temporal_antes_de_replace(self):
+        # Sin fsync, un corte de luz tras os.replace puede dejar el perfil vacío o a medias
+        # (revisión de Sol del código, NEGATIVO: esta mutación sobrevivía a T8).
+        calls = []
+        real_fsync, real_replace = profile_mod.os.fsync, profile_mod.os.replace
+
+        def spy_fsync(fd):
+            calls.append("fsync")
+            return real_fsync(fd)
+
+        def spy_replace(src, dst):
+            calls.append("replace")
+            return real_replace(src, dst)
+
+        with mock.patch.object(profile_mod.os, "fsync", side_effect=spy_fsync), \
+                mock.patch.object(profile_mod.os, "replace", side_effect=spy_replace):
+            st, _ = self.env.req("POST", "/api/profile", valid_profile(), key=HK)
+        self.assertEqual(st, 200)
+        self.assertIn("fsync", calls)
+        self.assertIn("replace", calls)
+        self.assertLess(calls.index("fsync"), calls.index("replace"))
+
 
 class T9Secretos(ProfileBase):
     def test_sin_secretos_en_log_ni_en_profile_json(self):

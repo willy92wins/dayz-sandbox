@@ -167,11 +167,17 @@ export async function confirmFieldValue(
 
   const entity = ent as SceneEntity;
   if (field === 'x' || field === 'z') {
-    const nextX = field === 'x' ? parsedValue : entity.x;
-    const nextZ = field === 'z' ? parsedValue : entity.z;
+    // La otra coordenada se lee cuando la tanda sale de la fila, ya con el documento releído tras
+    // la tanda anterior: si no, X y luego Z perdían X (revisión de Sol, F01).
     return commitSceneOps(
       `Mover ${entity.name}`,
-      [{ name: 'entity.move', target: entity.id, args: { x: nextX, z: nextZ } }],
+      () => {
+        const cur = getState().doc?.entities.find((e) => e.id === entity.id);
+        if (!cur) return null;
+        const nextX = field === 'x' ? parsedValue : cur.x;
+        const nextZ = field === 'z' ? parsedValue : cur.z;
+        return [{ name: 'entity.move', target: entity.id, args: { x: nextX, z: nextZ } }];
+      },
       { targetId, field, rawValue: rawDraft }
     );
   }
@@ -386,7 +392,11 @@ export function PropertiesPanel() {
           onFocus={handleFocus}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
+          aria-readonly={!leaseGranted ? 'true' : undefined}
           onChange={(e) => {
+            // Un select no tiene readOnly: sin préstamo concedido, el cambio se ignora y el control
+            // vuelve al valor del documento (revisión de Sol, F04).
+            if (!leaseGranted) return;
             const nextVal = e.target.value;
             setFieldDraft(targetId, prop, nextVal);
             void confirmFieldValue(targetId, prop, propSchema, nextVal);
@@ -414,7 +424,11 @@ export function PropertiesPanel() {
           onFocus={handleFocus}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
-          onChange={(e) => setFieldDraft(targetId, prop, e.target.value)}
+          aria-readonly={!leaseGranted ? 'true' : undefined}
+          onChange={(e) => {
+            if (!leaseGranted) return; // F04: sin préstamo concedido no se edita
+            setFieldDraft(targetId, prop, e.target.value);
+          }}
         >
           {propSchema.enum.map((opt) => (
             <option key={opt} value={opt}>

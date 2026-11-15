@@ -35,17 +35,8 @@ export function ValidationPanel() {
         exists: found,
       };
     }
-    const m = /^\/entities\/(\d+)(?:\/(.+))?$/.exec(err.pointer);
-    if (m) {
-      const idx = parseInt(m[1], 10);
-      const ent = doc?.entities[idx];
-      return {
-        hasEntityPointer: true,
-        targetId: ent?.id ?? null,
-        field: err.field ?? m[2] ?? null,
-        exists: Boolean(ent),
-      };
-    }
+    // Sin id conocido no se navega: el índice de la ruta cambia al borrar o al añadir, y llevaría a
+    // otra entidad (§5.5; revisión de Sol, F08). El error se enseña igual, sin «Ver».
     return { hasEntityPointer: false, targetId: null, field: null, exists: false };
   };
 

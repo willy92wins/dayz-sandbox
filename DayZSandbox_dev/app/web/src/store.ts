@@ -575,6 +575,19 @@ export function applyIncomingSceneDoc(
     };
     if (usable) {
       patch.doc = doc;
+      // Una entidad que ya no está no puede dejar un borrador que bloquee «Aplicar» para siempre:
+      // se retiran sus borradores y su fila de Validación se queda, con «Ya no existe» (Sol, F07).
+      const alive = new Set(doc.entities.map((e) => e.id));
+      const gone = (key: string) => {
+        const target = key.slice(0, key.lastIndexOf(':'));
+        return target !== 'ambiente' && !alive.has(target);
+      };
+      if (Object.keys(prev.drafts).some(gone) || Object.keys(prev.rejectedDrafts).some(gone)) {
+        patch.drafts = Object.fromEntries(Object.entries(prev.drafts).filter(([k]) => !gone(k)));
+        patch.rejectedDrafts = Object.fromEntries(
+          Object.entries(prev.rejectedDrafts).filter(([k]) => !gone(k))
+        );
+      }
     }
     if (isCommitEvent) {
       patch.lastCommitPerfMs = performance.now();
@@ -761,7 +774,24 @@ export async function acquireFieldLease(targetId: string, field: string): Promis
         })
           .then((r) => {
             markBackendAlive();
-            if (r.status === 401) handleSessionExpired();
+            if (r.status === 401) {
+              handleSessionExpired();
+              return;
+            }
+            // Una renovación rechazada (409 lease_expired u otra) deja al backend sin préstamo:
+            // la web no puede seguir dando el campo por suyo (revisión de Sol, F05).
+            if (!r.ok && state.activeLease?.leaseId === lid) {
+              clearLeaseTimer();
+              setState({
+                activeLease: {
+                  targetId,
+                  field,
+                  leaseId: null,
+                  status: 'denied',
+                  reason: 'El préstamo de este campo caducó: sal del campo y vuelve a entrar.',
+                },
+              });
+            }
           })
           .catch(() => {
             markBackendDown();
@@ -808,13 +838,33 @@ export interface SceneOp {
   args?: Record<string, unknown>;
 }
 
-export async function commitSceneOps(
+// Los cambios del documento van en fila: cada tanda se construye cuando le toca, después de que la
+// anterior haya releído el documento (fetchAuthoritativeScene). Así un movimiento que manda X y Z
+// toma la otra coordenada del documento bueno y no pisa la edición anterior (revisión de Sol, F01).
+let commitChain: Promise<unknown> = Promise.resolve();
+
+export function commitSceneOps(
   label: string,
-  ops: SceneOp[],
+  ops: SceneOp[] | (() => SceneOp[] | null),
+  context?: { targetId?: string; field?: string; rawValue?: string }
+): Promise<boolean> {
+  const run = commitChain.then(() => commitSceneOpsNow(label, ops, context));
+  commitChain = run.catch(() => undefined);
+  return run;
+}
+
+async function commitSceneOpsNow(
+  label: string,
+  opsOrBuilder: SceneOp[] | (() => SceneOp[] | null),
   context?: { targetId?: string; field?: string; rawValue?: string }
 ): Promise<boolean> {
   if (state.sinBackend || !state.docInfo) return false;
+  const ops = typeof opsOrBuilder === 'function' ? opsOrBuilder() : opsOrBuilder;
+  if (!ops || ops.length === 0) return false;
   const reqId = nextRequestId('ops');
+  const fieldKey =
+    context?.targetId && context?.field ? `${context.targetId}:${context.field}` : null;
+  const genAtSend = fieldKey ? draftGen[fieldKey] ?? 0 : 0;
   try {
     const res = await fetch('/api/scene/ops', {
       method: 'POST',
@@ -850,7 +900,8 @@ export async function commitSceneOps(
       if (Array.isArray(data.created) && data.created.length > 0) {
         pendingCreatedEntityId = data.created[0];
       }
-      if (context?.targetId && context?.field) {
+      // Un borrador posterior al envío (otra tecla, otro valor) no se borra con este éxito.
+      if (context?.targetId && context?.field && fieldKey && (draftGen[fieldKey] ?? 0) === genAtSend) {
         clearFieldErrorAndDraft(context.targetId, context.field);
       }
       await fetchAuthoritativeScene(true);
@@ -868,6 +919,8 @@ export async function commitSceneOps(
 
     if (context?.targetId && context?.field) {
       const key = `${context.targetId}:${context.field}`;
+      // El borrador cambió o se descartó (Esc) mientras volvía la respuesta: no se resucita.
+      if ((draftGen[key] ?? 0) !== genAtSend) return false;
       const rawValue = context.rawValue ?? state.drafts[key] ?? '';
       const rej: RejectedDraft = {
         targetId: context.targetId,
@@ -916,8 +969,16 @@ export async function commitSceneOps(
   }
 }
 
+// Generación de cada borrador: sube cada vez que el borrador cambia o se descarta. La respuesta de
+// un envío viejo (un 422 que llega después de Esc) no puede resucitarlo (revisión de Sol, F06).
+const draftGen: Record<string, number> = {};
+function bumpDraftGen(key: string): void {
+  draftGen[key] = (draftGen[key] ?? 0) + 1;
+}
+
 export function clearFieldErrorAndDraft(targetId: string, field: string) {
   const key = `${targetId}:${field}`;
+  bumpDraftGen(key);
   setState((prev) => {
     const nextDrafts = { ...prev.drafts };
     const nextRej = { ...prev.rejectedDrafts };
@@ -933,6 +994,7 @@ export function clearFieldErrorAndDraft(targetId: string, field: string) {
 
 export function setFieldDraft(targetId: string, field: string, value: string) {
   const key = `${targetId}:${field}`;
+  bumpDraftGen(key);
   setState((prev) => ({
     drafts: { ...prev.drafts, [key]: value },
   }));

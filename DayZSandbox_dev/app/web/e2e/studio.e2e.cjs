@@ -1033,6 +1033,32 @@ async function runS2(browser) {
     });
     await sleep(120);
 
+    // Corrida 3 (revisión de Sol, F09): reparar un choque no puede dejar otro nuevo
+    await quietPageForProfileWrite(page);
+    await cmd({
+      cmd: "profile_write",
+      text:
+        JSON.stringify({
+          v: 1,
+          layouts: { escena: null, rodaje: null },
+          keymap: { colocar: "Ctrl+Z", deshacer: "G", rehacer: "G" },
+        }) + "\n",
+    });
+    await page.goto(BASE + "/");
+    await loginIfNeeded(context, page);
+    await page.locator('[data-aviso="atajos-corregidos"]').first().waitFor({ state: "visible", timeout: 5000 });
+    await clickToolsItem(page, /Atajos de teclado/);
+    const keyRowTxt = async (act) =>
+      (await page.locator('[role="dialog"] [data-action="' + act + '"]').innerText()).replace(/\s+/g, " ");
+    const kColocar = await keyRowTxt("colocar");
+    const kDeshacer = await keyRowTxt("deshacer");
+    assert(
+      !(/Ctrl\s*\+\s*Z/i.test(kColocar) && /Ctrl\s*\+\s*Z/i.test(kDeshacer)),
+      "S2(-): tras reparar el perfil, Colocar y Deshacer comparten Ctrl+Z (F09): " + kColocar + " | " + kDeshacer
+    );
+    await page.keyboard.press("Escape");
+    await page.locator('[role="dialog"]').waitFor({ state: "hidden", timeout: 5000 });
+
     // Negativo 4: Layout guardado con panel titulado <img src=x> -> titulo del registro y 0 img
     const hostileLayout = JSON.parse(JSON.stringify(parsedSaved.layouts.escena));
     function poisonTitles(node) {
@@ -1751,6 +1777,171 @@ async function runS5(browser) {
       await page.unroute("**/api/catalog", catalogRoute);
     }
 
+    // ---- Regresiones de la revisión de Sol del código (F01, F04, F05, F06) ----
+    const continueSafe = async (route) => {
+      try {
+        await route.continue();
+      } catch (e) {
+        if (!/already handled/i.test(String(e && e.message))) throw e;
+      }
+    };
+    await page.locator('[data-panel="jerarquia"] [data-entity-id="' + eid + '"]').click();
+    await activatePanel(page, "propiedades");
+
+    // F04: sin préstamo concedido, el selector de Clase ni cambia ni manda nada
+    {
+      let releaseLease;
+      const leaseGate = new Promise((r) => {
+        releaseLease = r;
+      });
+      let leaseSeen = false;
+      const holdClsLease = async (route) => {
+        const req = route.request();
+        if (req.method() === "POST" && new URL(req.url()).pathname === "/api/lease") {
+          leaseSeen = true;
+          await leaseGate;
+        }
+        await continueSafe(route);
+      };
+      let effectPosts = 0;
+      const onEffect = (req) => {
+        if (isEffectPost(req)) effectPosts += 1;
+      };
+      await page.route("**/api/lease", holdClsLease);
+      page.on("request", onEffect);
+      try {
+        await page.locator("#f-cls").focus();
+        const d = Date.now() + 3000;
+        while (!leaseSeen && Date.now() < d) await sleep(50);
+        assert(leaseSeen, "S5(-): enfocar Clase no pidio prestamo (F04)");
+        const values = await page.locator("#f-cls option").evaluateAll((os) => os.map((o) => o.value));
+        const current = await page.locator("#f-cls").inputValue();
+        const other = values.find((v) => v !== current);
+        if (other) await page.locator("#f-cls").selectOption(other).catch(() => {});
+        await sleep(400);
+        assert(effectPosts === 0, "S5(-): Clase cambio sin prestamo concedido (F04): " + effectPosts);
+      } finally {
+        page.off("request", onEffect);
+        releaseLease();
+        await sleep(200);
+        await page.unroute("**/api/lease", holdClsLease);
+      }
+      await page.locator("#f-cls").evaluate((el) => el.blur());
+      await sleep(200);
+    }
+
+    // F05: una renovación rechazada retira el préstamo y X vuelve a solo lectura
+    {
+      const failRenew = async (route) => {
+        const req = route.request();
+        if (req.method() === "POST" && /\/api\/lease\/[^/]+\/renew$/.test(new URL(req.url()).pathname)) {
+          await route.fulfill({
+            status: 409,
+            contentType: "application/json; charset=utf-8",
+            body: JSON.stringify({ ok: false, code: "lease_expired", pointer: "", msg: "caducado" }),
+          });
+          return;
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/lease/**", failRenew);
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page
+          .waitForFunction(() => {
+            const el = document.getElementById("f-x");
+            return !!el && el.readOnly;
+          }, null, { timeout: 5000 })
+          .catch(() => {
+            throw new Error("S5(-): tras una renovacion 409 el campo X siguio editable (F05)");
+          });
+      } finally {
+        await page.unroute("**/api/lease/**", failRenew);
+        await page.locator("#f-x").evaluate((el) => el.blur());
+        await sleep(200);
+      }
+    }
+
+    // F06: un 422 que llega después de Esc no resucita el borrador descartado
+    {
+      let releaseOps;
+      const opsGate = new Promise((r) => {
+        releaseOps = r;
+      });
+      let opsHeld = false;
+      const holdOps = async (route) => {
+        if (route.request().method() === "POST") {
+          opsHeld = true;
+          await opsGate;
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", holdOps);
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("99999");
+        await page.keyboard.press("Enter");
+        const d = Date.now() + 3000;
+        while (!opsHeld && Date.now() < d) await sleep(50);
+        assert(opsHeld, "S5(-): F06: no salio el POST de X");
+        await page.keyboard.press("Escape");
+        await sleep(150);
+        releaseOps();
+        await sleep(900);
+        const st6 = await page.evaluate(() => {
+          const el = document.getElementById("f-x");
+          const btn = document.querySelector('[data-testid="accion-principal"] button');
+          return { inv: el && el.getAttribute("aria-invalid"), val: el && el.value, applyOff: !!(btn && btn.disabled) };
+        });
+        assert(
+          st6.inv !== "true" && st6.val !== "99999" && !st6.applyOff,
+          "S5(-): un 422 tardio resucito el borrador descartado con Esc (F06): " + JSON.stringify(st6)
+        );
+      } finally {
+        await page.unroute("**/api/scene/ops", holdOps);
+        await page.locator("#f-x").evaluate((el) => el.blur());
+        await sleep(200);
+      }
+    }
+
+    // F01: X y luego Z con las lecturas de /api/scene retenidas; no se pierde X
+    {
+      let releaseScene;
+      const sceneGate = new Promise((r) => {
+        releaseScene = r;
+      });
+      const holdScene = async (route) => {
+        if (route.request().method() === "GET") await sceneGate;
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene", holdScene);
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7111");
+        await page.keyboard.press("Tab");
+        await waitEditable(page, "#f-z");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7222");
+        await page.keyboard.press("Enter");
+        await sleep(700);
+      } finally {
+        releaseScene();
+        await sleep(300);
+        await page.unroute("**/api/scene", holdScene);
+      }
+      const snapF1 = await waitForSnap((s) => {
+        const e = s.doc.entities.find((x) => x.id === eid);
+        return !!e && e.z === 7222;
+      }, "F01: Z aplicado", 8000);
+      const entF1 = snapF1.doc.entities.find((x) => x.id === eid);
+      assert(entF1.x === 7111 && entF1.z === 7222, "S5(-): X y luego Z perdieron X (F01): " + JSON.stringify({ x: entF1.x, z: entF1.z }));
+    }
+
     console.log("S5 OK");
   } finally {
     await context.close();
@@ -2230,6 +2421,41 @@ async function runS7(browser) {
       "S7(-): tras recargar no coinciden las coordenadas guardadas"
     );
 
+    // F03 (revisión de Sol): con el foco en un campo, Ctrl+Intro mantenido tampoco repite Aplicar
+    await page.locator("#f-x").focus();
+    await waitEditable(page, "#f-x");
+    let fieldApplyPosts = 0;
+    const onFieldApply = (req) => {
+      if (req.method() === "POST" && new URL(req.url()).pathname === "/api/apply") fieldApplyPosts += 1;
+    };
+    page.on("request", onFieldApply);
+    try {
+      const firstFieldApplyP = page.waitForResponse(
+        (r) => new URL(r.url()).pathname === "/api/apply" && r.request().method() === "POST",
+        { timeout: 8000 }
+      );
+      await page.keyboard.down("Control");
+      await page.keyboard.down("Enter");
+      const r1 = await firstFieldApplyP;
+      assert(r1.status() === 200, "S7(-): F03: el primer Aplicar desde el campo no dio 200: " + r1.status());
+      await page.waitForFunction(
+        () => {
+          const b = document.querySelector('[data-testid="accion-principal"] button');
+          return !!b && !b.disabled;
+        },
+        null,
+        { timeout: 5000 }
+      );
+      await sleep(50);
+      await page.keyboard.down("Enter"); // repeat: true con el foco todavía en #f-x
+      await sleep(300);
+      await page.keyboard.up("Enter");
+      await page.keyboard.up("Control");
+    } finally {
+      page.off("request", onFieldApply);
+    }
+    assert(fieldApplyPosts === 1, "S7(-): Ctrl+Intro mantenido en un campo repitio Aplicar (F03): " + fieldApplyPosts);
+
     console.log("S7 OK");
   } finally {
     await context.close();
@@ -2240,6 +2466,13 @@ async function runS7(browser) {
 // S8: Atajos (D4, CU-32)
 // ============================================================================
 async function openShortcutsDialogKeyboardOnly(page) {
+  const trail = [];
+  const where = () =>
+    page.evaluate(() => {
+      const a = document.activeElement;
+      if (!a) return "-";
+      return (a.tagName + (a.id ? "#" + a.id : "") + ":" + (a.textContent || "").trim().slice(0, 24)).replace(/\s+/g, " ");
+    });
   await page.keyboard.press("Escape");
   for (let i = 0; i < 40; i++) {
     const isTools = await page.evaluate(() => {
@@ -2247,6 +2480,7 @@ async function openShortcutsDialogKeyboardOnly(page) {
       return !!a && a.tagName === "BUTTON" && /^Herramientas\b/.test((a.textContent || "").trim());
     });
     if (isTools) break;
+    trail.push("T:" + (await where()));
     await page.keyboard.press("Tab");
   }
   await page.keyboard.press("Enter");
@@ -2259,6 +2493,7 @@ async function openShortcutsDialogKeyboardOnly(page) {
       reached = true;
       break;
     }
+    trail.push("D:" + (await where()));
     await page.keyboard.press("ArrowDown");
   }
   if (!reached) {
@@ -2268,10 +2503,11 @@ async function openShortcutsDialogKeyboardOnly(page) {
         reached = true;
         break;
       }
+      trail.push("T2:" + (await where()));
       await page.keyboard.press("Tab");
     }
   }
-  assert(reached, "S8(+): no se alcanzo 'Atajos de teclado…' con teclado");
+  assert(reached, "S8(+): no se alcanzo 'Atajos de teclado…' con teclado; foco: " + trail.slice(-30).join(" | "));
   await page.keyboard.press("Enter");
   const dlg = page.locator('[role="dialog"][aria-modal="true"]');
   await dlg.waitFor({ state: "visible", timeout: 5000 });
@@ -2623,6 +2859,24 @@ async function runS8(browser) {
       snapAfterPartial.doc.entities.find((e) => e.id === placedId).yaw === 20,
       "S8(+): deshacer-parcial cambio el rumbo de 20"
     );
+
+    // F02 (revisión de Sol): la Jerarquía no tiene atajos fijos; Borrar reasignado a F4 manda
+    await openShortcutsDialogKeyboardOnly(page);
+    await assignShortcutByKeyboard(page, "borrar", "F4");
+    await page.keyboard.press("Escape");
+    await page.locator('[role="dialog"][aria-modal="true"]').waitFor({ state: "hidden", timeout: 5000 });
+    const treeRow = page.locator('[data-panel="jerarquia"] [data-entity-id="' + placedId + '"]');
+    await treeRow.click();
+    await page.keyboard.press("Delete");
+    await sleep(500);
+    const snapAfterSupr = await cmd({ cmd: "snapshot" });
+    assert(
+      snapAfterSupr.doc.entities.some((e) => e.id === placedId),
+      "S8(-): Supr en la Jerarquia borro con Borrar reasignado a F4 (F02)"
+    );
+    await treeRow.click();
+    await page.keyboard.press("F4");
+    await waitForSnap((s) => !s.doc.entities.some((e) => e.id === placedId), "borrar con F4 desde la Jerarquia");
 
     console.log("S8 OK");
   } finally {
@@ -3045,6 +3299,11 @@ async function runS10(browser) {
     await page.keyboard.type("99999");
     await page.keyboard.press("Enter");
     await errRow.first().waitFor({ state: "visible", timeout: 5000 });
+    // Precondición de F07: con el campo rechazado, «Aplicar» está desactivado
+    assert(
+      await page.locator('[data-testid="accion-principal"] button').first().isDisabled(),
+      "S10(-): «Aplicar» activo con un campo rechazado (precondición de F07)"
+    );
 
     // Soltar el prestamo humano antes de que ai_ops borre e1
     await page
@@ -3092,6 +3351,97 @@ async function runS10(browser) {
       e2Selected !== "true" && activeId !== "f-x",
       "S10(-): 'Ver' de entidad borrada selecciono la segunda entidad por indice o enfoco #f-x (Xz)"
     );
+
+    // F07 (revisión de Sol): el borrador rechazado de una entidad que ya no existe no deja «Aplicar»
+    // desactivado para siempre
+    await page
+      .waitForFunction(
+        () => {
+          const b = document.querySelector('[data-testid="accion-principal"] button');
+          return !!b && !b.disabled;
+        },
+        null,
+        { timeout: 5000 }
+      )
+      .catch(async (err) => {
+        const t = await page.locator('[data-testid="accion-principal"] button').first().getAttribute("title");
+        throw new Error(
+          "S10(-): «Aplicar» sigue desactivado tras borrar la entidad del campo rechazado (F07): " + t + " · " + err.message
+        );
+      });
+
+    // F08 (revisión de Sol): un error sin id de entidad no lleva «Ver», aunque el índice de su ruta lo
+    // ocupe ahora otra entidad
+    const rawCatS10 = JSON.parse(fs.readFileSync(CATALOG_PATH, "utf8"));
+    const catInventada = async (route) => {
+      const resp = await route.fetch();
+      const j = await resp.json();
+      j.classes.objeto = (j.classes.objeto || rawCatS10.classes.objeto).concat(["ClaseInventada"]);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify(j),
+      });
+    };
+    await page.route("**/api/catalog", catInventada);
+    try {
+      await page.goto(BASE + "/");
+      await loginIfNeeded(context, page);
+      const nBefore = (await cmd({ cmd: "snapshot" })).doc.entities.length;
+      const ptrCls = "/entities/" + nBefore + "/cls";
+      await activatePanel(page, "anadir");
+      await page.locator('[data-panel="anadir"] [data-cls="ClaseInventada"]').click();
+      await page.waitForFunction(
+        () => {
+          const el = document.querySelector('[data-panel="anadir"] [data-cls="ClaseInventada"]');
+          return !!el && el.getAttribute("aria-pressed") === "true";
+        },
+        null,
+        { timeout: 3000 }
+      );
+      await page.keyboard.press("Enter");
+      await activatePanel(page, "validacion");
+      const clsRow = page.locator('[data-panel="validacion"] [data-error-pointer="' + ptrCls + '"]');
+      await clsRow.first().waitFor({ state: "visible", timeout: 5000 });
+      assert(
+        (await cmd({ cmd: "snapshot" })).doc.entities.length === nBefore,
+        "S10(-): la clase inventada entró en la escena"
+      );
+
+      const dLease2 = Date.now() + 5000;
+      while (Date.now() < dLease2) {
+        if ((await cmd({ cmd: "leases" })).leases.length === 0) break;
+        await sleep(80);
+      }
+      const rBarril = await cmd({
+        cmd: "ai_ops",
+        label: "IA añade un barril",
+        ops: [
+          { name: "entity.add", args: { kind: "objeto", cls: "Barrel_Red", name: "Barril IA", x: 6200, z: 7200, yaw: 0 } },
+        ],
+      });
+      assert(rBarril.ok, "S10(-): ai_ops entity.add fallo: " + JSON.stringify(rBarril));
+      const idBarril = rBarril.created[0];
+      await page.waitForFunction(
+        (id) => !!document.querySelector('[data-panel="jerarquia"] [data-entity-id="' + id + '"]'),
+        idBarril,
+        { timeout: 5000 }
+      );
+      const snapB = await cmd({ cmd: "snapshot" });
+      assert(
+        snapB.doc.entities[nBefore] && snapB.doc.entities[nBefore].id === idBarril,
+        "S10(-): el barril de la IA no ocupa el índice " + nBefore
+      );
+      await activatePanel(page, "validacion");
+      await clsRow.first().waitFor({ state: "visible", timeout: 5000 });
+      const verSinId = await clsRow.first().getByRole("button", { name: /^Ver\b/ }).count();
+      assert(
+        verSinId === 0,
+        "S10(-): el error sin id lleva «Ver», que por índice llevaría al barril de la IA (F08)"
+      );
+    } finally {
+      await page.unroute("**/api/catalog", catInventada);
+    }
 
     console.log("S10 OK");
   } finally {

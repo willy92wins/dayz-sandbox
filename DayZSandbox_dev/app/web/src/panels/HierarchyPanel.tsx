@@ -2,7 +2,6 @@ import React, { useRef } from 'react';
 import { EntityKind, SceneEntity } from '../types';
 import { KindGlyph } from '../icons';
 import {
-  deleteSelectedEntities,
   getDockviewApi,
   setState,
   useStudioStore,
@@ -103,32 +102,9 @@ export function HierarchyPanel() {
       focusTreeItem(nextId);
       return;
     }
-    if (e.key === 'Delete') {
-      e.preventDefault();
-      e.stopPropagation();
-      void deleteSelectedEntities();
-      return;
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
-      e.preventDefault();
-      e.stopPropagation();
-      setState({ selectedIds: orderedEntities.map((ent) => ent.id) });
-      return;
-    }
-    if (e.altKey && e.key === 'Enter') {
-      e.preventDefault();
-      e.stopPropagation();
-      const api = getDockviewApi();
-      if (api) {
-        openOrFocusPanel(api, mode, 'propiedades');
-      }
-      window.setTimeout(() => {
-        const firstInput = document.querySelector<HTMLElement>(
-          '[data-panel="propiedades"] input:not([readonly]):not(:disabled), [data-panel="propiedades"] select:not(:disabled)'
-        );
-        firstInput?.focus();
-      }, 30);
-    }
+    // Borrar, Seleccionar todo e Ir a las propiedades no se atienden aquí: los resuelve el mapa
+    // común de atajos (App.tsx), que respeta las teclas reasignadas y las acciones sin tecla
+    // (revisión de Sol, F02). Este manejador se queda solo con la navegación del árbol.
   };
 
   const handleOpenAddFirstObject = () => {
