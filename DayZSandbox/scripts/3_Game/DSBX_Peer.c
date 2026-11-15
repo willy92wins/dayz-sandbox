@@ -333,6 +333,14 @@ class DSBX_Peer
 			j = j + 1;
 		}
 		m_PoolR.Clear();
+		// Each in-flight request keeps its callback alive inside the engine. Without clearing the
+		// context, shutdown reports "Leaked 'DSBX_Callback' script instance" (G1 smoke, diag, 15-nov).
+		// Callbacks are detached first, so anything reset() fires is a no-op.
+		if (m_Ctx && GetRestApi())
+		{
+			m_Ctx.reset();
+		}
+		m_Ctx = null;
 		Log("shutdown role=" + m_Role);
 	}
 
