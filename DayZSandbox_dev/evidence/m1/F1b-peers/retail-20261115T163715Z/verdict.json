@@ -1,0 +1,15 @@
+{
+  "aggregate": "INCONCLUSO",
+  "rows": {
+    "G1": {
+      "metrics": {},
+      "reason": "logs no finales",
+      "verdict": "INCONCLUSO"
+    },
+    "G4": {
+      "metrics": {},
+      "reason": "logs no finales",
+      "verdict": "INCONCLUSO"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{"ev":"start","scenario":"G1","t_ms":94079048.4188,"wall":"16:11:57.216"}
+{"ev":"config","key_sha256":"05cf9a2c02f755372359b3430b6209b424048a98eaa78c97ebe249d6722789e2","peer":"server","qa_step_gap_ms":0,"t_ms":94079048.46609999}
+{"ev":"config","key_sha256":"05cf9a2c02f755372359b3430b6209b424048a98eaa78c97ebe249d6722789e2","peer":"client","qa_step_gap_ms":0,"t_ms":94079048.4823}
+{"ev":"connected","peer":"server","t_ms":94079056.10869999}
+{"ev":"connected","peer":"client","t_ms":94079056.6901}
+{"ev":"end","reason":null,"status":"ok","t_ms":94079056.84220001}
