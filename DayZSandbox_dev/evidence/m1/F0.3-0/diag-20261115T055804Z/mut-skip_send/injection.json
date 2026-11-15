@@ -1,0 +1,12 @@
+{
+  "applied": true,
+  "kind": "qa_fault",
+  "mutant": "skip_send",
+  "observable_effect": {
+    "client_new_pings_n": 0,
+    "server_rows_sample_n": 11,
+    "server_state_at_reconnect": "failed"
+  },
+  "target": "7c46bcfd7966bf9f-253",
+  "when_h_ms": 75886.647
+}

@@ -1,0 +1,99 @@
+{
+  "checks": [
+    {
+      "detail": "",
+      "id": "C0",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "H1.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "H1.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "M1",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "M2",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N1.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N1.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N2.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N2.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N3.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N3.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N4.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N4.client",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N5.server",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "id": "N5.client",
+      "status": "pass"
+    },
+    {
+      "detail": "no burst or log",
+      "id": "N6",
+      "status": "missing"
+    }
+  ],
+  "error": null,
+  "exit_code": 2,
+  "id": "S-puente",
+  "metrics": {
+    "max_ms": 214.33600000001024,
+    "n_not_observed": 0,
+    "n_timeouts": 0,
+    "p50_ms": 198.5969999999943,
+    "p95_ms": 205.69000000000233
+  },
+  "reasons": [
+    "N6"
+  ],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "INCONCLUSO"
+}

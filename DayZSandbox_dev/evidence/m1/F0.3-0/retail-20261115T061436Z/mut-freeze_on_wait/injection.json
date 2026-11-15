@@ -1,0 +1,21 @@
+{
+  "applied": true,
+  "kind": "qa_fault",
+  "mutant": "freeze_on_wait",
+  "observable_effect": {
+    "client": {
+      "end_tick_ms": 473106.03125,
+      "onjobend_tick_ms": 473106.03125,
+      "released_tick_ms": 473106.03125,
+      "state": "expired"
+    },
+    "server": {
+      "end_tick_ms": 545006.0625,
+      "onjobend_tick_ms": 545006.0625,
+      "released_tick_ms": 545006.0625,
+      "state": "expired"
+    }
+  },
+  "target": "23fc96aa74f46e29-236",
+  "when_h_ms": 59675.864
+}

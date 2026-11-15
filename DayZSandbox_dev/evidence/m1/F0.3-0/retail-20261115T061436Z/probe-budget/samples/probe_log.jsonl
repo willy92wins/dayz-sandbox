@@ -1,0 +1,2 @@
+{"budget_n": 30, "created_n": 124, "ev": "probe_log", "line": "07:25:04.402 SCRIPT       : [DSBX_QA] callback_budget_exhausted created_n=124 budget_n=30", "peer": "server", "tag": "callback_budget_exhausted"}
+{"budget_n": 30, "created_n": 95, "ev": "probe_log", "line": "07:25:04.376 SCRIPT       : [DSBX_QA] callback_budget_exhausted created_n=95 budget_n=30", "peer": "client", "tag": "callback_budget_exhausted"}

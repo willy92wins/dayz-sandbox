@@ -1,7 +1,8 @@
-"""Registro de ids, mapa de fases, agregacion y E/S de evidencia (brief F0.1 §3-§4)."""
+"""Registro de ids, mapa de fases, agregacion y E/S de evidencia (brief F0.1 §3-§4, F0.3-0 §5.1, §13 A1)."""
 
 import json
 import math
+import os
 import platform
 import subprocess
 from datetime import datetime, timezone
@@ -10,18 +11,31 @@ from pathlib import Path
 SCHEMA_MANIFEST = "dsbx-qa-manifest/1"
 SCHEMA_VERDICT = "dsbx-qa-verdict/1"
 
-SPIKES = (
-    "S-puente",
-    "S-persist",
-    "S3",
-    "S-cam",
-    "S-cot",
-    "S-tiempo",
-    "S-toma",
-    "S-perf",
-    "S-mapa",
-)
-IMPLEMENTED_SPIKES = frozenset({"S-puente"})
+SPIKE_REGISTRY = {
+    "S-puente": ("s_puente_run", "s_puente_eval", None),
+    "F0.3-0": ("f03_base_run", "f03_base_eval", "f03_base_mutants"),
+    "S-persist": ("s_persist_run", "s_persist_eval", "s_persist_mutants"),
+    "S3": ("s3_run", "s3_eval", "s3_mutants"),
+    "S-cam": ("s_cam_run", "s_cam_eval", "s_cam_mutants"),
+    "S-cot": ("s_cot_run", "s_cot_eval", "s_cot_mutants"),
+    "S-tiempo": ("s_tiempo_run", "s_tiempo_eval", "s_tiempo_mutants"),
+    "S-toma": ("s_toma_run", "s_toma_eval", "s_toma_mutants"),
+    "S-perf": ("s_perf_run", "s_perf_eval", "s_perf_mutants"),
+    "S-mapa": ("s_mapa_run", "s_mapa_eval", "s_mapa_mutants"),
+}
+
+SPIKES = tuple(SPIKE_REGISTRY.keys())
+# Informativo: m1_gate despacha cualquier spike registrado a sus modulos (brief F0.3-0 §5.1); los esqueletos
+# responden not_implemented (exit 2). Activar un spike no exige tocar esta linea.
+IMPLEMENTED_SPIKES = frozenset(SPIKE_REGISTRY)
+
+
+def known_spikes():
+    extra = os.environ.get("DSBX_QA_TEST_UNIMPL_SPIKE", "").strip()
+    if extra and extra not in SPIKES:
+        return SPIKES + (extra,)
+    return SPIKES
+
 
 CRITERIA = (
     [f"A{i}" for i in range(1, 7)]
@@ -100,28 +114,53 @@ def utc_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def git_harness():
+def git_harness(repo_root=None):
     harness = {
         "git_dirty": None,
         "git_head": None,
         "platform": platform.platform(),
         "python": platform.python_version(),
     }
+    cwd = Path(repo_root) if repo_root is not None else None
     try:
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        if top.returncode != 0 or not top.stdout.strip():
+            return harness
+        toplevel = Path(top.stdout.strip())
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=toplevel,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
             check=False,
         )
         if head.returncode != 0:
             return harness
         dirty = subprocess.run(
-            ["git", "status", "--porcelain"],
+            [
+                "git",
+                "status",
+                "--porcelain",
+                "--",
+                ".",
+                ":(exclude)DayZSandbox_dev/evidence",
+            ],
+            cwd=toplevel,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=False,
         )
+        if dirty.returncode != 0:
+            return harness
     except OSError:
         return harness
     harness["git_head"] = head.stdout.strip() or None
@@ -129,8 +168,18 @@ def git_harness():
     return harness
 
 
-def make_manifest(kind, ident, args, argv, started, ended, port=None):
+def make_manifest(kind, ident, args, argv, started, ended, port=None, run_id=None):
     fault = getattr(args, "fault", None)
+    params = {
+        "hold_ms": getattr(args, "hold_ms", DEFAULT_HOLD_MS),
+        "lease_ms": getattr(args, "lease_ms", DEFAULT_LEASE_MS),
+        "port": port,
+        "retry_ms": getattr(args, "retry_ms", DEFAULT_RETRY_MS),
+        "seed": getattr(args, "seed", DEFAULT_SEED),
+        "ttl_ms": getattr(args, "ttl_ms", DEFAULT_TTL_MS),
+    }
+    if run_id is not None:
+        params["run_id"] = run_id
     return {
         "argv": list(argv),
         "both": bool(getattr(args, "both", False)),
@@ -140,14 +189,7 @@ def make_manifest(kind, ident, args, argv, started, ended, port=None):
         "harness": git_harness(),
         "id": ident,
         "kind": kind,
-        "params": {
-            "hold_ms": getattr(args, "hold_ms", DEFAULT_HOLD_MS),
-            "lease_ms": getattr(args, "lease_ms", DEFAULT_LEASE_MS),
-            "port": port,
-            "retry_ms": getattr(args, "retry_ms", DEFAULT_RETRY_MS),
-            "seed": getattr(args, "seed", DEFAULT_SEED),
-            "ttl_ms": getattr(args, "ttl_ms", DEFAULT_TTL_MS),
-        },
+        "params": params,
         "schema": SCHEMA_MANIFEST,
         "started_utc": started,
     }
