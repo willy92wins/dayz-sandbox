@@ -2296,5 +2296,230 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
         )
 
 
+class TestCase10Vuelta4(TestFakeWorldBaseMixin, unittest.TestCase):
+    """Vuelta 4: compensaciones limitadas a su orden (D8, §3.4) y M3 de verdad."""
+
+    def _reg(self, world: FakeWorld, doc_id: str, lid: str) -> dict | None:
+        for rec in world.registry_snapshot():
+            if rec["scene_id"] == doc_id and rec["lid"] == lid:
+                return rec
+        return None
+
+    def _reg_eid(self, world: FakeWorld, doc_id: str, lid: str) -> str:
+        rec = self._reg(world, doc_id, lid)
+        self.assertIsNotNone(rec, f"registro no encontrado para {(doc_id, lid)!r}")
+        return rec["eid"]
+
+    def _apply(self, world, plan, op_id, *, session=SESS_A, check=None, tick=None):
+        return world.apply(
+            _make_order(world, "scene.apply", plan, op_id=op_id, session=session),
+            check=check if check is not None else (lambda: None),
+            tick=tick if tick is not None else (lambda: None),
+        )
+
+    def _reset(self, world, op_id, *, args=None, session=SESS_A, check=None, tick=None):
+        if args is None:
+            args = {"doc_id": self.doc["doc_id"]}
+        return world.reset(
+            _make_order(world, "scene.reset", args, op_id=op_id, session=session),
+            check=check if check is not None else (lambda: None),
+            tick=tick if tick is not None else (lambda: None),
+        )
+
+    def _apply_main(self, world, *, rev=1, op_id="op-v4-base"):
+        plan = build_plan(self.doc, rev=rev, catalog=self.catalog)
+        st, rsn, _ = self._apply(world, plan, op_id)
+        self.assertEqual(st, "done")
+        self.assertIsNone(rsn)
+        return plan
+
+    def test_q3a_compensacion_en_la_orden_cortada_por_el_plazo_no_borra_nada(self) -> None:
+        world = FakeWorld(ground=_custom_ground)
+        world.fail_create("obj-12")
+        plan = build_plan(self.doc, rev=1, catalog=self.catalog)
+        calls = 0
+
+        def check():
+            nonlocal calls
+            calls += 1
+            return "expired" if calls > 12 else None
+
+        st, rsn, rd = self._apply(world, plan, "op-q3", check=check)
+        self.assertEqual((st, rsn), ("error", "create_failed"))
+        self.assertEqual(world.effects(SESS_A, "op-q3"), {"created": 11, "deleted": 0})
+        self.assertEqual(rd["scene"]["last"]["outcome"], "interrupted")
+        self.assertEqual(
+            rd["scene"]["pending"], {"session": SESS_A, "op_id": "op-q3", "n": 11}
+        )
+
+    def test_m2_reset_cortado_tras_borrar_obj17_no_deja_hijos_con_padre_muerto(self) -> None:
+        world = FakeWorld(ground=_custom_ground)
+        self._apply_main(world)
+        doc_id = self.doc["doc_id"]
+        roots = [
+            r["lid"] for r in world.registry_snapshot() if r["parent_lid"] is None
+        ]
+        k17 = roots.index("obj-17") + 1
+        e17 = self._reg_eid(world, doc_id, "obj-17")
+        e18 = self._reg_eid(world, doc_id, "obj-18")
+        world.move_inside((doc_id, "obj-18"), (doc_id, "obj-17"))
+        calls = 0
+
+        def check():
+            nonlocal calls
+            calls += 1
+            return "expired" if calls > k17 else None
+
+        st, rsn, _ = self._reset(world, "rst-m2", check=check)
+        self.assertEqual((st, rsn), ("error", "expired"))
+        census = {c["eid"]: c for c in world.census()}
+        self.assertNotIn(e17, census)
+        self.assertNotIn(e18, census)
+        dead_parent = [
+            c["eid"]
+            for c in census.values()
+            if c["parent"] is not None and c["parent"] not in census
+        ]
+        self.assertEqual(dead_parent, [])
+
+    def test_m3b_restart_en_el_primer_tick_de_un_reset_no_escribe_last(self) -> None:
+        world = FakeWorld(ground=_custom_ground)
+        self._apply_main(world)
+        doc_id = self.doc["doc_id"]
+        ticks = 0
+
+        def tick():
+            nonlocal ticks
+            ticks += 1
+            if ticks == 1:
+                world.restart()
+
+        st, rsn, rd = self._reset(world, "rst-m3", tick=tick)
+        self.assertEqual((st, rsn), ("error", "stale_epoch"))
+        self.assertEqual(world.effects(SESS_A, "rst-m3"), {"created": 0, "deleted": 8})
+        self.assertIsNone(rd["scene"]["last"])
+        self.assertIsNone(world.read(doc_id)["scene"]["last"])
+
+    def test_m3_restart_tras_la_ultima_creacion_no_publica_generation(self) -> None:
+        world = FakeWorld(ground=_custom_ground)
+        doc_id = self.doc["doc_id"]
+        plan = build_plan(self.doc, rev=1, catalog=self.catalog)
+        ticks = 0
+
+        def tick():
+            nonlocal ticks
+            ticks += 1
+            if ticks == 5:
+                world.restart()
+
+        st, rsn, rd = self._apply(world, plan, "op-pub", tick=tick)
+        self.assertEqual((st, rsn), ("error", "stale_epoch"))
+        self.assertEqual(world.effects(SESS_A, "op-pub"), {"created": 33, "deleted": 0})
+        self.assertIsNone(rd["generation"])
+        self.assertIsNone(world.read(doc_id)["generation"])
+
+    def test_m3_restart_antes_del_primer_borrado_de_la_compensacion_no_escribe_last(self) -> None:
+        world = FakeWorld(ground=_custom_ground)
+        doc_id = self.doc["doc_id"]
+        world.fail_create("obj-12")
+        plan = build_plan(self.doc, rev=1, catalog=self.catalog)
+        calls = 0
+
+        def check():
+            nonlocal calls
+            calls += 1
+            if calls == 13:
+                world.restart()
+            return None
+
+        st, rsn, rd = self._apply(world, plan, "op-comp", check=check)
+        self.assertEqual((st, rsn), ("error", "stale_epoch"))
+        self.assertEqual(world.effects(SESS_A, "op-comp"), {"created": 11, "deleted": 0})
+        self.assertIsNone(rd["scene"]["last"])
+        self.assertIsNone(world.read(doc_id)["scene"]["last"])
+
+    def test_oah_if_pending_compensacion_solo_borra_su_orden_y_conserva_registro_ajeno(self) -> None:
+        world = FakeWorld(ground=_custom_ground)
+        doc_id = self.doc["doc_id"]
+        plan = build_plan(self.doc, rev=1, catalog=self.catalog)
+        calls = 0
+
+        def cut5():
+            nonlocal calls
+            calls += 1
+            return "lease_expired" if calls > 5 else None
+
+        st_a, _, rd_a = self._apply(world, plan, "op-a", check=cut5)
+        self.assertEqual(st_a, "error")
+        self.assertEqual(
+            rd_a["scene"]["pending"], {"session": SESS_A, "op_id": "op-a", "n": 5}
+        )
+        e30 = world.seed_record(
+            doc_id, "obj-30", "WoodenCrate", 6100.0, 7600.0, SESS_B, "op-otra"
+        )
+        st, rsn, _ = self._reset(
+            world,
+            "rst-comp",
+            args={
+                "doc_id": doc_id,
+                "if_pending": {"session": SESS_A, "op_id": "op-a"},
+            },
+            session=SESS_B,
+        )
+        self.assertEqual((st, rsn), ("done", None))
+        self.assertEqual(world.effects(SESS_B, "rst-comp"), {"created": 0, "deleted": 5})
+        self.assertIn(e30, {c["eid"] for c in world.census()})
+        self.assertIsNotNone(self._reg(world, doc_id, "obj-30"))
+
+    def test_oah_en_orden_compensacion_no_borra_registro_ajeno_sembrado_tras_el_primer_lote(self) -> None:
+        world = FakeWorld(ground=_custom_ground)
+        doc_id = self.doc["doc_id"]
+        world.fail_create("obj-12")
+        plan = build_plan(self.doc, rev=1, catalog=self.catalog)
+        box = {"eid": None}
+        ticks = 0
+
+        def tick():
+            nonlocal ticks
+            ticks += 1
+            if ticks == 1:
+                box["eid"] = world.seed_record(
+                    doc_id, "obj-30", "WoodenCrate", 6100.0, 7600.0, SESS_B, "op-otra"
+                )
+
+        st, rsn, _ = self._apply(world, plan, "op-a12", tick=tick)
+        self.assertEqual((st, rsn), ("error", "create_failed"))
+        self.assertEqual(world.effects(SESS_A, "op-a12"), {"created": 11, "deleted": 11})
+        self.assertIsNotNone(box["eid"])
+        self.assertIn(box["eid"], {c["eid"] for c in world.census()})
+        self.assertIsNotNone(self._reg(world, doc_id, "obj-30"))
+
+    def test_m8_barrera_falla_rapido_si_el_verbo_retiene_el_cerrojo(self) -> None:
+        world = FakeWorld(ground=_custom_ground)
+        self._apply_main(world)
+        world.barrier_after(8)
+        reached = world._barrier_reached
+        release = world._barrier_release
+        self.assertIsNotNone(reached)
+        self.assertIsNotNone(release)
+        result: dict = {}
+
+        def run() -> None:
+            result["r"] = self._reset(world, "rst-m8")
+
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        self.assertTrue(reached.wait(5.0), "la barrera no se alcanzo en 5 s")
+        got_lock = world._lock.acquire(timeout=1.0)
+        if got_lock:
+            world._lock.release()
+        self.assertTrue(got_lock, "el verbo retuvo el cerrojo durante la barrera")
+        release.set()
+        th.join(10.0)
+        self.assertFalse(th.is_alive(), "el verbo no termino tras liberar la barrera")
+        st, rsn, _ = result["r"]
+        self.assertEqual((st, rsn), ("done", None))
+
+
 if __name__ == "__main__":
     unittest.main()

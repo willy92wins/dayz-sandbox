@@ -4,6 +4,10 @@ Modela entidades vivas con inventario jerarquico, suelo determinista inyectable,
 ticks simulados con deriva de criaturas tras soltar la IA, registro de propiedad
 por epoch y escena, censo independiente que no lee el registro, e inyeccion de
 fallos y reinicio de mision. Solo biblioteca estandar y sin red.
+
+El gancho publico `seed_record(doc_id, lid, cls, x, z, session, op_id)` existe SOLO
+para pruebas: siembra una entidad viva registrada en la escena con otra orden, para
+comprobar que las compensaciones no borran lo que no es de su `(session, op_id)`.
 """
 from __future__ import annotations
 
@@ -806,9 +810,13 @@ class FakeWorld:
         clear_gen_on_first_delete: bool,
         check,
         tick,
+        op_scope: tuple[str, str] | None = None,
     ) -> tuple[bool, set[int], str | None]:
         """Borra lo borrable no retenido en dos pasadas (hijos y luego raices) por lotes.
 
+        `op_scope` limita lo borrable a los registros de esa `(session, op_id)` (D8 y
+        §3.4 paso 2): solo lo pasan las dos compensaciones. El paso 4 del apply y el
+        reset normal pasan `None` y borran lo borrable de toda la escena.
         Revalida la retencion justo antes de cada borrado bajo self._lock (TOCTOU),
         confirma cada borrado (D5) y para con `delete_failed` si no se confirma.
         Con `stop_on_retention` (apply, §3.3 paso 4) para al encontrar retencion;
@@ -823,7 +831,12 @@ class FakeWorld:
         # Relee el registro y reordena en cada pasada (M1): hijos de mas profundo
         # a menos profundo, empates en el orden del registro; luego raices en ese orden.
         with self._lock:
-            deletable_records = self._scene_records_locked(doc_id)
+            if op_scope is None:
+                deletable_records = self._scene_records_locked(doc_id)
+            else:
+                deletable_records = self._op_records_locked(
+                    doc_id, op_scope[0], op_scope[1]
+                )
             deletable_eids: set[str] = set()
             deletable_by_eid: dict[str, dict] = {}
             for r in deletable_records:
@@ -845,6 +858,12 @@ class FakeWorld:
 
         for rec in queue:
             with self._lock:
+                # M3: con el cerrojo, antes de cualquier efecto, si el mundo reinicio
+                # el verbo para sin escribir nada (tambien antes de saltar registros
+                # que el reinicio ya se llevo, o `parada` quedaria en None).
+                if self.epoch != order_epoch:
+                    parada = "stale_epoch"
+                    break
                 if id(rec) in retained_ids or rec not in self._registry:
                     continue
 
@@ -857,12 +876,12 @@ class FakeWorld:
             do_batch_tick = False
             hit_barrier = False
             with self._lock:
-                if id(rec) in retained_ids or rec not in self._registry:
-                    continue
                 # M3: antes de cada efecto, con el cerrojo, si el mundo reinicio
                 if self.epoch != order_epoch:
                     parada = "stale_epoch"
                     break
+                if id(rec) in retained_ids or rec not in self._registry:
+                    continue
                 ent = self._entities.get(rec["eid"])
                 if ent is None or not ent.alive:
                     self._registry.remove(rec)
@@ -1137,6 +1156,10 @@ class FakeWorld:
         )
 
         with self._lock:
+            # M3: antes de escribir estado (last, retained, pending), si el mundo
+            # reinicio durante un tick, parar sin escribir nada en el mundo nuevo.
+            if self.epoch != order_epoch:
+                return ("error" if had_effect else "rejected"), "stale_epoch", self.read(doc_id)
             scene_now = self._scene_records_locked(doc_id)
             retained_recs = [r for r in scene_now if id(r) in stage4_retained]
             if parada == "stale_epoch":
@@ -1205,6 +1228,9 @@ class FakeWorld:
         # Si el plan tiene 0 filas y no hubo borrados, comprobar lease/plazo antes de publicar
         if not rows and not had_effect and check is not None:
             fail = check()
+            with self._lock:
+                if self.epoch != order_epoch:
+                    return "rejected", "stale_epoch", self.read(doc_id)
             if fail is not None:
                 return "rejected", fail, self.read(doc_id)
 
@@ -1216,6 +1242,9 @@ class FakeWorld:
                 fail = check()
                 if fail is not None:
                     with self._lock:
+                        # M3: antes de escribir `last`, si el mundo reinicio, parar.
+                        if self.epoch != order_epoch:
+                            return ("error" if had_effect else "rejected"), "stale_epoch", self.read(doc_id)
                         if not had_effect:
                             return "rejected", fail, self.read(doc_id)
                         st = self._scene_state_locked(doc_id, create=True)
@@ -1343,6 +1372,10 @@ class FakeWorld:
 
         # Etapa 6: publicar
         with self._lock:
+            # M3: antes de publicar generation/last/pending/retained, si el mundo
+            # reinicio en el ultimo tick, parar sin escribir nada.
+            if self.epoch != order_epoch:
+                return ("error" if had_effect else "rejected"), "stale_epoch", self.read(doc_id)
             st = self._scene_state_locked(doc_id, create=True)
             st.gen_n = target_gen_n
             st.generation = {
@@ -1402,9 +1435,15 @@ class FakeWorld:
             clear_gen_on_first_delete=False,
             check=check,
             tick=tick,
+            # D8 y §3.4 paso 2: la compensacion borra solo los registros de su orden.
+            op_scope=(session, op_id),
         )
 
         with self._lock:
+            # M3: antes de escribir last/retention/pending, si el mundo reinicio
+            # durante la compensacion, parar sin escribir nada en el mundo nuevo.
+            if self.epoch != order_epoch:
+                return ("error" if had_effect else "rejected"), "stale_epoch", self.read(doc_id)
             st = self._scene_state_locked(doc_id, create=True)
             rem_op = self._op_records_locked(doc_id, session, op_id)
             retained_lids = [r["lid"] for r in rem_op if id(r) in comp_retained]
@@ -1496,6 +1535,9 @@ class FakeWorld:
 
         if not non_retained_any and check is not None:
             fail = check()
+            with self._lock:
+                if self.epoch != order_epoch:
+                    return "rejected", "stale_epoch", self.read(doc_id)
             if fail is not None:
                 return "rejected", fail, self.read(doc_id)
 
@@ -1511,9 +1553,16 @@ class FakeWorld:
             clear_gen_on_first_delete=(not has_if_pending),
             check=check,
             tick=tick,
+            # §3.4 paso 2: con `if_pending` la compensacion borra solo los registros
+            # de esa orden; el reset normal (`None`) borra toda la escena.
+            op_scope=target_pending if has_if_pending else None,
         )
 
         with self._lock:
+            # M3: antes de escribir estado, si el mundo reinicio durante un tick,
+            # parar sin escribir nada en el mundo nuevo.
+            if self.epoch != order_epoch:
+                return ("error" if had_effect else "rejected"), "stale_epoch", self.read(doc_id)
             scene_now = self._scene_records_locked(doc_id)
             retained_recs = [r for r in scene_now if id(r) in final_retained]
             retained_lids = [r["lid"] for r in retained_recs]
@@ -2138,6 +2187,61 @@ class FakeWorld:
                 ai_active=False,
             )
             self._entities[eid] = ent
+            return eid
+
+    def seed_record(
+        self,
+        doc_id: str,
+        lid: str,
+        cls: str,
+        x: float,
+        z: float,
+        session: str,
+        op_id: str,
+    ) -> str:
+        """Gancho SOLO para pruebas: registra una entidad viva con otra `(session, op_id)`.
+
+        Siembra en `doc_id` un registro de una orden ajena para comprobar que las
+        compensaciones (D8, §3.4 paso 2) no borran lo que no es de su orden.
+        """
+        with self._lock:
+            if not isinstance(doc_id, str) or _DOC_ID_RE.match(doc_id) is None:
+                raise ValueError("doc_id invalido")
+            if not _valid_lid(lid):
+                raise ValueError("lid invalido")
+            if not isinstance(session, str) or not session:
+                raise ValueError("session invalida")
+            if not isinstance(op_id, str) or not op_id:
+                raise ValueError("op_id invalido")
+            fx, fz = float(x), float(z)
+            gy = float(self.ground_y(fx, fz))
+            eid = self._alloc_eid_locked()
+            ent = _Entity(
+                eid,
+                cls,
+                fx,
+                gy,
+                fz,
+                0.0,
+                hp=1.0,
+                flags=FLAGS_ROOT,
+                origin="sandbox",
+                scene=doc_id,
+                is_creature=False,
+                ai_active=False,
+            )
+            self._entities[eid] = ent
+            self._registry.append({
+                "epoch": self.epoch,
+                "scene_id": doc_id,
+                "gen_n": 1,
+                "op": {"session": session, "op_id": op_id},
+                "lid": lid,
+                "parent_lid": None,
+                "cls": cls,
+                "gy": gy,
+                "eid": eid,
+            })
             return eid
 
     def barrier_after(self, n: int) -> None:
