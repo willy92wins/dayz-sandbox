@@ -1,0 +1,41 @@
+{
+  "aggregate": "PASA",
+  "rows": {
+    "G1": {
+      "metrics": {
+        "client_alive_connected": true,
+        "connected": [
+          "client",
+          "server"
+        ],
+        "exit_leak_cb": [],
+        "script_errors": 0
+      },
+      "reason": "",
+      "verdict": "PASA"
+    },
+    "G4": {
+      "metrics": {
+        "cases": {
+          "a": {
+            "effects_in_window": 0,
+            "hellos_401": 29,
+            "recovery_ms": 3434.2966714799404
+          },
+          "b": {
+            "recovery_ms": 2928.4679714739323,
+            "results": 4
+          },
+          "c": {
+            "recovery_ms": 5716.022971495986
+          }
+        },
+        "inventory_paths": 11,
+        "key_scan_files": 12,
+        "key_scan_hits": 0
+      },
+      "reason": "",
+      "verdict": "PASA"
+    }
+  }
+}

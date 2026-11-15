@@ -1,0 +1,639 @@
+---------------------------------------------
+Log C:\tmp\dsbx-f1bpeers-work\partida\profiles_diag\server\script_2026-11-15_16-10-17.log started at 2026-11-15 16:10:21 (2026-11-15 15:10:21 UTC)
+
+16:10:21.996 SCRIPT       : Module: GameLib; loaded 13x files; 13x classes; used 8/2097 kB (0%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT"; CRC32: dd77776f
+16:10:22.012 SCRIPT       : Registered 324 temporary action enum(s), UAN==324
+16:10:22.348 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableCrouchCameraHorizontalRotation'
+16:10:22.348 SCRIPT    (W): @"scripts/3_Game/human.c,241": Method not linked 'HumanInputController.DisableCrouchCameratHorizontalRotation'
+16:10:22.348 SCRIPT    (W): @"scripts/3_Game/human.c,240": Method not linked 'HumanInputController.DisableErectCameratHorizontalRotation'
+16:10:22.348 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableErectHorizontalRotation'
+16:10:22.350 SCRIPT       : Module: Game; loaded 447x files; 1532x classes; used 5397/33554 kB (16%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT"; CRC32: 5d057844
+16:10:22.353 SCRIPT       : ... Backlit Effects Enabled
+16:10:23.435 SCRIPT    (W): @"scripts/4_World/entities/building/underground/entrance/land_underground_entrance.c,149": 'UpdatePathgraphDoorByAnimationSourceName' is obsolete: 1.30: Use UpdatePathgraphEntityState
+16:10:23.753 SCRIPT       : Module: World; loaded 2322x files; 6323x classes; used 12563/33554 kB (37%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT"; CRC32: 7f1b624f
+16:10:41.312  SCRIPT       : Module: Mission; loaded 220x files; 488x classes; used 3952/33554 kB (11%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT,ENABLE_CAROUSEL,BROADCAST_BUNKER_SP_VIS_ENABLED"; CRC32: ea554c11
+16:10:41.456  SCRIPT       : string s =    'Module PluginConfigDebugProfile is not Registred in PluginManager.c!'
+16:10:41.456  SCRIPT    (E):    -- Stack trace --
+16:10:41.456  SCRIPT    (E):    GetPlugin() scripts/4_World/plugins/pluginmanager.c : 341
+16:10:41.456  SCRIPT    (E):    OnInit() scripts/4_World/plugins/pluginbase/pluginitemdiagnostic.c : 94
+16:10:41.456  SCRIPT    (E):    PluginsInit() scripts/4_World/plugins/pluginmanager.c : 136
+16:10:41.456  SCRIPT    (E):    PluginManagerInit() scripts/4_World/plugins/pluginmanager.c : 304
+16:10:41.456  SCRIPT    (E):    MissionBase() scripts/5_Mission/mission/missionbase.c : 21
+16:10:41.456  SCRIPT    (E):    CreateCustomMission() C:\tmp\dsbx-f1bpeers-work\partida\b1\mpmissions\dayzOffline.chernarusplus\init.c : 97
+16:10:41.456  SCRIPT    (E):    -----------------
+16:10:41.489  SCRIPT       : 11-15 16:10:41 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-Bow
+16:10:41.564  SCRIPT       : 11-15 16:10:41 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-Center
+16:10:41.566  SCRIPT       : 11-15 16:10:41 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-Stern
+16:10:41.571  SCRIPT       : 11-15 16:10:41 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-East
+16:10:41.575  SCRIPT       : 11-15 16:10:41 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-North-Uphill
+16:10:41.582  SCRIPT       : 11-15 16:10:41 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-South-Building1
+16:10:41.586  SCRIPT       : 11-15 16:10:41 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-South-Building2
+16:10:41.594  SCRIPT       : 11-15 16:10:41 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-South-Downhill
+16:10:41.596  SCRIPT       : 11-15 16:10:41 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-West-Uphill
+16:10:59.663 SCRIPT       : [DSBX] clock tick_ms=42284
+16:10:59.664 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:10:59.664 SCRIPT       : [DSBX] config status=ok
+16:10:59.664 SCRIPT       : [DSBX] state HELLO
+16:11:00.487 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:11:00.742 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=1
+16:11:03.245 SCRIPT       : [DSBX] catalog scan finished pages=35 skipped=0
+16:11:04.663 SCRIPT       : [DSBX] clock tick_ms=47284
+16:11:06.730 SCRIPT       : [DSBX] catalog complete pages=35
+16:11:09.662 SCRIPT       : [DSBX] clock tick_ms=52284
+16:11:14.662 SCRIPT       : [DSBX] clock tick_ms=57284
+16:11:19.662 SCRIPT       : [DSBX] clock tick_ms=62284
+16:11:24.662 SCRIPT       : [DSBX] clock tick_ms=67284
+16:11:29.662 SCRIPT       : [DSBX] clock tick_ms=72284
+16:11:34.662 SCRIPT       : [DSBX] clock tick_ms=77284
+16:11:39.663 SCRIPT       : [DSBX] clock tick_ms=82284
+16:11:44.663 SCRIPT       : [DSBX] clock tick_ms=87284
+16:11:49.662 SCRIPT       : [DSBX] clock tick_ms=92284
+16:11:54.662 SCRIPT       : [DSBX] clock tick_ms=97284
+16:11:57.250 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-1 tick_ms=99871
+16:11:57.250 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-1 tick_ms=99871
+16:11:57.451 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-2 tick_ms=100072
+16:11:57.451 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-2 tick_ms=100073
+16:11:57.651 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-3 tick_ms=100273
+16:11:57.653 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-3 tick_ms=100274
+16:11:58.850 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-4 tick_ms=101471
+16:11:58.850 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-4 tick_ms=101472
+16:11:59.049 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-5 tick_ms=101671
+16:11:59.051 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-5 tick_ms=101672
+16:12:01.290  SCRIPT       : 11-15 16:12:01 | Server | Debug | Connect | n/a | n/a | InvokeOnConnect:CustomMission<0x00000295680E3F90>
+16:12:01.290  SCRIPT       : 11-15 16:12:01 | Server | Debug | Connect | n/a | n/a | Player connected:SurvivorBase<0x00000295C8772020> SurvivorF_Keiko:20799
+16:12:01.295 SCRIPT       : [DSBX] clock tick_ms=103917
+16:12:05.600 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-6 tick_ms=108221
+16:12:05.601 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-6 tick_ms=108222
+16:12:05.803 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-7 tick_ms=108424
+16:12:05.804 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-7 tick_ms=108426
+16:12:06.295 SCRIPT       : [DSBX] clock tick_ms=108917
+16:12:08.799 SCRIPT       : [DSBX] lease lost age_ms=3001 tick_ms=111421
+16:12:08.799 SCRIPT       : [DSBX] lease expired: returning to HELLO
+16:12:10.302 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:12:10.401 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=3
+16:12:11.296 SCRIPT       : [DSBX] clock tick_ms=113917
+16:12:14.503 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-8 tick_ms=117124
+16:12:14.503 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-8 tick_ms=117125
+16:12:14.702 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-9 tick_ms=117324
+16:12:14.704 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-9 tick_ms=117325
+16:12:16.295 SCRIPT       : [DSBX] clock tick_ms=118917
+16:12:21.296 SCRIPT       : [DSBX] clock tick_ms=123917
+16:12:24.666 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-10 tick_ms=127287
+16:12:24.666 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-10 tick_ms=127287
+16:12:24.866 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-11 tick_ms=127487
+16:12:24.867 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-11 tick_ms=127488
+16:12:26.295 SCRIPT       : [DSBX] clock tick_ms=128917
+16:12:31.295 SCRIPT       : [DSBX] clock tick_ms=133917
+16:12:35.594 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-12 tick_ms=138215
+16:12:35.598 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-12 tick_ms=138219
+16:12:35.791 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=138412
+16:12:35.791 SCRIPT       : [DSBX] state HELLO: client error on P
+16:12:36.041 SCRIPT       : [DSBX] config qa_step_gap_ms=2500
+16:12:36.091 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=4
+16:12:36.296 SCRIPT       : [DSBX] clock tick_ms=138917
+16:12:36.394 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-13 tick_ms=139015
+16:12:36.992 SCRIPT       : [DSBX] rest error ch=P kind=3 state=7 tick_ms=139614
+16:12:37.493 SCRIPT       : [DSBX] rest error ch=P kind=3 state=7 tick_ms=140114
+16:12:38.093 SCRIPT       : [DSBX] rest error ch=P kind=3 state=7 tick_ms=140715
+16:12:38.894 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-13 tick_ms=141515
+16:12:39.193 SCRIPT       : [DSBX] rest error ch=P kind=2 state=7 tick_ms=141814
+16:12:39.394 SCRIPT       : [DSBX] lease lost age_ms=3001 tick_ms=142015
+16:12:39.394 SCRIPT       : [DSBX] lease expired: returning to HELLO
+16:12:41.192 SCRIPT       : [DSBX] config qa_step_gap_ms=2500
+16:12:41.292 SCRIPT       : [DSBX] rest error ch=P kind=1 state=7 tick_ms=143914
+16:12:41.295 SCRIPT       : [DSBX] clock tick_ms=143917
+16:12:43.293 SCRIPT       : [DSBX] config qa_step_gap_ms=2500
+16:12:43.394 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=6
+16:12:44.397 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-14 tick_ms=147018
+16:12:46.295 SCRIPT       : [DSBX] clock tick_ms=148917
+16:12:46.896 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-14 tick_ms=149518
+16:12:49.109 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=151730
+16:12:49.109 SCRIPT       : [DSBX] state HELLO: client error on P
+16:12:49.359 SCRIPT       : [DSBX] config qa_step_gap_ms=4000
+16:12:49.408 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=7
+16:12:49.711 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-15 tick_ms=152332
+16:12:50.308 SCRIPT       : [DSBX] rest error ch=P kind=3 state=7 tick_ms=152930
+16:12:50.810 SCRIPT       : [DSBX] rest error ch=P kind=3 state=7 tick_ms=153432
+16:12:51.310 SCRIPT       : [DSBX] clock tick_ms=153932
+16:12:51.314 SCRIPT       : [DSBX] rest error ch=P kind=3 state=7 tick_ms=153936
+16:12:52.318 SCRIPT       : [DSBX] rest error ch=P kind=3 state=7 tick_ms=154939
+16:12:52.709 SCRIPT       : [DSBX] lease lost age_ms=3001 tick_ms=155331
+16:12:52.709 SCRIPT       : [DSBX] lease expired: returning to HELLO
+16:12:54.318 SCRIPT       : [DSBX] config qa_step_gap_ms=4000
+16:12:54.418 SCRIPT       : [DSBX] rest error ch=P kind=1 state=7 tick_ms=157039
+16:12:56.311 SCRIPT       : [DSBX] clock tick_ms=158932
+16:12:56.417 SCRIPT       : [DSBX] config qa_step_gap_ms=4000
+16:12:56.424 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=9
+16:12:57.538 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-16 tick_ms=160160
+16:13:01.323 SCRIPT       : [DSBX] clock tick_ms=163944
+16:13:01.538 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-16 tick_ms=164160
+16:13:01.736 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=164357
+16:13:01.736 SCRIPT       : [DSBX] state HELLO: client error on P
+16:13:01.986 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:13:02.035 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=10
+16:13:02.136 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=164757
+16:13:02.136 SCRIPT       : [DSBX] state HELLO: client error on P
+16:13:02.657 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:13:02.660 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=11
+16:13:06.278 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-17 tick_ms=168899
+16:13:06.278 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-17 tick_ms=168900
+16:13:06.322 SCRIPT       : [DSBX] clock tick_ms=168944
+16:13:06.478 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=169099
+16:13:06.478 SCRIPT       : [DSBX] state HELLO: client error on P
+16:13:06.728 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:13:06.778 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=12
+16:13:10.578 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-18 tick_ms=173200
+16:13:10.579 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-18 tick_ms=173200
+16:13:10.778 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=173399
+16:13:10.778 SCRIPT       : [DSBX] state HELLO: client error on P
+16:13:11.028 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:13:11.077 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=13
+16:13:11.323 SCRIPT       : [DSBX] clock tick_ms=173944
+16:13:14.879 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-19 tick_ms=177501
+16:13:14.879 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-19 tick_ms=177501
+16:13:15.078 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=177700
+16:13:15.078 SCRIPT       : [DSBX] state HELLO: client error on P
+16:13:15.329 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:13:15.378 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=14
+16:13:16.323 SCRIPT       : [DSBX] clock tick_ms=178944
+16:13:19.191 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-20 tick_ms=181813
+16:13:19.193 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-20 tick_ms=181814
+16:13:19.391 SCRIPT       : [DSBX] rest error ch=P kind=2 state=6 tick_ms=182013
+16:13:21.322 SCRIPT       : [DSBX] clock tick_ms=183944
+16:13:23.421 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-21 tick_ms=186042
+16:13:23.421 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-21 tick_ms=186042
+16:13:23.622 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-22 tick_ms=186243
+16:13:23.622 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-22 tick_ms=186244
+16:13:23.721 SCRIPT       : [DSBX] rest error ch=R kind=4 state=5 tick_ms=186342
+16:13:25.121 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-23 tick_ms=187743
+16:13:25.122 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-23 tick_ms=187743
+16:13:25.321 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-24 tick_ms=187942
+16:13:25.321 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-24 tick_ms=187943
+16:13:25.420 SCRIPT       : [DSBX] rest error ch=R kind=4 state=5 tick_ms=188042
+16:13:26.337 SCRIPT       : [DSBX] clock tick_ms=188958
+16:13:26.861 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-25 tick_ms=189483
+16:13:26.862 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-25 tick_ms=189483
+16:13:27.062 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-26 tick_ms=189683
+16:13:27.062 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-26 tick_ms=189683
+16:13:27.164 SCRIPT       : [DSBX] rest error ch=R kind=4 state=5 tick_ms=189785
+16:13:28.562 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-27 tick_ms=191183
+16:13:28.562 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-27 tick_ms=191184
+16:13:28.762 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-28 tick_ms=191384
+16:13:28.762 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-28 tick_ms=191384
+16:13:28.861 SCRIPT       : [DSBX] rest error ch=R kind=4 state=5 tick_ms=191483
+16:13:30.266 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-29 tick_ms=192887
+16:13:30.266 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-29 tick_ms=192887
+16:13:30.467 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-30 tick_ms=193089
+16:13:30.468 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-30 tick_ms=193089
+16:13:30.563 SCRIPT       : [DSBX] rest error ch=R kind=4 state=6 tick_ms=193184
+16:13:31.337 SCRIPT       : [DSBX] clock tick_ms=193958
+16:13:31.964 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-31 tick_ms=194585
+16:13:31.964 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-31 tick_ms=194586
+16:13:34.963 SCRIPT       : [DSBX] lease lost age_ms=3001 tick_ms=197584
+16:13:34.963 SCRIPT       : [DSBX] lease expired: returning to HELLO
+16:13:36.339 SCRIPT       : [DSBX] clock tick_ms=198960
+16:13:38.061 SCRIPT       : [DSBX] rest timeout ch=P kind=2 src=watchdog tick_ms=200683
+16:13:38.312 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:13:38.370 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=16
+16:13:39.104 SCRIPT       : [DSBX] rest repeat ch=P kind=2 via=success tick_ms=201725
+16:13:41.339 SCRIPT       : [DSBX] clock tick_ms=203960
+16:13:46.338 SCRIPT       : [DSBX] clock tick_ms=208960
+16:13:48.345 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-32 tick_ms=210967
+16:13:48.346 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-32 tick_ms=210968
+16:13:48.544 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-33 tick_ms=211165
+16:13:48.544 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-33 tick_ms=211165
+16:13:51.339 SCRIPT       : [DSBX] clock tick_ms=213961
+16:13:52.735 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-34 tick_ms=215356
+16:13:52.735 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-34 tick_ms=215357
+16:13:54.935 SCRIPT       : [DSBX] rest invalid ch=P kind=2 tick_ms=217557
+16:13:55.735 SCRIPT       : [DSBX] lease lost age_ms=3000 tick_ms=218356
+16:13:55.735 SCRIPT       : [DSBX] lease expired: returning to HELLO
+16:13:56.340 SCRIPT       : [DSBX] clock tick_ms=218961
+16:13:57.237 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:13:57.337 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=17
+16:13:59.143 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-35 tick_ms=221765
+16:13:59.144 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-35 tick_ms=221765
+16:14:01.339 SCRIPT       : [DSBX] clock tick_ms=223961
+16:14:01.343 SCRIPT       : [DSBX] rest invalid ch=P kind=2 tick_ms=223964
+16:14:02.143 SCRIPT       : [DSBX] lease lost age_ms=3001 tick_ms=224765
+16:14:02.143 SCRIPT       : [DSBX] lease expired: returning to HELLO
+16:14:03.666 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:14:03.765 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=18
+16:14:05.466 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-36 tick_ms=228087
+16:14:05.466 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-36 tick_ms=228087
+16:14:06.339 SCRIPT       : [DSBX] clock tick_ms=228961
+16:14:07.665 SCRIPT    (E): JSON ERROR DayZSandbox/scripts/3_Game/dsbx_peer.c:57
+16:14:07.665 SCRIPT       : [DSBX] rest invalid ch=P kind=2 tick_ms=230286
+16:14:08.465 SCRIPT       : [DSBX] lease lost age_ms=3000 tick_ms=231087
+16:14:08.465 SCRIPT       : [DSBX] lease expired: returning to HELLO
+16:14:09.968 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:14:10.067 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=19
+16:14:11.340 SCRIPT       : [DSBX] clock tick_ms=233961
+16:14:11.767 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-37 tick_ms=234388
+16:14:11.767 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-37 tick_ms=234389
+16:14:13.873 SCRIPT    (E): JSON ERROR DayZSandbox/scripts/3_Game/dsbx_peer.c:57
+16:14:13.873 SCRIPT       : [DSBX] rest invalid ch=P kind=2 tick_ms=236494
+16:14:14.767 SCRIPT       : [DSBX] lease lost age_ms=3000 tick_ms=237389
+16:14:14.767 SCRIPT       : [DSBX] lease expired: returning to HELLO
+16:14:16.183 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:14:16.282 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=20
+16:14:16.340 SCRIPT       : [DSBX] clock tick_ms=238961
+16:14:17.986 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-38 tick_ms=240607
+16:14:17.986 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-38 tick_ms=240608
+16:14:21.340 SCRIPT       : [DSBX] clock tick_ms=243961
+16:14:22.203 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-40 tick_ms=244825
+16:14:22.205 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-40 tick_ms=244826
+16:14:24.426 SCRIPT       : [DSBX] rest invalid ch=P kind=2 tick_ms=247047
+16:14:25.224 SCRIPT       : [DSBX] lease lost age_ms=3026 tick_ms=247845
+16:14:25.224 SCRIPT       : [DSBX] lease expired: returning to HELLO
+16:14:26.355 SCRIPT       : [DSBX] clock tick_ms=248977
+16:14:26.824 SCRIPT       : [DSBX] rest invalid ch=P kind=2 tick_ms=249446
+16:14:27.324 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:14:27.582 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=21
+16:14:28.631 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-41 tick_ms=251252
+16:14:28.631 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-41 tick_ms=251252
+16:14:31.441 SCRIPT       : [DSBX] clock tick_ms=254062
+16:14:36.441 SCRIPT       : [DSBX] clock tick_ms=259063
+16:14:37.316 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-42 tick_ms=259937
+16:14:37.317 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-42 tick_ms=259938
+16:14:41.442 SCRIPT       : [DSBX] clock tick_ms=264063
+16:14:41.650 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-44 tick_ms=264272
+16:14:41.651 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-44 tick_ms=264272
+16:14:44.650 SCRIPT       : [DSBX] lease lost age_ms=3000 tick_ms=267272
+16:14:44.650 SCRIPT       : [DSBX] lease expired: returning to HELLO
+16:14:46.441 SCRIPT       : [DSBX] clock tick_ms=269063
+16:14:47.753 SCRIPT       : [DSBX] rest timeout ch=P kind=2 src=watchdog tick_ms=270375
+16:14:48.003 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:14:48.085 SCRIPT       : [DSBX] hello accepted session=2f08a499d52ad35c conn=23
+16:14:51.442 SCRIPT       : [DSBX] clock tick_ms=274063
+16:14:51.799 SCRIPT       : [DSBX] rest repeat ch=P kind=2 via=error tick_ms=274420
+16:14:56.441 SCRIPT       : [DSBX] clock tick_ms=279063
+16:15:01.442 SCRIPT       : [DSBX] clock tick_ms=284063
+16:15:05.027 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-45 tick_ms=287648
+16:15:05.027 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-45 tick_ms=287649
+16:15:05.228 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-46 tick_ms=287849
+16:15:05.228 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-46 tick_ms=287849
+16:15:05.326 SCRIPT       : [DSBX] rest error ch=R kind=4 state=7 tick_ms=287947
+16:15:06.442 SCRIPT       : [DSBX] clock tick_ms=289064
+16:15:06.736 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-47 tick_ms=289358
+16:15:06.737 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-47 tick_ms=289358
+16:15:06.937 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-48 tick_ms=289558
+16:15:06.938 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-48 tick_ms=289559
+16:15:07.035 SCRIPT       : [DSBX] rest error ch=R kind=4 state=6 tick_ms=289657
+16:15:07.337 SCRIPT       : [DSBX] rest error ch=R kind=4 state=6 tick_ms=289958
+16:15:07.936 SCRIPT       : [DSBX] rest error ch=R kind=4 state=6 tick_ms=290558
+16:15:09.036 SCRIPT       : [DSBX] rest error ch=R kind=4 state=6 tick_ms=291658
+16:15:09.036 SCRIPT       : [DSBX] result abandoned op_id=op-48
+16:15:10.349 SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-49 tick_ms=292971
+16:15:10.349 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-49 tick_ms=292971
+16:15:11.073 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=293694
+16:15:11.073 SCRIPT       : [DSBX] state HELLO: client error on P
+16:15:11.322 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:15:11.375 SCRIPT       : [DSBX] hello accepted session=6eecfbf5c4ce9e97 conn=1
+16:15:11.442 SCRIPT       : [DSBX] clock tick_ms=294064
+16:15:11.675 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-1 tick_ms=294297
+16:15:11.678 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-1 tick_ms=294299
+16:15:12.874 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-2 tick_ms=295495
+16:15:12.877 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-2 tick_ms=295498
+16:15:13.175 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-3 tick_ms=295797
+16:15:13.178 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-3 tick_ms=295799
+16:15:13.478 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-4 tick_ms=296099
+16:15:13.479 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-4 tick_ms=296101
+16:15:13.778 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-5 tick_ms=296400
+16:15:13.780 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-5 tick_ms=296401
+16:15:14.078 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-6 tick_ms=296699
+16:15:14.080 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-6 tick_ms=296701
+16:15:14.378 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-7 tick_ms=297000
+16:15:14.380 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-7 tick_ms=297001
+16:15:14.678 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-8 tick_ms=297299
+16:15:14.680 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-8 tick_ms=297301
+16:15:14.977 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-9 tick_ms=297600
+16:15:14.980 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-9 tick_ms=297601
+16:15:15.279 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-10 tick_ms=297900
+16:15:15.280 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-10 tick_ms=297901
+16:15:15.588 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-11 tick_ms=298210
+16:15:15.593 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-11 tick_ms=298214
+16:15:15.888 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-12 tick_ms=298509
+16:15:15.890 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-12 tick_ms=298512
+16:15:16.181 SCRIPT       : [DSBX] catalog complete pages=35
+16:15:16.185 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-13 tick_ms=298806
+16:15:16.185 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-13 tick_ms=298807
+16:15:16.389 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-14 tick_ms=299010
+16:15:16.390 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-14 tick_ms=299011
+16:15:16.443 SCRIPT       : [DSBX] clock tick_ms=299064
+16:15:16.583 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-15 tick_ms=299204
+16:15:16.584 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-15 tick_ms=299206
+16:15:16.794 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-16 tick_ms=299415
+16:15:16.796 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-16 tick_ms=299417
+16:15:16.986 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-17 tick_ms=299607
+16:15:16.987 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-17 tick_ms=299609
+16:15:17.183 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-18 tick_ms=299805
+16:15:17.184 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-18 tick_ms=299806
+16:15:17.383 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-19 tick_ms=300005
+16:15:17.384 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-19 tick_ms=300005
+16:15:17.583 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-20 tick_ms=300204
+16:15:17.583 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-20 tick_ms=300205
+16:15:17.783 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-21 tick_ms=300405
+16:15:17.784 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-21 tick_ms=300405
+16:15:17.984 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-22 tick_ms=300605
+16:15:17.984 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-22 tick_ms=300605
+16:15:18.182 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-23 tick_ms=300804
+16:15:18.183 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-23 tick_ms=300805
+16:15:18.384 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-24 tick_ms=301005
+16:15:18.384 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-24 tick_ms=301006
+16:15:18.583 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-25 tick_ms=301204
+16:15:18.584 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-25 tick_ms=301205
+16:15:18.784 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-26 tick_ms=301405
+16:15:18.784 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-26 tick_ms=301405
+16:15:18.984 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-27 tick_ms=301605
+16:15:18.985 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-27 tick_ms=301606
+16:15:19.183 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-28 tick_ms=301804
+16:15:19.183 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-28 tick_ms=301804
+16:15:19.383 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-29 tick_ms=302004
+16:15:19.383 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-29 tick_ms=302004
+16:15:19.585 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-30 tick_ms=302206
+16:15:19.586 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-30 tick_ms=302207
+16:15:19.790 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-31 tick_ms=302412
+16:15:19.791 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-31 tick_ms=302413
+16:15:19.998 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-32 tick_ms=302619
+16:15:19.999 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-32 tick_ms=302620
+16:15:20.199 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-33 tick_ms=302820
+16:15:20.199 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-33 tick_ms=302820
+16:15:20.413 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-34 tick_ms=303035
+16:15:20.414 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-34 tick_ms=303036
+16:15:20.613 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-35 tick_ms=303235
+16:15:20.614 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-35 tick_ms=303236
+16:15:20.847 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-36 tick_ms=303469
+16:15:20.850 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-36 tick_ms=303472
+16:15:21.043 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-37 tick_ms=303665
+16:15:21.044 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-37 tick_ms=303665
+16:15:21.245 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-38 tick_ms=303866
+16:15:21.246 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-38 tick_ms=303867
+16:15:21.442 SCRIPT       : [DSBX] clock tick_ms=304064
+16:15:21.443 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-39 tick_ms=304064
+16:15:21.444 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-39 tick_ms=304065
+16:15:21.643 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-40 tick_ms=304265
+16:15:21.643 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-40 tick_ms=304265
+16:15:21.845 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-41 tick_ms=304466
+16:15:21.845 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-41 tick_ms=304466
+16:15:22.043 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-42 tick_ms=304664
+16:15:22.043 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-42 tick_ms=304665
+16:15:22.243 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-43 tick_ms=304865
+16:15:22.244 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-43 tick_ms=304865
+16:15:22.444 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-44 tick_ms=305065
+16:15:22.444 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-44 tick_ms=305066
+16:15:22.643 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-45 tick_ms=305264
+16:15:22.643 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-45 tick_ms=305265
+16:15:22.843 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-46 tick_ms=305465
+16:15:22.844 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-46 tick_ms=305465
+16:15:23.044 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-47 tick_ms=305666
+16:15:23.045 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-47 tick_ms=305666
+16:15:23.243 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-48 tick_ms=305865
+16:15:23.243 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-48 tick_ms=305865
+16:15:23.443 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-49 tick_ms=306065
+16:15:23.444 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-49 tick_ms=306065
+16:15:23.643 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-50 tick_ms=306265
+16:15:23.644 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-50 tick_ms=306266
+16:15:23.843 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-51 tick_ms=306464
+16:15:23.843 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-51 tick_ms=306465
+16:15:24.044 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-52 tick_ms=306665
+16:15:24.045 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-52 tick_ms=306666
+16:15:24.243 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-53 tick_ms=306865
+16:15:24.243 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-53 tick_ms=306865
+16:15:24.444 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-54 tick_ms=307065
+16:15:24.445 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-54 tick_ms=307066
+16:15:24.643 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-55 tick_ms=307265
+16:15:24.643 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-55 tick_ms=307265
+16:15:24.843 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-56 tick_ms=307465
+16:15:24.843 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-56 tick_ms=307465
+16:15:25.046 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-57 tick_ms=307667
+16:15:25.047 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-57 tick_ms=307668
+16:15:25.245 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-58 tick_ms=307866
+16:15:25.246 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-58 tick_ms=307867
+16:15:25.445 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-59 tick_ms=308067
+16:15:25.446 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-59 tick_ms=308067
+16:15:25.646 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-60 tick_ms=308268
+16:15:25.647 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-60 tick_ms=308269
+16:15:25.844 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-61 tick_ms=308466
+16:15:25.846 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-61 tick_ms=308467
+16:15:26.045 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-62 tick_ms=308667
+16:15:26.045 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-62 tick_ms=308667
+16:15:26.248 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-63 tick_ms=308869
+16:15:26.249 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-63 tick_ms=308871
+16:15:26.442 SCRIPT       : [DSBX] clock tick_ms=309064
+16:15:26.445 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-64 tick_ms=309067
+16:15:26.446 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-64 tick_ms=309067
+16:15:26.645 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-65 tick_ms=309266
+16:15:26.646 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-65 tick_ms=309267
+16:15:26.848 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-66 tick_ms=309469
+16:15:26.848 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-66 tick_ms=309470
+16:15:27.044 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-67 tick_ms=309666
+16:15:27.046 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-67 tick_ms=309667
+16:15:27.245 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-68 tick_ms=309866
+16:15:27.245 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-68 tick_ms=309867
+16:15:27.450 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-69 tick_ms=310070
+16:15:27.451 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-69 tick_ms=310072
+16:15:27.645 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-70 tick_ms=310267
+16:15:27.646 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-70 tick_ms=310267
+16:15:27.846 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-71 tick_ms=310467
+16:15:27.846 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-71 tick_ms=310467
+16:15:28.048 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-72 tick_ms=310669
+16:15:28.048 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-72 tick_ms=310670
+16:15:28.245 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-73 tick_ms=310867
+16:15:28.245 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-73 tick_ms=310867
+16:15:28.445 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-74 tick_ms=311067
+16:15:28.446 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-74 tick_ms=311067
+16:15:28.648 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-75 tick_ms=311269
+16:15:28.648 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-75 tick_ms=311270
+16:15:28.846 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-76 tick_ms=311467
+16:15:28.847 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-76 tick_ms=311468
+16:15:29.046 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-77 tick_ms=311667
+16:15:29.047 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-77 tick_ms=311667
+16:15:29.247 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-78 tick_ms=311868
+16:15:29.248 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-78 tick_ms=311869
+16:15:29.445 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-79 tick_ms=312066
+16:15:29.445 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-79 tick_ms=312067
+16:15:29.645 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-80 tick_ms=312266
+16:15:29.645 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-80 tick_ms=312267
+16:15:29.847 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-81 tick_ms=312468
+16:15:29.848 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-81 tick_ms=312469
+16:15:30.045 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-82 tick_ms=312666
+16:15:30.045 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-82 tick_ms=312666
+16:15:30.245 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-83 tick_ms=312866
+16:15:30.245 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-83 tick_ms=312867
+16:15:30.447 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-84 tick_ms=313068
+16:15:30.447 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-84 tick_ms=313069
+16:15:30.645 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-85 tick_ms=313266
+16:15:30.646 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-85 tick_ms=313267
+16:15:30.845 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-86 tick_ms=313466
+16:15:30.845 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-86 tick_ms=313467
+16:15:31.047 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-87 tick_ms=313668
+16:15:31.047 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-87 tick_ms=313669
+16:15:31.244 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-88 tick_ms=313866
+16:15:31.246 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-88 tick_ms=313867
+16:15:31.443 SCRIPT       : [DSBX] clock tick_ms=314064
+16:15:31.445 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-89 tick_ms=314067
+16:15:31.446 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-89 tick_ms=314067
+16:15:31.647 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-90 tick_ms=314269
+16:15:31.647 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-90 tick_ms=314269
+16:15:31.845 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-91 tick_ms=314467
+16:15:31.846 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-91 tick_ms=314467
+16:15:32.045 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-92 tick_ms=314667
+16:15:32.046 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-92 tick_ms=314667
+16:15:32.250 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-93 tick_ms=314870
+16:15:32.253 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-93 tick_ms=314874
+16:15:32.445 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-94 tick_ms=315067
+16:15:32.446 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-94 tick_ms=315067
+16:15:32.647 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-95 tick_ms=315268
+16:15:32.647 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-95 tick_ms=315269
+16:15:32.847 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-96 tick_ms=315469
+16:15:32.848 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-96 tick_ms=315469
+16:15:33.046 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-97 tick_ms=315667
+16:15:33.046 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-97 tick_ms=315668
+16:15:33.245 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-98 tick_ms=315866
+16:15:33.246 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-98 tick_ms=315867
+16:15:33.447 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-99 tick_ms=316069
+16:15:33.448 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-99 tick_ms=316069
+16:15:33.644 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-100 tick_ms=316266
+16:15:33.646 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-100 tick_ms=316267
+16:15:33.845 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-101 tick_ms=316466
+16:15:33.846 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-101 tick_ms=316467
+16:15:34.047 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-102 tick_ms=316669
+16:15:34.048 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-102 tick_ms=316669
+16:15:36.441 SCRIPT       : [DSBX] clock tick_ms=319064
+16:15:41.443 SCRIPT       : [DSBX] clock tick_ms=324064
+16:15:46.442 SCRIPT       : [DSBX] clock tick_ms=329064
+16:15:51.443 SCRIPT       : [DSBX] clock tick_ms=334064
+16:15:56.442 SCRIPT       : [DSBX] clock tick_ms=339064
+16:16:01.442 SCRIPT       : [DSBX] clock tick_ms=344064
+16:16:06.442 SCRIPT       : [DSBX] clock tick_ms=349064
+16:16:07.438 SCRIPT       : 11-15 16:16:07 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Dynamic area (<2835.000000, 216.787308, 12377.000000>)
+16:16:11.443 SCRIPT       : [DSBX] clock tick_ms=354064
+16:16:16.442 SCRIPT       : [DSBX] clock tick_ms=359064
+16:16:21.442 SCRIPT       : [DSBX] clock tick_ms=364064
+16:16:26.443 SCRIPT       : [DSBX] clock tick_ms=369064
+16:16:31.443 SCRIPT       : [DSBX] clock tick_ms=374064
+16:16:36.442 SCRIPT       : [DSBX] clock tick_ms=379064
+16:16:41.442 SCRIPT       : [DSBX] clock tick_ms=384064
+16:16:46.441 SCRIPT       : [DSBX] clock tick_ms=389064
+16:16:51.442 SCRIPT       : [DSBX] clock tick_ms=394064
+16:16:56.444 SCRIPT       : [DSBX] clock tick_ms=399065
+16:17:01.443 SCRIPT       : [DSBX] clock tick_ms=404065
+16:17:06.444 SCRIPT       : [DSBX] clock tick_ms=409065
+16:17:11.443 SCRIPT       : [DSBX] clock tick_ms=414065
+16:17:16.444 SCRIPT       : [DSBX] clock tick_ms=419065
+16:17:21.444 SCRIPT       : [DSBX] clock tick_ms=424065
+16:17:26.443 SCRIPT       : [DSBX] clock tick_ms=429065
+16:17:31.444 SCRIPT       : [DSBX] clock tick_ms=434065
+16:17:36.443 SCRIPT       : [DSBX] clock tick_ms=439065
+16:17:41.444 SCRIPT       : [DSBX] clock tick_ms=444065
+16:17:46.443 SCRIPT       : [DSBX] clock tick_ms=449065
+16:17:51.444 SCRIPT       : [DSBX] clock tick_ms=454065
+16:17:56.444 SCRIPT       : [DSBX] clock tick_ms=459065
+16:18:01.443 SCRIPT       : [DSBX] clock tick_ms=464065
+16:18:06.444 SCRIPT       : [DSBX] clock tick_ms=469065
+16:18:11.443 SCRIPT       : [DSBX] clock tick_ms=474065
+16:18:16.444 SCRIPT       : [DSBX] clock tick_ms=479065
+16:18:21.444 SCRIPT       : [DSBX] clock tick_ms=484065
+16:18:26.443 SCRIPT       : [DSBX] clock tick_ms=489065
+16:18:31.443 SCRIPT       : [DSBX] clock tick_ms=494065
+16:18:36.444 SCRIPT       : [DSBX] clock tick_ms=499065
+16:18:41.444 SCRIPT       : [DSBX] clock tick_ms=504065
+16:18:46.443 SCRIPT       : [DSBX] clock tick_ms=509065
+16:18:51.444 SCRIPT       : [DSBX] clock tick_ms=514066
+16:18:56.447 SCRIPT       : [DSBX] clock tick_ms=519068
+16:19:01.448 SCRIPT       : [DSBX] clock tick_ms=524071
+16:19:06.449 SCRIPT       : [DSBX] clock tick_ms=529071
+16:19:11.449 SCRIPT       : [DSBX] clock tick_ms=534071
+16:19:16.449 SCRIPT       : [DSBX] clock tick_ms=539071
+16:19:21.450 SCRIPT       : [DSBX] clock tick_ms=544071
+16:19:26.449 SCRIPT       : [DSBX] clock tick_ms=549071
+16:19:31.450 SCRIPT       : [DSBX] clock tick_ms=554071
+16:19:36.449 SCRIPT       : [DSBX] clock tick_ms=559071
+16:19:41.449 SCRIPT       : [DSBX] clock tick_ms=564071
+16:19:46.449 SCRIPT       : [DSBX] clock tick_ms=569071
+16:19:51.449 SCRIPT       : [DSBX] clock tick_ms=574071
+16:19:56.450 SCRIPT       : [DSBX] clock tick_ms=579071
+16:20:01.450 SCRIPT       : [DSBX] clock tick_ms=584071
+16:20:06.449 SCRIPT       : [DSBX] clock tick_ms=589071
+16:20:11.453 SCRIPT       : [DSBX] clock tick_ms=594074
+16:20:16.453 SCRIPT       : [DSBX] clock tick_ms=599074
+16:20:21.452 SCRIPT       : [DSBX] clock tick_ms=604074
+16:20:26.452 SCRIPT       : [DSBX] clock tick_ms=609074
+16:20:31.452 SCRIPT       : [DSBX] clock tick_ms=614074
+16:20:36.452 SCRIPT       : [DSBX] clock tick_ms=619074
+16:20:41.452 SCRIPT       : [DSBX] clock tick_ms=624074
+16:20:46.452 SCRIPT       : [DSBX] clock tick_ms=629074
+16:20:51.452 SCRIPT       : [DSBX] clock tick_ms=634074
+16:20:56.452 SCRIPT       : [DSBX] clock tick_ms=639074
+16:21:01.453 SCRIPT       : [DSBX] clock tick_ms=644074
+16:21:06.452 SCRIPT       : [DSBX] clock tick_ms=649074
+16:21:11.452 SCRIPT       : [DSBX] clock tick_ms=654074
+16:21:16.453 SCRIPT       : [DSBX] clock tick_ms=659074
+16:21:21.453 SCRIPT       : [DSBX] clock tick_ms=664074
+16:21:26.452 SCRIPT       : [DSBX] clock tick_ms=669074
+16:21:31.453 SCRIPT       : [DSBX] clock tick_ms=674074
+16:21:36.453 SCRIPT       : [DSBX] clock tick_ms=679074
+16:21:41.453 SCRIPT       : [DSBX] clock tick_ms=684074
+16:21:46.453 SCRIPT       : [DSBX] clock tick_ms=689074
+16:21:51.453 SCRIPT       : [DSBX] clock tick_ms=694074
+16:21:56.453 SCRIPT       : [DSBX] clock tick_ms=699074
+16:22:01.452 SCRIPT       : [DSBX] clock tick_ms=704074
+16:22:06.452 SCRIPT       : [DSBX] clock tick_ms=709074
+16:22:11.453 SCRIPT       : [DSBX] clock tick_ms=714074
+16:22:14.172 SCRIPT       : 11-15 16:22:14 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Dynamic area (<4186.000000, 338.410004, 11041.000000>)
+16:22:14.172 SCRIPT       : 11-15 16:22:14 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Dynamic area (<7239.000000, 253.220718, 7012.000000>)
+16:22:16.452 SCRIPT       : [DSBX] clock tick_ms=719074
+16:22:21.452 SCRIPT       : [DSBX] clock tick_ms=724074
+16:22:26.453 SCRIPT       : [DSBX] clock tick_ms=729074
+16:22:31.452 SCRIPT       : [DSBX] clock tick_ms=734074
+16:22:36.453 SCRIPT       : [DSBX] clock tick_ms=739074
+16:22:41.452 SCRIPT       : [DSBX] clock tick_ms=744074
+16:22:46.452 SCRIPT       : [DSBX] clock tick_ms=749074
+16:22:51.452 SCRIPT       : [DSBX] clock tick_ms=754074
+16:22:56.452 SCRIPT       : [DSBX] clock tick_ms=759074
+16:23:01.452 SCRIPT       : [DSBX] clock tick_ms=764074
+16:23:06.452 SCRIPT       : [DSBX] clock tick_ms=769074
+16:23:11.452 SCRIPT       : [DSBX] clock tick_ms=774074
+16:23:16.452 SCRIPT       : [DSBX] clock tick_ms=779074
+16:23:21.453 SCRIPT       : [DSBX] clock tick_ms=784074
+16:23:26.453 SCRIPT       : [DSBX] clock tick_ms=789074
+16:23:31.451 SCRIPT       : [DSBX] clock tick_ms=794074
+16:23:36.453 SCRIPT       : [DSBX] clock tick_ms=799074
+16:23:41.452 SCRIPT       : [DSBX] clock tick_ms=804074
+16:23:46.452 SCRIPT       : [DSBX] clock tick_ms=809074
+16:23:51.453 SCRIPT       : [DSBX] clock tick_ms=814074
+16:23:56.453 SCRIPT       : [DSBX] clock tick_ms=819074
+16:24:01.452 SCRIPT       : [DSBX] clock tick_ms=824074
+16:24:06.452 SCRIPT       : [DSBX] clock tick_ms=829074
+16:24:11.452 SCRIPT       : [DSBX] clock tick_ms=834074
+16:24:16.452 SCRIPT       : [DSBX] clock tick_ms=839074
+16:24:21.452 SCRIPT       : [DSBX] clock tick_ms=844074
+16:24:26.452 SCRIPT       : [DSBX] clock tick_ms=849074
+16:24:31.452 SCRIPT       : [DSBX] clock tick_ms=854074
+16:24:36.452 SCRIPT       : [DSBX] clock tick_ms=859074
+16:24:41.452 SCRIPT       : [DSBX] clock tick_ms=864074
+16:24:46.452 SCRIPT       : [DSBX] clock tick_ms=869074
+16:24:51.452 SCRIPT       : [DSBX] clock tick_ms=874074
+16:24:56.453 SCRIPT       : [DSBX] clock tick_ms=879074
+16:25:01.452 SCRIPT       : [DSBX] clock tick_ms=884074
+16:25:06.452 SCRIPT       : [DSBX] clock tick_ms=889074
+16:25:11.452 SCRIPT       : [DSBX] clock tick_ms=894074
+16:25:16.453 SCRIPT       : [DSBX] clock tick_ms=899074
+16:25:21.452 SCRIPT       : [DSBX] clock tick_ms=904074
+16:25:26.452 SCRIPT       : [DSBX] clock tick_ms=909074
+16:25:31.453 SCRIPT       : [DSBX] clock tick_ms=914074
+16:25:36.453 SCRIPT       : [DSBX] clock tick_ms=919074
+16:25:37.279 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-104 tick_ms=919900
+16:25:37.279 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-104 tick_ms=919901
+16:25:39.501  SCRIPT       : [Logout]: New player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= with instant logout
+16:25:39.502  SCRIPT       : 11-15 16:25:39 | Server | Debug | Connect | n/a | n/a | InvokeOnDisconnect:CustomMission<0x00000295680E3F90>
+16:25:39.503  SCRIPT       : 11-15 16:25:39 | Server | Debug | Connect | n/a | n/a | Player disconnected:SurvivorBase<0x00000295C8772020> SurvivorF_Keiko:20799
+16:25:39.503  SCRIPT       : [Logout]: Player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= finished
+16:25:41.452 SCRIPT       : [DSBX] clock tick_ms=924074
+16:25:43.728  SCRIPT       : [DSBX] shutdown role=server created_n=25 inflight_p=1 inflight_r=0
+16:25:43.742  SCRIPT       : ~DayZGame()
+16:25:46.833  SCRIPT       : Cleaning up script module globals 'Game'
+16:25:46.833   SCRIPT    (E): Leaked 'BunkerBroadcastManager' script instance (1x)!
+16:25:46.833   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (25x)!
+16:25:46.833   SCRIPT    (E): ==== Total Leaks (26x)! ====

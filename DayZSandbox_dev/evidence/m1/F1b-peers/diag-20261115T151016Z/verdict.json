@@ -1,0 +1,277 @@
+{
+  "aggregate": "INCONCLUSO",
+  "rows": {
+    "G1": {
+      "metrics": {
+        "connected": [
+          "client",
+          "server"
+        ],
+        "exit_leak_cb": [
+          {
+            "bound": 25,
+            "file": "server_script.log",
+            "n": 25
+          },
+          {
+            "bound": 3,
+            "file": "client_script.log",
+            "n": 3
+          },
+          {
+            "bound": 25,
+            "file": "server.RPT",
+            "n": 25
+          },
+          {
+            "bound": 3,
+            "file": "client.RPT",
+            "n": 3
+          }
+        ],
+        "script_errors": 0
+      },
+      "reason": "",
+      "verdict": "PASA"
+    },
+    "G2": {
+      "metrics": {
+        "bridge_photos": 1,
+        "catalog_200": 70,
+        "catalog_max_req_bytes": 3494,
+        "server_hello_req_bytes": 278
+      },
+      "reason": "",
+      "verdict": "PASA"
+    },
+    "G3": {
+      "metrics": {
+        "cases": {
+          "a": {
+            "pair": {
+              "anotar": 1,
+              "retirar": 1
+            }
+          },
+          "b": {
+            "pair": {
+              "anotar": 1,
+              "retirar": 1
+            }
+          },
+          "c": {
+            "pair": {
+              "anotar": 1,
+              "retirar": 1
+            },
+            "recovery_ms": 1270.5709714889526
+          }
+        }
+      },
+      "reason": "",
+      "verdict": "PASA"
+    },
+    "G5": {
+      "metrics": {
+        "cases": {
+          "a2500/client": {
+            "max_gap_ms": 2503,
+            "recovery_ms": 10067.184115618467,
+            "responses": 2
+          },
+          "a2500/server": {
+            "max_gap_ms": 2500,
+            "recovery_ms": 6616.196327343583,
+            "responses": 3
+          },
+          "a4500/client": {
+            "lease_lost": 1,
+            "recovery_ms": 10870.806094914675
+          },
+          "a4500/server": {
+            "lease_lost": 1,
+            "recovery_ms": 8743.66371563077
+          },
+          "b2500": {
+            "recovery_ms": 10665.065871492028
+          },
+          "b4000": {
+            "recovery_ms": 12007.31977148354
+          }
+        }
+      },
+      "reason": "",
+      "verdict": "PASA"
+    },
+    "G6": {
+      "metrics": {
+        "clock_n": 177,
+        "clock_pause_t_step_ms": 5000.0,
+        "clock_pause_tick_step_ms": 5000,
+        "clock_slope": 1.0000001930784141
+      },
+      "reason": "result_seen antes de T_s",
+      "verdict": "INCONCLUSO"
+    },
+    "G7": {
+      "metrics": {
+        "cases": {
+          "invalid_all_P": {
+            "invalid": 2,
+            "invalid_gap_ms": 5078.348099991679,
+            "recovery_ms": 6359.218171492219,
+            "rewritten": 2
+          },
+          "invalid_no_ok_P": {
+            "invalid": 1,
+            "recovery_ms": 6268.118527337909,
+            "rewritten": 1
+          },
+          "invalid_now_decimal_P": {
+            "invalid": 1,
+            "recovery_ms": 6226.692427352071,
+            "rewritten": 1
+          },
+          "invalid_now_text_P": {
+            "invalid": 1,
+            "recovery_ms": 6107.222471490502,
+            "rewritten": 1
+          },
+          "invalid_ok_false_P": {
+            "invalid": 1,
+            "recovery_ms": 6223.093471482396,
+            "rewritten": 1
+          },
+          "late_cb": {
+            "changes": 0,
+            "effects_in_window": 0,
+            "recovery_ms": 23238.819671481848
+          },
+          "measure_args_empty_P": {
+            "injection_observed": true,
+            "op_effects": {
+              "op-43": 0
+            },
+            "recovery_ms": 4212.01932734251,
+            "state": null
+          },
+          "measure_no_args_P": {
+            "injection_observed": true,
+            "op_effects": {
+              "op-39": 0
+            },
+            "recovery_ms": 4146.623471483588,
+            "state": null
+          },
+          "measure_ok1_P": {
+            "injection_observed": true,
+            "recovery_ms": 8241.743171483278,
+            "state": null
+          },
+          "r_held": {
+            "max_gap_ms": 551,
+            "polls": 8,
+            "recovery_ms": 4241.986783206463
+          },
+          "status400_P": {
+            "injection_observed": true,
+            "recovery_ms": 4202.084971487522,
+            "state": 5
+          },
+          "status400_R": {
+            "injection_observed": true,
+            "recovery_ms": 1636.5854714810848,
+            "state": 5
+          },
+          "status401_P": {
+            "injection_observed": true,
+            "recovery_ms": 4182.912671476603,
+            "state": 5
+          },
+          "status401_R": {
+            "injection_observed": true,
+            "recovery_ms": 1609.2118714898825,
+            "state": 5
+          },
+          "status409_P": {
+            "injection_observed": true,
+            "recovery_ms": 4176.720171481371,
+            "state": 5
+          },
+          "status409_R": {
+            "injection_observed": true,
+            "recovery_ms": 1575.4001832008362,
+            "state": 5
+          },
+          "status413_P": {
+            "injection_observed": true,
+            "recovery_ms": 4219.635115623474,
+            "state": 5
+          },
+          "status413_R": {
+            "injection_observed": true,
+            "recovery_ms": 1623.6285832077265,
+            "state": 5
+          },
+          "status500_P": {
+            "injection_observed": true,
+            "recovery_ms": 4111.410215616226,
+            "state": 6
+          },
+          "status500_R": {
+            "injection_observed": true,
+            "recovery_ms": 1583.0358714908361,
+            "state": 6
+          },
+          "timeout_P": {
+            "recovery_ms": 16327.31561562419,
+            "timeout_ms": 5996.754899993539
+          }
+        }
+      },
+      "reason": "",
+      "verdict": "PASA"
+    },
+    "G8": {
+      "metrics": {
+        "cases": {
+          "a": {
+            "observed": 1,
+            "pair": {
+              "anotar": 1,
+              "retirar": 1
+            },
+            "result_seen": 2
+          },
+          "b": {
+            "dups": 1,
+            "pair": {
+              "anotar": 1,
+              "retirar": 1
+            }
+          },
+          "c": {
+            "pair": {
+              "anotar": 1,
+              "retirar": 1
+            }
+          }
+        }
+      },
+      "reason": "",
+      "verdict": "PASA"
+    },
+    "G9": {
+      "metrics": {
+        "max_ms": 317.74722734093666,
+        "n_ops": 100,
+        "op_state_t_lectura": 0,
+        "ops_sin_pareja": 0,
+        "p50_ms": 188.86587147414684,
+        "p95_ms": 282.07267148792744
+      },
+      "reason": "",
+      "verdict": "PASA"
+    }
+  }
+}
