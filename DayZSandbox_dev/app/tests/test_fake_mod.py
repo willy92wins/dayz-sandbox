@@ -103,6 +103,19 @@ class FakeBase(unittest.TestCase):
         self.assertTrue(env.bridge.reconciled)
         return fake
 
+    def wait_past_ttl(self, env, op_id, extra=0.05, timeout=5.0):
+        """Espera a que el bridge vea vencida la orden: su TTL contado desde enqueued_mono y con
+        su propio reloj, como sweep(). Un t0 tomado antes de encolar se queda corto con carga."""
+        order = env.bridge.orders[(env.bridge.session, op_id)]
+        limit = order["enqueued_mono"] + order["ttl_ms"] / 1000.0 + extra
+        self.assertTrue(wait_until(lambda: env.bridge._now() > limit, timeout))
+
+    def wait_sent(self, fake, pred, timeout=5.0):
+        """El bridge cambia el estado dentro del POST del resultado y el mod falso anota el cuerpo
+        al volver el POST: con carga, el estado puede verse antes que sent_results."""
+        self.assertTrue(wait_until(lambda: any(pred(b) for b in fake.server.sent_results), timeout),
+                        "el resultado esperado no aparece en sent_results")
+
     def wait_state(self, env, op_id, state, timeout=8.0):
         ok = wait_until(lambda: env.op(op_id)["state"] == state, timeout)
         self.assertTrue(ok, "op %s no llego a %s (esta %s)" % (op_id, state, env.op(op_id)))
@@ -150,8 +163,7 @@ class BR5ResultadoPerdido(FakeBase):
                         for e in fake.server.cache.values())))
         fake.server.drop_all_results = False
         self.wait_state(env, op_id, "observado")
-        dups = [b for b in fake.server.sent_results if b["op_id"] == op_id and b["dup"] is True]
-        self.assertTrue(dups, "la reentrega no devolvio dup:true")
+        self.wait_sent(fake, lambda b: b["op_id"] == op_id and b["dup"] is True)
         self.assertEqual(fake.effects_for(op_id), {"retirar": 1, "anotar": 1})
 
     def test_reentrega_tras_plazo_devuelve_dup_sin_efecto(self):
@@ -246,6 +258,7 @@ class BR7H1(FakeBase):
         self.assertEqual(r2["op_id"], "op-1")
         self.wait_state(env2, r2["op_id"], "observado")
         self.assertEqual(fake.effects_for("op-1", session=s2), {"retirar": 1, "anotar": 1})
+        self.wait_sent(fake, lambda b: b["op_id"] == "op-1" and b["session"] == s2)
         sent = [b for b in fake.server.sent_results
                 if b["op_id"] == "op-1" and b["session"] == s2]
         self.assertTrue(sent and sent[0]["dup"] is False, sent)
@@ -287,7 +300,6 @@ class BR8Cache(FakeBase):
             fake.server.cache.clear()
         fake.server.drop_all_results = True
         time.sleep(1.0)  # un poll entregador queda retenido en el bridge
-        t0 = time.monotonic()
         r = env.apply_direct()
         op_id = r["op_id"]
         self.assertTrue(wait_until(lambda: fake.effect_count(op_id, "anotar") == 1, 5))
@@ -299,7 +311,7 @@ class BR8Cache(FakeBase):
         self.assertGreater(fake.server.maintenance_polls, maint)
         self.assertEqual(fake.effects_for(op_id), {"retirar": 1, "anotar": 1})
         # vence el TTL en el backend: parcial, aun sin pedir ordenes
-        self.assertTrue(wait_until(lambda: time.monotonic() - t0 > 2.05, 5))
+        self.wait_past_ttl(env, op_id)
         env.bridge.sweep()
         self.assertEqual((env.op(op_id)["state"], env.op(op_id)["reason"]),
                          ("parcial", "sin_resultado"))
@@ -563,12 +575,12 @@ class BR20LeaseTrasEfecto(FakeBase):
 
 
 class BR22ConfirmacionTardia(FakeBase):
-    def _parcial_sin_resultado(self, env, fake, op_id, t_apply):
+    def _parcial_sin_resultado(self, env, fake, op_id):
         self.assertTrue(wait_until(lambda: fake.effect_count(op_id, "anotar") == 1, 5))
         self.assertTrue(wait_until(
             lambda: any(e.order["op_id"] == op_id and e.state == "terminada" and not e.pending
                         for e in fake.server.cache.values()), 5))
-        self.assertTrue(wait_until(lambda: time.monotonic() - t_apply > 1.05, 5))
+        self.wait_past_ttl(env, op_id)
         env.bridge.sweep()
         self.assertEqual(env.op(op_id)["state"], "parcial")
         self.assertEqual(env.op(op_id)["reason"], "sin_resultado")
@@ -578,10 +590,9 @@ class BR22ConfirmacionTardia(FakeBase):
         fake = self.start_fake(env)
         fake.set_state_read_mode("error")
         fake.server.drop_all_results = True
-        t0 = time.monotonic()
         r = env.apply_direct()
         op_id = r["op_id"]
-        self._parcial_sin_resultado(env, fake, op_id, t0)
+        self._parcial_sin_resultado(env, fake, op_id)
         fake.server.drop_all_results = False
         self.assertTrue(fake.resend_cached_result(op_id))
         self.wait_state(env, op_id, "observado")
@@ -601,14 +612,13 @@ class BR22ConfirmacionTardia(FakeBase):
         fake.set_state_read_mode("error")
         fake.server.drop_all_results = True
         fake.server.poll_response_delay_ms = 900
-        t0 = time.monotonic()
         r = env.apply_direct()
         op_id = r["op_id"]
         # la orden llega vencida: rejected/expired en cache, sin transmitir
         self.assertTrue(wait_until(
-            lambda: any(e.order["op_id"] == op_id and e.state == "terminada"
+            lambda: any(e.order["op_id"] == op_id and e.state == "terminada" and not e.pending
                         for e in fake.server.cache.values()), 5))
-        self.assertTrue(wait_until(lambda: time.monotonic() - t0 > 0.75, 5))
+        self.wait_past_ttl(env, op_id)
         env.bridge.sweep()
         self.assertEqual(env.op(op_id)["state"], "parcial")
         fake.server.drop_all_results = False
@@ -623,14 +633,13 @@ class BR22ConfirmacionTardia(FakeBase):
         fake.set_state_read_mode("error")
         fake.server.drop_all_results = True
         fake.server.work_between_ms = 1100
-        t0 = time.monotonic()
         r = env.apply_direct()
         op_id = r["op_id"]
         self.assertTrue(wait_until(
-            lambda: any(e.order["op_id"] == op_id and e.state == "terminada"
+            lambda: any(e.order["op_id"] == op_id and e.state == "terminada" and not e.pending
                         and e.result and e.result["status"] == "error"
                         for e in fake.server.cache.values()), 6))
-        self.assertTrue(wait_until(lambda: time.monotonic() - t0 > 0.95, 5))
+        self.wait_past_ttl(env, op_id)
         env.bridge.sweep()
         self.assertEqual((env.op(op_id)["state"], env.op(op_id)["reason"]),
                          ("parcial", "sin_resultado"))
@@ -648,11 +657,14 @@ class BR23ReconciliacionPredicado(FakeBase):
         fake = self.start_fake(env)
         fake.server.annotate_rev_delta = 8
         fake.server.drop_all_results = True
-        t0 = time.monotonic()
         r = env.apply_direct()
         op_id = r["op_id"]
         self.assertTrue(wait_until(lambda: fake.effect_count(op_id, "anotar") == 1, 5))
-        self.assertTrue(wait_until(lambda: time.monotonic() - t0 > 1.05, 5))
+        # los 4 intentos caen sin transmitirse antes de abrir los envios
+        self.assertTrue(wait_until(
+            lambda: any(e.order["op_id"] == op_id and e.state == "terminada" and not e.pending
+                        for e in fake.server.cache.values()), 5))
+        self.wait_past_ttl(env, op_id)
         fake.server.drop_all_results = False
         env.bridge.sweep()
         self.assertEqual(env.op(op_id)["state"], "parcial")
