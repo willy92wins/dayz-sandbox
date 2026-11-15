@@ -101,6 +101,190 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
 
 
+def _strip_enforce_comments(txt: str) -> str:
+    """Quita comentarios de Enforce Script para no acreditar un .c solo-comentario."""
+    out: list[str] = []
+    i = 0
+    n = len(txt)
+    while i < n:
+        if txt.startswith("//", i):
+            j = txt.find("\n", i)
+            i = n if j < 0 else j
+        elif txt.startswith("/*", i):
+            j = txt.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+        elif txt[i] in ("'", '"'):
+            quote = txt[i]
+            out.append(txt[i])
+            i += 1
+            while i < n:
+                out.append(txt[i])
+                if txt[i] == "\\":
+                    if i + 1 < n:
+                        out.append(txt[i + 1])
+                        i += 2
+                        continue
+                elif txt[i] == quote:
+                    i += 1
+                    break
+                i += 1
+        else:
+            out.append(txt[i])
+            i += 1
+    return "".join(out)
+
+
+def _probe_c_problems(txt: str) -> list[str]:
+    """Comprueba la sonda Enforce por codigo real, no por menciones en comentarios."""
+    code = _strip_enforce_comments(txt)
+    problems: list[str] = []
+    for token in (
+        "class DSBX_QA_X_Map",
+        "override bool Handles(",
+        '"map_world_read"',
+        '"map_feature_locate"',
+        '"map_place_ground"',
+        "SpawnTrackedObject",
+        "ObjectDelete",
+        "SurfaceY",
+        "SurfaceRoadY",
+        "SurfaceIsSea",
+        "SurfaceGetSeaLevel",
+        "RaycastRVProxy",
+        "RayCastBullet",
+    ):
+        if token not in code:
+            problems.append(f"missing_code_token:{token}")
+    if '"not_implemented"' in code:
+        problems.append("still_not_implemented")
+    if code.count("CreateObjectEx(") != 1:
+        problems.append(f"create_object_ex_count:{code.count('CreateObjectEx(')}")
+    return problems
+
+
+def _locate_payload_problems(u_read: dict) -> list[str]:
+    """Rechaza una extension que solo devuelve decision_id='located'."""
+    problems: list[str] = []
+    for sk in ("point_id", "mode_id", "decision_id", "reject_reason_id"):
+        if not isinstance(u_read.get("str", {}).get(sk), str):
+            problems.append(f"missing_locate_str:{sk}")
+    for nk in (
+        "req_x_m",
+        "req_z_m",
+        "srv_feature_found_b",
+        "srv_x_m",
+        "srv_y_m",
+        "srv_z_m",
+        "prominence_m",
+        "err_xz_m",
+        "err_reflected_z_m",
+        "tick_ms",
+        "frame",
+    ):
+        val = u_read.get("num", {}).get(nk)
+        if not isinstance(val, (int, float)) or isinstance(val, bool) or not math.isfinite(float(val)):
+            problems.append(f"missing_locate_num:{nk}")
+    rows = u_read.get("rows")
+    if not isinstance(rows, list) or len(rows) != 2:
+        problems.append("missing_locate_audit_rows")
+    else:
+        for row in rows:
+            for col in ("sx_m", "sz_m", "y_m", "sea_b"):
+                if not isinstance(row.get(col), (int, float)):
+                    problems.append(f"missing_locate_row_col:{col}")
+    return problems
+
+
+class _TrafficRecord:
+    def __init__(self) -> None:
+        self.bridge: dict[str, list[dict]] = {}
+        self.contexts: list[dict] = []
+
+
+_RECORD = _TrafficRecord()
+
+
+def _recording_writer_factory():
+    base = f03_common._JsonlWriter
+
+    class _RecordingWriter(base):  # type: ignore[misc, valid-type]
+        def __init__(self, path):
+            super().__init__(path)
+            if Path(path).name == "bridge.jsonl":
+                _RECORD.bridge.setdefault(str(Path(path)), [])
+
+        def write(self, row):
+            super().write(row)
+            if Path(self.path).name == "bridge.jsonl":
+                _RECORD.bridge[str(Path(self.path))].append(copy.deepcopy(row))
+
+    return _RecordingWriter
+
+
+def _recording_part_context_class():
+    base = f03_common.PartContext
+
+    class _RecordingPartContext(base):  # type: ignore[misc, valid-type]
+        def open(self):
+            super().open()
+            _RECORD.contexts.append(
+                {
+                    "part_dir": str(self.part_dir),
+                    "pids": dict(self.fake_peer_pids),
+                    "spawned": sorted(self.procs.keys()),
+                }
+            )
+
+    return _RecordingPartContext
+
+
+def _verify_part_against_record(part_dir: Path, rec: _TrafficRecord) -> list[str]:
+    """Comprueba que la evidencia de la parte viene del nucleo, no del runner."""
+    problems: list[str] = []
+    pdir = Path(part_dir)
+    bridge_path = pdir / "samples" / "bridge.jsonl"
+    if not bridge_path.is_file():
+        return ["missing_bridge"]
+    recorded = rec.bridge.get(str(bridge_path), [])
+    written = f03_common.read_jsonl(bridge_path)
+    if written != recorded:
+        problems.append("bridge_not_from_core")
+    if not recorded:
+        problems.append("no_recorded_traffic")
+
+    ctx = next((c for c in rec.contexts if c["part_dir"] == str(pdir)), None)
+    if ctx is None:
+        problems.append("missing_part_context")
+        return problems
+    pids = ctx["pids"]
+    if not pids.get("server") or not pids.get("client"):
+        problems.append("runner_without_peers")
+    if ctx["spawned"] != ["client", "server"]:
+        problems.append("peers_not_spawned")
+
+    try:
+        manifest = gate_core.read_json(pdir / "manifest.json")
+    except Exception:
+        problems.append("missing_manifest")
+        return problems
+    exec_ids = manifest.get("execution_identity") if isinstance(manifest, dict) else None
+    if not isinstance(exec_ids, dict):
+        problems.append("missing_execution_identity")
+        return problems
+    if exec_ids.get("fake_peer_pids") != pids:
+        problems.append("manifest_pids_mismatch")
+
+    hellos = [r for r in written if r.get("ev") == "hello" and r.get("http") == 200]
+    for role in ("server", "client"):
+        if not any(r.get("peer") == role for r in hellos):
+            problems.append(f"missing_hello:{role}")
+    if not any(r.get("ev") == "enq" for r in written):
+        problems.append("no_enqueued_ops")
+    if not any(r.get("ev") == "result" and r.get("http") == 200 for r in written):
+        problems.append("no_results")
+    return problems
+
+
 def _build_synthetic_part(
     part_dir: Path,
     *,
@@ -576,6 +760,10 @@ def _build_synthetic_part(
         surf_y = srv_y
         bbox_min_y = -0.5625
         bbox_max_y = 0.5625
+        # Posicion observada independiente de la pedida (no es un simple eco):
+        # el motor coloca con un residuo deterministico dentro de la tolerancia.
+        obs_x = req_x + 0.0125
+        obs_z = req_z - 0.0125
         obs_y = surf_y - bbox_min_y + contact_offset_y_m
         a_pl = wire.pack_payload(
             scalars_str={"point_id": vid, "class_id": "Barrel_Green"},
@@ -599,9 +787,9 @@ def _build_synthetic_part(
                 "seq_pre_n": float(seq_pre),
                 "seq_post_n": float(seq_post),
                 "ent_id_n": float(ent_id_for_valid_spawns),
-                "obs_x_m": req_x,
+                "obs_x_m": obs_x,
                 "obs_y_m": obs_y,
-                "obs_z_m": req_z,
+                "obs_z_m": obs_z,
                 "bbox_min_y_m": bbox_min_y,
                 "bbox_max_y_m": bbox_max_y,
                 "obs_surf_y_m": surf_y,
@@ -622,6 +810,8 @@ def _build_synthetic_part(
     pg_surf_y = 12.5
     pg_bbox_min_y = -0.5625
     pg_bbox_max_y = 0.5625
+    pg_obs_x = pg_x + 0.0125
+    pg_obs_z = pg_z - 0.0125
     pg_obs_y = pg_surf_y - pg_bbox_min_y + contact_offset_y_m
     step4_op_id = _emit_op(
         "map_place_ground",
@@ -1099,8 +1289,12 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             f"certifying_capture_sha256 esperado={expected_fx['accreditation']['certifying_capture_sha256']}",
         )
 
-    def test_e2e_run_and_all_four_mutants_and_aggregation(self) -> None:
-        """Verifica run/ (con ent_id_n == 0 en colocaciones validas, N23), los 4 mutantes y aggregate_spike."""
+    def test_run_and_all_four_mutants_and_aggregation(self) -> None:
+        """Verifica run/ (con ent_id_n == 0 en colocaciones validas, N23), los 4 mutantes y aggregate_spike.
+
+        Es sintetico a proposito: prueba evaluador y agregacion sin la
+        implementacion. Los ``test_e2e_*`` son los que ejercitan el runner real.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "ev_s_mapa"
             _build_synthetic_part(
@@ -1679,29 +1873,411 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             self.assertEqual(v_inv, v_orig)
 
     # =========================================================================
+    # Negativas de la revision de Sol r1 (BLOQ 1..9, MEN 10). Cada una reproduce
+    # una fabricacion concreta y debe dar FALLA o INCONCLUSO, nunca PASA.
+    # =========================================================================
+    def test_neg_sol01_sat_label_without_files_or_reference(self) -> None:
+        """BLOQ 1: dayz_tools_sat no se acredita por etiqueta; sin ficheros ni referencia, INCONCLUSO."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_sat_label"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            prov = gate_core.read_json(pdir / "samples" / "map_provenance.json")
+            prov["source_kind"] = "dayz_tools_sat"
+            prov["sat_reference_image_sha256"] = "00" * 32
+            gate_core.write_json(pdir / "samples" / "map_provenance.json", prov)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 2)
+            self.assertEqual(v["reasons"], ["unaccredited_sat_source"])
+
+    def test_neg_sol02_physical_copies_of_calibration_as_verification(self) -> None:
+        """BLOQ 2: V1..V3 copiadas fisicamente de C1..C3 no acreditan la separacion."""
+        with tempfile.TemporaryDirectory() as tmp:
+            frozen = gate_core.read_json(FIXTURE_PATH)
+            custom = copy.deepcopy(frozen)
+            cal = custom["calibration_points"]
+            custom["verification_points"] = []
+            for idx, src in enumerate(cal):
+                cp = copy.deepcopy(src)
+                cp["point_id"] = s_mapa_eval.VER_IDS[idx]
+                custom["verification_points"].append(cp)
+            for idx, src in enumerate(cal):
+                pid = s_mapa_eval.VER_IDS[idx]
+                custom["certifying_capture"]["patches"][pid] = copy.deepcopy(
+                    custom["certifying_capture"]["patches"][src["point_id"]]
+                )
+            pdir = Path(tmp) / "neg_v_copies_c"
+            _build_synthetic_part(
+                pdir,
+                git_head=self.real_git_head,
+                probe_stamp=self.real_probe_stamp,
+                custom_fixture=custom,
+            )
+            with mock.patch.object(s_mapa_eval, "_load_frozen_fixture", return_value=copy.deepcopy(custom)):
+                v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 2)
+            self.assertEqual(v["reasons"], ["unaccredited_fixture"])
+
+    def test_neg_sol03_orders_without_matching_coordinates(self) -> None:
+        """BLOQ 3: MAP-02/MAP-03 contrastan la orden con su respuesta, no el eco de la respuesta."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_zero_order_coords"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            for row in rows:
+                if row.get("ev") != "enq" or row.get("verb") not in ("map_feature_locate", "map_place_ground"):
+                    continue
+                u = wire.unpack_payload(row["args"])
+                if row["verb"] == "map_feature_locate" and u["str"].get("mode_id") == "calibrate":
+                    for key in ("x_min_m", "z_min_m", "x_max_m", "z_max_m"):
+                        u["num"][key] = 0.0
+                else:
+                    for key in ("req_x_m", "req_z_m"):
+                        u["num"][key] = 0.0
+                row["args"] = wire.pack_payload(scalars_str=u["str"], scalars_num=u["num"])
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 1, v)
+            self.assertEqual(next(c for c in v["checks"] if c["id"] == "MAP-02")["status"], "fail")
+
+            # Origenes observados a cero en la respuesta, con la orden correcta.
+            pdir2 = Path(tmp) / "neg_zero_read_origins"
+            _build_synthetic_part(pdir2, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows2 = f03_common.read_jsonl(pdir2 / "samples" / "bridge.jsonl")
+            for row in rows2:
+                if row.get("ev") == "result" and isinstance(row.get("result"), dict):
+                    res = row["result"]
+                    u = wire.unpack_payload(res["read"]) if res.get("status") == "done" else None
+                    if u is not None and u["str"].get("mode_id") in ("grid_row", "patch_row"):
+                        u["num"]["x0_m"] = 0.0
+                        u["num"]["z0_m"] = 0.0
+                        res["read"] = wire.pack_payload(
+                            scalars_str=u["str"],
+                            scalars_num=u["num"],
+                            num_cols=u["ncol"],
+                            row_dicts=u["rows"],
+                        )
+            _write_jsonl(pdir2 / "samples" / "bridge.jsonl", rows2)
+            v2 = s_mapa_eval.evaluate(pdir2, repo_root=REPO_ROOT)
+            self.assertEqual(v2["exit_code"], 2, v2)
+
+    def test_neg_sol04_unbound_or_ambiguous_operations(self) -> None:
+        """BLOQ 4: operaciones atribuidas a una instancia no registrada o duplicadas ambiguas."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_client_attribution"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            target = None
+            for row in rows:
+                if row.get("ev") == "enq" and row.get("verb") == "map_place_ground":
+                    target = row.get("op_id")
+                    break
+            self.assertIsNotNone(target)
+            for row in rows:
+                if row.get("op_id") == target:
+                    row["peer"] = "client"
+                    if "inst" in row:
+                        row["inst"] = "cli-map-1"
+                if row.get("ev") == "poll" and target in (row.get("op_ids") or []):
+                    row["peer"] = "client"
+                    row["inst"] = "cli-map-1"
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 2, v)
+
+            # Duplicado ambiguo: mismo op_id con otra orden.
+            pdir2 = Path(tmp) / "neg_ambiguous_dup"
+            _build_synthetic_part(pdir2, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows2 = f03_common.read_jsonl(pdir2 / "samples" / "bridge.jsonl")
+            enq = next(r for r in rows2 if r.get("ev") == "enq")
+            dup = copy.deepcopy(enq)
+            dup["verb"] = "map_world_read"
+            rows2.append(dup)
+            _write_jsonl(pdir2 / "samples" / "bridge.jsonl", rows2)
+            v2 = s_mapa_eval.evaluate(pdir2, repo_root=REPO_ROOT)
+            self.assertEqual(v2["exit_code"], 2, v2)
+
+    def test_neg_sol05_fabricated_placement_heights_and_copied_request(self) -> None:
+        """BLOQ 5: alturas y contacto se contrastan con las muestras del mundo y terrain_y_m."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_constant_place_heights"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            for row in rows:
+                if row.get("ev") != "result" or not isinstance(row.get("result"), dict):
+                    continue
+                res = row["result"]
+                u = wire.unpack_payload(res["read"]) if res.get("status") == "done" else None
+                if u is None or u["str"].get("decision_id") != "placed":
+                    continue
+                # obs_x/obs_z siguen copiados de req, pero la altura observada se fija
+                # a 0.5625 y la superficie a 0, mientras terrain_y_m dice otra cosa.
+                u["num"]["obs_y_m"] = 0.5625
+                u["num"]["bbox_min_y_m"] = -0.5625
+                u["num"]["bbox_max_y_m"] = 0.5625
+                u["num"]["obs_surf_y_m"] = 0.0
+                res["read"] = wire.pack_payload(
+                    scalars_str=u["str"], scalars_num=u["num"], num_cols=u["ncol"], row_dicts=u["rows"]
+                )
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 1, v)
+            self.assertEqual(next(c for c in v["checks"] if c["id"] == "MAP-03")["status"], "fail")
+
+    def test_neg_sol06_counters_reset_or_rounded(self) -> None:
+        """BLOQ 6: los contadores de N23 son enteros exactos y continuos toda la sesion."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_counter_reset_on_rejects"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows = f03_common.read_jsonl(pdir / "samples" / "bridge.jsonl")
+            for row in rows:
+                if row.get("ev") != "result" or not isinstance(row.get("result"), dict):
+                    continue
+                res = row["result"]
+                u = wire.unpack_payload(res["read"]) if res.get("status") == "done" else None
+                if u is None or u["str"].get("decision_id") != "rejected":
+                    continue
+                if u["str"].get("reject_reason_id") in ("out_of_map", "elevated_surface"):
+                    u["num"]["seq_pre_n"] = 0.0
+                    u["num"]["seq_post_n"] = 0.0
+                    res["read"] = wire.pack_payload(
+                        scalars_str=u["str"], scalars_num=u["num"], num_cols=u["ncol"], row_dicts=u["rows"]
+                    )
+            _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 1, v)
+            self.assertEqual(next(c for c in v["checks"] if c["id"] == "MAP-03")["status"], "fail")
+
+            # Censo redondeado: pre_count_n=0 y post_count_n=0.49 no es un entero exacto.
+            pdir2 = Path(tmp) / "neg_rounded_census"
+            _build_synthetic_part(pdir2, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows2 = f03_common.read_jsonl(pdir2 / "samples" / "bridge.jsonl")
+            for row in rows2:
+                if row.get("ev") != "result" or not isinstance(row.get("result"), dict):
+                    continue
+                res = row["result"]
+                u = wire.unpack_payload(res["read"]) if res.get("status") == "done" else None
+                if u is None or u["str"].get("decision_id") != "rejected":
+                    continue
+                if u["str"].get("reject_reason_id") == "out_of_map":
+                    u["num"]["pre_count_n"] = 0.0
+                    u["num"]["post_count_n"] = 0.49
+                    res["read"] = wire.pack_payload(
+                        scalars_str=u["str"], scalars_num=u["num"], num_cols=u["ncol"], row_dicts=u["rows"]
+                    )
+            _write_jsonl(pdir2 / "samples" / "bridge.jsonl", rows2)
+            v2 = s_mapa_eval.evaluate(pdir2, repo_root=REPO_ROOT)
+            self.assertEqual(v2["exit_code"], 1, v2)
+            self.assertEqual(next(c for c in v2["checks"] if c["id"] == "MAP-03")["status"], "fail")
+
+    def test_neg_sol07_capture_without_full_coverage_or_declared_promotion(self) -> None:
+        """BLOQ 7: N31 exige 32 ordenes distintas y una captura offline no se promociona por declaracion."""
+        with tempfile.TemporaryDirectory() as tmp:
+            frozen = gate_core.read_json(FIXTURE_PATH)
+            stub = copy.deepcopy(frozen)
+            for pid in s_mapa_eval.PATCH_IDS:
+                stub["certifying_capture"]["patches"][pid]["patch_row_ops"] = stub["certifying_capture"][
+                    "patches"
+                ][pid]["patch_row_ops"][:2]
+            pdir = Path(tmp) / "neg_capture_two_orders"
+            _build_synthetic_part(
+                pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp, custom_fixture=stub
+            )
+            with mock.patch.object(s_mapa_eval, "_load_frozen_fixture", return_value=copy.deepcopy(stub)):
+                v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 2)
+            self.assertEqual(v["reasons"], ["unaccredited_fixture"])
+
+            # Una captura offline relabelada como diag/ingame en samples/ no vale
+            # si la fixture congelada sigue diciendo offline.
+            pdir2 = Path(tmp) / "neg_offline_declared_diag"
+            _build_synthetic_part(pdir2, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            fx = gate_core.read_json(pdir2 / "samples" / "s_mapa_puntos.json")
+            fx["accreditation"]["accredited_ingame"] = True
+            fx["certifying_capture"]["certifying_build"] = "diag"
+            fx["certifying_capture"]["certifying_hello"]["build"] = "diag"
+            fx = _compute_stamped_fixture(
+                fx,
+                cert_git_head=self.real_git_head,
+                cert_probe_stamp=self.real_probe_stamp,
+            )
+            (pdir2 / "samples" / "s_mapa_certifying_capture.json").write_bytes(
+                json.dumps(fx["certifying_capture"], indent=2, sort_keys=True).encode("utf-8")
+            )
+            gate_core.write_json(pdir2 / "samples" / "s_mapa_puntos.json", fx)
+            prov = gate_core.read_json(pdir2 / "samples" / "map_provenance.json")
+            prov["fixture_sha256"] = f03_common.sha256_file_hex(pdir2 / "samples" / "s_mapa_puntos.json")
+            prov["certifying_capture_sha256"] = f03_common.sha256_file_hex(
+                pdir2 / "samples" / "s_mapa_certifying_capture.json"
+            )
+            gate_core.write_json(pdir2 / "samples" / "map_provenance.json", prov)
+            v2 = s_mapa_eval.evaluate(pdir2, repo_root=REPO_ROOT)
+            self.assertEqual(v2["exit_code"], 2, v2)
+            self.assertEqual(v2["reasons"], ["unaccredited_fixture"])
+
+    def test_neg_sol08_e2e_reference_negatives_and_n24_locator(self) -> None:
+        """BLOQ 8: runner sin peers, extension solo-located, .c comentario y localizador N24 completo."""
+        with tempfile.TemporaryDirectory() as tmp:
+            # 1) Runner que escribe paquetes sin arrancar peers.
+            pdir = Path(tmp) / "neg_runner_without_peers"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            man = gate_core.read_json(pdir / "manifest.json")
+            man["execution_identity"]["fake_peer_pids"] = {"client": None, "server": None}
+            gate_core.write_json(pdir / "manifest.json", man)
+            empty_record = _TrafficRecord()
+            self.assertIn("runner_without_peers", _verify_part_against_record(pdir, empty_record))
+            self.assertIn("no_recorded_traffic", _verify_part_against_record(pdir, empty_record))
+
+            # 2) Extension que solo devuelve decision_id="located".
+            minimal = {
+                "str": {"point_id": "C1", "mode_id": "calibrate", "decision_id": "located", "reject_reason_id": ""},
+                "num": {},
+                "rows": [],
+                "ncol": [],
+                "scol": [],
+            }
+            self.assertIn("missing_locate_num:req_x_m", _locate_payload_problems(minimal))
+            pdir2 = Path(tmp) / "neg_located_only"
+            _build_synthetic_part(pdir2, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows2 = f03_common.read_jsonl(pdir2 / "samples" / "bridge.jsonl")
+            for row in rows2:
+                if row.get("ev") == "result" and isinstance(row.get("result"), dict):
+                    res = row["result"]
+                    u = wire.unpack_payload(res["read"]) if res.get("status") == "done" else None
+                    if u is not None and u["str"].get("mode_id") == "calibrate":
+                        res["read"] = wire.pack_payload(
+                            scalars_str={
+                                "point_id": u["str"]["point_id"],
+                                "mode_id": "calibrate",
+                                "decision_id": "located",
+                                "reject_reason_id": "",
+                            },
+                            scalars_num={"req_x_m": 0.0, "req_z_m": 0.0},
+                        )
+            _write_jsonl(pdir2 / "samples" / "bridge.jsonl", rows2)
+            v2 = s_mapa_eval.evaluate(pdir2, repo_root=REPO_ROOT)
+            self.assertEqual(v2["exit_code"], 2, v2)
+
+            # 3) DSBX_QA_X_Map.c compuesto solo por un comentario.
+            comment_only = "// class DSBX_QA_X_Map SpawnTrackedObject CreateObjectEx( SurfaceY\n"
+            self.assertIn("missing_code_token:override bool Handles(", _probe_c_problems(comment_only))
+
+            # 4) N24: el localizador fraudulento completo (centroide de solo 2 filas)
+            #    se entrega al evaluador; MAP-02 debe rechazarlo contra las 256 muestras.
+            pdir3 = Path(tmp) / "neg_n24_two_row_locator"
+            _build_synthetic_part(pdir3, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            rows3 = f03_common.read_jsonl(pdir3 / "samples" / "bridge.jsonl")
+            for row in rows3:
+                if row.get("ev") != "result" or not isinstance(row.get("result"), dict):
+                    continue
+                res = row["result"]
+                u = wire.unpack_payload(res["read"]) if res.get("status") == "done" else None
+                if u is None or u["str"].get("point_id") != "C2" or u["str"].get("mode_id") != "calibrate":
+                    continue
+                rows_loc = u["rows"]
+                if len(rows_loc) != 2:
+                    continue
+                avg_x = 0.5 * (float(rows_loc[0]["sx_m"]) + float(rows_loc[1]["sx_m"]))
+                avg_z = 0.5 * (float(rows_loc[0]["sz_m"]) + float(rows_loc[1]["sz_m"]))
+                u["num"]["srv_x_m"] = avg_x
+                u["num"]["srv_z_m"] = avg_z
+                res["read"] = wire.pack_payload(
+                    scalars_str=u["str"], scalars_num=u["num"], num_cols=u["ncol"], row_dicts=u["rows"]
+                )
+            _write_jsonl(pdir3 / "samples" / "bridge.jsonl", rows3)
+            v3 = s_mapa_eval.evaluate(pdir3, repo_root=REPO_ROOT)
+            self.assertEqual(v3["exit_code"], 1, v3)
+            self.assertEqual(next(c for c in v3["checks"] if c["id"] == "MAP-02")["status"], "fail")
+
+    def test_neg_sol09_implementer_cannot_self_accredit(self) -> None:
+        """BLOQ 9: la acreditacion diag es del propietario; el implementador no puede autoacreditar samples/."""
+        frozen = gate_core.read_json(FIXTURE_PATH)
+        self.assertIs(frozen["accreditation"]["accredited_ingame"], False)
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_self_accredited"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            fx = gate_core.read_json(pdir / "samples" / "s_mapa_puntos.json")
+            fx["accreditation"]["accredited_ingame"] = True
+            gate_core.write_json(pdir / "samples" / "s_mapa_puntos.json", fx)
+            prov = gate_core.read_json(pdir / "samples" / "map_provenance.json")
+            prov["fixture_sha256"] = f03_common.sha256_file_hex(pdir / "samples" / "s_mapa_puntos.json")
+            gate_core.write_json(pdir / "samples" / "map_provenance.json", prov)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 2)
+            self.assertEqual(v["reasons"], ["unaccredited_fixture"])
+
+    def test_neg_sol10_truncated_zlib_stream(self) -> None:
+        """MEN 10: un PNG con flujo zlib truncado no puede pasar aunque descomprima al tamano esperado."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = Path(tmp) / "neg_truncated_idat"
+            _build_synthetic_part(pdir, git_head=self.real_git_head, probe_stamp=self.real_probe_stamp)
+            png_path = pdir / "samples" / "chernarus_local.png"
+            raw = png_path.read_bytes()
+            pos = 8
+            chunks: list[tuple[bytes, bytes]] = []
+            while pos < len(raw):
+                length = struct.unpack(">I", raw[pos : pos + 4])[0]
+                ctype = raw[pos + 4 : pos + 8]
+                cdata = raw[pos + 8 : pos + 8 + length]
+                chunks.append((ctype, cdata))
+                pos += 12 + length
+            rebuilt = bytearray(b"\x89PNG\r\n\x1a\n")
+            for ctype, cdata in chunks:
+                if ctype == b"IDAT" and len(cdata) > 4:
+                    cdata = cdata[:-4]  # quita el trailer adler32 del flujo zlib
+                crc = binascii.crc32(ctype + cdata) & 0xFFFFFFFF
+                rebuilt += struct.pack(">I", len(cdata)) + ctype + cdata + struct.pack(">I", crc)
+            png_path.write_bytes(bytes(rebuilt))
+            prov = gate_core.read_json(pdir / "samples" / "map_provenance.json")
+            prov["image_sha256"] = f03_common.sha256_file_hex(png_path)
+            gate_core.write_json(pdir / "samples" / "map_provenance.json", prov)
+            v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            self.assertEqual(v["exit_code"], 1, v)
+            c_m1 = next(c for c in v["checks"] if c["id"] == "MAP-01")
+            self.assertEqual(c_m1["status"], "fail")
+            self.assertIn("idat_stream_not_terminated", c_m1["detail"])
+
+    # =========================================================================
     # Tests end-to-end (prefijo test_e2e_): ejercitan la implementacion real
     # (s_mapa_run.py, fake_ext_map.py, DSBX_QA_X_Map.c, m1_gate.py).
     # Deben FALLAR ahora contra el esqueleto y PASAR cuando el implementador
     # complete el spike.
     # =========================================================================
     def test_e2e_m1_gate_spike_s_mapa_offline_full_and_evaluate_only(self) -> None:
-        """Ejecuta la corrida completa offline de S-mapa y su reevaluacion (--evaluate-only)."""
+        """Ejecuta la corrida completa offline de S-mapa y su reevaluacion (--evaluate-only).
+
+        Envuelve ``f03_common.PartContext`` para registrar el trafico real del
+        nucleo y los peers lanzados; cada parte tiene que casar con ese registro.
+        """
+        import s_mapa_run  # noqa: F401  (se importa antes de parchear)
+
+        _RECORD.bridge.clear()
+        _RECORD.contexts.clear()
         with tempfile.TemporaryDirectory() as tmp:
             ev_dir = Path(tmp) / "ev_offline"
-            rc = m1_gate.main(
-                [
-                    "spike",
-                    "S-mapa",
-                    "--both",
-                    "--build",
-                    "offline",
-                    "--evidence",
-                    str(ev_dir),
-                ]
-            )
+            writer_cls = _recording_writer_factory()
+            ctx_cls = _recording_part_context_class()
+            with mock.patch.object(f03_common, "_JsonlWriter", writer_cls), mock.patch.object(
+                f03_common, "PartContext", ctx_cls
+            ), mock.patch.object(s_mapa_run, "PartContext", ctx_cls, create=True):
+                rc = m1_gate.main(
+                    [
+                        "spike",
+                        "S-mapa",
+                        "--both",
+                        "--build",
+                        "offline",
+                        "--evidence",
+                        str(ev_dir),
+                    ]
+                )
             self.assertEqual(rc, 0, "m1_gate.py spike S-mapa offline debe devolver 0 PASA")
             verdict = gate_core.read_json(ev_dir / "verdict.json")
             self.assertEqual(verdict["exit_code"], 0, verdict)
+
+            expected_parts = ["run"] + [f"mut-{name}" for name in s_mapa_mutants.EXPECTED_MUTANTS]
+            for pname in expected_parts:
+                problems = _verify_part_against_record(ev_dir / pname, _RECORD)
+                self.assertEqual(problems, [], f"{pname}: {problems}")
 
             rc_eval = m1_gate.main(
                 [
@@ -1778,9 +2354,9 @@ class SMapaOracleOfflineTests(unittest.TestCase):
         """Verifica que DSBX_QA_X_Map.c implementa los verbos y contiene una unica llamada a CreateObjectEx(."""
         c_path = wire.REAL_PROBE_DIR / "scripts" / "5_Mission" / "DSBX_QA_X_Map.c"
         txt = c_path.read_text(encoding="utf-8")
-        self.assertNotIn('"not_implemented"', txt)
-        self.assertIn("SpawnTrackedObject", txt)
-        self.assertEqual(txt.count("CreateObjectEx("), 1)
+        problems = _probe_c_problems(txt)
+        self.assertEqual(problems, [], f"DSBX_QA_X_Map.c: {problems}")
+        self.assertEqual(_strip_enforce_comments(txt).count("CreateObjectEx("), 1)
 
 
 if __name__ == "__main__":
