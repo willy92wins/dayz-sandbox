@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "world": "chernarusplus",
+  "center_x_m": 7500.0,
+  "center_z_m": 7500.0,
+  "director_x_m": 7500.0,
+  "director_z_m": 7495.0,
+  "clear_radius_m": 65.0,
+  "loaded_addons": [
+    "DayZExpansion_AI",
+    "DayZExpansion_AI_Scripts",
+    "DayZExpansion_Core_Scripts",
+    "DayZSandbox_QA"
+  ],
+  "loaded_addons_csv": "DayZExpansion_AI,DayZExpansion_AI_Scripts,DayZExpansion_Core_Scripts,DayZSandbox_QA",
+  "required_patches": [
+    "DZ_Data",
+    "DZ_Characters",
+    "DayZExpansion_AI",
+    "DayZExpansion_AI_Scripts",
+    "DayZExpansion_Core_Scripts",
+    "DayZSandbox_QA"
+  ],
+  "patches_n": 6,
+  "modset_sig": "world=chernarusplus;addons=DayZExpansion_AI,DayZExpansion_AI_Scripts,DayZExpansion_Core_Scripts,DayZSandbox_QA;patches_n=6",
+  "required_classes": {
+    "object": "SeaChest",
+    "infected": "ZmbM_CitizenASkinny_Base",
+    "animal": "Animal_CapraHircus_Brown",
+    "actors": [
+      "eAI_SurvivorM_Mirek",
+      "eAI_SurvivorF_Eva"
+    ],
+    "wardrobe": [
+      "Jeans_Blue",
+      "TShirt_Beige",
+      "AthleticShoes_Blue",
+      "BaseballCap_Blue",
+      "Fingerless_Gloves_Brown"
+    ]
+  },
+  "required_classes_csv": "SeaChest,ZmbM_CitizenASkinny_Base,Animal_CapraHircus_Brown,eAI_SurvivorM_Mirek,eAI_SurvivorF_Eva,Jeans_Blue,TShirt_Beige,AthleticShoes_Blue,BaseballCap_Blue,Fingerless_Gloves_Brown",
+  "steps": {
+    "base": {
+      "k": 0,
+      "objects_n": 0,
+      "infected_n": 0,
+      "animals_n": 0,
+      "actors_n": 0,
+      "wardrobe_per_actor_n": 0,
+      "roots_n": 0,
+      "children_n": 0,
+      "entities_n": 0
+    },
+    "fixture": {
+      "k": 1,
+      "objects_n": 20,
+      "infected_n": 10,
+      "animals_n": 3,
+      "actors_n": 2,
+      "wardrobe_per_actor_n": 5,
+      "roots_n": 35,
+      "children_n": 10,
+      "entities_n": 45
+    },
+    "inc1": {
+      "k": 2,
+      "objects_n": 30,
+      "infected_n": 15,
+      "animals_n": 5,
+      "actors_n": 3,
+      "wardrobe_per_actor_n": 5,
+      "roots_n": 53,
+      "children_n": 15,
+      "entities_n": 68
+    },
+    "inc2": {
+      "k": 3,
+      "objects_n": 40,
+      "infected_n": 20,
+      "animals_n": 6,
+      "actors_n": 4,
+      "wardrobe_per_actor_n": 5,
+      "roots_n": 70,
+      "children_n": 20,
+      "entities_n": 90
+    }
+  },
+  "spawn_flags": {
+    "object_flags": 12583972,
+    "creature_flags": 12586020,
+    "actor_flags": 12586020,
+    "forbidden_flag": 33554432
+  },
+  "emote": {
+    "emote_id": 39,
+    "callback_cmd_id": 1101
+  }
+}
