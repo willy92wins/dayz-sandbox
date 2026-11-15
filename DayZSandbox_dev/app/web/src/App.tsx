@@ -1,251 +1,542 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { FunctionComponent } from "react";
+import {
+  DockviewReact,
+  type DockviewReadyEvent,
+  type IDockviewPanelHeaderProps,
+  type IDockviewPanelProps,
+} from "dockview-react";
+import { AddPanel } from "./panels/AddPanel";
+import { ActivityPanel } from "./panels/ActivityPanel";
+import { HierarchyPanel } from "./panels/HierarchyPanel";
+import { PlaceholderPanel } from "./panels/Placeholders";
+import { PropertiesPanel, confirmActiveFieldBeforeApply } from "./panels/PropertiesPanel";
+import { ValidationPanel } from "./panels/ValidationPanel";
+import {
+  ACTIONS,
+  BROWSER_RESERVED_COMBOS,
+  comboOf,
+  findConflict,
+  keyLabel,
+  type ShortcutActionDef,
+} from "./shortcuts";
+import {
+  PANEL_TITLES,
+  getAllowedPanelsForMode,
+  toggleStudioPanel,
+} from "./layout";
+import {
+  applyCurrentModePropsLeftPreset,
+  applyLayoutToDockview,
+  copySelectedCoordinates,
+  deleteSelectedEntities,
+  duplicateSelectedEntity,
+  fetchAuthoritativeScene,
+  getDockviewApi,
+  getState,
+  handleDockviewLayoutChange,
+  handleOpStateEvent,
+  handleSnapshotEvent,
+  loadInitialStudioData,
+  markBackendAlive,
+  markBackendDown,
+  openPropertiesAndFocus,
+  placeSelectedCatalogItem,
+  releaseActiveLeaseOnUnmount,
+  resetAllShortcutsToDefault,
+  resetCurrentModeLayoutToFactory,
+  resetStudioState,
+  setDockviewApi,
+  setFlash,
+  setState,
+  switchStudioMode,
+  triggerApplyScene,
+  triggerResetScene,
+  triggerUndoRedo,
+  updateShortcutBinding,
+  useStudioStore,
+} from "./store";
+import type { StudioPanelId } from "./types";
 
-type View = "checking" | "login" | "queue";
+type PanelComponent = FunctionComponent<IDockviewPanelProps>;
 
-interface OpData {
-  op_id: string;
-  state: string;
-  rev?: number;
-  hash?: string;
-  at_ms?: number;
-  origin?: string;
-  age_ms?: number;
-}
-
-interface Anchor {
-  atMs: number;
-  ageMs: number | null;
-  perfMs: number;
-  unknown: boolean;
-}
-
-interface Row {
-  op_id: string;
-  state: string;
-  rev?: number;
-  hash?: string;
-  at_ms?: number;
-  origin?: string;
-  anchor: Anchor;
-}
-
-interface DocInfo {
-  doc_id: string;
-  rev: number;
-  hash: string;
-}
-
-const STATE_LABELS: Record<string, string> = {
-  pendiente: "Pendiente",
-  ejecutando: "Ejecutando",
-  aplicado: "Aplicado",
-  observado: "Observado",
-  fallido: "Fallido",
-  parcial: "Parcial",
-};
-
-// Solo las seis claves propias: un estado como «toString» no puede colarse por el prototipo.
-function isKnownState(state: string): boolean {
-  return Object.prototype.hasOwnProperty.call(STATE_LABELS, state);
-}
-
-function stateLabel(state: string): string {
-  return isKnownState(state) ? STATE_LABELS[state] : `Desconocido (${state})`;
-}
-
-function makeAnchor(op: OpData, source: "snapshot" | "op.state", existing?: Row): Anchor {
-  const perf = performance.now();
-  const atMs = typeof op.at_ms === "number" ? op.at_ms : 0;
-  if (existing && existing.anchor.atMs === atMs) {
-    if (source === "snapshot" && typeof op.age_ms === "number") {
-      const displayed = existing.anchor.unknown || existing.anchor.ageMs === null
-        ? null
-        : existing.anchor.ageMs + (perf - existing.anchor.perfMs);
-      if (displayed === null || op.age_ms > displayed) {
-        return { atMs, ageMs: op.age_ms, perfMs: perf, unknown: false };
-      }
-    }
-    return existing.anchor;
-  }
-  if (source === "snapshot" && typeof op.age_ms === "number") {
-    return { atMs, ageMs: op.age_ms, perfMs: perf, unknown: false };
-  }
-  const nowWall = Date.now();
-  if (atMs - nowWall > 2000) {
-    return { atMs, ageMs: null, perfMs: perf, unknown: true };
-  }
-  return { atMs, ageMs: Math.max(0, nowWall - atMs), perfMs: perf, unknown: false };
-}
-
-function rowFromOp(op: OpData, source: "snapshot" | "op.state", existing?: Row): Row {
-  return {
-    op_id: op.op_id,
-    state: op.state,
-    rev: op.rev,
-    hash: op.hash,
-    at_ms: op.at_ms,
-    origin: op.origin,
-    anchor: makeAnchor(op, source, existing),
+function placeholderFor(id: StudioPanelId): PanelComponent {
+  return function Placeholder() {
+    return <PlaceholderPanel id={id} />;
   };
 }
 
-function displayedAgeMs(row: Row): number | null {
-  if (row.anchor.unknown || row.anchor.ageMs === null) return null;
-  return row.anchor.ageMs + (performance.now() - row.anchor.perfMs);
+const PANEL_COMPONENTS: Record<string, PanelComponent> = {
+  jerarquia: HierarchyPanel,
+  mapa: placeholderFor("mapa"),
+  propiedades: PropertiesPanel,
+  anadir: AddPanel,
+  actividad: ActivityPanel,
+  validacion: ValidationPanel,
+  historial: placeholderFor("historial"),
+  ia: placeholderFor("ia"),
+  camaras: placeholderFor("camaras"),
+  tomas: placeholderFor("tomas"),
+  preparacion: placeholderFor("preparacion"),
+  "vista-previa": placeholderFor("vista-previa"),
+};
+
+function StudioTab({ api }: IDockviewPanelHeaderProps) {
+  // Se suscribe al título como la pestaña de serie de dockview-react (useTitle): sin esto, un
+  // setTitle (la cuenta de Actividad, §5.4) no se repinta.
+  const [title, setTitle] = useState(api.title ?? "");
+  useEffect(() => {
+    const disposable = api.onDidTitleChange((event) => {
+      setTitle(event.title ?? "");
+    });
+    if (title !== (api.title ?? "")) setTitle(api.title ?? "");
+    return () => {
+      disposable.dispose();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api]);
+  return <span className="studio-tab">{title}</span>;
 }
 
-function formatAge(row: Row): string {
-  const age = displayedAgeMs(row);
-  if (age === null) return "Edad desconocida";
-  const totalSec = Math.floor(age / 1000);
-  if (totalSec <= 59) return `${totalSec} s`;
-  const totalMin = Math.floor(age / 60000);
-  if (totalMin <= 59) return `${totalMin} min`;
-  return `${Math.floor(age / 3600000)} h`;
+const TAB_COMPONENTS: Record<string, FunctionComponent<IDockviewPanelHeaderProps>> = {
+  studioTab: StudioTab,
+};
+
+interface ConflictState {
+  actionId: string;
+  combo: string;
+  other: ShortcutActionDef;
 }
 
-function opNumber(opId: string): number {
-  const m = /^op-(\d+)$/.exec(opId);
-  return m ? parseInt(m[1], 10) : -1;
+function formatSaveAge(lastCommitPerfMs: number | null, now: number): string {
+  if (lastCommitPerfMs === null) return "sin guardar";
+  const sec = Math.max(0, Math.floor((now - lastCommitPerfMs) / 1000));
+  if (sec <= 59) return `hace ${sec} s`;
+  const min = Math.floor(sec / 60);
+  if (min <= 59) return `hace ${min} min`;
+  return `hace ${Math.floor(min / 60)} h`;
+}
+
+function formatEventAge(lastEventPerfMs: number, now: number): string {
+  const sec = Math.max(0, Math.floor((now - lastEventPerfMs) / 1000));
+  if (sec <= 59) return `hace ${sec} s`;
+  const min = Math.floor(sec / 60);
+  if (min <= 59) return `hace ${min} min`;
+  return `hace ${Math.floor(min / 60)} h`;
+}
+
+function isTextField(el: EventTarget | null): boolean {
+  const node = el as HTMLElement | null;
+  if (!node || !node.tagName) return false;
+  const tag = node.tagName;
+  return (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    node.isContentEditable === true
+  );
 }
 
 export default function App() {
-  const [view, setView] = useState<View>("checking");
-  const [loginMessage, setLoginMessage] = useState<string | null>(null);
+  const st = useStudioStore();
   const [password, setPassword] = useState("");
-  const [rows, setRows] = useState<Row[]>([]);
-  const [docInfo, setDocInfo] = useState<DocInfo | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [applying, setApplying] = useState(false);
-  const [applyError, setApplyError] = useState<string | null>(null);
-  const [, setTick] = useState(0);
-  const esRef = useRef<EventSource | null>(null);
-  const checkingRef = useRef(false);
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [capturing, setCapturing] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<ConflictState | null>(null);
+  const [captureMsg, setCaptureMsg] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const shortcutsReturnFocus = useRef<HTMLElement | null>(null);
 
-  // Carga inicial (§5.2.1)
+  const expireSession = useCallback(() => {
+    releaseActiveLeaseOnUnmount();
+    setState({
+      view: "login",
+      connected: false,
+      loginMessage: "Sesión caducada: vuelve a entrar",
+    });
+  }, []);
+
+  // Entrada (§3.2, P1): csrf en localStorage y GET /api/session.
   useEffect(() => {
     let cancelled = false;
     const csrf = localStorage.getItem("csrf");
     if (!csrf) {
-      setView("login");
+      setState({ view: "login" });
       return;
     }
     fetch("/api/session", { credentials: "same-origin" })
       .then((res) => {
         if (cancelled) return;
         if (res.status === 200) {
-          setView("queue");
+          setState({ view: "studio" });
+          void loadInitialStudioData();
         } else {
-          setView("login");
+          setState({ view: "login" });
         }
       })
       .catch(() => {
-        if (!cancelled) setView("login");
+        if (!cancelled) setState({ view: "login" });
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Recalculo de edades cada segundo (§5.2.3)
+  // SSE y reconexión (P1-P9b).
   useEffect(() => {
-    if (view !== "queue") return;
-    const id = window.setInterval(() => setTick((t) => t + 1), 1000);
-    return () => window.clearInterval(id);
-  }, [view]);
-
-  // SSE (§5.2.3 y §5.2.4)
-  useEffect(() => {
-    if (view !== "queue") return;
+    if (st.view !== "studio") return;
     let cancelled = false;
+    let es: EventSource | null = null;
+    let retryTimer: number | null = null;
+    let checking = false;
 
-    const closeCurrent = () => {
-      if (esRef.current) {
-        esRef.current.close();
-        esRef.current = null;
+    function close() {
+      if (es) {
+        es.close();
+        es = null;
       }
-    };
+    }
 
-    const handleClosed = () => {
-      if (cancelled || checkingRef.current) return;
-      checkingRef.current = true;
+    function scheduleRetry() {
+      if (cancelled) return;
+      retryTimer = window.setTimeout(checkSession, 3000);
+    }
+
+    function checkSession() {
+      if (cancelled || checking) return;
+      checking = true;
       fetch("/api/session", { credentials: "same-origin" })
         .then((res) => {
-          checkingRef.current = false;
+          checking = false;
           if (cancelled) return;
           if (res.status === 401) {
-            closeCurrent();
-            setConnected(false);
-            setLoginMessage("Sesión caducada: vuelve a entrar");
-            setView("login");
+            close();
+            expireSession();
           } else {
             start();
           }
         })
         .catch(() => {
-          // Sin respuesta (backend caído): se vuelve a mirar, para no quedarse en «Reconectando…» sin reconectar.
-          checkingRef.current = false;
-          if (!cancelled) {
-            setConnected(false);
-            window.setTimeout(handleClosed, 3000);
-          }
+          checking = false;
+          if (cancelled) return;
+          markBackendDown();
+          scheduleRetry();
         });
-    };
+    }
 
-    const start = () => {
+    function start() {
       if (cancelled) return;
-      closeCurrent();
-      const es = new EventSource("/api/events");
-      esRef.current = es;
-      es.addEventListener("snapshot", (ev) => {
-        const data = JSON.parse((ev as MessageEvent).data) as {
-          doc_id: string;
-          rev: number;
-          hash: string;
-          ops: OpData[];
-        };
-        setDocInfo({ doc_id: data.doc_id, rev: data.rev, hash: data.hash });
-        setRows((prev) => {
-          const byId = new Map(prev.map((r) => [r.op_id, r]));
-          return (data.ops || []).map((op) => rowFromOp(op, "snapshot", byId.get(op.op_id)));
-        });
+      close();
+      const src = new EventSource("/api/events");
+      es = src;
+      src.addEventListener("snapshot", (ev) => {
+        try {
+          handleSnapshotEvent(
+            JSON.parse((ev as MessageEvent).data) as Parameters<
+              typeof handleSnapshotEvent
+            >[0]
+          );
+        } catch {
+          // evento malformado: se ignora
+        }
       });
-      es.addEventListener("op.state", (ev) => {
-        const op = JSON.parse((ev as MessageEvent).data) as OpData;
-        setRows((prev) => {
-          const existing = prev.find((r) => r.op_id === op.op_id);
-          const row = rowFromOp(op, "op.state", existing);
-          if (existing) return prev.map((r) => (r.op_id === op.op_id ? row : r));
-          return [...prev, row];
-        });
+      src.addEventListener("op.state", (ev) => {
+        try {
+          handleOpStateEvent(
+            JSON.parse((ev as MessageEvent).data) as Parameters<
+              typeof handleOpStateEvent
+            >[0]
+          );
+        } catch {
+          // evento malformado: se ignora
+        }
       });
-      es.addEventListener("scene.commit", (ev) => {
-        const data = JSON.parse((ev as MessageEvent).data) as { rev: number; hash: string };
-        setDocInfo((prev) => (prev ? { ...prev, rev: data.rev, hash: data.hash } : prev));
+      src.addEventListener("scene.commit", () => {
+        void fetchAuthoritativeScene(true);
       });
-      es.onopen = () => {
-        if (!cancelled) setConnected(true);
-      };
-      es.onerror = () => {
+      src.onopen = () => {
         if (cancelled) return;
-        if (es.readyState === EventSource.CLOSED) {
-          setConnected(false);
-          handleClosed();
-        } else {
-          setConnected(false);
+        markBackendAlive();
+        setState({ connected: true });
+      };
+      src.onerror = () => {
+        if (cancelled) return;
+        setState({ connected: false });
+        if (src.readyState === EventSource.CLOSED) {
+          checkSession();
         }
       };
-    };
+    }
 
     start();
     return () => {
       cancelled = true;
-      closeCurrent();
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+      close();
     };
-  }, [view]);
+  }, [st.view, expireSession]);
+
+  // Sin SSE abierto: sesión y escena cada 3 s (§3.2).
+  useEffect(() => {
+    if (st.view !== "studio" || st.connected) return;
+    let cancelled = false;
+    const poll = () => {
+      fetch("/api/session", { credentials: "same-origin" })
+        .then((res) => {
+          if (cancelled) return;
+          if (res.status === 401) {
+            expireSession();
+            return;
+          }
+          markBackendAlive();
+          void fetchAuthoritativeScene(false);
+        })
+        .catch(() => {
+          if (!cancelled) markBackendDown();
+        });
+    };
+    poll();
+    const id = window.setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [st.view, st.connected, expireSession]);
+
+  // Recalculo de edades (§5.2.3 de F1b-web / P2b).
+  useEffect(() => {
+    if (st.view !== "studio") return;
+    const id = window.setInterval(() => {
+      setState((prev) => ({ tick: prev.tick + 1 }));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [st.view]);
+
+  // El aviso breve se retira solo.
+  useEffect(() => {
+    if (!st.flash) return;
+    const id = window.setTimeout(() => {
+      if (getState().flash === st.flash) setFlash(null);
+    }, 4000);
+    return () => window.clearTimeout(id);
+  }, [st.flash]);
+
+  // Foco del diálogo de atajos y devolución al cerrar.
+  useEffect(() => {
+    if (st.shortcutsOpen) {
+      window.setTimeout(() => dialogRef.current?.focus(), 0);
+    } else if (shortcutsReturnFocus.current) {
+      shortcutsReturnFocus.current.focus?.();
+      shortcutsReturnFocus.current = null;
+    }
+  }, [st.shortcutsOpen]);
+
+  // Cierre de menú/popover al pulsar fuera.
+  useEffect(() => {
+    if (!st.toolsMenuOpen && !popoverOpen) return;
+    const onDown = (ev: MouseEvent) => {
+      const t = ev.target as HTMLElement | null;
+      if (t && (t.closest("[data-keep-open]") || t.closest("[data-menu-trigger]"))) return;
+      if (st.toolsMenuOpen) setState({ toolsMenuOpen: false });
+      setPopoverOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [st.toolsMenuOpen, popoverOpen]);
+
+  // Atajos (§6.2) y captura de teclas del diálogo (§6.4).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const cur = getState();
+      if (cur.view !== "studio") return;
+      const target = e.target as HTMLElement | null;
+
+      if (cur.shortcutsOpen) {
+        if (conflict) {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setConflict(null);
+          }
+          return;
+        }
+        if (capturing) {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setCapturing(null);
+            setCaptureMsg(null);
+            return;
+          }
+          const combo = comboOf(e);
+          if (!combo) return;
+          e.preventDefault();
+          if (BROWSER_RESERVED_COMBOS.has(combo)) {
+            setCaptureMsg("La atiende el navegador. Elige otra.");
+            return;
+          }
+          const other = findConflict(cur.keymap, capturing, combo);
+          if (other) {
+            if (other.mandatory) {
+              setCaptureMsg(
+                `${keyLabel(combo)} ya es «${other.name}», que no puede quedarse sin tecla. Elige otra.`
+              );
+            } else {
+              setConflict({ actionId: capturing, combo, other });
+              setCapturing(null);
+              setCaptureMsg(null);
+            }
+            return;
+          }
+          updateShortcutBinding(capturing, combo);
+          setCapturing(null);
+          setCaptureMsg(null);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setState({ shortcutsOpen: false });
+        }
+        return;
+      }
+
+      const inField = isTextField(target);
+      const combo = comboOf(e);
+
+      if (inField) {
+        const aplicar = cur.keymap["aplicar"];
+        if (combo && aplicar && combo === aplicar) {
+          e.preventDefault();
+          void (async () => {
+            const ok = await confirmActiveFieldBeforeApply();
+            if (ok) await triggerApplyScene();
+          })();
+        }
+        return;
+      }
+
+      if (!combo) return;
+
+      if (combo === "Escape") {
+        if (cur.toolsMenuOpen) {
+          e.preventDefault();
+          setState({ toolsMenuOpen: false });
+          return;
+        }
+        if (popoverOpen) {
+          e.preventDefault();
+          setPopoverOpen(false);
+          return;
+        }
+        if (cur.placingItem) {
+          e.preventDefault();
+          setState({ placingItem: null });
+          return;
+        }
+        if (cur.keymap["parar"] === "Escape") {
+          e.preventDefault();
+          setFlash("Llega con F5");
+        }
+        return;
+      }
+
+      if (target && target.tagName === "BUTTON" && e.key === " ") return;
+
+      const bound = ACTIONS.filter((a) => cur.keymap[a.id] === combo);
+      const active = bound.find((a) => a.ctx !== "toma");
+      if (!active) {
+        if (bound.length > 0) {
+          e.preventDefault();
+          setFlash("Llega con F5");
+        }
+        return;
+      }
+
+      if (e.repeat && ["colocar", "aplicar", "preparar", "rodar"].includes(active.id)) {
+        return;
+      }
+
+      switch (active.id) {
+        case "colocar":
+          if (cur.placingItem && !cur.sinBackend) {
+            e.preventDefault();
+            void placeSelectedCatalogItem();
+          }
+          return;
+        case "aplicar":
+          e.preventDefault();
+          void (async () => {
+            const ok = await confirmActiveFieldBeforeApply();
+            if (ok) await triggerApplyScene();
+          })();
+          return;
+        case "deshacer":
+          e.preventDefault();
+          void triggerUndoRedo(false);
+          return;
+        case "rehacer":
+          e.preventDefault();
+          void triggerUndoRedo(true);
+          return;
+        case "guardar":
+          e.preventDefault();
+          setFlash(
+            cur.sinBackend
+              ? "No se puede guardar: no hay backend"
+              : "Cada cambio se guarda al momento"
+          );
+          return;
+        case "borrar":
+          e.preventDefault();
+          void deleteSelectedEntities();
+          return;
+        case "duplicar":
+          e.preventDefault();
+          void duplicateSelectedEntity();
+          return;
+        case "seleccionar-todo":
+          e.preventDefault();
+          setState({ selectedIds: (cur.doc?.entities ?? []).map((x) => x.id) });
+          return;
+        case "ir-propiedades":
+          e.preventDefault();
+          openPropertiesAndFocus();
+          return;
+        case "copiar-coordenadas":
+          e.preventDefault();
+          copySelectedCoordinates();
+          return;
+        case "modo-escena":
+          e.preventDefault();
+          switchStudioMode("escena");
+          return;
+        case "modo-rodaje":
+          e.preventDefault();
+          switchStudioMode("rodaje");
+          return;
+        default:
+          return;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [capturing, conflict, popoverOpen]);
+
+  // §5.4: la pestaña de Actividad lleva la cuenta de las órdenes en curso. Solo se toca el
+  // título cuando cambia, para no disparar guardados del layout de más.
+  const activeOpsCount = st.rows.filter(
+    (r) => r.state === "pendiente" || r.state === "ejecutando"
+  ).length;
+  useEffect(() => {
+    const panel = getDockviewApi()?.getPanel("actividad");
+    if (!panel) return;
+    const title = activeOpsCount > 0 ? `Actividad · ${activeOpsCount}` : "Actividad";
+    if (panel.title !== title) panel.api.setTitle(title);
+  });
 
   const onLogin = (e: React.FormEvent) => {
     e.preventDefault();
+    if (loginBusy) return;
+    setLoginBusy(true);
     fetch("/api/session", {
       method: "POST",
       credentials: "same-origin",
@@ -253,73 +544,67 @@ export default function App() {
       body: JSON.stringify({ key: password }),
     })
       .then(async (res) => {
+        setLoginBusy(false);
         if (res.status === 200) {
-          const data = (await res.json()) as { csrf: string };
-          localStorage.setItem("csrf", data.csrf);
+          const data = (await res.json()) as { csrf?: string };
+          if (data.csrf) localStorage.setItem("csrf", data.csrf);
           setPassword("");
-          setLoginMessage(null);
-          setRows([]);
-          setDocInfo(null);
-          setApplyError(null);
-          setView("queue");
-        } else if (res.status === 401) {
-          setLoginMessage("Clave no válida");
+          resetStudioState();
+          void loadInitialStudioData();
         } else {
-          setLoginMessage("Clave no válida");
+          setState({ loginMessage: "Clave no válida" });
         }
       })
       .catch(() => {
-        setLoginMessage("Clave no válida");
+        setLoginBusy(false);
+        setState({ loginMessage: "Clave no válida" });
       });
   };
 
-  const onApply = () => {
-    if (!docInfo || applying) return;
-    setApplying(true);
-    setApplyError(null);
-    fetch("/api/apply", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRF-Token": localStorage.getItem("csrf") ?? "",
-      },
-      body: JSON.stringify({ doc_id: docInfo.doc_id, rev: docInfo.rev, hash: docInfo.hash }),
-    })
-      .then(async (res) => {
-        const data = (await res.json().catch(() => null)) as
-          | { ok?: boolean; code?: string; msg?: string }
-          | null;
-        if (res.status === 401 || (res.status === 403 && data?.code === "csrf_failed")) {
-          setLoginMessage("Sesión caducada: vuelve a entrar");
-          setView("login");
-          return;
-        }
-        if (!res.ok) {
-          const code = data?.code ?? String(res.status);
-          const msg = data?.msg ?? "";
-          setApplyError(msg ? `${code}: ${msg}` : code);
-        }
-      })
-      .catch(() => {
-        setApplyError("Error de red");
-      })
-      .finally(() => setApplying(false));
+  const onReady = useCallback((event: DockviewReadyEvent) => {
+    setDockviewApi(event.api);
+    event.api.onDidLayoutChange(() => {
+      handleDockviewLayoutChange();
+    });
+    const cur = getState();
+    applyLayoutToDockview(event.api, cur.mode, cur.layouts[cur.mode]);
+  }, []);
+
+  const onDialogKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== "Tab") return;
+    const root = dialogRef.current;
+    if (!root) return;
+    const focusables = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+      )
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const activeEl = document.activeElement as HTMLElement | null;
+    if (e.shiftKey && (activeEl === first || activeEl === root)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && activeEl === last) {
+      e.preventDefault();
+      first.focus();
+    }
   };
 
-  if (view === "checking") {
+  if (st.view === "checking") {
     return (
       <main className="page">
-        <h1>Cola de órdenes</h1>
+        <h1>Estudio · DayZ Sandbox</h1>
         <p>Cargando…</p>
       </main>
     );
   }
 
-  if (view === "login") {
+  if (st.view === "login") {
     return (
       <main className="page">
-        <h1>Cola de órdenes</h1>
+        <h1>Estudio · DayZ Sandbox</h1>
         <form onSubmit={onLogin} className="login-form">
           <label htmlFor="human-key">
             Clave de persona (<code>human_key</code> de <code>backend.json</code>)
@@ -331,49 +616,422 @@ export default function App() {
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
           />
-          <button type="submit">Entrar</button>
-          {loginMessage ? <p role="alert">{loginMessage}</p> : null}
+          <button type="submit" disabled={loginBusy}>
+            Entrar
+          </button>
+          {st.loginMessage ? <p role="alert">{st.loginMessage}</p> : null}
         </form>
       </main>
     );
   }
 
-  const sorted = [...rows].sort((a, b) => opNumber(b.op_id) - opNumber(a.op_id));
+  const now = performance.now();
+  const docName = st.doc?.name ?? (st.docInfo ? "Escena" : "Sin escena");
+  const lastObservedRevs = st.rows
+    .filter((r) => r.state === "observado" && typeof r.rev === "number")
+    .map((r) => r.rev as number);
+  const lastObservedRev =
+    lastObservedRevs.length > 0 ? Math.max(...lastObservedRevs) : null;
+  const pendingChanges =
+    st.docInfo && lastObservedRev !== null ? st.docInfo.rev - lastObservedRev : 0;
+  const pendingLabel =
+    pendingChanges > 0
+      ? `${pendingChanges} ${pendingChanges === 1 ? "cambio sin aplicar" : "cambios sin aplicar"}`
+      : "Sin aplicar";
+
+  const rejectedCount = Object.keys(st.rejectedDrafts).length;
+  const applyDisabled =
+    !st.docInfo || st.applying || st.sinBackend || rejectedCount > 0;
+  const applyTitle = st.sinBackend
+    ? "Sin conexión con el backend: no se puede aplicar"
+    : rejectedCount > 0
+    ? "Corrige o descarta (Esc) los campos con error antes de aplicar"
+    : !st.docInfo
+    ? "Sin escena cargada"
+    : undefined;
+
+  const failingRows = st.rows.filter(
+    (r) => r.state === "fallido" || r.state === "parcial"
+  ).length;
+  const problemCount = st.validationErrors.length + failingRows;
+  const validationText = st.sinBackend
+    ? "Sin validar"
+    : problemCount === 0
+    ? "Escena sin errores"
+    : `${problemCount} ${problemCount === 1 ? "problema" : "problemas"}`;
+
+  const mode = st.mode;
+  const allowedPanels = getAllowedPanelsForMode(mode);
+  const api = getDockviewApi();
+
+  const closeShortcuts = () => {
+    setCapturing(null);
+    setConflict(null);
+    setCaptureMsg(null);
+    setState({ shortcutsOpen: false });
+  };
 
   return (
-    <main className="page">
-      <h1>Cola de órdenes</h1>
-      <p>{connected ? "Conectado" : "Reconectando…"}</p>
-      <button type="button" onClick={onApply} disabled={!docInfo || applying}>
-        {docInfo ? `Aplicar rev ${docInfo.rev}` : "Aplicar"}
-      </button>
-      {applyError ? <p role="alert">{applyError}</p> : null}
-      <table>
-        <thead>
-          <tr>
-            <th>Orden</th>
-            <th>Revisión</th>
-            <th>Estado</th>
-            <th>Edad</th>
-            <th>Origen</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((row) => (
-            <tr key={row.op_id} data-op-id={row.op_id}>
-              <td>{row.op_id}</td>
-              <td>{row.hash ? `${row.rev} ${row.hash.slice(0, 8)}` : `${row.rev ?? ""}`}</td>
-              <td>
-                <span className={isKnownState(row.state) ? `chip ${row.state}` : "chip"}>
-                  {stateLabel(row.state)}
-                </span>
-              </td>
-              <td>{formatAge(row)}</td>
-              <td>{row.origin ?? "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </main>
+    <div className="studio-shell">
+      <header className="topbar" data-testid="barra-superior">
+        <div className="topbar-left">
+          <div className="doc-summary" title={st.docInfo ? `rev ${st.docInfo.rev}` : undefined}>
+            <span className="doc-name">{docName}</span>
+            <span className="doc-meta">{pendingLabel}</span>
+            <span className="doc-meta">
+              {formatSaveAge(st.lastCommitPerfMs, now)}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="btn sm"
+            title="Deshacer"
+            disabled={st.sinBackend || !st.docInfo}
+            onClick={() => void triggerUndoRedo(false)}
+          >
+            Deshacer <kbd>{keyLabel(st.keymap["deshacer"])}</kbd>
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            title="Rehacer"
+            disabled={st.sinBackend || !st.docInfo}
+            onClick={() => void triggerUndoRedo(true)}
+          >
+            Rehacer <kbd>{keyLabel(st.keymap["rehacer"])}</kbd>
+          </button>
+        </div>
+
+        <div className="topbar-center">
+          <div className="mode-switch" role="group" aria-label="Modo">
+            <button
+              type="button"
+              aria-pressed={mode === "escena"}
+              onClick={() => switchStudioMode("escena")}
+            >
+              Escena <kbd>{keyLabel(st.keymap["modo-escena"])}</kbd>
+            </button>
+            <button
+              type="button"
+              aria-pressed={mode === "rodaje"}
+              onClick={() => switchStudioMode("rodaje")}
+            >
+              Rodaje <kbd>{keyLabel(st.keymap["modo-rodaje"])}</kbd>
+            </button>
+          </div>
+        </div>
+
+        <div className="topbar-right">
+          <div data-keep-open data-menu-trigger>
+            <button
+              type="button"
+              className="btn sm"
+              disabled={st.sinBackend || st.applying || st.removing}
+              aria-haspopup="dialog"
+              aria-expanded={popoverOpen}
+              onClick={() => setPopoverOpen((v) => !v)}
+            >
+              Quitar del juego
+            </button>
+            {popoverOpen ? (
+              <div className="menu popover" role="dialog" aria-label="Quitar del juego">
+                <p className="popover-text">
+                  Quita del juego lo de esta escena. Lo que no sea de la escena no se
+                  toca, y el documento no cambia.
+                </p>
+                <div className="popover-actions">
+                  <button
+                    type="button"
+                    className="btn sm danger"
+                    onClick={() => {
+                      setPopoverOpen(false);
+                      void triggerResetScene();
+                    }}
+                  >
+                    Quitar
+                  </button>
+                  <button
+                    type="button"
+                    className="btn sm"
+                    onClick={() => setPopoverOpen(false)}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div data-testid="accion-principal">
+            <button
+              type="button"
+              className="btn primary"
+              title={applyTitle}
+              disabled={applyDisabled}
+              onClick={() => void triggerApplyScene()}
+            >
+              Aplicar rev {st.docInfo ? st.docInfo.rev : "—"}
+            </button>
+          </div>
+
+          <div data-menu-trigger>
+            <button
+              type="button"
+              className="btn sm"
+              aria-haspopup="menu"
+              aria-expanded={st.toolsMenuOpen}
+              onClick={() => setState({ toolsMenuOpen: !st.toolsMenuOpen })}
+            >
+              Herramientas
+            </button>
+            {st.toolsMenuOpen ? (
+              <div className="menu" role="menu" data-keep-open>
+                <div className="menu-sec">Paneles</div>
+                {allowedPanels.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="menuitem"
+                    className="mi"
+                    onClick={() => {
+                      if (api) toggleStudioPanel(api, mode, id);
+                      setState({ toolsMenuOpen: false });
+                    }}
+                  >
+                    <span>{PANEL_TITLES[id]}</span>
+                    <span>{api?.getPanel(id) ? "Abierto" : "Cerrado"}</span>
+                  </button>
+                ))}
+                <div className="menu-sep" />
+                <div className="menu-sec">Layouts</div>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="mi"
+                  onClick={() => {
+                    resetCurrentModeLayoutToFactory();
+                    setState({ toolsMenuOpen: false });
+                  }}
+                >
+                  De fábrica
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="mi"
+                  onClick={() => {
+                    applyCurrentModePropsLeftPreset();
+                    setState({ toolsMenuOpen: false });
+                  }}
+                >
+                  Propiedades a la izquierda
+                </button>
+                <div className="menu-sep" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="mi"
+                  onClick={() => {
+                    shortcutsReturnFocus.current =
+                      document.activeElement as HTMLElement | null;
+                    setState({ shortcutsOpen: true, toolsMenuOpen: false });
+                  }}
+                >
+                  Atajos de teclado…
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </header>
+
+      <div className="notices">
+        {st.notice ? (
+          <div className="notice-strip" role="alert" data-aviso={st.notice.kind}>
+            <span>{st.notice.message}</span>
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() => setState({ notice: null })}
+            >
+              Cerrar
+            </button>
+          </div>
+        ) : null}
+        {st.flash ? (
+          <div className="notice-strip" role="status" data-aviso="info">
+            <span>{st.flash}</span>
+          </div>
+        ) : null}
+        {st.applyError ? (
+          <div className="notice-strip err" role="alert" data-aviso="apply-error">
+            <span>
+              {st.applyError.code}
+              {st.applyError.pointer ? ` · ${st.applyError.pointer}` : ""}
+              {st.applyError.msg ? `: ${st.applyError.msg}` : ""}
+            </span>
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() => setState({ applyError: null })}
+            >
+              Cerrar
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="workspace">
+        <DockviewReact
+          className="dockview-theme-dsbx"
+          components={PANEL_COMPONENTS}
+          tabComponents={TAB_COMPONENTS}
+          disableFloatingGroups
+          onReady={onReady}
+        />
+      </div>
+
+      <footer className="statusbar" data-testid="barra-estado">
+        <span className="peer back-label">Backend</span>
+        <span className={st.connected ? "peer ok" : "peer warn"}>
+          <span className="dot" />
+          <span>{st.connected ? "Conectado" : "Reconectando…"}</span>
+        </span>
+        <span className="peer stale">{formatEventAge(st.lastEventPerfMs, now)}</span>
+        <span className="peer stale" title="Llega con el bridge">
+          <span className="dot" />
+          Servidor · Sin datos
+        </span>
+        <span className="peer stale" title="Llega con el bridge">
+          <span className="dot" />
+          Tu juego · Sin datos
+        </span>
+        <span>Catálogo: {st.catalog?.source ?? "fixture"}</span>
+        <span>{validationText}</span>
+      </footer>
+
+      {st.shortcutsOpen ? (
+        <div className="modal-bg" data-keep-open>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Atajos de teclado"
+            tabIndex={-1}
+            ref={dialogRef}
+            onKeyDown={onDialogKeyDown}
+          >
+            <div className="modal-h">
+              <span>Atajos de teclado</span>
+              <button type="button" className="btn sm" onClick={closeShortcuts}>
+                Cerrar
+              </button>
+            </div>
+            <div className="modal-b">
+              <div className="klist" role="list">
+                {ACTIONS.map((action) => (
+                  <div
+                    key={action.id}
+                    role="listitem"
+                    className="krow"
+                    data-action={action.id}
+                  >
+                    <span>{action.name}</span>
+                    <span className="krow-ctx">
+                      {action.ctx === "global"
+                        ? "global"
+                        : action.ctx === "escena"
+                        ? "escena"
+                        : "toma"}
+                    </span>
+                    <kbd>{keyLabel(st.keymap[action.id])}</kbd>
+                    <button
+                      type="button"
+                      className="btn sm"
+                      aria-label={`Cambiar la tecla de ${action.name}`}
+                      onClick={() => {
+                        setConflict(null);
+                        setCaptureMsg(null);
+                        setCapturing(action.id);
+                      }}
+                    >
+                      Cambiar
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div id="kconf" className="kconf" hidden={!captureMsg && !conflict && !capturing}>
+                {conflict ? (
+                  <>
+                    <span>
+                      {keyLabel(conflict.combo)} ya es «{conflict.other.name}»
+                    </span>
+                    <span className="kconf-actions">
+                      <button
+                        type="button"
+                        className="btn sm"
+                        onClick={() => {
+                          updateShortcutBinding(
+                            conflict.actionId,
+                            conflict.combo,
+                            conflict.other.id
+                          );
+                          setConflict(null);
+                        }}
+                      >
+                        Reemplazar
+                      </button>
+                      <button
+                        type="button"
+                        className="btn sm"
+                        onClick={() => setConflict(null)}
+                      >
+                        Cancelar
+                      </button>
+                    </span>
+                  </>
+                ) : (
+                  <span>
+                    {captureMsg ?? "Pulsa una tecla…"}
+                    {captureMsg && capturing
+                      ? ""
+                      : ""}
+                  </span>
+                )}
+                {capturing && !conflict ? (
+                  <span className="kconf-actions">
+                    <button
+                      type="button"
+                      className="btn sm"
+                      onClick={() => {
+                        setCapturing(null);
+                        setCaptureMsg(null);
+                      }}
+                    >
+                      Cancelar
+                    </button>
+                  </span>
+                ) : null}
+              </div>
+            </div>
+            <div className="modal-f">
+              <button
+                type="button"
+                className="btn sm"
+                onClick={() => {
+                  resetAllShortcutsToDefault();
+                  setCapturing(null);
+                  setConflict(null);
+                  setCaptureMsg(null);
+                }}
+              >
+                Restaurar
+              </button>
+              <span className="meta">Esc cierra el diálogo</span>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
