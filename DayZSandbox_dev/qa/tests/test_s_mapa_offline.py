@@ -1136,9 +1136,12 @@ def _build_synthetic_part(
             "build": build,
             "git_dirty": git_dirty,
             "git_head": git_head,
+            # D12 del núcleo final: la identidad trae los parámetros de probe-budget de git_head.
             "params": {
                 "hold_ms": 2000,
                 "lease_ms": 3000,
+                "probe_budget_log_poll_ms": f03_common.PROBE_BUDGET_LOG_POLL_MS,
+                "probe_budget_retry_ms": f03_common.PROBE_BUDGET_RETRY_MS,
                 "retry_ms": 2000,
                 "seed": 20261026,
                 "ttl_ms": 5000,
