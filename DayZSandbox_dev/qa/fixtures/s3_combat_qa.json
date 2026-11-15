@@ -1,0 +1,8 @@
+{
+  "schema": "dsbx-s3-combat/1",
+  "faction_key": "qa_hostile",
+  "infected_class": "ZmbM_PatrolNormal_Autumn",
+  "dist_s5_m": 2.5,
+  "dist_s2_m": 4.0,
+  "note": "facción de QA puesta con SetFaction para acreditar combate vigente frente al infectado"
+}

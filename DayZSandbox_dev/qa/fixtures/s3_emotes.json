@@ -1,0 +1,53 @@
+{
+  "schema": "dsbx-s3-emotes/1",
+  "catalog": [
+    {
+      "emote_key": "nod",
+      "emote_id": 58,
+      "cmd_id": 1109,
+      "kind": "onetime"
+    },
+    {
+      "emote_key": "shake",
+      "emote_id": 59,
+      "cmd_id": 1110,
+      "kind": "onetime"
+    },
+    {
+      "emote_key": "shrug",
+      "emote_id": 60,
+      "cmd_id": 1111,
+      "kind": "onetime"
+    },
+    {
+      "emote_key": "clap",
+      "emote_id": 39,
+      "cmd_id": 1101,
+      "kind": "onetime"
+    },
+    {
+      "emote_key": "move",
+      "emote_id": 52,
+      "cmd_id": 1103,
+      "kind": "onetime"
+    },
+    {
+      "emote_key": "down",
+      "emote_id": 53,
+      "cmd_id": 1104,
+      "kind": "onetime"
+    },
+    {
+      "emote_key": "come",
+      "emote_id": 54,
+      "cmd_id": 1105,
+      "kind": "onetime"
+    },
+    {
+      "emote_key": "tauntthink",
+      "emote_id": 51,
+      "cmd_id": 1108,
+      "kind": "onetime"
+    }
+  ]
+}

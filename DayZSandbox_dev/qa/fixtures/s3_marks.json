@@ -1,0 +1,84 @@
+{
+  "schema": "dsbx-s3-marks/1",
+  "map": "chernarusplus",
+  "points": {
+    "once_origin": {
+      "mode": "ONCE",
+      "x_m": 4520.0,
+      "z_m": 10320.0
+    },
+    "once_reachable": {
+      "mode": "ONCE",
+      "x_m": 4540.0,
+      "z_m": 10320.0,
+      "dist_from": "once_origin",
+      "dist_m": 20.0,
+      "note": "llano abierto junto al aerodromo del noroeste"
+    },
+    "once_unreachable_origin": {
+      "mode": "ONCE",
+      "x_m": 4520.0,
+      "z_m": 10320.0
+    },
+    "once_unreachable": {
+      "mode": "ONCE",
+      "x_m": 4520.0,
+      "z_m": 10340.0,
+      "dist_from": "once_unreachable_origin",
+      "dist_m": 20.0,
+      "note": "interior de un hangar grande, sin acceso directo desde el llano"
+    },
+    "threat_origin": {
+      "mode": "ONCE",
+      "x_m": 4520.0,
+      "z_m": 10320.0
+    },
+    "threat_mark": {
+      "mode": "ONCE",
+      "x_m": 4540.0,
+      "z_m": 10320.0,
+      "dist_from": "threat_origin",
+      "dist_m": 20.0
+    },
+    "threat_infected": {
+      "mode": "ONCE",
+      "x_m": 4524.0,
+      "z_m": 10320.0,
+      "dist_from": "threat_origin",
+      "dist_m": 4.0
+    },
+    "loop_m0": {
+      "mode": "LOOP",
+      "x_m": 4520.0,
+      "z_m": 10320.0
+    },
+    "loop_m1": {
+      "mode": "LOOP",
+      "x_m": 4532.0,
+      "z_m": 10320.0,
+      "dist_from": "loop_m0",
+      "dist_m": 12.0
+    },
+    "roam_urban_center": {
+      "mode": "ROAM",
+      "x_m": 4600.0,
+      "z_m": 10300.0,
+      "radius_m": 15.0,
+      "buildings_near_max": 8,
+      "buildings_near_min": 3
+    },
+    "roam_open_center": {
+      "mode": "ROAM",
+      "x_m": 4400.0,
+      "z_m": 9800.0,
+      "radius_m": 15.0,
+      "buildings_near_max": 2,
+      "note": "campo abierto sin edificios en 60 m"
+    },
+    "hold_origin": {
+      "mode": "HOLD",
+      "x_m": 4520.0,
+      "z_m": 10320.0
+    }
+  }
+}
