@@ -1,8 +1,9 @@
-"""Pruebas puras de scene_plan.py (F2-offline §3, §4.1 y §4.3).
+"""Pruebas puras de scene_plan.py (F2-offline §3, §4.1 y §4.3; contrato v1.3 del cable).
 
 Sin red ni Bridge: solo funciones puras y las fixtures del repositorio.
-Contrato: plans/2026-11-14-m1-f2-offline-brief.md v1.2.1, §3.3, §3.6, §4.1, §4.3,
-D11, D12 y §13 (A2, A3, A6).
+Contrato: plans/2026-11-14-m1-f2-offline-brief.md v1.2.2, §3.3, §3.6, §4.1, §4.3,
+D11, D12 y §13 (A2, A3, A6), con el delta v1.3 de plans/2026-11-15-m1-f2-partida-brief.md
+§3 (enteros y columnas). Las lecturas sinteticas van en mm (§3.6 v1.3).
 """
 import copy
 import hashlib
@@ -113,10 +114,16 @@ def _apply_order(plan, expectation):
     }
 
 
+def _plan_rows(plan):
+    """Filas `[lid, ci, x_mm, z_mm, yaw_mdeg]` reconstruidas de las columnas v1.3."""
+    return [list(r) for r in zip(*(plan[k] for k in sp.PLAN_COLUMNS))]
+
+
 def _checkpoint_rows(plan):
+    # y y gy a 100 m = 100000 mm (v1.3: solo enteros)
     return [
-        [row[0], row[1], row[2], 100.0, row[3], row[4], 100.0]
-        for row in plan["rows"]
+        [lid, ci, x, 100000, z, yaw, 100000]
+        for lid, ci, x, z, yaw in _plan_rows(plan)
     ]
 
 
@@ -153,7 +160,7 @@ def _reset_order(doc_id=DOC_ID):
         "session": SESSION,
         "op_id": "op-1",
         "epoch": EPOCH,
-        "args": {"doc_id": doc_id},
+        "args": {"f2": 1, "doc_id": doc_id, "if_pending": {"session": "", "op_id": ""}},
     }
 
 
@@ -204,6 +211,7 @@ class TestPlan(unittest.TestCase):
         p2 = sp.build_plan(copy.deepcopy(doc), 1, HASH, cat)
         self.assertEqual(sp.compact_json_bytes(p1), sp.compact_json_bytes(p2))
         self.assertEqual(p1["plan_sha256"], p2["plan_sha256"])
+        # v1.3 §3.2: SHA-256 del JSON canonico de {doc_id, rev, hash, classes, columnas}
         self.assertEqual(
             p1["plan_sha256"],
             hashlib.sha256(sp.canonical_json_bytes({
@@ -211,7 +219,11 @@ class TestPlan(unittest.TestCase):
                 "rev": 1,
                 "hash": HASH,
                 "classes": p1["classes"],
-                "rows": p1["rows"],
+                "lid": p1["lid"],
+                "ci": p1["ci"],
+                "x_mm": p1["x_mm"],
+                "z_mm": p1["z_mm"],
+                "yaw_mdeg": p1["yaw_mdeg"],
             })).hexdigest(),
         )
 
@@ -219,16 +231,19 @@ class TestPlan(unittest.TestCase):
         doc = _doc_without_actors()
         cat = _catalog()
         plan = sp.build_plan(doc, 1, HASH, cat)
-        self.assertEqual(len(plan["rows"]), 33)
-        self.assertEqual([r[0] for r in plan["rows"]], [e["id"] for e in doc["entities"]])
+        self.assertEqual(len(plan["lid"]), 33)
+        self.assertEqual(plan["lid"], [e["id"] for e in doc["entities"]])
         self.assertEqual(plan["classes"], sorted({e["cls"] for e in doc["entities"]}))
-        by_lid = {e["id"]: e["cls"] for e in doc["entities"]}
-        for row in plan["rows"]:
-            self.assertEqual(len(row), 5)
-            lid, ci, x, z, yaw = row
-            self.assertEqual(plan["classes"][ci], by_lid[lid])
-            for val in (x, z, yaw):
-                self.assertEqual(round(val, 3), val)
+        by_lid = {e["id"]: e for e in doc["entities"]}
+        for lid, ci, x, z, yaw in _plan_rows(plan):
+            ent = by_lid[lid]
+            self.assertEqual(plan["classes"][ci], ent["cls"])
+            # v1.3 §3.1: enteros, round(metros * 1000) y yaw en milesimas normalizadas
+            for val in (ci, x, z, yaw):
+                self.assertIs(type(val), int)
+            self.assertEqual(x, round(float(ent["x"]) * 1000))
+            self.assertEqual(z, round(float(ent["z"]) * 1000))
+            self.assertEqual(yaw, round(float(ent["yaw"]) * 1000) % 360000)
         exp = sp.extract_expectation(doc)
         self.assertEqual(len(exp), 33)
         self.assertTrue(sp.plan_matches_expectation(plan, exp))
@@ -249,11 +264,12 @@ class TestPlan(unittest.TestCase):
     def test_plan_yaw_normalized_after_rounding(self):
         doc = _doc_without_actors()
         cat = _catalog()
-        for raw, expected in ((359.9999, 0.0), (360.0, 0.0), (359.9994, 359.999), (-0.0001, 0.0)):
+        for raw, expected in ((359.9999, 0), (359.9996, 0), (360.0, 0), (359.9994, 359999),
+                              (-0.0001, 0), (720.5, 500)):
             moved = copy.deepcopy(doc)
             moved["entities"][0]["yaw"] = raw
             plan = sp.build_plan(moved, 1, HASH, cat)
-            self.assertEqual(plan["rows"][0][4], expected, raw)
+            self.assertEqual(plan["yaw_mdeg"][0], expected, raw)
 
     def test_plan_rows_shifted_by_constructor_do_not_match_expectation(self):
         doc = _doc_without_actors()
@@ -262,8 +278,7 @@ class TestPlan(unittest.TestCase):
         exp = sp.extract_expectation(doc)
         self.assertTrue(sp.plan_matches_expectation(plan, exp))
         shifted = copy.deepcopy(plan)
-        for row in shifted["rows"]:
-            row[2] = row[2] + 2.0
+        shifted["x_mm"] = [x + 2000 for x in shifted["x_mm"]]
         self.assertFalse(sp.plan_matches_expectation(shifted, exp))
 
     def test_plan_with_repeated_row_does_not_match_expectation(self):
@@ -271,7 +286,8 @@ class TestPlan(unittest.TestCase):
         cat = _catalog()
         plan = sp.build_plan(doc, 1, HASH, cat)
         exp = sp.extract_expectation(doc)
-        plan["rows"][1] = copy.deepcopy(plan["rows"][0])
+        for key in sp.PLAN_COLUMNS:
+            plan[key][1] = plan[key][0]
         self.assertFalse(sp.plan_matches_expectation(plan, exp))
 
     def test_plan_with_ci_of_another_class_does_not_match_expectation(self):
@@ -279,18 +295,18 @@ class TestPlan(unittest.TestCase):
         cat = _catalog()
         plan = sp.build_plan(doc, 1, HASH, cat)
         exp = sp.extract_expectation(doc)
-        lid = plan["rows"][0][0]
+        lid = plan["lid"][0]
         other = next(i for i, cls in enumerate(plan["classes"]) if cls != exp[lid][0])
-        plan["rows"][0][1] = other
+        plan["ci"][0] = other
         self.assertFalse(sp.plan_matches_expectation(plan, exp))
 
-    def test_plan_negative_zero_yaw_becomes_positive_zero(self):
+    def test_plan_negative_zero_yaw_becomes_zero_int(self):
         doc = _doc_without_actors()
         doc["entities"][0]["yaw"] = -0.0
         plan = sp.build_plan(doc, 1, HASH, _catalog())
-        yaw = plan["rows"][0][4]
-        self.assertEqual(yaw, 0.0)
-        self.assertEqual(math.copysign(1.0, yaw), 1.0)
+        yaw = plan["yaw_mdeg"][0]
+        self.assertEqual(yaw, 0)
+        self.assertIs(type(yaw), int)
 
 
 class TestValidation(unittest.TestCase):
@@ -312,7 +328,8 @@ class TestValidation(unittest.TestCase):
         res = self._validate(doc, op_id="op-1", conn=1)
         self.assertTrue(res["ok"])
         self.assertEqual(len(res["expectation"]), 33)
-        self.assertEqual(res["plan"]["rows"], sp.build_plan(doc, 1, HASH, _catalog())["rows"])
+        self.assertEqual(res["plan"], sp.build_plan(doc, 1, HASH, _catalog()))
+        self.assertTrue(sp.valid_plan_args(res["plan"]))
         self.assertLessEqual(res["envelope"]["max_bytes"], sp.WIRE_CAP)
 
     def test_expansion_unavailable(self):
@@ -421,11 +438,18 @@ class TestValidation(unittest.TestCase):
         self.assertEqual(res["code"], "plan_too_large")
         self.assertEqual(res["pointer"], "")
 
-    def test_plan_too_large_envelope_35_roots(self):
-        doc, cat = _max_doc(20, 10, 5, 5)
+    def test_plan_too_large_envelope_40_roots(self):
+        # v1.3 (§3.7): las filas en enteros ocupan menos; caben 33 y 34, y 40 ya no.
+        doc, cat = _max_doc(20, 10, 10, 10)
         res = self._validate(doc, store_catalog=cat)
         self.assertEqual(res["code"], "plan_too_large")
         self.assertEqual(res["pointer"], "")
+
+    def test_34_roots_with_maxima_still_fit(self):
+        doc, cat = _max_doc(20, 10, 4, 4)
+        res = self._validate(doc, store_catalog=cat, op_id="op-999999", conn=999999)
+        self.assertTrue(res["ok"], res)
+        self.assertLessEqual(res["envelope"]["max_bytes"], sp.WIRE_CAP)
 
     def test_validation_order_stops_at_first_code(self):
         full = _load("escena-basica-cine.json")
@@ -444,11 +468,23 @@ class TestValidation(unittest.TestCase):
 
 
 class TestEnvelope(unittest.TestCase):
+    def _env(self, doc, cat):
+        return sp.compute_envelope(
+            [e["id"] for e in doc["entities"]],
+            sorted({e["cls"] for e in doc["entities"]}),
+            caps=sp.wire_caps(sp.extract_caps(cat)),
+            doc_id=doc["doc_id"],
+            rev=sp._MAX_REV,
+            hash_="0" * 64,
+            op_id="op-999999",
+            conn=sp._MAX_COUNT,
+        )
+
     def test_envelope_33_roots_with_maxima_fits_wire_cap(self):
         doc, cat = _max_doc(20, 10, 3, 3)
         plan = sp.build_plan(doc, sp._MAX_REV, "0" * 64, cat)
         env = sp.compute_envelope(
-            [row[0] for row in plan["rows"]],
+            plan["lid"],
             plan["classes"],
             caps=plan["caps"],
             doc_id=doc["doc_id"],
@@ -461,6 +497,8 @@ class TestEnvelope(unittest.TestCase):
         for key in ("poll_apply", "result_apply", "result_observe_now",
                     "result_reset_or_read"):
             self.assertLessEqual(env[key], sp.WIRE_CAP, key)
+        # el cuerpo que decide el tope sigue siendo el de observe now
+        self.assertEqual(env["max_bytes"], env["result_observe_now"])
         res = sp.validate_for_apply(
             doc, 1, HASH, cat, world_catalog=_world_catalog(cat),
             catalog_valid=True, world_size=15360,
@@ -468,19 +506,21 @@ class TestEnvelope(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertLessEqual(res["envelope"]["max_bytes"], sp.WIRE_CAP)
 
-    def test_envelope_35_roots_exceeds_wire_cap(self):
-        doc, cat = _max_doc(20, 10, 5, 5)
-        env = sp.compute_envelope(
-            [e["id"] for e in doc["entities"]],
-            sorted({e["cls"] for e in doc["entities"]}),
-            caps={"objeto": 20, "infectado": 10, "animal": 5},
-            doc_id=doc["doc_id"],
-            rev=sp._MAX_REV,
-            hash_="0" * 64,
-            op_id="op-999999",
-            conn=sp._MAX_COUNT,
-        )
-        self.assertGreater(env["max_bytes"], sp.WIRE_CAP)
+    def test_envelope_34_roots_fits_and_40_exceeds_wire_cap(self):
+        doc34, cat34 = _max_doc(20, 10, 4, 4)
+        self.assertLessEqual(self._env(doc34, cat34)["max_bytes"], sp.WIRE_CAP)
+        doc40, cat40 = _max_doc(20, 10, 10, 10)
+        self.assertGreater(self._env(doc40, cat40)["max_bytes"], sp.WIRE_CAP)
+
+    def test_envelope_grows_with_each_root_and_uses_v13_bodies(self):
+        # Cada raiz de mas suma lo mismo en cada cuerpo (filas de enteros de ancho fijo).
+        doc33, cat = _max_doc(20, 10, 3, 3)
+        doc34, _ = _max_doc(20, 10, 4, 3)
+        e33 = self._env(doc33, cat)
+        e34 = self._env(doc34, cat)
+        for key in ("poll_apply", "result_apply", "result_observe_now"):
+            self.assertGreater(e34[key], e33[key], key)
+        self.assertEqual(e34["result_reset_or_read"], e33["result_reset_or_read"])
 
 
 class TestApplyPredicate(unittest.TestCase):
@@ -501,7 +541,7 @@ class TestApplyPredicate(unittest.TestCase):
         self.assertFalse(sp.check_apply_predicate(self.order, read))
 
     def test_extra_row(self):
-        rows = self.rows + [["obj-99", 0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+        rows = self.rows + [["obj-99", 0, 0, 0, 0, 0, 0]]
         read = _apply_read(self.order, rows)
         self.assertFalse(sp.check_apply_predicate(self.order, read))
 
@@ -540,7 +580,7 @@ class TestApplyPredicate(unittest.TestCase):
 
     def test_position_error_06m(self):
         rows = copy.deepcopy(self.rows)
-        rows[0][2] = rows[0][2] + 0.6
+        rows[0][2] = rows[0][2] + 600
         read = _apply_read(self.order, rows)
         self.assertFalse(sp.check_apply_predicate(self.order, read))
 
@@ -555,13 +595,16 @@ class TestApplyPredicate(unittest.TestCase):
         plan = sp.build_plan(doc, 1, HASH, self.cat)
         exp = sp.extract_expectation(doc)
         order = _apply_order(plan, exp)
-        # Posicion real (0.0704, 0, 0.4954): el redondeo a mm da (0.07, 0, 0.495).
-        rows = [["obj-01", 0, 0.07, 0.0, 0.495, 0.0, 0.0]]
-        dist = sp.dist3((0.07, 0.0, 0.495), (0.0, 0.0, 0.0))
-        self.assertGreaterEqual(dist, sp.POS_TOL_M - sp.EPS_Q)
-        self.assertLess(dist, sp.POS_TOL_M)
+        # Posicion real (0.0704, 0, 0.4954) m: el redondeo a mm da (70, 0, 495) mm.
+        rows = [["obj-01", 0, 70, 0, 495, 0, 0]]
+        dist = sp.dist3((70, 0, 495), (0.0, 0.0, 0.0))
+        self.assertGreaterEqual(dist, sp.POS_TOL - sp.EPS_Q)
+        self.assertLess(dist, sp.POS_TOL)
         read = _apply_read(order, rows)
         self.assertFalse(sp.check_apply_predicate(order, read))
+        # y una lectura a 0,4 m si pasa
+        read_ok = _apply_read(order, [["obj-01", 0, 0, 0, 400, 0, 0]])
+        self.assertTrue(sp.check_apply_predicate(order, read_ok))
 
     def test_generation_other_plan_sha256(self):
         read = _apply_read(self.order, self.rows)
@@ -596,7 +639,7 @@ class TestApplyPredicate(unittest.TestCase):
 
     def test_expectation_shifted_two_meters(self):
         read = _apply_read(self.order, self.rows)
-        shifted = {lid: (cls, x + 2.0, z) for lid, (cls, x, z) in self.exp.items()}
+        shifted = {lid: (cls, x + 2000.0, z) for lid, (cls, x, z) in self.exp.items()}
         self.assertFalse(sp.check_apply_predicate(self.order, read, shifted))
 
     def test_epoch_mismatch(self):
@@ -875,7 +918,7 @@ class TestReadShape(unittest.TestCase):
     def test_obs_checkpoint_row_valid(self):
         read = _scene_read()
         read["obs"] = {"at": "checkpoint",
-                       "rows": [["obj-01", 0, 1.0, 2.0, 3.0, 359.999, 2.0]]}
+                       "rows": [["obj-01", 0, 1000, 2000, 3000, 359999, 2000]]}
         self.assertTrue(sp.valid_scene_read(read, require_obs="checkpoint"))
 
     def test_obs_checkpoint_dead_entity_valid(self):
@@ -886,34 +929,50 @@ class TestReadShape(unittest.TestCase):
 
     def test_obs_checkpoint_row_out_of_range(self):
         cases = [
-            ("x", 100000.0),
-            ("z", 100000.0),
-            ("y", -10000.0),
-            ("gy", 10000.0),
-            ("yaw", 360.0),
+            ("x", 99999001),
+            ("z", 99999001),
+            ("x", -1),
+            ("y", -10000000),
+            ("gy", 10000000),
+            ("yaw", 360000),
+            ("yaw", -1),
             ("ci", 1000000),
+            # v1.3: solo enteros; un float (aunque sea entero en valor) o un bool no valen
+            ("x", 1000.0),
             ("x", 1.2345),
+            ("y", True),
+            ("gy", 2000.0),
+            ("yaw", 359.999),
         ]
         for field, value in cases:
             read = _scene_read()
-            row = ["obj-01", 0, 1.0, 2.0, 3.0, 359.999, 2.0]
+            row = ["obj-01", 0, 1000, 2000, 3000, 359999, 2000]
             idx = {"lid": 0, "ci": 1, "x": 2, "y": 3, "z": 4, "yaw": 5, "gy": 6}[field]
             row[idx] = value
             read["obs"] = {"at": "checkpoint", "rows": [row]}
-            self.assertFalse(sp.valid_scene_read(read, require_obs="checkpoint"), field)
+            self.assertFalse(sp.valid_scene_read(read, require_obs="checkpoint"), (field, value))
+
+    def test_obs_checkpoint_x_up_to_world_size_mm(self):
+        read = _scene_read()
+        read["obs"] = {"at": "checkpoint",
+                       "rows": [["obj-01", 0, 15360000, 0, 0, 0, 0]]}
+        self.assertTrue(sp.valid_scene_read(read, require_obs="checkpoint", world_size=15360))
+        read["obs"]["rows"][0][2] = 15360001
+        self.assertFalse(sp.valid_scene_read(read, require_obs="checkpoint", world_size=15360))
 
     def test_obs_now_row_valid_and_invalid(self):
         read = _scene_read()
         read["obs"] = {"at": "now",
-                       "rows": [["obj-01", 1.0, 2.0, 3.0, 359.999, 0.999, 5, 0]]}
+                       "rows": [["obj-01", 1000, 2000, 3000, 359999, 999, 5, 0]]}
         self.assertTrue(sp.valid_scene_read(read, require_obs="now"))
-        for field, value in (("hp", 1.001), ("n_own", 1000000), ("yaw", 360.0)):
+        for field, value in (("hp", 1001), ("hp", -1), ("n_own", 1000000), ("yaw", 360000),
+                             ("hp", 0.999), ("hp", 1.0), ("x", 1000.0), ("z", False)):
             read = _scene_read()
-            row = ["obj-01", 1.0, 2.0, 3.0, 359.999, 0.999, 5, 0]
-            idx = {"hp": 5, "n_own": 6, "yaw": 4}[field]
+            row = ["obj-01", 1000, 2000, 3000, 359999, 999, 5, 0]
+            idx = {"x": 1, "z": 3, "hp": 5, "n_own": 6, "yaw": 4}[field]
             row[idx] = value
             read["obs"] = {"at": "now", "rows": [row]}
-            self.assertFalse(sp.valid_scene_read(read, require_obs="now"), field)
+            self.assertFalse(sp.valid_scene_read(read, require_obs="now"), (field, value))
 
     def test_obs_now_row_dead_root_m15(self):
         # M15: la raiz muerta da nulos en x, y, z, yaw y hp, y contadores a 0.
@@ -922,7 +981,7 @@ class TestReadShape(unittest.TestCase):
                        "rows": [["obj-05", None, None, None, None, None, 0, 0]]}
         self.assertTrue(sp.valid_scene_read(read, require_obs="now"))
         # Cualquier combinacion con solo algunos nulos se rechaza.
-        base = ["obj-05", 1.0, 2.0, 3.0, 0.0, 1.0, 0, 0]
+        base = ["obj-05", 1000, 2000, 3000, 0, 1000, 0, 0]
         for r in range(1, 5):
             for idxs in itertools.combinations(range(1, 6), r):
                 row = list(base)
@@ -963,6 +1022,203 @@ class TestReadShape(unittest.TestCase):
         self.assertFalse(sp.valid_op_id("op-1000000"))
         self.assertFalse(sp.valid_op_id("op-"))
         self.assertFalse(sp.valid_op_id("x-1"))
+
+
+def _single_entity_doc(x, z, yaw=0.0, cls="Land_Wreck_Ikarus"):
+    return {
+        "doc_id": DOC_ID,
+        "entities": [{"id": "obj-01", "kind": "objeto", "cls": cls, "x": x, "z": z, "yaw": yaw}],
+    }
+
+
+class TestContratoV13Unidades(unittest.TestCase):
+    """§3.9 (a) y (b) del brief de F2-partida: unidades enteras del cable v1.3."""
+
+    # Valores con x,5 mm exactos en binario (k/16 m): el redondeo de Python va al par.
+    HALF_MM_CASES = (
+        (0.0625, 62),      # 62,5 mm -> 62 (par); mitad hacia arriba daria 63
+        (0.1875, 188),     # 187,5 mm -> 188 (par); floor daria 187
+        (2.0625, 2062),
+        (6170.1875, 6170188),
+        (-0.0625, -62),    # floor daria -63
+        (-0.1875, -188),
+    )
+
+    def test_a_metros_mm_metros_sin_perder_mas_de_eps_q(self):
+        values = [0.0, 0.0005, 0.0015, 0.001, 0.4999, 0.5, 1.234, 6170.123, 6170.1235,
+                  7643.9995, 9999.999, -9999.999, 15359.9995, 15360.0, 99999.0]
+        values += [v for v, _mm in self.HALF_MM_CASES]
+        for v in values:
+            mm = sp.m_to_mm(v)
+            self.assertIs(type(mm), int, v)
+            back = sp.mm_to_m(mm)
+            self.assertLessEqual(abs(back - v) * 1000.0, sp.EPS_Q, v)
+            # cota real: medio mm (mas el error de coma flotante)
+            self.assertLessEqual(abs(back - v), 0.0005 + 1e-9, v)
+
+    def test_a_redondeo_mitad_al_par_y_negativas_floor_y_factor(self):
+        for v, expected in self.HALF_MM_CASES:
+            self.assertEqual(sp.m_to_mm(v), expected, v)
+            self.assertEqual(sp.m_to_mm(v), round(v * 1000), v)
+        # negativas: ni floor ni factor 100 ni truncado
+        self.assertNotEqual(sp.m_to_mm(0.1875), math.floor(0.1875 * 1000))
+        self.assertNotEqual(sp.m_to_mm(-0.0625), math.floor(-0.0625 * 1000))
+        self.assertEqual(sp.m_to_mm(1.234), 1234)
+        self.assertNotEqual(sp.m_to_mm(1.234), round(1.234 * 100))
+        self.assertEqual(sp.mm_to_m(1234), 1.234)
+        self.assertEqual(sp.mm_to_m(-9999999), -9999.999)
+        self.assertIsNone(sp.mm_to_m(None))
+
+    def test_a_world_size_en_mm_ida_y_vuelta_y_rango(self):
+        self.assertEqual(sp.m_to_mm(15360), 15360000)
+        self.assertEqual(sp.mm_to_m(sp.m_to_mm(15360.0)), 15360.0)
+        doc = _single_entity_doc(15360.0, 0.0)
+        plan = sp.build_plan(doc, 1, HASH, _catalog())
+        self.assertEqual(plan["x_mm"], [15360000])
+        self.assertEqual(plan["z_mm"], [0])
+        exp = sp.extract_expectation(doc)
+        self.assertTrue(sp.plan_matches_expectation(plan, exp))
+        # la lectura en el borde del mapa vale; un mm mas alla, no
+        self.assertTrue(sp.valid_obs_now_row(["obj-01", 15360000, 0, 0, 0, 1000, 0, 0], 15360))
+        self.assertFalse(sp.valid_obs_now_row(["obj-01", 15360001, 0, 0, 0, 1000, 0, 0], 15360))
+
+    def test_a_plan_con_mitad_de_mm_redondea_al_par(self):
+        doc = _single_entity_doc(6170.1875, 6170.0625)
+        plan = sp.build_plan(doc, 1, HASH, _catalog())
+        self.assertEqual(plan["x_mm"], [6170188])
+        self.assertEqual(plan["z_mm"], [6170062])
+        self.assertTrue(sp.plan_matches_expectation(plan, sp.extract_expectation(doc)))
+
+    def test_a_negativa_factor_100_no_casa_con_la_expectativa(self):
+        doc = _doc_without_actors()
+        plan = sp.build_plan(doc, 1, HASH, _catalog())
+        exp = sp.extract_expectation(doc)
+        bad = copy.deepcopy(plan)
+        bad["x_mm"] = [round(float(e["x"]) * 100) for e in doc["entities"]]
+        bad["z_mm"] = [round(float(e["z"]) * 100) for e in doc["entities"]]
+        self.assertFalse(sp.plan_matches_expectation(bad, exp))
+        # y la expectativa no depende del constructor: x * 1000 sin redondear (D11)
+        ent = doc["entities"][0]
+        self.assertEqual(exp[ent["id"]][1], float(ent["x"]) * 1000.0)
+
+    def test_b_yaw_359_9996_da_0(self):
+        doc = _single_entity_doc(100.0, 100.0, yaw=359.9996)
+        plan = sp.build_plan(doc, 1, HASH, _catalog())
+        self.assertEqual(plan["yaw_mdeg"], [0])
+        self.assertEqual(sp.yaw_to_mdeg(359.9996), 0)
+        self.assertNotIn(360000, plan["yaw_mdeg"])
+
+    def test_b_negativa_yaw_359_9994_no_se_normaliza_y_360000_no_vale(self):
+        self.assertEqual(sp.yaw_to_mdeg(359.9994), 359999)
+        # normalizar antes de redondear dejaria 360000, fuera de rango
+        self.assertEqual(round((359.9996 % 360.0) * 1000), 360000)
+        self.assertFalse(sp.valid_obs_now_row(["obj-01", 0, 0, 0, 360000, 1000, 0, 0]))
+        self.assertTrue(sp.valid_obs_now_row(["obj-01", 0, 0, 0, 359999, 1000, 0, 0]))
+
+    def test_conversion_de_filas_now_a_metros(self):
+        row = ["obj-01", 6188000, 120500, 7626000, 62000, 1000, 2, 1]
+        self.assertEqual(sp.obs_now_row_to_m(row),
+                         ["obj-01", 6188.0, 120.5, 7626.0, 62.0, 1.0, 2, 1])
+        dead = ["obj-05", None, None, None, None, None, 0, 0]
+        self.assertEqual(sp.obs_now_row_to_m(dead), dead)
+        self.assertEqual(sp.obs_checkpoint_row_to_m(["obj-01", 3, 1500, -2, 0, 359999, -2]),
+                         ["obj-01", 3, 1.5, -0.002, 0.0, 359.999, -0.002])
+
+
+class TestContratoV13Plan(unittest.TestCase):
+    """§3.9 (c) del brief de F2-partida: el constructor siempre manda todas las claves (DP-2)."""
+
+    def test_c_build_plan_con_todas_las_claves_y_total_menos_uno(self):
+        plan = sp.build_plan(_doc_without_actors(), 1, HASH, _catalog())
+        self.assertEqual(list(plan.keys()), list(sp.PLAN_KEYS))
+        self.assertEqual(plan["f2"], 1)
+        self.assertEqual(set(plan["caps"]), set(sp.CAPS_KEYS))
+        self.assertEqual(plan["caps"], {"objeto": 20, "infectado": 10, "animal": 3, "total": -1})
+        n = len(plan["lid"])
+        self.assertEqual(n, 33)
+        for key in sp.PLAN_COLUMNS:
+            self.assertEqual(len(plan[key]), n, key)
+        self.assertTrue(sp.valid_plan_args(plan))
+        self.assertNotIn("rows", plan)
+
+    def test_c_total_de_la_biblioteca_se_respeta(self):
+        cat = _catalog()
+        cat["caps"]["total"] = 40
+        plan = sp.build_plan(_doc_without_actors(), 1, HASH, cat)
+        self.assertEqual(plan["caps"]["total"], 40)
+        cat["caps"]["total"] = 0
+        plan = sp.build_plan(_doc_without_actors(), 1, HASH, cat)
+        self.assertEqual(plan["caps"]["total"], 0)
+
+    def test_c_negativa_sin_caps_no_hay_orden(self):
+        cat = _catalog()
+        cat.pop("caps")
+        with self.assertRaises(ValueError):
+            sp.build_plan(_doc_without_actors(), 1, HASH, cat)
+
+    def test_c_negativa_orden_sin_alguna_clave_no_vale(self):
+        base = sp.build_plan(_doc_without_actors(), 1, HASH, _catalog())
+        for key in sp.PLAN_KEYS:
+            plan = copy.deepcopy(base)
+            del plan[key]
+            self.assertFalse(sp.valid_plan_args(plan), key)
+            self.assertEqual(sp.plan_args_error(plan), "/plan/%s" % key)
+        no_total = copy.deepcopy(base)
+        del no_total["caps"]["total"]
+        self.assertFalse(sp.valid_plan_args(no_total))
+        zero_f2 = copy.deepcopy(base)
+        zero_f2["f2"] = 0
+        self.assertFalse(sp.valid_plan_args(zero_f2))
+        bool_f2 = copy.deepcopy(base)
+        bool_f2["f2"] = True
+        self.assertFalse(sp.valid_plan_args(bool_f2))
+        legacy = copy.deepcopy(base)
+        legacy["rows"] = _plan_rows(base)
+        self.assertFalse(sp.valid_plan_args(legacy))
+
+    def test_c_negativa_columna_desalineada(self):
+        base = sp.build_plan(_doc_without_actors(), 1, HASH, _catalog())
+        exp = sp.extract_expectation(_doc_without_actors())
+        short = copy.deepcopy(base)
+        short["z_mm"] = short["z_mm"][:-1]
+        self.assertFalse(sp.valid_plan_args(short))
+        self.assertFalse(sp.plan_matches_expectation(short, exp))
+        rotated = copy.deepcopy(base)
+        rotated["x_mm"] = rotated["x_mm"][1:] + rotated["x_mm"][:1]
+        self.assertTrue(sp.valid_plan_args(rotated))  # la forma vale ...
+        self.assertFalse(sp.plan_matches_expectation(rotated, exp))  # ... pero no casa
+        float_col = copy.deepcopy(base)
+        float_col["x_mm"][0] = float(float_col["x_mm"][0])
+        self.assertFalse(sp.valid_plan_args(float_col))
+        self.assertFalse(sp.plan_matches_expectation(float_col, exp))
+
+
+class TestContratoV13Lecturas(unittest.TestCase):
+    """§3.9 (e) del brief de F2-partida: una lectura con floats no vale."""
+
+    def setUp(self):
+        self.doc = _doc_without_actors()
+        self.plan = sp.build_plan(self.doc, 1, HASH, _catalog())
+        self.exp = sp.extract_expectation(self.doc)
+        self.order = _apply_order(self.plan, self.exp)
+
+    def test_e_lectura_de_enteros_vale_y_cumple(self):
+        read = _apply_read(self.order, _checkpoint_rows(self.plan))
+        self.assertTrue(sp.valid_scene_read(read, require_obs="checkpoint"))
+        self.assertTrue(sp.check_apply_predicate(self.order, read))
+
+    def test_e_negativa_lectura_con_floats_no_vale(self):
+        for idx in range(2, 7):
+            rows = _checkpoint_rows(self.plan)
+            rows[3][idx] = float(rows[3][idx])
+            read = _apply_read(self.order, rows)
+            self.assertFalse(sp.valid_scene_read(read, require_obs="checkpoint"), idx)
+            self.assertFalse(sp.check_apply_predicate(self.order, read), idx)
+        # una lectura v1.2.2 en metros tampoco vale
+        legacy = [[lid, ci, x / 1000.0, 100.0, z / 1000.0, yaw / 1000.0, 100.0]
+                  for lid, ci, x, z, yaw in _plan_rows(self.plan)]
+        self.assertFalse(sp.valid_scene_read(_apply_read(self.order, legacy),
+                                             require_obs="checkpoint"))
 
 
 if __name__ == "__main__":
