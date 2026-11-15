@@ -631,7 +631,8 @@ def _is_allowed_c_file(rel_posix):
     if re.fullmatch(r"scripts/4_World/DSBX_QA_W_Actor_[A-Za-z0-9_]+\.c", rel_posix):
         return True
     # Gancho EEInit del testigo de creacion (per_witness_start, PR «sonda: extensiones para F2»).
-    if rel_posix == "scripts/4_World/DSBX_QA_W_Witness.c":
+    # (el gancho de EntityAI y el bufer van en 3_Game: un modded class tiene que estar en el modulo de su clase)
+    if rel_posix in ("scripts/3_Game/DSBX_QA_G_Witness.c", "scripts/4_World/DSBX_QA_W_Witness.c"):
         return True
     return False
 
@@ -714,8 +715,8 @@ def check_1_mod_files(probe_dir):
                     ('name = "DayZSandbox_QA"', r'\bname\s*=\s*"DayZSandbox_QA"\s*;'),
                     ('type = "mod"', r'\btype\s*=\s*"mod"\s*;'),
                     (
-                        'dependencies[] = {"World", "Mission"}',
-                        r'\bdependencies\s*\[\s*\]\s*=\s*\{\s*"World"\s*,\s*"Mission"\s*\}\s*;',
+                        'dependencies[] = {"Game", "World", "Mission"}',
+                        r'\bdependencies\s*\[\s*\]\s*=\s*\{\s*"Game"\s*,\s*"World"\s*,\s*"Mission"\s*\}\s*;',
                     ),
                 ):
                     if not re.search(pat, mod_body, re.DOTALL):
@@ -747,12 +748,13 @@ def check_1_mod_files(probe_dir):
                         name: (mbs, mbe)
                         for name, _, mbs, mbe in _extract_named_blocks(defs_no_str, "class")
                     }
-                    expected_modules = {"worldScriptModule", "missionScriptModule"}
+                    expected_modules = {"gameScriptModule", "worldScriptModule", "missionScriptModule"}
                     if set(modules.keys()) != expected_modules:
                         violations.append(
                             f"config.cpp: defs debe tener exactamente {sorted(expected_modules)}, tiene {sorted(modules.keys())}"
                         )
                     for mod_name, expected_path in (
+                        ("gameScriptModule", "DayZSandbox_QA/scripts/3_Game"),
                         ("worldScriptModule", "DayZSandbox_QA/scripts/4_World"),
                         ("missionScriptModule", "DayZSandbox_QA/scripts/5_Mission"),
                     ):
@@ -2044,9 +2046,14 @@ class CfgMods
         dir = "DayZSandbox_QA";
         name = "DayZSandbox_QA";
         type = "mod";
-        dependencies[] = {"World", "Mission"};
+        dependencies[] = {"Game", "World", "Mission"};
         class defs
         {
+            class gameScriptModule
+            {
+                value = "";
+                files[] = {"DayZSandbox_QA/scripts/3_Game"};
+            };
             class worldScriptModule
             {
                 value = "";
@@ -2686,8 +2693,8 @@ class ProbeStaticTests(unittest.TestCase):
         # 1c: config.cpp sin World en dependencies[]
         def mut_config_deps(files):
             files["config.cpp"] = files["config.cpp"].replace(
-                b'dependencies[] = {"World", "Mission"};',
-                b'dependencies[] = {"Mission"};',
+                b'dependencies[] = {"Game", "World", "Mission"};',
+                b'dependencies[] = {"Game", "Mission"};',
             )
 
         self._assert_mutation_caught_by(mut_config_deps, check_1_mod_files)

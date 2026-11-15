@@ -32,7 +32,10 @@ from . import test_probe_static as tps
 QA_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = QA_DIR.parent
 PERSIST_C = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "5_Mission" / "DSBX_QA_X_Persist.c"
-WITNESS_C = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "4_World" / "DSBX_QA_W_Witness.c"
+WITNESS_C = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "3_Game" / "DSBX_QA_G_Witness.c"  # gancho y bufer
+WITNESS_W_C = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "4_World" / "DSBX_QA_W_Witness.c"  # cobertura 4_World
+PROBE_SCRIPTS = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts"
+VANILLA_ROOTS = (Path("P:/scripts"), Path("C:/Users/guill/OneDrive/Documentos/DayZ Projects/scripts"))
 BASELINE_COMMIT = "6a7bd7a"  # implementacion de S-persist (rama claude/s-persist-impl-e9), de donde sale este PR
 
 CENTER = (6170.0, 7643.0)
@@ -1051,6 +1054,63 @@ def _eeinit_without_super(root):
     return out
 
 
+def _vanilla_class_index(root):
+    """{modulo: {clase}} con cada `class X` (no modded) de scripts/3_game, 4_world y 5_mission de root."""
+    index = {}
+    for mod in ("3_game", "4_world", "5_mission"):
+        names = set()
+        for path in (Path(root) / mod).rglob("*.c"):
+            text = path.read_bytes().decode("utf-8", "replace")
+            names.update(re.findall(r"^[ \t]*class[ \t]+(\w+)", text, re.M))
+        index[mod] = names
+    return index
+
+
+def _modded_module_violations(scripts_dir, index):
+    """Cada `modded class X` de scripts/<N>_<Modulo>/ tiene que estar definida en el mismo modulo vanilla."""
+    out = []
+    for path in sorted(Path(scripts_dir).rglob("*.c")):
+        mod = path.parent.name.lower()
+        code = tps._strip_comments(path.read_bytes().decode("utf-8"), blank_strings=False)
+        for m in re.finditer(r"\bmodded\s+class\s+(\w+)", code):
+            if m.group(1) not in index.get(mod, set()):
+                out.append("%s: modded class %s no esta definida en %s" % (path.name, m.group(1), mod))
+    return out
+
+
+class StaticModdedClassModuleTests(unittest.TestCase):
+    """Un modded class tiene que estar en el MISMO modulo de scripts que la clase original (EntityAI es de 3_Game)."""
+
+    @classmethod
+    def setUpClass(cls):
+        roots = [r for r in VANILLA_ROOTS if (r / "3_game").is_dir() and (r / "4_world").is_dir()]
+        if not roots:
+            raise unittest.SkipTest("no hay scripts vanilla (P:\\scripts ni la copia de OneDrive)")
+        cls.index = _vanilla_class_index(roots[0])
+
+    def test_probe_modded_classes_live_in_their_vanilla_module(self):
+        self.assertEqual(_modded_module_violations(PROBE_SCRIPTS, self.index), [])
+        self.assertIn("EntityAI", self.index["3_game"])  # el indice ve de verdad el vanilla
+
+    def test_control_modded_entityai_in_4_world_fails(self):
+        tmp = Path(tempfile.mkdtemp(prefix="dsbx-modmod-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "4_World").mkdir()
+        (tmp / "3_Game").mkdir()
+        (tmp / "4_World" / "bad.c").write_bytes(b"modded class EntityAI\n{\n}\n")
+        (tmp / "3_Game" / "ok.c").write_bytes(b"modded class EntityAI\n{\n}\n")
+        got = _modded_module_violations(tmp, self.index)
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("bad.c", got[0])
+
+    def test_hook_files_are_in_the_expected_modules(self):
+        self.assertEqual(WITNESS_C.parent.name, "3_Game")
+        self.assertEqual(WITNESS_W_C.parent.name, "4_World")
+        cfg = (QA_DIR / "probe" / "DayZSandbox_QA" / "config.cpp").read_bytes().decode("utf-8")
+        self.assertIn('files[] = {"DayZSandbox_QA/scripts/3_Game"};', cfg)
+        self.assertRegex(cfg, r'dependencies\[\]\s*=\s*\{"Game",\s*"World",\s*"Mission"\};')
+
+
 class StaticEEInitCoverageTests(unittest.TestCase):
     VANILLA_ROOTS = (Path("P:/scripts"), Path("C:/Users/guill/OneDrive/Documentos/DayZ Projects/scripts"))
 
@@ -1067,7 +1127,7 @@ class StaticEEInitCoverageTests(unittest.TestCase):
         roots = [r for r in self.VANILLA_ROOTS if r.is_dir()]
         if not roots:
             self.skipTest("no hay scripts vanilla (P:\\scripts) en esta maquina")
-        witness = WITNESS_C.read_bytes().decode("utf-8")
+        witness = WITNESS_C.read_bytes().decode("utf-8") + WITNESS_W_C.read_bytes().decode("utf-8")
         for root in roots:
             found = _eeinit_without_super(root)
             self.assertGreater(len(found), 0)  # el escaner ve al menos los cuatro conocidos
@@ -1078,8 +1138,10 @@ class StaticEEInitCoverageTests(unittest.TestCase):
                 )
 
     def test_covered_classes_repeat_the_guard_and_limitation_is_written(self):
-        _t, code = _code(WITNESS_C)
-        raw = WITNESS_C.read_bytes().decode("utf-8")
+        _t, code_g = _code(WITNESS_C)
+        _t, code_w = _code(WITNESS_W_C)
+        code = code_g + code_w
+        raw = WITNESS_W_C.read_bytes().decode("utf-8")
         for cm in re.finditer(r"modded\s+class\s+(\w+)", code):
             cls = cm.group(1)
             body = _block_after(code, r"modded\s+class\s+%s\s*\{" % cls)
@@ -1212,7 +1274,7 @@ class StaticPersistExtensionTests(unittest.TestCase):
         self.assertEqual("per_witness_start" in fake_ext_persist.SERVER_VERBS, True)
 
     def test_sources_are_lf(self):
-        for path in (PERSIST_C, WITNESS_C, QA_DIR / "fake_ext_persist.py", Path(__file__)):
+        for path in (PERSIST_C, WITNESS_C, WITNESS_W_C, QA_DIR / "fake_ext_persist.py", Path(__file__)):
             self.assertNotIn(b"\r", path.read_bytes(), str(path))
 
 
