@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3, **congelada** tras la ronda 2 de Sol, que fue la última, y el arbitraje del orquestador (§12). Las ampliaciones de la sonda de §11.2 son requisitos de interfaz pendientes de que F0.3 las confirme por escrito. 2026-11-15, por el orquestador de F2.
+- **Versión:** v1.3.1, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda (§12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito. 2026-11-15, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -217,11 +217,11 @@ Si S-persist decide otros valores, se cambia la constante y se anota su commit e
 
 | Parte | Qué hace el runner | Estado al terminar | Fila |
 |---|---|---|---|
-| P1 | censo de referencia y control persistente puesto (§5.3) | mundo sin nada de F2 | base |
+| P1 | censo de referencia; control persistente puesto (§5.3); **ventana de control** del testigo, en modo de radio y sin crear nada, para medir el ruido que quede | mundo sin nada de F2 | base |
 | P2 | testigo activo → `POST /api/apply` → `observado`; segunda entrega forzada del mismo `(session, op_id)` dentro de la retención; censo | escena 1 aplicada (33) | A2 |
 | P2n | **negativa real:** apply de una variante de la escena 1 con un estímulo que tiene que acabar en `parcial` o `fallido` (§5.5) | escena 1 limpia otra vez (reset) | A2 (-) |
-| P3 | apply de la escena 1; reinicio del backend con la escena 2 → apply de la escena 2; reinicio con la escena 1; ajeno en el suelo y ajeno dentro de `obj-17` (§5.3); un objeto de la escena 2 trasladado con `per_transfer` dentro de un contenedor de la escena 1 (P-02, Q-03); reset → `parcial/contenido_ajeno`; censo; segundo reset → igual | `obj-17` y el otro contenedor retenidos | A3 |
-| P3c | limpieza: la sonda borra sus ajenos (§5.3); el objeto de la escena 2 vuelve al suelo con `per_transfer`, conservando su `net_id`; reset de la escena 1 → `observado`; censo | escena 1 vacía; escena 2 aplicada | A3 |
+| P3 | apply de la escena 1; reinicio del backend con la escena 2 → apply de la escena 2; reinicio con la escena 1; ajeno en el suelo y ajeno dentro de `obj-17` (§5.3); reset → `parcial/contenido_ajeno`; censo; segundo reset → igual | `obj-17` retenido | A3 |
+| P3c | limpieza: la sonda borra sus ajenos (§5.3); reset de la escena 1 → `observado`; censo | escena 1 vacía; escena 2 aplicada | A3 |
 | P4a | reinicio **solo del backend** (mismo epoch): apply de la escena 1 → reconcilia; el reset borra la generación viva; apply → 33; censo sin extras | escena 1 aplicada | A4 |
 | P4b | reinicio del **servidor** sin reset (epoch nuevo, mismo storage): censo → nada de F2 reaparece y el control persistente sí; apply → 33 | escena 1 aplicada | A3, A4 |
 | P4c | reset de la escena 1 y de la escena 2 → reinicio del servidor con reset previo: censo → nada de F2 reaparece y el control sí | sin F2 | A3 |
@@ -244,14 +244,16 @@ Todas van por el bridge de la sonda (`qa0`), así que quedan en la evidencia.
   - Columnas: `scol` `class_name`, `net_id` y `parent_net_id`; `ncol` `pos_x_m`, `pos_y_m`, `pos_z_m`, `yaw_deg`, `tick_ms`, `frame` y `ai_agent_b`. Hay una fila por cada `EntityAI` que pasa por `EEInit` dentro del radio.
   - Es la observación independiente de las 33 posiciones en el momento de crear, **criaturas incluidas**.
   - `[verify F2 en partida]`: que en `EEInit` la posición ya sea la final. Lo contrasta F2P-12.
-  - **Trayectoria (Q-01), pedida a F0.3 (§11):** por cada entidad capturada, la sonda vuelve a muestrear su posición en sus `K` ticks siguientes (`witness_follow_ticks`, con `K = 3`).
-    - Un salto de más de `JUMP_MAX_M` = 0,3 m entre `EEInit` y el tick 1 delata un desplazamiento del mod antes del checkpoint. La IA no recorre eso en un tick de unos 33 ms.
-    - Mientras la trayectoria no esté en la interfaz confirmada, F2P-02 da INCONCLUSO para las criaturas.
-  - **Modo mapa entero (Q-02), pedido a F0.3 (§11):** `all_map_b = 1` en las ventanas de operación, para ver los extras que nazcan fuera de los discos.
-- **Traslado por `net_id` (Q-03), pedido a F0.3 (§11):** `per_transfer`.
-  - Mueve una entidad que ya existe y no es de la sonda (el objeto de la escena 2) al cargo de un contenedor (`target_net_id`) o al suelo (`x_m`, `z_m`), **sin recrearla**.
-  - Conserva el `net_id` y devuelve la ubicación anterior y la posterior.
-  - Se usa en P3 (la entrada) y en P3c (la vuelta al suelo).
+  - **Trayectoria (Q-01), confirmada por F0.3:**
+    - son filas con `sample_idx`: el 0 es `EEInit` y del 1 a `K` son los `K` ticks siguientes;
+    - `witness_follow_ticks` = `K`, en [1, 5] y 3 por defecto;
+    - `ncol` añade `sample_idx` y `alive_b`, y las filas cuentan para el tope de 4096;
+    - un salto de más de `JUMP_MAX_M` = 0,3 m entre `EEInit` y el tick 1 delata un desplazamiento del mod antes del checkpoint. La IA no recorre eso en un tick de unos 33 ms.
+  - **Modo de radio:** el oráculo usa el testigo y el censo en modo de radio. El modo mapa entero no entra en M1 (Q-02, §10).
+- **Ruido de la CE:**
+  - la partida corre con una copia de la misión con `db/globals.xml` en `ZombieMaxCount = 0` y `AnimalMaxCount = 0`, como recomienda F0.3;
+  - el testigo solo se abre alrededor de cada operación;
+  - `[verify F2 en partida]`: que esos `globals` corten la aparición de criaturas de la CE sin afectar a las que crea el producto por script, y cuánto loot se cuela. Lo mide la ventana de control de P1.
 - **Ajenos:** `per_spawn_raw`.
   - En el suelo, `foreign_ground`.
   - En el cargo, `foreign_in_container` con `target_net_id`, el `net_id` del contenedor sacado del censo.
@@ -311,7 +313,7 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
   | F2P-02 | A2: **cada una de las 33** nace a menos de 0,5 m de `(x_doc, surface_y, z_doc)` según el testigo.<br>**Criaturas (Q-01):** de `EEInit` al tick 1 no saltan más de `JUMP_MAX_M`, y el checkpoint que declara el mod está a menos de `JUMP_MAX_M` de la posición del tick 1; sin trayectoria, INCONCLUSO.<br>**Objetos:** siguen a menos de 0,5 m en el censo.<br>**Q-05:** en el censo posterior las 13 criaturas tienen `alive_b = 1` y `ai_agent_b = 1`. Con la vía (b) de Q9, el censo se toma después del plazo de `InitAIAgent` `[verify S-persist]` | testigo y censo |
   | F2P-03 | A2 (-), en P2n: el estímulo ocurrió (testigo o traza), la op quedó `parcial` o `fallida`, y el censo lo confirma | traza, API y censo |
   | F2P-04 | A2: en P2 hay **dos entregas** del mismo `(session, op_id)` y la segunda respuesta lleva `dup: true`, y no aparece ninguna entidad de más | traza y censo |
-  | F2P-05 | A3, en P3: tras el reset, las propias retenidas son solo los contenedores con algo ajeno; los ajenos, intactos en clase, pose y padre.<br>**Q-06:** las **tres** entidades de la escena 2, intactas antes y después, en identidad (`net_id`), clase, pose e inventario, también la que está dentro del contenedor de la escena 1.<br>La op, `parcial/contenido_ajeno`; el segundo reset, igual | censo, `per_transfer` y API |
+  | F2P-05 | A3, en P3: tras el reset, las propias retenidas son solo los contenedores con algo ajeno; los ajenos, intactos en clase, pose y padre.<br>**Q-06:** las **tres** entidades de la escena 2, intactas antes y después, en identidad (`net_id`), clase, pose e inventario.<br>La op, `parcial/contenido_ajeno`; el segundo reset, igual | censo y API |
   | F2P-06 | A3, en P3c: tras la limpieza, 0 propias vivas de la escena 1, y las tres de la escena 2 intactas (Q-06) | censo |
   | F2P-07 | A3, en P4b y P4c: nada de F2 reaparece, con reset y sin él, **y el control persistente reaparece**; si el control no reaparece, INCONCLUSO | censo y manifest |
   | F2P-08 | A4, en P4a: tras el reinicio del backend, reconciliación antes del apply; mismos conteos y posiciones; sin extras | traza y censo |
@@ -319,7 +321,7 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
   | F2P-10 | DP-6: cada borrado que el mod da por confirmado falta en el censo siguiente, dentro de lo cubierto; cada `delete_failed` sigue vivo. Informa del tick medido | log, censo y cobertura |
   | F2P-11 | El modo de censo y el testigo funcionan: hay filas, están los edificios de referencia de P1 (por clase y pose) y `surface_y_m` varía con la posición | censo y testigo |
   | F2P-12 | El testigo es fiable: en los **objetos** de P2, que no se mueven, su posición coincide con la del censo posterior a menos de 0,05 m `[verify F2 en partida]`. Si no, F2P-02 da INCONCLUSO para las criaturas, porque la posición de `EEInit` no sería la final | testigo y censo |
-  | F2P-13 | **Sin extras en todo el mapa (Q-02):** durante las ventanas de operación, el testigo en modo mapa entero no ve nacer ninguna entidad de las clases de la escena que no sea de las esperadas.<br>Un objeto de más → FALLA.<br>Una criatura de más fuera del área de la escena → INCONCLUSO, salvo que el manifest acredite la CE dinámica de criaturas apagada (requisito del entorno, a confirmar con F0.3); entonces, FALLA | testigo y manifest |
+  | F2P-13 | **Sin extras dentro de la cobertura:** durante las ventanas de operación, el testigo en modo de radio no ve nacer ninguna entidad de las clases de la escena que no case con una fila esperada (clase y posición a menos de 0,5 m).<br>Un objeto de más → FALLA.<br>Una criatura de más → FALLA si la ventana de control de P1 no tuvo criaturas, e INCONCLUSO si las tuvo.<br>**Alcance:** lo que nazca fuera de la cobertura no se ve en M1 (Q-02, §10) | testigo |
 
 - **Negativas contra la fabricación,** obligatorias, que dan FALLA o INCONCLUSO y nunca PASA:
   - filas sin respuesta cruda de la sonda que las respalde, o con trabajo, página, epoch o sello que no casan, o tomadas antes del efecto (frescura);
@@ -341,7 +343,7 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
   - criatura desplazada por el mod entre `EEInit` y el checkpoint, con un salto mayor que `JUMP_MAX_M` en el tick 1 y un checkpoint inventado en su sitio (Q-01);
   - criatura con `alive_b = 0` o `ai_agent_b = 0` en el censo posterior (Q-05);
   - una de las entidades de la escena 2 que están en el suelo, borrada por el reset (Q-06);
-  - un extra nacido fuera de los discos de censo, que solo ve el testigo en modo mapa entero (Q-02);
+  - un extra de una clase de la escena nacido dentro de la cobertura, en un sitio que no es del documento (F2P-13);
   - borrado «confirmado» que sigue vivo;
   - **copia de las lecturas del mod con una perturbación por debajo de la tolerancia** (P-10);
   - una sola entrega en P2;
@@ -416,6 +418,9 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
 - **Cobertura (P-05):** las criaturas que se alejan pueden dejar la comprobación en INCONCLUSO. Es lo honesto; los discos extra lo reducen.
 - **P2n (P-04):** puede que ningún estímulo natural haga fallar al motor. Entonces la negativa del producto queda INCONCLUSA y se queda con los mutantes y con lo acreditado offline (F2b F2-A2).
 - **El testigo de creación (P-03) y el control persistente (P-06)** dependen de F0.3. Sin ellos, T2 no se congela y P4b/P4c dan INCONCLUSO.
+- **Limitación conocida (Q-02), para después de M1:** «sin extras» se acredita **dentro de la cobertura** del censo y del testigo, en modo de radio. Un huérfano nacido fuera de esa cobertura no se ve en M1. El testigo de mapa entero quedó fuera por decisión de la principal: era MAY, no BLOQ, y cada pieza de Enforce en la sonda cuesta una ronda de Sol, partida y riesgo.
+- **Limitación conocida (Q-03), para después de M1:** en partida no se mete un objeto **registrado** de la escena 2 dentro de un contenedor de la escena 1, porque haría falta un traslado por `net_id` (`per_transfer`) que no entra en M1. Esa propiedad (P-02: lo ajeno es lo que está fuera del conjunto borrable de la operación) se acredita offline (F2b F2-A3 e), y en el código Enforce la cubren la revisión de Sol y la del Experto (§9.3). En partida se cubren el ajeno no registrado dentro de `obj-17` y las tres entidades de la escena 2 en el suelo.
+- **`globals` a 0:** no está medido si `ZombieMaxCount = 0` o `AnimalMaxCount = 0` afectan a las criaturas que crea el producto por script. Si F2P-02 encuentra criaturas muertas o sin IA solo con esos `globals`, se repite P2 con los `globals` originales y se anota.
 - **TTL:** el plazo cuenta desde el envío del poll (F1b-peers). Un apply de 33 son unos 10 ticks `[verify S-perf]`.
 - **Una orden a la vez en el mod:** las lecturas no se entregan durante un apply. Es coherente con el backend, porque la guarda «en vuelo» de C-01 sigue siendo válida.
 - **`registry_sha256` opaco (DP-3):** no se puede verificar de forma independiente. Nadie lo consume.
@@ -431,12 +436,12 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
      - Los dos los escribe F0.3 (Claude), con Sol.
      - El testigo lleva `super.EEInit()` primero, está apagado por defecto (con un bool estático), tiene tope de filas por ventana (`failed/rows_cap`), `sk witness_tag` y una partida diag corta con el testigo encendido y apagado.
 
-   **Pedido a F0.3 tras Sol r2** (§5.3), pendiente de que lo confirme por escrito:
-   - **(e)** trayectoria del testigo, `witness_follow_ticks` (Q-01);
-   - **(f)** testigo en modo mapa entero, `all_map_b` (Q-02), y si la partida puede correr con la CE dinámica de criaturas apagada;
-   - **(g)** `per_transfer` por `net_id` (Q-03).
+   **Tras Sol r2** (confirmado por F0.3 por escrito y recortado por la principal):
+   - **(e)** trayectoria del testigo, con `witness_follow_ticks` entre 1 y 5 y 3 por defecto: **entra** en el PR de F0.3 (Q-01, que era BLOQ);
+   - **(f)** testigo en modo mapa entero (Q-02) y **(g)** `per_transfer` (Q-03): **no entran en M1**. Eran MAY, y quedan como limitación conocida (§10);
+   - **ruido de la CE:** copia de la misión con `ZombieMaxCount = 0` y `AnimalMaxCount = 0`, más la ventana de control de P1, como recomienda F0.3.
 
-   El oráculo (T2) arranca cuando F0.3 confirme por escrito (e), (f) y (g). Si alguna no llega, su comprobación da INCONCLUSO y nunca PASA (F2P-02 en criaturas, F2P-13, F2P-05/06 en la entidad trasladada). La partida (T4) espera a que todo esté en `main`.
+   El oráculo (T2) se escribe ya contra estas interfaces. La partida (T4) espera a que estén en `main`.
 3. **F1b-peers:** está en el PR #19 (`02fb06e`), con el mod idéntico a `525da99` (`git diff` vacío, comprobado el 15-nov). Los ganchos de §4.2 se ponen en T3, cuando F1b-peers ya esté en `main`, así que no hay edición concurrente.
 
 ## 12. Registro de cambios
@@ -476,3 +481,10 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
   | P-09 (parcial) | la comprobación estática de storage cubre todo `DayZSandbox/scripts/**` (§5.6) |
 
   Lo que depende de F0.3 queda como requisito de interfaz (§11.2), con la regla de INCONCLUSO si falta.
+- v1.3.1 (2026-11-15): **arbitraje tras el congelado, por la decisión de la sesión principal sobre la sonda.** Sustituye lo de la v1.3 para Q-02 y Q-03:
+  - **Q-01:** la trayectoria se queda, confirmada por F0.3: filas `sample_idx`, K en [1, 5] y 3 por defecto, más `alive_b` (§5.3).
+  - **Q-02** (era MAY): fuera el modo mapa entero. F2P-13 queda en «sin extras dentro de la cobertura», en modo de radio, y lo de fuera es limitación conocida para después de M1 (§10).
+  - **Q-03** (era MAY): fuera `per_transfer` y el estímulo «objeto registrado de la escena 2 dentro de un contenedor de la escena 1». P-02 se acredita offline (F2b F2-A3 e) y con la revisión de código; queda como limitación conocida para después de M1 (§10).
+  - **El ruido de la CE:** `globals` a 0 y ventana de control en P1 (§5.2, §5.3). F2P-13 la usa para decidir entre FALLA e INCONCLUSO en las criaturas.
+
+  Nada de §3 (el contrato v1.3, T1) cambia.
