@@ -246,7 +246,8 @@ class Case:
         }
         return oid
 
-    def add_job(self, name, verb, args, rows, ncols, scols, resource, start_ms, end_ms):
+    def add_job(self, name, verb, args, rows, ncols, scols, resource, start_ms, end_ms,
+                start_status="done", start_reason=""):
         oid = self._id()
         pages_n = max(1, math.ceil(len(rows) / 4)) if rows else 1
         page_ids = [self._id() for _ in range(pages_n)]
@@ -261,6 +262,8 @@ class Case:
             "start_ms": start_ms,
             "end_ms": end_ms,
             "verb": verb,
+            "start_status": start_status,
+            "start_reason": start_reason,
         }
         return self.jobs[name]
 
@@ -908,7 +911,9 @@ class Case:
                            "args": spec["args"], "t_ms": start})
             bridge.append({"ev": "result", "http": 200, "op_id": oid, "peer": "server",
                            "t_ms": start + 0.5,
-                           "result": {"status": "done", "reason": "", "read": _read(start_payload)}})
+                           "result": {"status": spec.get("start_status", "done"),
+                                      "reason": spec.get("start_reason", ""),
+                                      "read": _read(start_payload)}})
             pages_n = max(1, math.ceil(len(rows) / 4)) if rows else 1
             for pno, pid in enumerate(spec["page_ids"]):
                 chunk = rows[pno * 4:(pno + 1) * 4]
@@ -997,6 +1002,68 @@ def _check(verdict, cid):
     return next(c for c in verdict["checks"] if c["id"] == cid)
 
 
+def _set_scalar_num(payload, key, value):
+    nk = list(payload["nk"])
+    nv = list(payload["nv"])
+    if key in nk:
+        nv[nk.index(key)] = value
+    else:
+        nk.append(key)
+        nv.append(value)
+    payload["nk"] = nk
+    payload["nv"] = nv
+
+
+def _set_scalar_str(payload, key, value):
+    sk = list(payload["sk"])
+    sv = list(payload["sv"])
+    if key in sk:
+        sv[sk.index(key)] = value
+    else:
+        sk.append(key)
+        sv.append(value)
+    payload["sk"] = sk
+    payload["sv"] = sv
+
+
+def _row(payload, col, row_index, value):
+    _set_cell(payload, col, row_index, value)
+
+
+def _bad_fixtures(tmpdir, *, emote_key="nod", emote_id=7):
+    dst = Path(tmpdir) / "fixtures"
+    shutil.copytree(FIXTURES_DIR, dst)
+    emotes = gate_core.read_json(dst / "s3_emotes.json")
+    for entry in emotes["catalog"]:
+        if entry["emote_key"] == emote_key:
+            entry["emote_id"] = emote_id
+    gate_core.write_json(dst / "s3_emotes.json", emotes)
+    return dst
+
+
+class S3EvidenceTestBase(unittest.TestCase):
+    """Repositorio git sintetico y evaluacion de una parte construida en memoria."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root, self.head, self.core, self.exp = _make_repo(self._tmp.name)
+
+    def case(self, **kwargs):
+        return _new_case(self.root, self.head, self.core, self.exp, **kwargs)
+
+    def evaluate(self, case, part_name="part", fixtures_dir=None):
+        part = Path(self.root).parent / part_name
+        case.write(part)
+        return s3_eval.evaluate(part, repo_root=self.root, fixtures_dir=fixtures_dir)
+
+    def assert_not_pass(self, verdict, cid, statuses=("fail",)):
+        chk = _check(verdict, cid)
+        self.assertIn(chk["status"], statuses, chk)
+        self.assertNotEqual(verdict["exit_code"], 0, verdict)
+        return chk
+
+
 class S3HealthyRunTests(unittest.TestCase):
     def test_healthy_full_run_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1011,6 +1078,429 @@ class S3HealthyRunTests(unittest.TestCase):
             self.assertEqual(verdict["c4_m1"], "PASA")
             self.assertEqual(verdict["c4_m2"], "pendiente")
             self.assertEqual(verdict["c4_status"], "m1=PASA; m2=pendiente")
+
+
+class S3CheckNegativeTests(S3EvidenceTestBase):
+    """Una negativa por check: la corrida sana con una sola alteracion que lo viola."""
+
+    def test_neg_s3_00_observed_adapter_stamp(self):
+        case = self.case()
+        case.build()
+        _set_scalar_str(case.ops["s3_00_observe"]["payload"], "adapter_ver",
+                        "dsbx-qa-exp1+deadbeefdeadbeef")
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-00")
+        self.assertIn("adapter_ver", chk["detail"])
+
+    def test_neg_s3_01_pre_gear_sweep_incomplete(self):
+        case = self.case()
+        case.build()
+        _set_scalar_num(case.ops["s3_01_apply1"]["payload"], "pre_gear_cleared_n", 0.0)
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-01")
+        self.assertIn("pre_gear_sweep", chk["detail"])
+
+    def test_neg_s3_02_initial_distance_not_twenty(self):
+        case = self.case()
+        case.build()
+        case.jobs["s3_02_once"]["rows"][0]["wp_x_m"] = 4541.0
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-02")
+        self.assertIn("initial_distance", chk["detail"])
+
+    def test_neg_s3_03_loop_window_short(self):
+        case = self.case()
+        case.build()
+        last = case.jobs["s3_03_loop"]["rows"][-1]
+        last["dtsum_ms"] = 59000.0
+        last["tick_ms"] = 59000.0
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-03")
+        self.assertIn("loop_window_short", chk["detail"])
+
+    def test_neg_s3_04_wrong_observed_emote(self):
+        case = self.case()
+        case.build()
+        for row in case.jobs["s3_04_nod"]["rows"]:
+            row["observed_emote_id"] = 59.0
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-04")
+        self.assertIn("nod:never_started", chk["detail"])
+
+    def test_neg_s3_05_roam_leaves_radius(self):
+        case = self.case()
+        case.build()
+        row = case.jobs["s3_05_urban"]["rows"][2]
+        row["x_m"] = 4616.0
+        row["z_m"] = 10300.0
+        row["dist_center_m"] = 16.0
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-05")
+        self.assertIn("outside_radius", chk["detail"])
+
+    def test_neg_s3_06_unreachable_marked_as_reached(self):
+        case = self.case()
+        case.build()
+        case.jobs["s3_06_unreachable"]["rows"][-1]["mark_state"] = "en_marca"
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-06")
+        self.assertIn("en_marca", chk["detail"])
+
+    def test_neg_s3_07_combat_emote_terminated(self):
+        case = self.case()
+        case.build()
+        case.jobs["s3_07_combat"]["rows"][0]["emote_state"] = "terminado"
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-07")
+        self.assertIn("terminated_under_combat", chk["detail"])
+
+    def test_neg_s3_08_cancellation_only_as_label(self):
+        case = self.case()
+        case.build()
+        for row in case.jobs["s3_cancel_before"]["rows"] + case.jobs["s3_post_before"]["rows"]:
+            row["emote_state"] = "agotado"
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-08")
+        self.assertIn("cancel_before_start:not_canceled", chk["detail"])
+
+    def test_neg_s3_09_drain_over_limit(self):
+        case = self.case()
+        case.build()
+        start = case.jobs["s3_cancel_after"]["start_ms"]
+        case.jobs["s3_cancel_after"]["rows"][4]["cleanup_tick_ms"] = start + 3500.0
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-09")
+        self.assertIn("cancel_after_start:drain_too_long", chk["detail"])
+
+    def test_neg_s3_10_fixture_contradicts_catalog(self):
+        case = self.case()
+        case.build()
+        bad = _bad_fixtures(self._tmp.name, emote_key="nod", emote_id=7)
+        verdict = self.evaluate(case, fixtures_dir=bad)
+        chk = self.assert_not_pass(verdict, "S3-10")
+        self.assertIn("emote_catalog_mismatch", chk["detail"])
+
+    def test_neg_s3_11_backend_still_available_without_expansion(self):
+        case = self.case()
+        case.build()
+        _set_scalar_num(case.ops["s3_11_obs"]["payload"], "backend_available_b", 1.0)
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-11")
+        self.assertIn("backend_still_available", chk["detail"])
+
+    def test_neg_s3_12_effect_before_reject(self):
+        case = self.case()
+        case.build()
+        _set_scalar_num(case.ops["s3_12_post_capability_lost"]["payload"],
+                        "last_op_spawned_props_ever_n", 2.0)
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-12")
+        self.assertIn("counter_last_op_spawned_props_ever_n", chk["detail"])
+
+
+class S3SolBlockingNegativeTests(S3EvidenceTestBase):
+    """Una negativa por cada BLOQ de Sol: reproduce la fabricacion y exige FALLA/INCONCLUSO."""
+
+    def test_neg_sol01_scene_without_live_entities(self):
+        case = self.case()
+        case.build()
+        _set_scalar_num(case.ops["s3_01_obs1"]["payload"], "world_props_n", 0.0)
+        _set_scalar_num(case.ops["s3_01_obs1"]["payload"], "world_actors_n", 0.0)
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-01")
+        self.assertIn("world_counts_before_reset", chk["detail"])
+
+    def test_neg_sol02_invented_motion_and_duration(self):
+        case = self.case()
+        case.build()
+        for row in case.jobs["s3_02_once"]["rows"]:
+            row["dtsum_ms"] = 500.0
+        for row in case.jobs["s3_03_hold"]["rows"]:
+            row["dtsum_ms"] = 5000.0
+        verdict = self.evaluate(case)
+        c02 = self.assert_not_pass(verdict, "S3-02")
+        c03 = self.assert_not_pass(verdict, "S3-03")
+        self.assertIn("dtsum_not_growing", c02["detail"])
+        self.assertIn("hold_dtsum_not_growing", c03["detail"])
+
+    def test_neg_sol03_labels_instead_of_native_events(self):
+        case = self.case()
+        case.build()
+        for row in case.jobs["s3_04_nod"]["rows"]:
+            row["cb_inst_id"] = 10.0
+            row["observed_emote_id"] = 58.0
+            row["anim_cmd_id"] = 1109.0
+            row["anim_state_n"] = 7.0
+        case.jobs["s3_cancel_after"]["rows"][3].update(
+            {"raw_p_canceled_b": 0.0, "observed_end_cause": "cb_normal", "emote_state": "terminado"}
+        )
+        verdict = self.evaluate(case)
+        c04 = self.assert_not_pass(verdict, "S3-04")
+        c08 = self.assert_not_pass(verdict, "S3-08")
+        self.assertIn("nod:never_started", c04["detail"])
+        self.assertIn("cancel_after_start", c08["detail"])
+
+    def test_neg_sol04_binding_negatives_omitted(self):
+        case = self.case()
+        case.build(checks={"S3-00"})
+        verdict = self.evaluate(case)
+        for cid in ("S3-06", "S3-08", "S3-12"):
+            chk = self.assert_not_pass(verdict, cid, ("missing",))
+            self.assertIn("no_scenario", chk["detail"])
+        self.assertEqual(verdict["exit_code"], 2, verdict)
+
+    def test_neg_sol05_injection_absent_from_evidence(self):
+        details = []
+        for label in (wire.QA_FAULT_NONE, "wrong_emote_played", "fault:wrong_emote_played"):
+            case = self.case()
+            case.build()
+            for row in case.jobs["s3_04_nod"]["rows"]:
+                row["observed_emote_id"] = 59.0
+            _set_arg_str(case.jobs["s3_04_nod"]["args"], "qa_fault", label)
+            verdict = self.evaluate(case)
+            chk = self.assert_not_pass(verdict, "S3-04")
+            self.assertIn("nod:never_started", chk["detail"])
+            details.append(chk["detail"])
+        self.assertEqual(len(set(details)), 1, details)
+
+    def test_neg_sol06_backend_not_observable(self):
+        case = self.case()
+        case.build()
+        _set_scalar_num(case.ops["s3_00_observe"]["payload"], "backend_available_b", 0.0)
+        verdict = self.evaluate(case)
+        chk = self.assert_not_pass(verdict, "S3-00")
+        self.assertIn("backend_unavailable", chk["detail"])
+
+    def test_neg_sol07_expected_stamp_instead_of_observed(self):
+        diag = self.case(build="diag")
+        diag.build()
+        verdict = self.evaluate(diag)
+        self.assertEqual(verdict["exit_code"], 2, verdict)
+        self.assertIn("artifact_unverified", verdict["reasons"])
+
+        case = self.case()
+        case.build()
+        _set_scalar_str(case.ops["s3_00_observe"]["payload"], "adapter_ver",
+                        f"dsbx-qa-exp1+{'0' * 16}")
+        verdict = self.evaluate(case, part_name="part-stamp")
+        chk = self.assert_not_pass(verdict, "S3-00")
+        self.assertIn("adapter_ver", chk["detail"])
+
+    def test_neg_sol08_e1_without_cleanup(self):
+        case = self.case()
+        case.build(checks={"S3-00", "S3-09"})
+        for row in case.jobs["s3_cancel_after"]["rows"] + case.jobs["s3_post_after"]["rows"]:
+            row["cleanup_tick_ms"] = 0.0
+        verdict = self.evaluate(case, part_name="part-no-cleanup")
+        chk = self.assert_not_pass(verdict, "S3-09", ("missing",))
+        self.assertIn("cancel_after_start:no_cancel_or_cleanup", chk["detail"])
+        self.assertEqual(verdict["exit_code"], 2, verdict)
+
+        case = self.case()
+        case.build(checks={"S3-00", "S3-09"})
+        case.jobs["s3_cancel_after"]["start_status"] = "rejected"
+        case.jobs["s3_cancel_after"]["start_reason"] = "lease_expired"
+        verdict = self.evaluate(case, part_name="part-lease-expired")
+        chk = self.assert_not_pass(verdict, "S3-09", ("missing",))
+        self.assertIn("status:rejected", chk["detail"])
+        self.assertEqual(verdict["exit_code"], 2, verdict)
+
+    def test_neg_sol09_two_jobs_on_same_actor(self):
+        case = self.case()
+        case.build(checks={"S3-00", "S3-02", "S3-03"})
+        s2 = case.jobs["s3_02_once"]
+        hold = case.jobs["s3_03_hold"]
+        hold["start_ms"] = s2["start_ms"] + 1000.0
+        hold["end_ms"] = s2["start_ms"] + 4000.0
+        verdict = self.evaluate(case)
+        self.assertEqual(verdict["exit_code"], 2, verdict)
+        self.assertIn("actor_resource_overlap", verdict["reasons"])
+
+    def test_neg_sol10_fixture_contradicts_approved_catalog(self):
+        case = self.case()
+        case.build()
+        bad = _bad_fixtures(self._tmp.name, emote_key="shake", emote_id=41)
+        verdict = self.evaluate(case, part_name="part-bad-fixture", fixtures_dir=bad)
+        chk = self.assert_not_pass(verdict, "S3-10")
+        self.assertIn("emote_catalog_mismatch", chk["detail"])
+
+
+def _mut_roam_out_of_radius(case):
+    row = case.jobs["s3_05_urban"]["rows"][2]
+    row.update({"x_m": 4616.0, "z_m": 10300.0, "dist_center_m": 16.0})
+
+
+def _mut_roam_stand_still(case):
+    for row in case.jobs["s3_05_urban"]["rows"]:
+        row["path_len_m"] = 0.0
+        row["dest_reached_n"] = 0.0
+
+
+def _mut_fsm_is_final_as_reached(case):
+    case.jobs["s3_06_unreachable"]["rows"][-1]["mark_state"] = "en_marca"
+
+
+def _mut_wrong_emote_cmd(case):
+    for row in case.jobs["s3_04_nod"]["rows"]:
+        row["observed_emote_id"] = 59.0
+
+
+def _mut_stale_callback_contamination(case):
+    for row in case.jobs["s3_stale"]["rows"]:
+        row["cb_inst_id"] = 5.0
+        row["max_cb_inst_at_req_n"] = 5.0
+        row["observed_emote_id"] = 58.0
+        row["anim_cmd_id"] = 1109.0
+        row["anim_state_n"] = 7.0
+    case.jobs["s3_stale"]["rows"][-1]["emote_state"] = "terminado"
+
+
+def _mut_canceled_emote_as_done(case):
+    case.jobs["s3_cancel_after"]["rows"][3].update(
+        {"raw_p_canceled_b": 0.0, "observed_end_cause": "cb_normal", "emote_state": "terminado"}
+    )
+
+
+def _mut_late_emote_after_timeout(case):
+    for row in case.jobs["s3_post_never"]["rows"]:
+        row["exp_pending_id"] = 58.0
+        row["post_cleanup_cb_count_n"] = 1.0
+
+
+def _mut_no_clear_on_stop_after_start(case):
+    for row in case.jobs["s3_post_after"]["rows"]:
+        row["exp_pending_id"] = 58.0
+
+
+def _mut_combat_emote_as_done(case):
+    case.jobs["s3_07_combat"]["rows"][0]["emote_state"] = "terminado"
+
+
+def _mut_extra_default_gear(case):
+    _set_scalar_num(case.ops["s3_01_apply1"]["payload"], "pre_gear_cleared_n", 0.0)
+
+
+def _mut_props_before_actor_check(case):
+    payload = case.ops["s3_12_post_capability_lost"]["payload"]
+    _set_scalar_num(payload, "last_op_spawned_props_ever_n", 2.0)
+    _set_scalar_num(payload, "last_op_deleted_objects_ever_n", 2.0)
+    _set_scalar_num(payload, "last_op_env_writes_ever_n", 1.0)
+
+
+_MUTATIONS = {
+    "roam_out_of_radius": _mut_roam_out_of_radius,
+    "roam_stand_still": _mut_roam_stand_still,
+    "fsm_is_final_as_reached": _mut_fsm_is_final_as_reached,
+    "wrong_emote_cmd": _mut_wrong_emote_cmd,
+    "stale_callback_contamination": _mut_stale_callback_contamination,
+    "canceled_emote_as_done": _mut_canceled_emote_as_done,
+    "late_emote_after_timeout": _mut_late_emote_after_timeout,
+    "no_clear_on_stop_after_start": _mut_no_clear_on_stop_after_start,
+    "combat_emote_as_done": _mut_combat_emote_as_done,
+    "extra_default_gear": _mut_extra_default_gear,
+    "props_before_actor_check": _mut_props_before_actor_check,
+}
+
+
+class S3MutantTests(S3EvidenceTestBase):
+    """Cada mutante de EXPECTED_MUTANTS sale exit 1 con sus must_fail_checks en fail."""
+
+    def test_expected_mutants_fail_only_their_checks(self):
+        self.assertEqual(set(_MUTATIONS), set(s3_mutants.EXPECTED_MUTANTS))
+        for name, spec in s3_mutants.EXPECTED_MUTANTS.items():
+            with self.subTest(mutant=name):
+                self.assertEqual(spec["expected_exit_code"], 1)
+                must = list(spec["must_fail_checks"])
+                self.assertEqual(len(must), 1, spec)
+                case = self.case()
+                case.build(checks={"S3-00", must[0]})
+                _MUTATIONS[name](case)
+                verdict = self.evaluate(case, part_name=f"mut-{name}")
+                self.assertEqual(verdict["exit_code"], spec["expected_exit_code"], verdict)
+                self.assertEqual(verdict["verdict"], "FALLA", verdict)
+                for cid in must:
+                    self.assertEqual(_check(verdict, cid)["status"], "fail",
+                                     _check(verdict, cid))
+                for cid, allowed in spec["allowed_non_pass"].items():
+                    self.assertIn(_check(verdict, cid)["status"], allowed,
+                                  f"{name}:{cid}")
+                self.assertEqual(_check(verdict, "S3-00")["status"], "pass", name)
+                self.assertEqual(_check(verdict, "S3-10")["status"], "pass", name)
+
+
+class S3E2ETests(unittest.TestCase):
+    """Extremo a extremo: el gate real produce evidencias que el evaluador reevalua."""
+
+    def _gate(self, tmp, *extra):
+        evidence = Path(tmp) / "evidence"
+        cmd = [sys.executable, str(QA_DIR / "m1_gate.py"), "spike", "S3",
+               "--both", "--build", "offline", "--evidence", str(evidence), *extra]
+        proc = subprocess.run(cmd, cwd=DEV_ROOT, capture_output=True, text=True,
+                              encoding="utf-8", timeout=600)
+        return proc, evidence
+
+    def _parts(self, evidence):
+        if not evidence.is_dir():
+            return []
+        return [p for p in sorted(evidence.iterdir())
+                if p.is_dir() and (p / "manifest.json").is_file() and (p / "samples").is_dir()]
+
+    def _assert_orders_valid(self, part):
+        rows = f03_common.read_jsonl(part / "samples" / "bridge.jsonl")
+        hellos = {}
+        for ev in rows:
+            if ev.get("ev") == "hello" and ev.get("http") == 200:
+                hellos.setdefault(ev.get("peer"), set()).add(ev.get("inst"))
+        manifest = gate_core.read_json(part / "manifest.json")
+        ttl = (manifest.get("params") or {}).get("ttl_ms")
+        self.assertIsInstance(ttl, int, part)
+        self.assertGreater(ttl, 0, part)
+        enq = [ev for ev in rows if ev.get("ev") == "enq"]
+        self.assertTrue(enq, part)
+        delivered = {}
+        for ev in rows:
+            if ev.get("ev") in ("deliver", "expire") and isinstance(ev.get("op_id"), str):
+                delivered.setdefault(ev["op_id"], []).append(ev)
+        for ev in enq:
+            self.assertIsInstance(ev.get("inst"), str, ev)
+            self.assertTrue(ev["inst"], ev)
+            self.assertIn(ev["inst"], hellos.get(ev.get("peer"), set()), ev)
+            self.assertIsInstance(ev.get("t_ms"), (int, float), ev)
+            self.assertGreater(ev["t_ms"], 0, ev)
+            args = ev.get("args") or {}
+            sk = list(args.get("sk") or [])
+            sv = list(args.get("sv") or [])
+            self.assertIn("qa_fault", sk, ev)
+            qf = sv[sk.index("qa_fault")]
+            self.assertEqual(len(qf), wire.QA_FAULT_LEN, ev)
+            self.assertTrue(qf.isascii(), ev)
+            self.assertIn(ev.get("op_id"), delivered, ev)
+
+    def test_e2e_full_run_reevaluate_and_orders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, evidence = self._gate(tmp)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            parts = self._parts(evidence)
+            self.assertTrue(parts, "el gate no dejo ninguna parte evaluable")
+            self.assertIn("run", [p.name for p in parts])
+            for part in parts:
+                stored = gate_core.read_json(part / "verdict.json")
+                fresh = s3_eval.evaluate(part, repo_root=REPO_TOP)
+                self.assertEqual(fresh["exit_code"], stored["exit_code"], part.name)
+                self.assertEqual(fresh["verdict"], stored["verdict"], part.name)
+                self._assert_orders_valid(part)
+
+    def test_e2e_evaluate_only_preserves_verdict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, evidence = self._gate(tmp)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            parts = self._parts(evidence)
+            self.assertTrue(parts, "el gate no dejo ninguna parte evaluable")
+            before = {p.name: (p / "verdict.json").read_bytes() for p in parts}
+            proc, _ = self._gate(tmp, "--evaluate-only")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            for part in parts:
+                self.assertEqual((part / "verdict.json").read_bytes(), before[part.name], part.name)
 
 
 if __name__ == "__main__":

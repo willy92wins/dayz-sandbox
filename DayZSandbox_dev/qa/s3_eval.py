@@ -838,6 +838,8 @@ def _eval_s3_04(scen_rows, idx, fixtures):
         return _miss("S3-04", "fixture_unavailable")
 
     rows = [r for r in scen_rows if r.get("check") == "S3-04" and r.get("kind") == "emote"]
+    if not rows:
+        return _miss("S3-04", "no_scenario")
     by_key = {}
     for row in rows:
         key = row.get("emote_key")
