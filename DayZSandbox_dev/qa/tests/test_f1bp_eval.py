@@ -377,7 +377,11 @@ def _g5(
     uninjected=False,
     client_lost=True,
     b2500_session="s",
+    window_early=False,
+    window_rule_ids=False,
 ):
+    """`window_early`: el disparo (t_start_ms) cae justo antes del caso y la ventana se escribe despues,
+    como en partida (H-12). `window_rule_ids`: las ventanas llevan rule_id y se escriben todas al final."""
     root = _base(root, ["G5"])
     ids = [f"r_{name}_{peer}" for name, peer in G5_CASES]
     events = [{"t_ms": 100.0, "ev": "start", "scenario": "G5"}]
@@ -397,8 +401,13 @@ def _g5(
         injected = rule if not uninjected else None
         if name in ("a2500", "a4500"):
             hold = 2500 if name == "a2500" else 4500
-            start = base + 10
-            events.append({"t_ms": start, "ev": "window", "t_start_ms": start, "t_end_ms": start + hold})
+            start = base - 0.5 if window_early else base + 10
+            window = {"t_ms": base + 50 if window_early else start, "ev": "window",
+                      "t_start_ms": start, "t_end_ms": start + hold}
+            if window_rule_ids:
+                window["rule_id"] = rule
+                window["t_ms"] = 900000.0 + index
+            events.append(window)
             if name == "a2500" and filler:
                 # Las unicas respuestas de P dejan un hueco de 3200 ms; las del canal R lo rellenan.
                 proxy += [
@@ -1198,6 +1207,18 @@ class TestG4(unittest.TestCase):
 
 
 class TestG5(unittest.TestCase):
+    def test_h12_disparo_justo_antes_del_caso(self):
+        # Partida diag del 15-nov: el disparo (t_start_ms) cae fracciones de ms antes del case, y
+        # emparejar por t_start_ms le daba a cada a2500 la ventana del caso siguiente.
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = EVAL.evaluate(_g5(tmp, window_early=True))
+            self.assertEqual(verdict["rows"]["G5"]["verdict"], "PASA", verdict["rows"]["G5"].get("reason"))
+
+    def test_h12_ventanas_con_rule_id_se_emparejan_por_regla(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = EVAL.evaluate(_g5(tmp, window_rule_ids=True))
+            self.assertEqual(verdict["rows"]["G5"]["verdict"], "PASA", verdict["rows"]["G5"].get("reason"))
+
     def test_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             verdict = EVAL.evaluate(_g5(tmp))

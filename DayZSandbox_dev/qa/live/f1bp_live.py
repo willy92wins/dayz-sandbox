@@ -1613,7 +1613,8 @@ class LiveRun:
                 problem = "%s_%s: regla sin disparar" % (name, peer)
             else:
                 t_start = float(fired["t_done_ms"])
-                self.writer.emit("window", t_start_ms=t_start, t_end_ms=t_start + ms)
+                # rule_id: el evaluador empareja ventana y caso por la regla (v1.6, H-12).
+                self.writer.emit("window", t_start_ms=t_start, t_end_ms=t_start + ms, rule_id=rule_id)
                 self._g56_sleep_until(t_start + ms + 3000.0)
         finally:
             self._g56_clear_rules()
@@ -1644,7 +1645,7 @@ class LiveRun:
                 problem = "%s: regla sin disparar" % name
             else:
                 t_start = float(fired["t_done_ms"])
-                self.writer.emit("window", t_start_ms=t_start, t_end_ms=t_start + 6000.0)
+                self.writer.emit("window", t_start_ms=t_start, t_end_ms=t_start + 6000.0, rule_id=rule_id)
                 if op_id:
                     states = {"observado", "fallido"} if gap == 2500 else {"parcial", "fallido", "observado"}
                     self.wait_op(op_id, states, 60.0)

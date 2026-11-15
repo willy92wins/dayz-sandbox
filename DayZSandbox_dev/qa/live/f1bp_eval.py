@@ -906,23 +906,38 @@ def _g4(ctx):
 P_ROUTES = ("hello", "poll")  # R11: solo las rutas de P renuevan el lease
 
 
-def _assign_windows(cases, windows):
-    """Una ventana distinta para cada caso: la mas cercana sin usar (prefiere las que empiezan despues)."""
+def _assign_windows(cases, windows, all_cases=None):
+    """Una ventana distinta para cada caso (brief v1.6, H-12).
+
+    Si la ventana lleva `rule_id`, va con el caso de esa regla. Si no, es la primera sin usar que se
+    escribio (su `t_ms`, no su `t_start_ms`) entre el caso y el siguiente: el disparo puede ocurrir antes
+    de que el caso se escriba, asi que comparar `t_start_ms` con el caso emparejaba con la ventana del
+    caso siguiente (partida diag del 15-nov, G5 a).
+    """
+    order = sorted(
+        (c for c in (all_cases if all_cases is not None else cases) if _num(c.get("t_ms"))),
+        key=lambda c: c["t_ms"],
+    )
     used = set()
     assigned = {}
     for case in cases:
         moment = case.get("t_ms")
-        best = None
+        if not _num(moment):
+            continue
+        rule = case.get("rule_id")
+        later = [c["t_ms"] for c in order if c["t_ms"] > moment]
+        limit = min(later) if later else math.inf
         for index, window in enumerate(windows):
-            start = window.get("t_start_ms")
-            if index in used or not _num(start) or not _num(moment):
+            if index in used:
                 continue
-            key = (start < moment, abs(start - moment))
-            if best is None or key < best[0]:
-                best = (key, index)
-        if best is not None:
-            used.add(best[1])
-            assigned[id(case)] = windows[best[1]]
+            if window.get("rule_id") is not None:
+                if window.get("rule_id") != rule:
+                    continue
+            elif not (_num(window.get("t_ms")) and moment <= window["t_ms"] < limit):
+                continue
+            used.add(index)
+            assigned[id(case)] = window
+            break
     return assigned
 
 
@@ -961,6 +976,7 @@ def _g5(ctx):
     windows = _assign_windows(
         [case for case in cases if case.get("name") in ("a2500", "a4500")],
         _events(ctx, "window"),
+        all_cases=cases,
     )
     anchors = [case.get("t_ms") for case in cases if _num(case.get("t_ms"))]
     effects = _effects(ctx)

@@ -300,3 +300,8 @@ Cada tanda trabaja en una copia del commit congelado. El orquestador revisa, cor
 - **H-10:** la regla `resp_has_op` de G5 b se disparó con `rd-4`, la lectura interna con que el backend reconcilia tras un hello, y no con la orden del caso. El corte empezó antes de entregarla, y la orden acabó en `conexion_perdida`. Corregido con R19, el prefijo `op-`.
 - **H-11:** las recuperaciones que fallaron acabaron en `fallido/conexion_perdida`. Se encolaron mientras el servidor volvía a presentarse: tras un lease vencido, o tras un paro del servidor de ~1,7 s después de a2500, con `clock` y `lease lost` en el mismo tick. El bridge falla lo pendiente cuando cambia la `conn` (§2.5.3). Corregido con R20.
 - **G6:** su INCONCLUSO es Z-07. La línea de `g6_deliver` llevaba la versión de recepción (67) y no la de la regla (68). La pausa en sí fue válida: suspensión 73 ms después de la entrega, 2156 ms de pausa y el plazo `D` dentro.
+
+**H-12, emparejar ventana y caso en G5 (partida diag v1.6, `3806133`), arbitraje del orquestador:**
+- **El problema:** el disparo de una regla de G5 a puede caer fracciones de milisegundo antes de que se escriba su `case`. El evaluador emparejaba por `t_start_ms` y prefería las ventanas posteriores al caso, así que daba a cada a2500 la ventana del a4500 siguiente. Salía «hueco 4501» en a2500 y «sin lease lost» en a4500.
+- **El arbitraje:** la ventana lleva el `rule_id` de su regla y se empareja por él. Si no lo lleva, va con el caso entre cuyo `t_ms` y el del caso siguiente se escribió la ventana.
+- **Con eso, la partida v1.6 tiene las ocho filas diag en PASA**, G5 incluida: hueco máximo de 2500/2501 ms y `lease lost` en a4500 con la edad en rango.
