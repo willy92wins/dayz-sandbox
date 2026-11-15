@@ -1,6 +1,6 @@
 # F1b-peers en partida: arnés G1-G9 y partidas
 
-2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.2, `48452b7`). **v1.0, para la ronda 1 de Sol** (como mucho 2; después arbitra el orquestador).
+2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.2, `48452b7`). **v1.1: ronda 1 de Sol aplicada (§10).** Queda como mucho una ronda.
 
 **Por qué ahora.** F0.3-0 pasó su gate en partida en diag y en retail (`origin/main` `4f18c62`): `WIRE_CAP = 3500` está validado (G10 cumplido). La sesión principal ordenó arrancar las partidas el 2026-11-15. El PR de F1b-peers no se mergea hasta que G1-G9 pasen, porque toca el PBO.
 
@@ -18,7 +18,7 @@
 **Es:**
 - un arnés que lanza el backend real, un **proxy de fallos** delante del bridge y DayZ (servidor y cliente) con el mod `DayZSandbox`;
 - los escenarios G1-G9, con evidencia y veredicto;
-- dos ajustes pequeños del mod para que lo medible se pueda medir (§2, D-P3 y D-P4).
+- ajustes pequeños del mod para que lo medible se pueda medir: D-P3 y D-P4.
 
 **No es:**
 - la escena real de F2;
@@ -29,7 +29,9 @@
 
 - Python 3.14 en `C:\Python314\python.exe`, solo biblioteca estándar y `unittest`. PowerShell 5.1 para el lanzador.
 - Todo en 127.0.0.1.
-- Ninguna clave en logs, salidas, evidencia ni errores. El proxy quita `key=` de toda ruta antes de escribirla.
+- **Ninguna clave** en logs, salidas, evidencia, stderr, trazas de excepción ni errores.
+  - El proxy quita `key=` de toda ruta antes de escribirla o de pasarla a cualquier log.
+  - El `log_message` de `http.server` se sustituye, porque el de Python escribe la URL entera en stderr.
 - **Partidas con el OK fijo de Guillermo:**
   - lease de GPU como mutex;
   - ningún `DayZ*` ajeno abierto antes de lanzar;
@@ -39,31 +41,37 @@
   - DayZ diag: `...\steamapps\common\DayZ\DayZDiag_x64.exe`;
   - servidor retail: `...\common\DayZServer\DayZServer_x64.exe`;
   - cliente retail: `DayZ_BE.exe 0 1 1 -exe DayZ_x64.exe <args>`.
-  - Misión y cfg: una copia propia de `C:\tmp\dsbx-f030-work\partida\b1` en la carpeta de trabajo de la partida, con `verifySignatures=0` y, en retail, `BattlEye = 1;`. **No se toca `C:\tmp\dsbx-f02`.**
+  - Misión y cfg: una copia propia de `C:\tmp\dsbx-f030-work\partida\b1` en la carpeta de trabajo de la partida (`C:\tmp\dsbx-f1bpeers-work\partida\`), con `verifySignatures=0` y, en retail, `BattlEye = 1;`. **No se toca `C:\tmp\dsbx-f02`.**
 - **Git:** todo comando que escriba el árbol va con `-c core.autocrlf=false`. Con el árbol sucio fuera de `evidence/`, el veredicto es INCONCLUSO.
 
 ## 2. Decisiones de esta parte
 
 - **D-P1. PBO sin firmar.** Se acepta con `verifySignatures=0` en el servidor, también en retail con BattlEye, como F0.2 y F0.3-0. G1 lo acredita en retail. Firmar con una clave propia queda para el despliegue (§9).
-- **D-P2. El negativo de G3 no se alcanza con un peer correcto.**
-  - El peer anota la `rev` y el `hash` de su propia orden, y el bridge solo resuelve la orden que nombra la generación (`bridge.py`, `_process_world_read_locked`). Así, `fallido/lectura_no_cumple` no aparece con peers reales.
-  - Queda acreditado sin juego: BR23 del mod falso, con `annotate_rev_delta`.
-  - En partida se prueba el camino positivo y la supersesión (un `apply` nuevo sobre otro observado).
-- **D-P3. El corte entre pasos de G5 necesita tiempo entre `retirar` y `anotar`.** Con el peer real son ticks seguidos (unos 20-30 ms).
-  - Gancho **solo en diag** (`#ifdef DIAG_DEVELOPER`): un campo opcional `qa_step_gap_ms` en `dsbx_peer.json` (entero de 0 a 10000; 0 o ausente es sin espera). `anotar` no se ejecuta hasta que han pasado esos ms desde `retirar`, y la guarda literal sigue siendo la primera sentencia de `StepAnotar`.
-  - En retail el campo no existe: se lee dentro del `#ifdef`.
-  - Regla estática nueva: el campo y su uso solo aparecen dentro de `#ifdef DIAG_DEVELOPER`, y `StepAnotar` conserva su guarda literal.
-- **D-P4. Diagnóstico en el log del mod, con `tick_ms` en la propia línea** (D12):
-  - `rest error ch=<P|R> kind=<n> state=<n> tick_ms=<n>`: en el `OnError` del callback, antes de despachar al canal. R lo registra pero no lo mira (D1 intacta).
-  - `rest timeout ch=<P|R> kind=<n> tick_ms=<n>`: en `OnTimeout` y en el watchdog.
+- **D-P2. El negativo de G3, en partida.**
+  - El proxy reescribe `args.rev` en la respuesta del poll que entrega la orden; los demás campos siguen válidos.
+  - El peer anota lo que recibe y el backend compara con la revisión original: el camino directo del resultado (`bridge.py`, tras `done`) acaba en `fallido/lectura_no_cumple`.
+  - Se exige ese motivo exacto y que la orden nunca llegue a `observado`. BR23 del mod falso lo complementa.
+- **D-P3. Gancho solo en diag para G5.**
+  - Campo opcional `qa_step_gap_ms` en `dsbx_peer.json` (entero de 0 a 10000; 0 o ausente es sin espera), leído en `LoadConfig` dentro de `#ifdef DIAG_DEVELOPER`. En retail el campo no existe.
+  - `anotar` no se ejecuta hasta que han pasado esos ms desde `retirar`. La guarda literal sigue siendo la primera sentencia de `StepAnotar`.
+  - Se registra `config qa_step_gap_ms=<n>` en cada `LoadConfig` de diag, para comprobar que vuelve a 0 antes de G9.
+  - Reglas estáticas nuevas: el campo y su uso solo dentro de `#ifdef DIAG_DEVELOPER`; `StepAnotar` conserva su guarda literal.
+- **D-P4. Diagnóstico en el log del mod, con `tick_ms` en la propia línea** (D12). En diag y en retail.
+  - `effect step=<retirar|anotar> session=<s> op=<op> tick_ms=<n>`: en el punto exacto del efecto, justo después de `SetGeneration`. **Es la evidencia de cuántos efectos hay** (L-04).
+  - `rest error ch=<P|R> kind=<n> state=<n> tick_ms=<n>`: en `OnHttpDone`, antes de despachar al canal. R lo registra pero no lo mira (D1 intacta: `OnChannelRError` sigue sin ver el estado).
+  - `rest timeout ch=<P|R> kind=<n> src=<engine|watchdog> tick_ms=<n>`.
   - `rest invalid ch=<P|R> kind=<n> tick_ms=<n>`: un 200 cuya respuesta no pasa su validador.
-  - `rest late ch=<P|R> kind=<n> tick_ms=<n>`: una respuesta de una generación ya retirada, que se descarta.
+  - `rest late ch=<P|R> kind=<n> tick_ms=<n>`: una respuesta de una petición ya retirada, que se descarta.
+  - `lease lost age_ms=<n> tick_ms=<n>`: en `CheckLeaseTimeout`, con la edad desde el último poll válido.
   - `clock tick_ms=<n>`: cada 5000 ms de su propio reloj.
 
-  Ninguna línea lleva la ruta, la clave ni un cuerpo (M4 ya lo exige para todo `Log`).
-- **D-P5. G6 se mide de dos formas:**
-  - **pendiente:** las líneas `clock` frente al reloj del arnés cuando aparecen, descontando un volcado constante (D12);
-  - **pausa:** el arnés suspende el proceso servidor 2000 ms (`NtSuspendProcess`/`NtResumeProcess` por `ctypes`, solo el PID propio) y mide si `tick_ms` salta unos 2000 o se para.
+  Ninguna línea lleva la ruta, la clave ni un cuerpo; M4 ya lo exige para todo `Log`. `session` y `op` no son secretos.
+- **D-P5. Reloj.**
+  - **Pendiente** (medida complementaria): las líneas `clock` frente al reloj del arnés al aparecer, con un volcado constante (D12).
+  - **Plazo con efecto pendiente durante una pausa** (lo que acredita la cota de 100 ms): el arnés suspende el servidor 2000 ms (`NtSuspendProcess`/`NtResumeProcess` por `ctypes`, solo el PID propio, reanudación garantizada en `finally`) justo tras entregar una orden de TTL 1500 ms.
+    - Las líneas `effect` se pasan al reloj del backend con el ajuste lineal de las `clock`.
+    - FALLA si algún efecto cae más de 100 ms después del vencimiento real (emisión + TTL en el monotónico del backend).
+    - Si G6 falla, se cambia la fuente de reloj del peer en esta misma tarea (brief de F1b-peers §9).
 
 ## 3. Piezas y write-set
 
@@ -72,11 +80,11 @@ DayZSandbox_dev/qa/live/
   fault_proxy.py          proxy de fallos (§4)                                  [worker]
   f1bp_live.py            orquestador: setup, backend, escenarios G1-G9 (§5)    [worker]
   f1bp_eval.py            evaluador puro sobre la evidencia (§6)                [worker]
-  run_f1bp_partida.ps1    lanzador de DayZ, adaptado de L y PL (§1)             [orquestador]
+  run_f1bp_partida.ps1    lanzador de DayZ, adaptado de L y PL (§1, §8)         [orquestador]
 DayZSandbox_dev/qa/tests/
-  test_fault_proxy.py     reglas, log sin clave, códigos, retención, corte      [worker]
+  test_fault_proxy.py     reglas, barrera, log y salidas sin clave              [worker]
   test_f1bp_eval.py       evidencia sintética → PASA/FALLA/INCONCLUSO por fila  [worker]
-  test_f1bp_dryrun.py     escenarios contra el mod falso, sin DayZ (§7)          [worker]
+  test_f1bp_dryrun.py     ensayo con el mod falso, sin DayZ (§7)                [worker]
 DayZSandbox/scripts/3_Game/DSBX_Peer.c   D-P3 y D-P4                            [orquestador]
 DayZSandbox_dev/app/tests/test_mod_static.py   reglas de D-P3 y D-P4             [orquestador]
 ```
@@ -85,55 +93,83 @@ No se tocan `app/backend/`, `app/web/` ni el resto del mod.
 
 ## 4. El proxy de fallos
 
-- **Escucha** en 127.0.0.1 en un puerto propio y reenvía al bridge (`http.client`, una conexión por petición). El peer apunta al proxy: `peer_config.py` recibe un `backend.json` derivado con `bridge_port` = puerto del proxy.
-- **Reglas** en un JSON que el orquestador reescribe de forma atómica y el proxy relee si cambia la fecha de modificación. Cada regla tiene un `match` y una `action`.
-  - `match`: `route` (`hello`, `poll`, `result` o `catalog`), `peer` (`server` o `client`), `deliver` (`0` o `1`, solo en poll), `nth` (la enésima petición que casa desde que se cargó la regla) y `count` (cuántas veces se aplica).
-  - `action`:
-    - `pass`;
-    - `status` (código y cuerpo JSON `{"ok": false, "error": "<x>"}` como los del bridge, sin reenviar);
-    - `hold_ms` (retiene la petición y después la reenvía);
-    - `hold_resp_ms` (reenvía y retiene la respuesta);
-    - `refuse` (cierra la conexión sin respuesta y sin reenviar);
-    - `drop_resp` (reenvía y cierra sin devolver la respuesta);
-    - `rewrite` (reenvía y sustituye el cuerpo de la respuesta por uno dado, para G7).
-- **Log jsonl**, una línea por petición: `t_ms` (monotónico del arnés), `peer`, `route`, `deliver`, `session` (sí; no es secreto), `action`, `req_bytes`, `upstream_status`, `resp_bytes` y `held_ms`. **Sin `key`**: se quita de la consulta antes de nada.
-- Pruebas: cada acción contra un bridge de prueba, y una búsqueda literal de la clave en el log (cero apariciones).
+- **Escucha** en 127.0.0.1 en un puerto propio y reenvía al bridge con una conexión por petición; atiende varias conexiones a la vez (`ThreadingHTTPServer`). El peer apunta al proxy: `peer_config.py` recibe un `backend.json` derivado con `bridge_port` = puerto del proxy.
+- **Reglas versionadas.**
+  - El orquestador escribe de forma atómica un JSON `{version, rules: [...]}`.
+  - El proxy lo relee y, al activarlo, escribe `rules_active.json` con esa `version`. **Una inyección solo cuenta desde que `rules_active.json` confirma su versión.**
+  - Cada regla tiene un `id`, un `match` y una `action`.
+- **`match`:**
+  - `route`: `hello`, `poll`, `result` o `catalog`;
+  - `peer`: `server` o `client`;
+  - `deliver`: `0` o `1`, solo en poll;
+  - `resp_has_op`: `true` si la respuesta del bridge trae una orden; sirve de disparador;
+  - `nth` y `count`: se consumen de forma atómica bajo un candado.
+- **`action`:**
+  - `pass`;
+  - `status`: código y cuerpo JSON `{"ok": false, "error": "<x>"}`, sin reenviar;
+  - `hold_ms`: retiene la petición y después la reenvía;
+  - `hold_resp_ms`: reenvía y retiene la respuesta;
+  - `refuse`: cierra la conexión sin respuesta y sin reenviar;
+  - `drop_resp`: reenvía y cierra sin devolver la respuesta;
+  - `rewrite`: reenvía y sustituye campos de la respuesta, conservando el resto válido;
+  - `then_cut_ms`: tras servir esta respuesta, `refuse` a todas las peticiones de ese peer en las rutas indicadas durante N ms. Es el disparador sincronizado de G5 (b).
+  - `then_hold_ms`: tras servir esta respuesta, retiene sin responder todas las peticiones de ese peer en las rutas indicadas durante N ms, y después las reenvía. No provoca errores de conexión (que el motor puede dar como `CLIENTERROR`, `restapi.c:16-17`); el motor vence la petición por su plazo de 3 s. Es el corte de G5 (a).
+- **Barrera de corte:** una regla de corte con `abort_inflight: true` cierra al activarse las conexiones de cliente de las peticiones ya reenviadas y pendientes de ese peer (los long-polls), y lo registra. Así un poll anterior no entrega una orden «durante el corte».
+- **Log jsonl**, una línea por petición:
+  - `req_id`, `rule_id` y `rules_version`;
+  - `t_ms`, monotónico del arnés;
+  - `peer`, `route`, `deliver` y `session` (no es secreto);
+  - `action`, `req_bytes`, `upstream_status`, `resp_bytes`, `held_ms` y `aborted`.
+  - **Sin `key`.**
+- **Pruebas:**
+  - cada acción contra un bridge de prueba;
+  - la barrera con un long-poll pendiente;
+  - el consumo de `nth`/`count` con conexiones concurrentes;
+  - la búsqueda literal de todas las claves usadas en el jsonl, stdout, stderr y las trazas de excepción del proceso (cero apariciones).
 
 ## 5. Escenarios
 
-Cada escenario escribe `samples/<G>.jsonl` (sus pasos y lo que observó) y deja al evaluador el veredicto.
-
+Cada escenario escribe `samples/<G>.jsonl` (sus pasos, las versiones de reglas confirmadas y lo que observó) y deja al evaluador el veredicto.
 - **El backend corre dentro del proceso del orquestador**, como en las pruebas (`Backend(...)` de `app/backend/server.py`, con su servidor web y el bridge en un puerto fijo).
 - **Las órdenes van por la API web**, como la web: `POST /api/session` con la clave humana, `POST /api/apply`, y la lectura por `GET /api/scene` y `GET /api/events` (ver `app/tests/e2e_web.py` y `server.py`).
 - **El estado del bridge se lee del objeto**, bajo su candado: peers, epoch, catálogo, sesión y órdenes. La API web no lo expone.
 - **Reiniciar el backend** es cerrarlo y crear otro en el mismo puerto, como BR7H1.
+- **Los efectos se cuentan** con las líneas `effect` del script log del servidor (D-P4), leídas tras el volcado y, al final, tras cerrar.
+- **Recuperación (P-08):** después de cada corte, reinicio o inyección, el peer vuelve a presentarse, el backend reconcilia y **una orden nueva llega a `observado`** en 60 s. Sin eso, la fila es FALLA.
+- **INCONCLUSO:** una inyección que no se observa (regla sin casar o versión sin confirmar) deja su fila en INCONCLUSO.
 
 | # | Build | Procedimiento | PASA si |
 |---|---|---|---|
-| G1 carga | diag y retail | Lanzar servidor y cliente con `@DayZSandbox`; esperar el hello de los dos (proxy) hasta 300 s | Los dos peers se presentan; ningún error de script de `DSBX_` en el script log de la sesión; en retail, el cliente sigue conectado a los 120 s (BattlEye no lo echa) |
-| G2 handshake | diag | Tras G1 | El cliente lleva el epoch del servidor; catálogo `complete` con `n_classes > 0`; el hello del servidor mide menos de 3500 B (`req_bytes` del proxy) |
-| G3 D2 | diag | `apply` de la escena → seguir `pendiente → ejecutando → aplicado → observado`; después, un segundo `apply` (supersesión) | Las dos llegan a `observado` y la generación del mundo es la segunda. El negativo es D-P2 |
-| G4 E1 | **retail** | (a) Clave mala: se reescribe `dsbx_peer.json` y se reinicia el backend → 60 s; (b) backend reiniciado con una orden en vuelo (el proxy retiene su resultado); (c) polls cortados 4500 ms (`refuse`) con una orden encolada durante el corte | Durante cada uno, 0 efectos nuevos y la cola vieja sin ejecutar (la generación no cambia por órdenes viejas). **Después de cada uno, recuperación y una orden nueva hasta `observado`** en 60 s. La clave no aparece en ningún `script*.log` ni `.RPT` de servidor o cliente |
-| G5 hombre muerto | diag | (a) Cortes de polls de 2500 y 3500 ms a cada peer; (b) `qa_step_gap_ms = 2000` y un corte de polls de 2500 ms que empieza tras `retirar` | (a) Con 2500 no hay re-hello; con 3500, sí, y después hay recuperación. (b) La orden acaba `parcial` (`error/lease_expired`), nunca `fallido`; después, recuperación y orden nueva |
-| G6 reloj | diag | 10 min de partida; después, pausa del servidor de 2000 ms | Pendiente `tick_ms`/reloj del arnés entre 0,98 y 1,02; se anota qué hace `tick_ms` en la pausa. Es medida: FALLA solo si la pendiente sale del intervalo |
-| G7 lo que no se sabe | diag | Con el proxy: `status` 400, 401, 409, 413 y 500 a P y a R; `hold_resp_ms` 5000 (plazo del motor); `hold_resp_ms` 4000 al acuse de un resultado (dos en vuelo); `hold_resp_ms` 8000 (callback tardío); `rewrite` de un poll sin `ok`, con `ok:1` y con `args:{}` | Es medida: se anota qué línea `rest …` y qué estado da cada código, si P sigue a 500 ms con R retenido, el plazo efectivo y qué hace el validador con cada variante. FALLA solo si el peer pierde la recuperación |
-| G8 deduplicación | diag | (a) `drop_resp` al primer resultado; (b) resultado descartado (`status 503` ×4) y reentrega de la orden; (c) backend reiniciado y `op-1` nuevo | (a)(b) un solo efecto y `dup:true` en la reentrega; (c) el `op-1` nuevo se ejecuta |
-| G9 E2 | diag | 100 `apply` seguidos por la API | p95 de entrega a resultado < 1000 ms, con los fallos en el denominador (el cálculo de `s_puente_eval`) |
-
-Las filas «es medida» acreditan el dato, no un umbral, salvo lo que dicen.
+| G1 carga | diag y retail | Lanzar servidor y cliente con `@DayZSandbox`; esperar el hello de los dos (proxy), hasta 300 s | Los dos peers se presentan. Ningún error de script de `DSBX_` en el script log ni en el RPT de la sesión. En retail, el cliente sigue conectado a los 120 s |
+| G2 handshake | diag | Tras G1 | El cliente lleva el epoch del servidor; catálogo `complete` con `n_classes > 0`; la mayor página de catálogo mide ≥ 3000 B y < 3500 (`req_bytes`) y fue aceptada; el hello del servidor mide < 3500 |
+| G3 D2 | diag | (a) `apply` → `pendiente → ejecutando → aplicado → observado`; (b) un segundo `apply` (supersesión); (c) negativo de D-P2 | (a)(b) las dos `observado`, con una `retirar` y una `anotar` cada una. (c) `fallido/lectura_no_cumple`, nunca `observado`. Recuperación |
+| G4 E1 | **retail** | (a) Clave mala pero válida de forma: se escribe en `dsbx_peer.json` y se fuerza un hello con un 409 al siguiente poll; 60 s con una orden de TTL 2000 ms encolada al principio (el TTL, por los `bridge_kwargs` del backend en proceso); después, la clave buena. (b) Backend reiniciado con una orden en vuelo; tras recuperar la sesión nueva, el proxy entrega (`rewrite` de un poll) una orden con la sesión vieja. (c) Corte de polls de 4500 ms con `abort_inflight`, y una orden de TTL 2000 ms encolada durante el corte | (a) Hellos rechazados por el bridge (401 en el proxy), 0 `effect` durante la ventana, y la orden encolada nunca tiene `effect`, tampoco tras recuperar. (b) La orden vieja da `rejected/stale_session` sin `effect`. (c) La orden encolada nunca tiene `effect`. **En los tres, recuperación.** La clave no aparece en ningún `script*.log` ni `.RPT` de servidor o cliente, leídos tras cerrar |
+| G5 hombre muerto | diag | (a) Por peer, `then_hold_ms` de hello y poll, disparado por una respuesta de poll válida, de 2500 ms y de 4500 ms. (b) En el servidor, `qa_step_gap_ms` de 2500 y de 4000 ms, con `then_cut_ms = 6000` de hello y poll disparado por la respuesta que entrega la orden. Al final, `qa_step_gap_ms = 0` confirmado por el log | (a) Sin `lease lost` con 2500; con 4500, `lease lost` con `age_ms` ≥ `lease_ms` y < `lease_ms + 200`, en servidor y en cliente. (b) Con 2500, una `retirar` y una `anotar`, y la orden `observado`. Con 4000, una `retirar`, ninguna `anotar`, y la orden en `parcial` (`error/lease_expired`), nunca `fallido`. Así se acota «acepta hasta y rechaza desde» a los dos lados de `lease_ms`. Recuperación |
+| G6 reloj | diag | 10 min de partida (líneas `clock`); después, el plazo con pausa de D-P5 | Ningún `effect` más de 100 ms tras el vencimiento real; pendiente entre 0,98 y 1,02 (complementaria); se anota qué hace `tick_ms` en la pausa. Recuperación |
+| G7 lo que no se sabe | diag | Invariantes, más medidas exploratorias | **Invariantes** (FALLA si no se cumplen): con el acuse de R retenido 4000 ms, los polls de mantenimiento de P siguen sin huecos de más de 750 ms; las respuestas reescritas no válidas (sin `ok`, `ok:false`, `now_ms` con decimales o en texto, sin `args`) dan `rest invalid`, ningún `effect` y no renuevan el lease (con todas las de P no válidas durante más de `lease_ms`, aparece `lease lost`); un acuse retenido 8000 ms da `rest late` y ningún cambio (el resultado se acusa una vez). **Medidas** (se anotan): la línea `rest …` y el estado de cada `status` 400, 401, 409, 413 y 500 a P y a R; el plazo efectivo de `hold_resp_ms` 5000; qué hace el validador con `ok:1` y `args:{}`. Recuperación |
+| G8 deduplicación | diag | (a) `drop_resp` al primer resultado; (b) resultado bloqueado (`status 503` ×4) y reentrega de la orden por el backend; (c) backend reiniciado y `op-1` nuevo | (a) Una `retirar` y una `anotar`; el resultado repetido no cambia nada. (b) Una sola pareja de `effect` y `dup:true` en el reenvío. (c) El `op-1` de la sesión nueva tiene su propia pareja de `effect` |
+| G9 E2 | diag | Con `qa_step_gap_ms = 0` confirmado: 100 `apply` seguidos por la API | p95 de entrega a resultado < 1000 ms, con los fallos en el denominador (cálculo de `s_puente_eval`); una pareja de `effect` por orden |
 
 ## 6. Evidencia y veredicto
 
-- `manifest.json`: `git_head`, `git_dirty`, `pbo_sha256`, build, puertos, `key_sha256` (nunca la clave) y versión de DayZ.
-- `samples/proxy.jsonl`, `samples/<G>.jsonl` y una copia del `script_*.log` de la sesión de servidor y de cliente (uno por perfil; con dos, `log_ambiguous`).
+- `manifest.json`: `git_head`, `git_dirty`, `pbo_sha256`, build, puertos, `key_sha256` de cada clave usada (nunca la clave) y versión de DayZ.
+- `samples/proxy.jsonl` y `samples/<G>.jsonl`.
+- Copia del `script_*.log` **y del `.RPT`** de la sesión, de servidor y de cliente, con un inventario de los logs de cada perfil. Con dos `script_*.log` de la sesión, `log_ambiguous`. Se leen tras cerrar el juego; la ausencia de un fichero es INCONCLUSO, no «cero filtraciones».
 - `verdict.json` por fila y agregado, como `gate_core`: PASA, FALLA o INCONCLUSO, más el motivo.
 - JSON ordenado, en UTF-8 y con LF.
 
 ## 7. Gate sin juego del arnés
 
 - `test_fault_proxy.py` y `test_f1bp_eval.py` pasan.
-- **Ensayo en seco:** `test_f1bp_dryrun.py` corre G2-G5, G8 y G9 contra el backend real y el **mod falso** (`app/tests/fake_mod.py`) a través del proxy, sin DayZ, y el evaluador da PASA. G1, G6 y G7 se saltan, porque necesitan el motor.
-- La suite de `app/tests` sigue verde, y la prueba estática acepta D-P3 y D-P4 con sus reglas y mutaciones.
+- **Ensayo en seco:** `test_f1bp_dryrun.py` corre, contra el backend real y el **mod falso** a través del proxy, sin DayZ, **solo** lo que el falso puede acreditar:
+  - G2, salvo la página de 3000 B;
+  - G3, con el negativo por `rewrite`;
+  - G4 (b) con la orden de sesión vieja;
+  - G8 (a), (b) y (c);
+  - G9.
+
+  El falso va con `r_retry_unknown=True` (D1), y el evaluador real da PASA. Los efectos del falso se cuentan por su propio registro de efectos, no fabricando líneas `effect`. G1, G4 (a) y (c), G5, G6 y G7 se saltan: necesitan el motor, o la transición local por vencimiento que el falso no tiene.
+- La suite de `app/tests` sigue verde. La prueba estática acepta D-P3 y D-P4, con sus reglas y mutaciones.
 
 ## 8. Entrega
 
@@ -143,12 +179,37 @@ Las filas «es medida» acreditan el dato, no un umbral, salvo lo que dicen.
 | L1 | DS4.1 en el GX10 (puesto 5), o Nemotron por OpenRouter si está libre | `fault_proxy.py` y `test_fault_proxy.py` |
 | L2 | DS4.1 en el GX10 | `f1bp_live.py`, `f1bp_eval.py`, `test_f1bp_eval.py` y `test_f1bp_dryrun.py` |
 
-Cada tanda trabaja en una copia del commit congelado. El orquestador revisa, corre el gate de §7, integra, hace commit y lanza las partidas: diag primero (G1, G2, G3 y G5-G9), después retail (G1 y G4). Sol revisa el código del arnés como mucho en 2 rondas.
+**El lanzador (L0)**, sobre el esqueleto de F0.3-0:
+- comprueba las condiciones previas y toma el lease;
+- arranca el orquestador, que escribe las configuraciones del peer;
+- lanza servidor y cliente por WMI y escribe `pids.json` con PID e instante de creación de cada proceso propio, incluido el lanzador de BattlEye;
+- al acabar, cierra por WM_CLOSE y **solo suelta el lease cuando confirma que no queda vivo ningún PID propio** (mismo PID e instante). Si queda alguno, no suelta, lo registra y sale con error.
+
+Cada tanda trabaja en una copia del commit congelado. El orquestador revisa, corre el gate de §7, integra, hace commit y lanza las partidas: diag primero (G1-G3 y G5-G9), después retail (G1 y G4). Sol revisa el código del arnés como mucho en 2 rondas.
 
 ## 9. Riesgos
 
 - **Firma del PBO para el despliegue:** sin resolver; aquí, D-P1.
 - **El estado del motor para cada código** puede no distinguir 4xx de un fallo de transporte (`restapi.c:16-17`). G7 lo mide; la política de §3.4 ya lo cubre.
-- **Suspender el servidor** puede tumbar la conexión del cliente. Va al final de la sesión diag.
-- **D12:** el log se ve unos 560 ms tarde. Por eso las líneas llevan `tick_ms` y el evaluador no usa la hora de llegada para nada más que la pendiente de G6.
+- **Suspender el servidor** puede tumbar la conexión del cliente. Va al final de la sesión diag, con reanudación garantizada.
+- **D12:** el log se ve unos 560 ms tarde. Por eso las líneas llevan `tick_ms` y la hora de llegada solo se usa para la pendiente de G6.
 - **BattlEye:** el cliente lanzado sin BattlEye se cae en retail; el lanzador lo hace como F0.3-0.
+
+## 10. Cambios por la revisión
+
+**Ronda 1 de Sol** (`gpt-6.1-sol`, solo lectura, sobre `d5ae0c4`; UNSOUND con 4 bloqueantes y 8 importantes). Se aplican todos:
+
+| Hallazgo | Qué cambia |
+|---|---|
+| L-01 · bloqueante · el corte de G5 (b) no hacía vencer el lease entre pasos | Huecos de 2500 y 4000 ms, a los dos lados de `lease_ms`, con corte de 6000 ms de hello y poll sincronizado con la respuesta que entrega la orden (`then_cut_ms`). Hueco a 0 confirmado por el log antes de G9 (D-P3) |
+| L-02 · bloqueante · perder el acuse no provoca reentrega | G8 separa la idempotencia del resultado (a) de la reentrega provocada (b), y exige `dup:true` solo en (b) |
+| L-03 · bloqueante · G7 solo fallaba sin recuperación | Invariantes obligatorias (cadencia de P con R retenido, respuestas no válidas sin efecto ni renovación, callback tardío neutro) y medidas aparte; casos de `now_ms` con decimales o en texto y página de catálogo de ≥ 3000 B en G2; inyección no observada → INCONCLUSO |
+| L-04 · bloqueante · no se contaban los efectos | Línea `effect` en el punto del efecto, también en retail (D-P4); el evaluador rechaza una ejecución doble aunque la generación final sea la misma |
+| L-05 · importante · el negativo de G3 sí se alcanza | Se reescribe `args.rev` en el poll de entrega y se exige `fallido/lectura_no_cumple` (D-P2) |
+| L-06 · importante · G4 (b) no probaba el rechazo de una orden con sesión vieja | Entrega tardía de una orden de la sesión vieja tras recuperar; clave mala válida de forma, aislada del reinicio |
+| L-07 · importante · faltaba una barrera para las peticiones en vuelo | Reglas versionadas con confirmación, `abort_inflight` para los long-polls, consumo atómico de `nth`/`count` e identificadores de regla y de petición |
+| L-08 · importante · G5 (a) no medía la ventana | `lease lost age_ms`; retención `then_hold_ms` disparada por un poll válido (edad cero al empezar, y sin errores de conexión que el motor daría como `CLIENTERROR`) a los dos lados del umbral; el observable del cliente; la recuperación de P-08 |
+| L-09 · importante · la pendiente no acreditaba la cota de 100 ms | Plazo con efecto pendiente durante la pausa, medido contra el monotónico del backend (D-P5) |
+| L-10 · importante · el falso no acredita todo el ensayo | §7 delimita lo que acredita el falso, con D1 activada y sin fabricar estados |
+| L-11 · importante · la clave podía salir por stderr; faltaban los RPT | `log_message` sustituido y búsqueda en todas las salidas; RPT e inventario de logs en la evidencia; lectura tras cerrar |
+| L-12 · importante · el lanzador soltaba el lease con procesos vivos | Cierre confirmado por PID e instante de creación antes de soltar; reanudación de la pausa en `finally` |
