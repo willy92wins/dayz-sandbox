@@ -42,10 +42,53 @@ CLIENT_VAL = {
 # (otras suites en paralelo). Las latencias que decide la matriz (M2 p95 < 1000 ms, "d done", seq de N6)
 # se miden contra el reloj, asi que bajo carga salian veredictos 1/2 espurios. Los plazos son contrato y no
 # se tocan: se aisla la corrida de la carga ajena subiendo la prioridad de bridge y peers.
-_HIGH_PRIORITY_CLASS = 0x00000080
-_PEER_CREATIONFLAGS = _HIGH_PRIORITY_CLASS if os.name == "nt" else 0
+#
+# Limites (sesion principal, 2026-11-15): la subida es solo para los procesos de la corrida (este runner y sus
+# peers), como mucho HIGH y nunca REALTIME; y no se sube mientras una partida tenga el lease de la GPU
+# (`gpu_lease.py comprobar` da OCUPADA), para que una corrida offline no deforme una medicion en partida
+# (p. ej. la de S-perf). Si no se puede saber el estado del lease, tampoco se sube. La decision queda escrita
+# en `<evidencia>/priority_boost.json`.
+_HIGH_PRIORITY_CLASS = 0x00000080  # HIGH_PRIORITY_CLASS; REALTIME_PRIORITY_CLASS (0x100) no se usa nunca
 _CFG_REPLACE_TRIES = 40
 _CFG_REPLACE_PAUSE_S = 0.05
+_GPU_LEASE_SCRIPT_ENV = "DSBX_GPU_LEASE_SCRIPT"
+_GPU_LEASE_DEFAULT = Path.home() / ".claude" / "tools" / "gpu_lease.py"
+
+
+def _gpu_lease_busy():
+    """True si una partida tiene el lease de la GPU; False si esta libre; None si no se puede saber."""
+    script = os.environ.get(_GPU_LEASE_SCRIPT_ENV) or str(_GPU_LEASE_DEFAULT)
+    if not Path(script).is_file():
+        return None
+    try:
+        proc = subprocess.run(
+            [sys.executable, script, "comprobar"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode == 0 and "LIBRE" in out:
+        return False
+    if proc.returncode != 0 or "OCUPADA" in out:
+        return True
+    return None
+
+
+def _priority_decision(build):
+    """Si esta corrida sube la prioridad ("applied") o por que no."""
+    if os.name != "nt":
+        return "not_windows"
+    if build != "offline":
+        return "not_offline"
+    busy = _gpu_lease_busy()
+    if busy is None:
+        return "skipped_gpu_lease_unknown"
+    if busy:
+        return "skipped_gpu_lease_busy"
+    return "applied"
 
 
 def _raise_priority():
@@ -112,7 +155,13 @@ def run(args, evidence, argv=None):
         write_row(bridge_fp, row)
 
     ready = False
-    restore_priority = _raise_priority() if args.build == "offline" else (lambda: None)
+    priority = _priority_decision(args.build)
+    gate_core.write_json(
+        evidence / "priority_boost.json",
+        {"decision": priority, "priority_class": "HIGH" if priority == "applied" else "unchanged"},
+    )
+    peer_creationflags = _HIGH_PRIORITY_CLASS if priority == "applied" else 0
+    restore_priority = _raise_priority() if priority == "applied" else (lambda: None)
     try:
         bridge = QABridge(hold, lease, sink, port=0)
         bridge_port_box["port"] = None
@@ -182,7 +231,7 @@ def run(args, evidence, argv=None):
                         cwd=str(ROOT),
                         stdout=log,
                         stderr=subprocess.STDOUT,
-                        creationflags=_PEER_CREATIONFLAGS,
+                        creationflags=peer_creationflags,
                     )
                 )
 

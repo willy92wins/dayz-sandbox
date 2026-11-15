@@ -269,6 +269,11 @@ class E2ESpuenteTests(unittest.TestCase):
 
     def test_point7_rows_hold_under_cpu_load(self):
         # Sin el arreglo (peers y bridge a prioridad normal) esta carga da 1 en vez de 0 (M2 p95, N5 "d not done").
+        import s_puente_run
+
+        decision = s_puente_run._priority_decision("offline")
+        if decision != "applied":
+            self.skipTest(f"sin subida de prioridad en esta maquina ahora: {decision}")
         with _cpu_load():
             for fault, expected in (("none", 0), ("wrong_build", 2)):
                 with self.subTest(fault=fault, expected=expected):
@@ -280,6 +285,8 @@ class E2ESpuenteTests(unittest.TestCase):
 
         if os.name != "nt":
             self.skipTest("solo Windows")
+        if s_puente_run._gpu_lease_busy() is not False:
+            self.skipTest("lease de la GPU ocupado o desconocido: no se sube la prioridad")
         import ctypes
 
         kernel32 = ctypes.windll.kernel32
@@ -293,6 +300,55 @@ class E2ESpuenteTests(unittest.TestCase):
         finally:
             restore()
         self.assertEqual(kernel32.GetPriorityClass(me), before)
+        # como mucho HIGH: nunca REALTIME_PRIORITY_CLASS (0x100)
+        self.assertEqual(s_puente_run._HIGH_PRIORITY_CLASS, 0x80)
+
+    def test_gpu_lease_check_reads_the_lease_script(self):
+        import s_puente_run
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-lease-") as tmp:
+            busy = Path(tmp) / "busy.py"
+            busy.write_text("import sys\nprint('OCUPADA: partida en curso')\nsys.exit(1)\n", encoding="utf-8")
+            free = Path(tmp) / "free.py"
+            free.write_text("print('LIBRE')\n", encoding="utf-8")
+            cases = ((busy, True), (free, False), (Path(tmp) / "missing.py", None))
+            for script, expected in cases:
+                with self.subTest(script=script.name):
+                    with mock.patch.dict(os.environ, {s_puente_run._GPU_LEASE_SCRIPT_ENV: str(script)}):
+                        self.assertIs(s_puente_run._gpu_lease_busy(), expected)
+
+    def test_priority_decision_respects_the_gpu_lease(self):
+        import s_puente_run
+
+        if os.name != "nt":
+            self.assertEqual(s_puente_run._priority_decision("offline"), "not_windows")
+            return
+        for busy, expected in ((True, "skipped_gpu_lease_busy"), (None, "skipped_gpu_lease_unknown"), (False, "applied")):
+            with self.subTest(busy=busy):
+                with mock.patch.object(s_puente_run, "_gpu_lease_busy", return_value=busy):
+                    self.assertEqual(s_puente_run._priority_decision("offline"), expected)
+        with mock.patch.object(s_puente_run, "_gpu_lease_busy", return_value=False):
+            self.assertEqual(s_puente_run._priority_decision("diag"), "not_offline")
+
+    def test_run_does_not_boost_while_a_game_holds_the_gpu_lease(self):
+        import s_puente_run
+
+        def must_not_boost():
+            raise AssertionError("subio la prioridad con el lease de la GPU ocupado")
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+            evidence = Path(tmp) / "run"
+            evidence.mkdir()
+            with mock.patch.object(s_puente_run, "_gpu_lease_busy", return_value=True), mock.patch.object(
+                s_puente_run, "_raise_priority", must_not_boost
+            ):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                    s_puente_run.run(_args(fault=None), evidence, [])
+            note = json.loads((evidence / "priority_boost.json").read_text(encoding="utf-8"))
+            expected = "skipped_gpu_lease_busy" if os.name == "nt" else "not_windows"
+            self.assertEqual(note["decision"], expected)
+            self.assertEqual(note["priority_class"], "unchanged")
 
     def test_write_cfg_retries_a_busy_file(self):
         import s_puente_run
