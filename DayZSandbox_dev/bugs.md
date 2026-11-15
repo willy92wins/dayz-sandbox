@@ -39,12 +39,13 @@ Lo que aparece fuera del alcance de una tanda, o lo que un arbitraje aplaza, se 
   - **12:4x, base `0c730f0`:** `fault='wrong_build'` da 1 en vez de 2.
   - **13:1x, `main` en `7754ac0`:** `fault='wrong_build'` da 1 en vez de 2.
   - **13:2x, `fc24197` (sin F2), con el test aislado pero a la vez que otro en `7754ac0`:** `none` da 1 en vez de 0, y `wrong_build`, 1 en vez de 2. En `7754ac0` pasó en esa misma ejecución. No lo causa F2.
-- **Hipótesis, sin verificar:**
-  - la matriz de fallos decide con plazos de reloj, que con la CPU cargada se vencen;
-  - `_free_udp_port` suelta el puerto antes de que el peer lo ocupe (`qa/f03_common.py:347`, `qa/s_puente_run.py:566`);
-  - `Path.replace` no reintenta en Windows si otro proceso tiene el fichero abierto.
-- **Arreglo propuesto:**
-  - esperas deterministas (eventos o condiciones) en vez de plazos;
-  - un reintento corto en `_write_cfg`;
-  - una prueba que meta carga o latencia para reproducirlo.
-- **Cuándo:** tarea pequeña para un subagente Sonnet en cuanto haya hueco. La lleva la sesión de los spikes de F0.3.
+- **Estado:** MITIGADO (la tasa de fallo con carga pasa de ~100 % a ~10 %; ver el residual al final) el 2026-11-15 en la rama `claude/s-puente-point7-estable`.
+- **Causa medida:** inanición de CPU. Bridge (hilos del proceso de la prueba) y peers falsos corrían a prioridad normal, compitiendo con cualquier otro proceso; con la máquina cargada, las latencias que mide la propia matriz se pasan de su umbral.
+  - Reproducido sin tocar nada del resto: 24-32 procesos de Python girando en bucle (16 núcleos) mientras corre `s_puente_run.run`. Sin el arreglo, `none` dio 1 en 3 de 3 corridas (M2 `p95 >= 1000`; N5.client `d not done`; N4.server y N6 `missing`) y `wrong_build` dio 1 en vez de 2 en 2 de 3 (M2 `fail` además de C0 `missing`; la tercera dio 2). Cada corrida tardaba 90-210 s en vez de 27 s. Con el arreglo y la misma carga: `none` 0, `wrong_build` 2, 29-34 s.
+  - Los umbrales fallidos son contrato (M2: p95 < 1000 ms), no plazos de espera de la matriz; por eso no se tocan.
+- **Hipótesis descartadas o no necesarias:**
+  - `_free_udp_port`: no se observó ningún fallo de bind en los peers (los fallos eran de latencia: M2, N5, N4, N6); no se ha tocado. Sigue siendo una ventana teórica entre soltar el puerto y que el peer cliente lo ocupe.
+  - `Path.replace`: el `PermissionError [WinError 5]` del 09:58 no se reprodujo con esta carga, pero la carrera es real en Windows (el peer o un antivirus tienen `dsbx_qa.json` abierto un instante), así que se añade un reintento corto y acotado.
+- **Arreglo:** `qa/s_puente_run.py`: peers lanzados con `HIGH_PRIORITY_CLASS`, proceso de la corrida subido a prioridad alta y restaurado al acabar (solo `build == offline` y solo Windows), y `_write_cfg` reintenta hasta 40 veces con 50 ms si `Path.replace` da `PermissionError`.
+- **Pruebas** (`qa/tests/test_e2e_s_puente.py`): `test_point7_rows_hold_under_cpu_load` (carga de 2 x núcleos procesos; falla sin el arreglo, pasa con él), `test_point7_priority_boost_is_restored`, `test_write_cfg_retries_a_busy_file`, `test_write_cfg_retry_is_bounded`.
+- **Residual medido (no cerrado del todo):** con el arreglo y carga extrema (2 x núcleos de procesos girando, a veces con otras suites a la vez) quedan fallos esporádicos: 1 de 3 corridas de `test_point7_rows_hold_under_cpu_load` con 1 x núcleos, 1 de unas 9 con 2 x núcleos (`wrong_build` da 1 por N6 `fail`) y 1 `none` = 1 con tres suites a la vez. N6 compara `lease_age_ms` contra un lease de 600 ms con aceptados hasta ~566 ms, es decir ~34 ms de margen entre aceptar y aplicar la pose; un tirón de ese tamaño en un peer a prioridad alta es lo que queda. Sin el arreglo, `none` falló en 4 de 4 corridas con carga. Si molesta, el siguiente paso sería que el peer decida la ventana por reloj lógico del bridge en vez de reloj de pared.

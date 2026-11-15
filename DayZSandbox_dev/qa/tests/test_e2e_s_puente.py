@@ -160,6 +160,36 @@ def _tree_bytes(root):
     return blob
 
 
+@contextlib.contextmanager
+def _cpu_load():
+    """Satura la CPU con procesos de prioridad normal (el caso de varias suites a la vez)."""
+    spin = "while True: pass"
+    burners = [
+        subprocess.Popen([PY, "-c", spin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(max(8, 2 * (os.cpu_count() or 4)))
+    ]
+    try:
+        yield len(burners)
+    finally:
+        for proc in burners:
+            proc.kill()
+        for proc in burners:
+            proc.wait(timeout=20)
+
+
+def _row_code(fault):
+    import s_puente_run
+
+    with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+        evidence = Path(tmp) / "run"
+        evidence.mkdir()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = s_puente_run.run(_args(fault=None if fault == "none" else fault), evidence, [])
+        verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
+        bad = [(row["id"], row["status"]) for row in verdict["checks"] if row["status"] != "pass"]
+    return code, bad
+
+
 class E2ESpuenteTests(unittest.TestCase):
     def setUp(self):
         self.parents = {str(os.getpid())}
@@ -217,8 +247,9 @@ class E2ESpuenteTests(unittest.TestCase):
                         err = io.StringIO()
                         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                             code = s_puente_run.run(args, evidence, [])
-                        self.assertEqual(code, expected)
                         verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
+                        not_passing = [(row["id"], row["status"], row["detail"]) for row in verdict["checks"] if row["status"] != "pass"]
+                        self.assertEqual(code, expected, not_passing)
                         self.assertEqual(verdict["exit_code"], expected)
                         if fault == "drop_results":
                             self.assertEqual(verdict["metrics"]["n_timeouts"], 11)
@@ -235,6 +266,64 @@ class E2ESpuenteTests(unittest.TestCase):
                             self.assertIn(planted.encode("ascii"), evidence_key_bytes(copied))
                             self.assertNotIn(planted.encode("ascii"), evidence_key_bytes(evidence))
                             self.assertIn(planted.encode("ascii"), evidence_key_bytes(evidence, planted))
+
+    def test_point7_rows_hold_under_cpu_load(self):
+        # Sin el arreglo (peers y bridge a prioridad normal) esta carga da 1 en vez de 0 (M2 p95, N5 "d not done").
+        with _cpu_load():
+            for fault, expected in (("none", 0), ("wrong_build", 2)):
+                with self.subTest(fault=fault, expected=expected):
+                    code, bad = _row_code(fault)
+                    self.assertEqual(code, expected, bad)
+
+    def test_point7_priority_boost_is_restored(self):
+        import s_puente_run
+
+        if os.name != "nt":
+            self.skipTest("solo Windows")
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.GetPriorityClass.argtypes = [ctypes.c_void_p]
+        me = kernel32.GetCurrentProcess()
+        before = kernel32.GetPriorityClass(me)
+        restore = s_puente_run._raise_priority()
+        try:
+            self.assertEqual(kernel32.GetPriorityClass(me), s_puente_run._HIGH_PRIORITY_CLASS)
+        finally:
+            restore()
+        self.assertEqual(kernel32.GetPriorityClass(me), before)
+
+    def test_write_cfg_retries_a_busy_file(self):
+        import s_puente_run
+
+        real = Path.replace
+        calls = []
+
+        def busy_twice(self, target):
+            calls.append(target)
+            if len(calls) <= 2:
+                raise PermissionError(5, "Acceso denegado")
+            return real(self, target)
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-cfg-") as tmp:
+            cfg = Path(tmp) / "dsbx_qa.json"
+            with mock.patch.object(Path, "replace", busy_twice), mock.patch.object(s_puente_run.time, "sleep"):
+                s_puente_run._write_cfg(cfg, 1234, "k" * 32, 300)
+            self.assertEqual(json.loads(cfg.read_text(encoding="utf-8"))["url"], "http://127.0.0.1:1234/")
+            self.assertEqual(len(calls), 3)
+
+    def test_write_cfg_retry_is_bounded(self):
+        import s_puente_run
+
+        def always_busy(self, target):
+            raise PermissionError(5, "Acceso denegado")
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-cfg-") as tmp:
+            cfg = Path(tmp) / "dsbx_qa.json"
+            with mock.patch.object(Path, "replace", always_busy), mock.patch.object(s_puente_run.time, "sleep"):
+                with self.assertRaises(PermissionError):
+                    s_puente_run._write_cfg(cfg, 1234, "k" * 32, 300)
 
     def test_point8_retail_does_not_launch_and_writes_profiles(self):
         with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:

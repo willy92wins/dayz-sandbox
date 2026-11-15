@@ -2,6 +2,7 @@
 
 import json
 import math
+import os
 import random
 import secrets
 import shutil
@@ -35,6 +36,40 @@ CLIENT_VAL = {
     "N4": ((7430, 380, 7430), (7440, 380, 7440)),
     "N5": ((7450, 380, 7450), (7460, 380, 7460)),
 }
+
+
+# En Windows los peers falsos y el bridge compiten por CPU con cualquier otro proceso de la maquina
+# (otras suites en paralelo). Las latencias que decide la matriz (M2 p95 < 1000 ms, "d done", seq de N6)
+# se miden contra el reloj, asi que bajo carga salian veredictos 1/2 espurios. Los plazos son contrato y no
+# se tocan: se aisla la corrida de la carga ajena subiendo la prioridad de bridge y peers.
+_HIGH_PRIORITY_CLASS = 0x00000080
+_PEER_CREATIONFLAGS = _HIGH_PRIORITY_CLASS if os.name == "nt" else 0
+_CFG_REPLACE_TRIES = 40
+_CFG_REPLACE_PAUSE_S = 0.05
+
+
+def _raise_priority():
+    """Sube este proceso a prioridad alta mientras dure la corrida; devuelve la funcion que la restaura."""
+    if os.name != "nt":
+        return lambda: None
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.GetPriorityClass.argtypes = [ctypes.c_void_p]
+        kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        handle = kernel32.GetCurrentProcess()
+        previous = kernel32.GetPriorityClass(handle)
+        if not previous or not kernel32.SetPriorityClass(handle, _HIGH_PRIORITY_CLASS):
+            return lambda: None
+    except (OSError, AttributeError):
+        return lambda: None
+
+    def restore():
+        kernel32.SetPriorityClass(handle, previous)
+
+    return restore
 
 
 def run(args, evidence, argv=None):
@@ -77,6 +112,7 @@ def run(args, evidence, argv=None):
         write_row(bridge_fp, row)
 
     ready = False
+    restore_priority = _raise_priority() if args.build == "offline" else (lambda: None)
     try:
         bridge = QABridge(hold, lease, sink, port=0)
         bridge_port_box["port"] = None
@@ -141,7 +177,13 @@ def run(args, evidence, argv=None):
                 if clock_offset_ms != 0.0:
                     cmd.extend(["--clock-offset-ms", str(clock_offset_ms)])
                 procs.append(
-                    subprocess.Popen(cmd, cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT)
+                    subprocess.Popen(
+                        cmd,
+                        cwd=str(ROOT),
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        creationflags=_PEER_CREATIONFLAGS,
+                    )
                 )
 
         def prepare_live():
@@ -209,6 +251,7 @@ def run(args, evidence, argv=None):
                 handle.close()
             for folder in profiles:
                 shutil.rmtree(folder, ignore_errors=True)
+            restore_priority()
     if bridge is not None and bridge.failure is not None:
         _raise_if_bridge_failed(bridge)
     if ready:
@@ -558,7 +601,15 @@ def _write_cfg(path, port, key, retry):
     body = {"key": key, "retry_ms": int(retry), "url": f"http://127.0.0.1:{port}/"}
     tmp = Path(str(path) + ".tmp")
     tmp.write_bytes(json.dumps(body, separators=(",", ":")).encode("utf-8"))
-    tmp.replace(path)
+    for attempt in range(_CFG_REPLACE_TRIES):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            # Windows: el peer (o un antivirus) tiene dsbx_qa.json abierto un instante. Reintento corto y acotado.
+            if attempt == _CFG_REPLACE_TRIES - 1:
+                raise
+            time.sleep(_CFG_REPLACE_PAUSE_S)
 
 
 def _free_udp():
