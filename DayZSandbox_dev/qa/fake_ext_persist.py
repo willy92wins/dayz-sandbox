@@ -5,10 +5,19 @@ propias creadas con ECE_NOPERSISTENCY_WORLD, objetos ajenos y un control persist
 reseteo por escena con retencion de descendientes ajenos o de otra escena, censos por
 disco con trabajo protegido (resource per_census, deadman stop) y reinicio de mundo que
 solo conserva lo creado sin ECE_NOPERSISTENCY_WORLD.
+
+Extensiones para F2 (PR "sonda: extensiones para F2"), con la misma forma de cable que el .c:
+  * per_census_start con nk select_all_entityai_b = 1: todo lo del disco (mundo S-persist mas los objetos del
+    mapa simulado: edificios, contenedores con inventario anidado, una criatura), inventario recorrido en
+    PREORDER, radio en (0, 120] y columna surface_y_m (la ultima, solo en este modo);
+  * per_spawn_raw foreign_in_container con sk target_net_id "<high>:<low>" (rechazos target_not_found y
+    no_cargo_space, sin efectos);
+  * per_witness_start: testigo de creacion (resource per_witness) con muestras sample_idx 0 (EEInit) y 1..K.
 """
 
 import json
 import math
+import re
 import secrets
 from pathlib import Path
 
@@ -26,6 +35,7 @@ SERVER_VERBS = frozenset({
     "per_spawn_raw",
     "per_census_start",
     "per_cleanup_qa",
+    "per_witness_start",
 })
 
 AREA_CENTERS = {
@@ -72,6 +82,59 @@ CENSUS_NCOL = [
     "spawn_tick_ms",
 ]
 
+CENSUS_NCOL_ALL = CENSUS_NCOL + ["surface_y_m"]
+CENSUS_ALL_RADIUS_MAX = 120.0
+
+WITNESS_SCOL = ["class_name", "net_id", "parent_net_id"]
+WITNESS_NCOL = [
+    "sample_idx",
+    "pos_x_m",
+    "pos_y_m",
+    "pos_z_m",
+    "yaw_deg",
+    "tick_ms",
+    "frame",
+    "ai_agent_b",
+    "alive_b",
+]
+WITNESS_PAGE_SIZE = 5
+WITNESS_MAX_ROWS = 4096
+WITNESS_RADIUS_MAX = 120.0
+WITNESS_WINDOW_MAX_MS = 600000.0
+WITNESS_TAIL_MS = 5000.0
+WITNESS_K_DEFAULT = 3
+WITNESS_K_MAX = 5
+
+# Huecos de cargo de cada clase en el mundo simulado (lo que no esta aqui no tiene cargo).
+CARGO_CAPACITY = {
+    "Barrel_Blue": 8,
+    "Barrel_Green": 8,
+    "Barrel_Red": 8,
+    "Barrel_Yellow": 8,
+    "WoodenCrate": 6,
+    "SeaChest": 10,
+    "Pot": 2,
+    "FirstAidKit": 3,
+}
+
+# Objetos del mapa simulado (no los crea S-persist ni los toca cleanup/reinicio): solo los ve el censo con
+# select_all_entityai_b = 1. net_id "0:0" es el de los edificios estaticos (GetObjectByNetworkId no los resuelve).
+# (net_id, class_name, parent_net_id, slot_name, x, z, ai_agent)
+MAP_OBJECT_SPECS = (
+    ("0:0", "Land_Mil_Barracks1", "", "", 6170.0, 7643.0, False),
+    ("0:0", "Land_Garage_Row", "", "", 6120.0, 7600.0, False),
+    ("1:50", "Barrel_Blue", "", "", 6190.0, 7650.0, False),
+    ("1:51", "Rag", "1:50", "Cargo:0:0:0", 6190.0, 7650.0, False),
+    ("1:52", "WoodenCrate", "", "", 6150.0, 7620.0, False),
+    ("1:53", "Pot", "1:52", "Cargo:0:0:0", 6150.0, 7620.0, False),
+    ("1:54", "Apple", "1:53", "Cargo:0:0:0", 6150.0, 7620.0, False),
+    ("1:55", "OffroadHatchback", "", "", 6200.0, 7700.0, False),
+    ("1:56", "HatchbackWheel", "1:55", "Wheel_1_1", 6200.0, 7700.0, False),
+    ("1:57", "Zmbf_PoliceCopBlue", "", "", 6140.0, 7680.0, True),
+    ("1:58", "Barrel_Green", "", "", 6290.0, 7643.0, False),
+    ("1:59", "Barrel_Red", "", "", 6500.0, 7643.0, False),
+)
+
 CENSUS_PAGE_SIZE = 5
 CENSUS_MAX_ROWS = 4096
 CENSUS_MAX_MS = 900000.0
@@ -85,6 +148,7 @@ DIRECTOR_APPLE_NET = "1:11"
 PERSISTENT_CONTROL_PERS_ID = "11:22:33:44"
 PERSISTENT_CHILD_PERS_ID = "55:66:77:88"
 ZERO_PERS_ID = "0:0:0:0"
+NET_ID_RE = re.compile(r"-?[0-9]{1,10}:-?[0-9]{1,10}")
 
 
 def _surface_y(x, z):
@@ -113,6 +177,8 @@ class PersistFakeExt(FakeExt):
         self.pending_finish = {}
         self.director_items = []
         self.director_uid = DIRECTOR_UID
+        self.map_objects = []
+        self.witness = None
 
     def _state_file(self):
         cfg = getattr(self.peer, "config", None)
@@ -213,6 +279,7 @@ class PersistFakeExt(FakeExt):
         self.jobs = jobs
         self.epoch = peer.inst
         self._build_director()
+        self._build_map()
         if self._load_state():
             self.records = []
             self.scene_gen = {}
@@ -266,7 +333,7 @@ class PersistFakeExt(FakeExt):
         self.next_net_low += 1
         return "1:%d" % self.next_net_low
 
-    def _add_entity(self, **kw):
+    def _make_entity(self, **kw):
         ent = {
             "net_id": kw["net_id"],
             "pers_id": kw.get("pers_id", ZERO_PERS_ID),
@@ -290,8 +357,68 @@ class PersistFakeExt(FakeExt):
             "scene_id": kw.get("scene_id", ""),
             "area_id": kw.get("area_id", ""),
         }
-        self.world[ent["net_id"]] = ent
         return ent
+
+    def _add_entity(self, **kw):
+        ent = self._make_entity(**kw)
+        self.world[ent["net_id"]] = ent
+        self._witness_capture(ent)
+        return ent
+
+    def _build_map(self):
+        self.map_objects = []
+        for net_id, cname, parent_net, slot, x, z, ai in MAP_OBJECT_SPECS:
+            parent_class = ""
+            if parent_net:
+                for prev in self.map_objects:
+                    if prev["net_id"] == parent_net:
+                        parent_class = prev["class_name"]
+            self.map_objects.append(self._make_entity(
+                net_id=net_id,
+                pers_id=ZERO_PERS_ID,
+                class_name=cname,
+                cat="map",
+                loc_kind="cargo" if (parent_net and slot.startswith("Cargo")) else ("attachment" if parent_net else "ground"),
+                parent_net_id=parent_net,
+                parent_class=parent_class,
+                slot_name=slot,
+                owner_uid="",
+                pos=(x, _surface_y(x, z), z),
+                ori=(0.0, 0.0, 0.0),
+                max_hp=DEFAULT_MAX_HP,
+                health_hp=DEFAULT_MAX_HP,
+                spawn_tick_ms=0.0,
+                persistent=False,
+                ai_agent=ai,
+            ))
+
+    def _find_by_net_id(self, net_id):
+        # GetObjectByNetworkId: 0:0 no es un id de red valido (edificios estaticos del mapa).
+        if net_id == "0:0":
+            return None
+        ent = self.world.get(net_id)
+        if ent is not None and ent["alive"]:
+            return ent
+        for obj in self.map_objects:
+            if obj["net_id"] == net_id and obj["alive"]:
+                return obj
+        return None
+
+    def _cargo_children(self, net_id):
+        out = []
+        for ent in list(self.world.values()) + self.map_objects:
+            if ent["alive"] and ent["parent_net_id"] == net_id and ent["loc_kind"] == "cargo":
+                out.append(ent)
+        return out
+
+    def _preorder_children(self, net_id):
+        # Hijos de net_id en PREORDER (mundo y mapa), como EnumerateInventory(PREORDER) menos la raiz.
+        out = []
+        for ent in list(self.world.values()) + self.map_objects:
+            if ent["alive"] and ent["parent_net_id"] == net_id and net_id != "":
+                out.append(ent)
+                out.extend(self._preorder_children(ent["net_id"]))
+        return out
 
     def _record_by(self, scene_id, logical_id):
         for rec in self.records:
@@ -301,7 +428,7 @@ class PersistFakeExt(FakeExt):
 
     def _children_count(self, net_id):
         n = 0
-        for ent in self.world.values():
+        for ent in list(self.world.values()) + self.map_objects:
             if ent["alive"] and ent["parent_net_id"] == net_id:
                 n += 1
         return n
@@ -359,6 +486,7 @@ class PersistFakeExt(FakeExt):
             "health_hp": float(ent["health_hp"]),
             "inv_children_n": float(self._children_count(ent["net_id"])),
             "spawn_tick_ms": float(ent["spawn_tick_ms"]),
+            "surface_y_m": float(_surface_y(ent["pos"][0], ent["pos"][2])),
         }
 
     # ------------------------------------------------------------------ verbs
@@ -381,6 +509,8 @@ class PersistFakeExt(FakeExt):
             return self._op_spawn_raw(args_unpacked)
         if verb == "per_census_start":
             return self._op_census_start(op, args_unpacked, fault)
+        if verb == "per_witness_start":
+            return self._op_witness_start(op, args_unpacked)
         return ("rejected", "unknown_verb", wire.empty_payload())
 
     def _op_status(self, args_unpacked):
@@ -826,6 +956,7 @@ class PersistFakeExt(FakeExt):
         child_class = strs.get("child_cargo_class", "")
         target_scene = strs.get("target_scene_id", "")
         target_parent = strs.get("target_parent_id", "")
+        target_net = strs.get("target_net_id", "")
         x_m = float(nums.get("x_m", 0.0))
         z_m = float(nums.get("z_m", 0.0))
         yaw = float(nums.get("yaw_deg", 0.0))
@@ -848,7 +979,25 @@ class PersistFakeExt(FakeExt):
             if _dist2(x_m, z_m, cx, cz) <= 60.0:
                 area_id = aid
                 break
-        if mode == "foreign_in_container":
+        if mode == "foreign_in_container" and target_net != "":
+            # Padre por net_id (GetObjectByNetworkId). Los rechazos salen antes de crear nada: sin efectos.
+            if not NET_ID_RE.fullmatch(target_net):
+                return ("rejected", "bad_args", wire.empty_payload())
+            tgt_ent = self._find_by_net_id(target_net)
+            if tgt_ent is None:
+                return ("rejected", "target_not_found", wire.empty_payload())
+            capacity = CARGO_CAPACITY.get(tgt_ent["class_name"], 0)
+            used = len(self._cargo_children(tgt_ent["net_id"]))
+            if used >= capacity:
+                return ("rejected", "no_cargo_space", wire.empty_payload())
+            loc_kind = "cargo"
+            parent_net = tgt_ent["net_id"]
+            parent_class = tgt_ent["class_name"]
+            slot_name = "Cargo:0:0:%d" % used
+            pos = tgt_ent["pos"]
+            ori = tgt_ent["ori"]
+            area_id = tgt_ent["area_id"]
+        elif mode == "foreign_in_container":
             tgt = self._record_by(target_scene, target_parent)
             if tgt is None:
                 return ("rejected", "unknown_entity", wire.empty_payload())
@@ -946,7 +1095,15 @@ class PersistFakeExt(FakeExt):
         center_z = float(nums.get("center_z_m", 0.0))
         radius = float(nums.get("radius_m", 60.0))
         include_dir = int(round(float(nums.get("include_director_b", 0.0))))
+        select_all_raw = float(nums.get("select_all_entityai_b", 0.0))
         if not area_tag:
+            return ("rejected", "bad_args", wire.empty_payload())
+        # Modo opt-in select_all_entityai_b: con 0 nada cambia (ni filas, ni columnas, ni tope de radio);
+        # con 1 el radio va en (0, 120]. Los rechazos salen antes de cualquier efecto.
+        if select_all_raw not in (0.0, 1.0):
+            return ("rejected", "bad_args", wire.empty_payload())
+        select_all = int(select_all_raw)
+        if select_all == 1 and not (0.0 < radius <= CENSUS_ALL_RADIUS_MAX):
             return ("rejected", "bad_args", wire.empty_payload())
         if fault == "drop_ctrl_pre_restart":
             for net_id in list(self.world.keys()):
@@ -962,7 +1119,7 @@ class PersistFakeExt(FakeExt):
             self,
             job_id,
             "per_census",
-            list(CENSUS_NCOL),
+            list(CENSUS_NCOL_ALL if select_all == 1 else CENSUS_NCOL),
             list(CENSUS_SCOL),
             CENSUS_PAGE_SIZE,
             CENSUS_MAX_ROWS,
@@ -977,23 +1134,44 @@ class PersistFakeExt(FakeExt):
         snap_ms = float(self.peer.local_ms())
         snap_frame = int(self.peer.frame)
         rows = []
-        for ent in self.world.values():
-            if not ent["alive"]:
-                continue
-            if ent["owner_uid"] == self.director_uid:
-                if include_dir == 1:
-                    rows.append(self._census_row(ent, 1))
-                continue
-            if _dist2(ent["pos"][0], ent["pos"][2], center_x, center_z) <= radius:
+        if select_all == 1:
+            # Todo lo del disco (mundo S-persist y mapa simulado): cada raiz seguida de su inventario en PREORDER.
+            # El director no es raiz del censo; su inventario solo entra con include_director_b = 1.
+            for ent in list(self.world.values()) + self.map_objects:
+                if not ent["alive"] or ent["parent_net_id"] != "" or ent["owner_uid"] == self.director_uid:
+                    continue
+                if _dist2(ent["pos"][0], ent["pos"][2], center_x, center_z) > radius:
+                    continue
                 rows.append(self._census_row(ent, 1))
-                continue
-            if ent["own_b"] == 1 and ent["cat"] in ("infected", "animal"):
-                if ent["area_id"] == area_id:
-                    rows.append(self._census_row(ent, 0))
+                for sub in self._preorder_children(ent["net_id"]):
+                    rows.append(self._census_row(sub, 1))
+            if include_dir == 1:
+                for ent in self.world.values():
+                    if ent["alive"] and ent["owner_uid"] == self.director_uid:
+                        rows.append(self._census_row(ent, 1))
+        else:
+            for ent in self.world.values():
+                if not ent["alive"]:
+                    continue
+                if ent["owner_uid"] == self.director_uid:
+                    if include_dir == 1:
+                        rows.append(self._census_row(ent, 1))
+                    continue
+                if _dist2(ent["pos"][0], ent["pos"][2], center_x, center_z) <= radius:
+                    rows.append(self._census_row(ent, 1))
+                    continue
+                if ent["own_b"] == 1 and ent["cat"] in ("infected", "animal"):
+                    if ent["area_id"] == area_id:
+                        rows.append(self._census_row(ent, 0))
+        census_ncol = CENSUS_NCOL_ALL if select_all == 1 else CENSUS_NCOL
         for row in rows:
-            nvals = [row[c] for c in CENSUS_NCOL]
+            nvals = [row[c] for c in census_ncol]
             svals = [row[c] for c in CENSUS_SCOL]
             if not self.jobs.append_row(job_id, nvals, svals):
+                if select_all == 1 and self.jobs.get_state(job_id) == "failed":
+                    # Tope de filas: el JobMgr ya dejo el trabajo en failed/rows_cap; no se sigue ni se trunca en
+                    # silencio. Igual que el .c, el arranque responde done y el estado se lee con job_read.
+                    break
                 return ("rejected", "bad_args", wire.empty_payload())
         s = {
             "job": job_id,
@@ -1018,6 +1196,177 @@ class PersistFakeExt(FakeExt):
         payload = wire.pack_payload(scalars_str=s, scalars_num=n)
         self.pending_finish[job_id] = CENSUS_FINISH_DELAY_FRAMES
         return ("done", "", payload)
+
+    # --------------------------------------------------------- testigo de creacion
+    def _witness_capture(self, ent):
+        # Equivale al gancho EEInit del .c: apagado cuesta un chequeo; encendido filtra por radio y ventana.
+        wit = self.witness
+        if wit is None or wit["closed"]:
+            return
+        now_ms = float(self.peer.local_ms())
+        if now_ms > wit["end_ms"]:
+            return
+        if len(wit["buf"]) >= WITNESS_MAX_ROWS + 1:
+            return
+        if _dist2(ent["pos"][0], ent["pos"][2], wit["cx"], wit["cz"]) > wit["radius"]:
+            return
+        wit["buf"].append({
+            "ent": ent,
+            "class_name": ent["class_name"],
+            "net_id": ent["net_id"],
+            "parent_net_id": ent["parent_net_id"],
+            "pos": tuple(ent["pos"]),
+            "yaw": float(ent["ori"][0]),
+            "tick_ms": now_ms,
+            "frame": int(wit["frame"]),
+            "ai": 1.0 if ent["ai_agent"] else 0.0,
+        })
+
+    def _witness_alive(self, ent):
+        return ent["alive"] and self.world.get(ent["net_id"]) is ent
+
+    def _witness_row(self, sample_idx, cls, net_id, parent_net_id, pos, yaw, tick_ms, frame, ai, alive):
+        return {
+            "class_name": cls,
+            "net_id": net_id,
+            "parent_net_id": parent_net_id,
+            "sample_idx": float(sample_idx),
+            "pos_x_m": float(pos[0]),
+            "pos_y_m": float(pos[1]),
+            "pos_z_m": float(pos[2]),
+            "yaw_deg": float(yaw),
+            "tick_ms": float(tick_ms),
+            "frame": float(frame),
+            "ai_agent_b": float(ai),
+            "alive_b": 1.0 if alive else 0.0,
+        }
+
+    def _witness_append(self, job_id, row):
+        nvals = [row[c] for c in WITNESS_NCOL]
+        svals = [row[c] for c in WITNESS_SCOL]
+        return self.jobs.append_row(job_id, nvals, svals)
+
+    def _op_witness_start(self, op, args_unpacked):
+        strs = args_unpacked.get("str") or {}
+        nums = args_unpacked.get("num") or {}
+        witness_tag = strs.get("witness_tag", "")
+        for key in ("center_x_m", "center_z_m", "radius_m", "window_ms"):
+            if key not in nums:
+                return ("rejected", "bad_args", wire.empty_payload())
+        center_x = float(nums["center_x_m"])
+        center_z = float(nums["center_z_m"])
+        radius = float(nums["radius_m"])
+        window_ms = float(nums["window_ms"])
+        k_raw = float(nums.get("witness_follow_ticks", float(WITNESS_K_DEFAULT)))
+        # Los rechazos salen antes de start_job y de encender el gancho: sin efectos.
+        if not (0.0 < radius <= WITNESS_RADIUS_MAX) or not (0.0 < window_ms <= WITNESS_WINDOW_MAX_MS):
+            return ("rejected", "bad_args", wire.empty_payload())
+        if not k_raw.is_integer() or not (1 <= int(k_raw) <= WITNESS_K_MAX):
+            return ("rejected", "bad_args", wire.empty_payload())
+        follow_k = int(k_raw)
+        job_id = op["op_id"]
+        err = self.jobs.start_job(
+            self,
+            job_id,
+            "per_witness",
+            list(WITNESS_NCOL),
+            list(WITNESS_SCOL),
+            WITNESS_PAGE_SIZE,
+            WITNESS_MAX_ROWS,
+            window_ms + WITNESS_TAIL_MS,
+            "stop",
+        )
+        if err != "":
+            return ("rejected", err, wire.empty_payload())
+        start_ms = float(self.peer.local_ms())
+        self.witness = {
+            "job_id": job_id,
+            "end_ms": start_ms + window_ms,
+            "k": follow_k,
+            "cx": center_x,
+            "cz": center_z,
+            "radius": radius,
+            "closed": False,
+            "frame": int(self.peer.frame),
+            "buf": [],
+            "follow": [],
+        }
+        s = {
+            "job": job_id,
+            "state": "running",
+            "resource": "per_witness",
+            "witness_tag": witness_tag,
+            "server_epoch": self.epoch,
+        }
+        n = {
+            "start_tick_ms": start_ms,
+            "start_frame": float(self.peer.frame),
+            "center_x_m": center_x,
+            "center_z_m": center_z,
+            "radius_m": radius,
+            "window_ms": window_ms,
+            "witness_follow_ticks": float(follow_k),
+        }
+        payload = wire.pack_payload(scalars_str=s, scalars_num=n)
+        return ("done", "", payload)
+
+    def _tick_witness(self):
+        wit = self.witness
+        if wit is None:
+            return
+        jid = wit["job_id"]
+        now_ms = float(self.peer.local_ms())
+        frame = int(self.peer.frame)
+        wit["frame"] = frame
+        # 1) muestras de seguimiento (sample_idx 1..K) de lo capturado en ticks anteriores
+        keep = []
+        for fol in list(wit["follow"]):
+            ent = fol["ent"]
+            alive = self._witness_alive(ent)
+            if alive:
+                fol["pos"] = tuple(ent["pos"])
+                fol["yaw"] = float(ent["ori"][0])
+                fol["net_id"] = ent["net_id"]
+                fol["parent_net_id"] = ent["parent_net_id"]
+                fol["ai"] = 1.0 if ent["ai_agent"] else 0.0
+            row = self._witness_row(
+                fol["next"], fol["class_name"], fol["net_id"], fol["parent_net_id"],
+                fol["pos"], fol["yaw"], now_ms, frame, fol["ai"], alive,
+            )
+            if not self._witness_append(jid, row):
+                return
+            fol["next"] += 1
+            if fol["next"] <= wit["k"]:
+                keep.append(fol)
+        wit["follow"] = keep
+        # 2) capturas de EEInit acumuladas desde el tick anterior (sample_idx 0)
+        for cap in wit["buf"]:
+            row = self._witness_row(
+                0, cap["class_name"], cap["net_id"], cap["parent_net_id"],
+                cap["pos"], cap["yaw"], cap["tick_ms"], cap["frame"], cap["ai"], True,
+            )
+            if not self._witness_append(jid, row):
+                return
+            wit["follow"].append({
+                "ent": cap["ent"],
+                "class_name": cap["class_name"],
+                "net_id": cap["net_id"],
+                "parent_net_id": cap["parent_net_id"],
+                "pos": cap["pos"],
+                "yaw": cap["yaw"],
+                "ai": cap["ai"],
+                "next": 1,
+            })
+        wit["buf"] = []
+        # 3) vencida la ventana se deja de capturar; acaba cuando no queda seguimiento pendiente
+        if not wit["closed"] and now_ms >= wit["end_ms"]:
+            wit["closed"] = True
+        if wit["closed"] and not wit["follow"]:
+            self.jobs.end_job(jid, "done", "")
+
+    def on_job_end(self, job_id, state, reason):
+        if self.witness is not None and self.witness["job_id"] == job_id:
+            self.witness = None
 
     def _op_cleanup(self, args_unpacked):
         cleaned_own = len(self.records)
@@ -1067,6 +1416,7 @@ class PersistFakeExt(FakeExt):
         self._save_state()
 
     def on_tick(self, timeslice_s):
+        self._tick_witness()
         for job_id in list(self.pending_finish):
             left = int(self.pending_finish.get(job_id, 0)) - 1
             if left > 0:
@@ -1078,6 +1428,7 @@ class PersistFakeExt(FakeExt):
 
     def on_shutdown(self):
         self.pending_finish.clear()
+        self.witness = None
 
 
 def create_ext(peer, jobs):
