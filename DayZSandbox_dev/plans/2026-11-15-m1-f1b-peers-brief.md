@@ -1,6 +1,6 @@
 # F1b-peers sin juego: mod núcleo `DayZSandbox/` y los dos peers `dsbx1` en Enforce
 
-2026-11-15 · tarea **F1b-peers**, parte sin juego. Rama `claude/f1b-peers` desde `origin/main` (`0634598`, que ya lleva F1b-bridge, PR #9) · spec de implementación (R25) de la continuación que define el brief de F1b-bridge en su §11 ([brief](2026-11-14-m1-f1b-bridge-brief.md), líneas 367-382) · contrato de los peers: el mismo brief, §2.4 (líneas 85-122), congelado y ya en `main` · plan v2, decisiones #3, #5, #8, #10, #22 y #32 · **v1.1, ronda 1 de Sol aplicada** (§10). Queda como mucho una ronda.
+2026-11-15 · tarea **F1b-peers**, parte sin juego. Rama `claude/f1b-peers` desde `origin/main` (`0634598`, que ya lleva F1b-bridge, PR #9) · spec de implementación (R25) de la continuación que define el brief de F1b-bridge en su §11 ([brief](2026-11-14-m1-f1b-bridge-brief.md), líneas 367-382) · contrato de los peers: el mismo brief, §2.4 (líneas 85-122), congelado y ya en `main` · plan v2, decisiones #3, #5, #8, #10, #22 y #32 · **v1.2, congelada**: ronda 1 de Sol aplicada y ronda 2 arbitrada por el orquestador, con el tope de 2 rondas cumplido (§10).
 
 **Por qué ahora.** F1b-bridge dejó en `main` el lado del backend y un mod falso en Python que cumple §2.4 (`app/tests/fake_mod.py`). Falta el mod real para cerrar F1 (plan v2, F1, líneas 80-93). La sesión principal asignó F1b-peers el 2026-11-15. La parte en partida espera al gate en partida de F0.3-0 (§6).
 
@@ -18,7 +18,7 @@
 
 **Proceso.** Como F1b-web y F1b-bridge:
 1. Sol revisa este brief, como mucho en 2 rondas (Guillermo, 2026-11-14: «Máximo 2 rondas de Sol»); después arbitra el orquestador.
-2. La lógica de los peers la escribe un worker. El esqueleto mecánico y el cambio de origen de los ms del bridge (§3.6) los hace el orquestador.
+2. La lógica de los peers la escribe un worker (F1bp-1) y las herramientas de Python, otro (F1bp-0, §8). El esqueleto mecánico y los ajustes del bridge y del mod falso (§3.4-§3.6) los hace el orquestador.
 3. El orquestador revisa, integra y corre el gate.
 4. Sol revisa el código.
 5. Es Enforce de producto, así que después revisa el experto de Enforce (Guillermo: «Solo el producto»). El orquestador le deja el texto a Guillermo.
@@ -40,7 +40,8 @@
   - `scene.apply` en dos pasos que solo anotan la generación;
   - la subida del catálogo de `CfgVehicles` (#8);
   - el epoch del mundo que el servidor pasa al cliente (#3, #10);
-- **un ajuste del bridge**: los ms públicos cuentan desde su arranque (§3.6);
+- **dos ajustes del bridge**: los ms públicos cuentan desde su arranque (§3.6) y no encola una orden con una cadena que el motor leería cortada (§3.5);
+- **dos ajustes del mod falso**: corta las cadenas como el motor (§3.5) y tiene el modo de reintento del peer de Enforce (§3.4, D1);
 - **el gate sin juego** (§5):
   - linter offline de Enforce por `errors`;
   - prueba estática del mod con antitautología;
@@ -144,9 +145,10 @@ Una clase, `DSBX_Peer(role)`, con `role` = `"server"` o `"client"`. Cumple **§2
   - **P**: hello, poll entregador y poll de mantenimiento;
   - **R**: resultados y páginas del catálogo.
 - **Pueden estar en vuelo a la vez.** Así un acuse lento no corta los polls de mantenimiento (§2.4.2; es el H3 de Sol en el mod falso). **[verify en partida]** si el motor atiende las dos peticiones a la vez (§6, G7).
-- **Un solo punto de envío (P-06):** `Send(canal, ruta, cuerpo)` es la única función que llama a `GET` o `POST`.
-  - Para `POST` compara antes `cuerpo.Length() > DSBX_WIRE_CAP`. Si se pasa, no envía y devuelve el fallo `wire_cap` a quien llama.
+- **Un solo punto de envío (P-06):** `Send(canal, ruta, body)` es la única función que llama a `GET` o `POST`.
+  - Para `POST` compara antes `body.Length() > DSBX_WIRE_CAP`. Si se pasa, no envía y devuelve el fallo `wire_cap` a quien llama.
   - Cubre hello, resultados y páginas del catálogo.
+  - **Lo que entra en `Send` no sale de él (P-09).** Dentro de `Send`, `ruta` solo aparece en la firma y como argumento de `.GET(` y `.POST(`; `body`, además, en la comparación con `DSBX_WIRE_CAP`. Ninguno de los dos se concatena, se asigna, se guarda ni se pasa a `Log` ni a otra llamada. Los logs de `Send` dicen el canal y los bytes, nunca la ruta.
 - **Callbacks a prueba de repetición:** el motor puede llamar a `OnError` varias veces si reintenta (`restapi.c:53`). Cada callback se cierra con su primera llamada (`m_Done`). Una respuesta de una generación que ya no es la activa de su canal se descarta, como en `PROBE`.
 - **Plazos del motor:** `RestApi.SetOption(ERESTOPTION_READOPERATION, 3)` y `SetOption(ERESTOPTION_CONNECTION, 3)` al crear el primer peer. Son los mínimos que admite el motor (`restapi.c:28-35`: entre 3 y 120 s; 10 por defecto).
 - **Watchdog de guion:** de 6 s por canal. Una petición sin respuesta se retira y cuenta como fallo de transporte.
@@ -192,20 +194,26 @@ Un `Tick(timeslice)` por `OnUpdate` mueve:
 - `OnError(code)` trae solo un `ERestResultState` y ningún cuerpo.
 - `OnTimeout()` no trae nada.
 
-Así que el peer **no distingue** un 409 `hello_required` de un 401 o un 400 por el cuerpo. La política decide por el estado del motor, sin cambiar el contrato:
+Así que el peer **no distingue** un 409 `hello_required` de un 401 o un 400 por el cuerpo. La política decide por el estado del motor; en R, con la desviación declarada D1 (abajo):
 
 | Canal y estado | Qué hace el peer |
 |---|---|
-| P, `OnError` con `EREST_ERROR_CLIENTERROR` (un 4xx: `hello_required`, `bad_key` o `bad_request`) | Olvida `session` y `conn` y vuelve a `HELLO`. Si era la clave, el hello falla igual y espera su `retry_ms` |
+| P, `OnError` con `EREST_ERROR_CLIENTERROR` (un 4xx: `hello_required`, `bad_key` o `bad_request`) | Olvida `session` y `conn` y vuelve a `HELLO`. Las vueltas seguidas por esta fila esperan 250 ms × 2^(n−1), con tope `retry_ms`, y la cuenta vuelve a cero con un poll válido: un 4xx que se repite no presenta al peer en bucle |
 | P, cualquier otro fallo (otro `OnError`, `OnTimeout`, watchdog o un 200 que no vale) | No renueva el lease. Reintenta en el mismo estado, con esperas de 250 ms × 2^(n−1) y tope `retry_ms`. **No se vuelve a presentar**, salvo por la regla de abajo |
 | P, sin un poll válido durante más de `lease_ms` | Vuelve a `HELLO`, pase lo que pase. Para entonces el backend ya ha dado la conexión por perdida (§2.5.3) |
-| R, resultado, `OnError` con `EREST_ERROR_CLIENTERROR` (`unknown_op`, `bad_request` o `bad_key`) | Abandona el envío; el resultado queda en la caché (§2.4.7) |
-| R, resultado, cualquier otro fallo | Reintento a los 250, 500 y 1000 ms; se abandona al cuarto fallo |
-| R, página del catálogo, `CLIENTERROR` (`bad_catalog` o `bad_request`) | Abandona el catálogo de esa sesión |
-| R, página del catálogo, cualquier otro fallo | Mismos reintentos que un resultado |
+| R, resultado, cualquier fallo: `OnError` con cualquier estado (`CLIENTERROR` incluido), `OnTimeout`, watchdog o un 200 que no vale | Reintento a los 250, 500 y 1000 ms; se abandona al cuarto fallo y el resultado queda en la caché (§2.4.7). **R no mira el estado del motor** (D1) |
+| R, página del catálogo, cualquier fallo | Los mismos reintentos. Al cuarto fallo de una página se abandona el catálogo de esa sesión |
+
+**D1, desviación declarada (arbitraje del orquestador tras la ronda 2 de Sol, P-01).** El contrato abandona un resultado «tras 4 fallos o con un 409 `unknown_op`» (brief de F1b-bridge, línea 121). El motor no deja ver ese 409, así que el peer de Enforce solo aplica la primera rama:
+- ante un `unknown_op` manda como mucho 3 POST de más, en 1,75 s;
+- el backend contesta a cada uno con el mismo 409 y no toca su estado (`bridge.py:590-610`, en `handle_result`);
+- el resultado acaba como en el contrato: abandonado y en la caché para una reentrega;
+- un 400 `bad_request` por un cuerpo incompleto se reintenta y puede acabar en 200, como en la referencia (`fake_mod.py`, `_service_pending`).
+
+El mod falso reproduce esta política con `r_retry_unknown=True`. La prueba `ReintentoSinVer409` acredita que así se abandona al cuarto intento sin que el backend cambie, y que con el modo apagado se abandona al primero. El backend ya acepta esos reintentos, así que el contrato no se toca.
 
 - **[verify en partida]** qué estado entrega el motor para un 400, 401, 409, 413, 500 y un plazo agotado, y si llama a `OnSuccess` con un 4xx (G7).
-- **Si el motor no entrega `CLIENTERROR` para un 4xx,** la regla de `lease_ms` sigue garantizando que el peer se vuelve a presentar.
+- **Si el motor no entrega `CLIENTERROR` para un 4xx,** la regla de `lease_ms` sigue garantizando que el peer se vuelve a presentar. En R no cambia nada, porque no mira el estado.
 - **La caché sobrevive** a un hello nuevo (§2.4.4).
 
 ### 3.5 Validación de todo 200 (§2.4.1, H5)
@@ -220,6 +228,10 @@ Funciones con nombre fijo y sin efectos, `ValidHello`, `ValidPoll` y `ValidAck`,
 Las respuestas se leen con `JsonSerializer.ReadFromString` en clases de mensajes (`DSBX_HelloResp`, `DSBX_PollResp`, `DSBX_Order`, `DSBX_Args` y `DSBX_AckResp`), como `PROBE`.
 - **Los ms del cable son `int`**: `now_ms`, `issued_ms`, `ttl_ms` y `conn` (P-02). Nunca `float`.
 - **Una lectura fallida** cuenta como 200 no válido.
+- **Cadenas que el motor cortaría.** `JsonSerializer` corta a 1023 cada cadena que lee (F0.3-0, BASE-01; su brief, §15, D10, en `b9b4740`).
+  - El bridge no encola una orden con una cadena de más de 1000 bytes en el cable, contada escapada y en UTF-8: `STR_CAP` en `bridge.py`, con rechazo `wire_cap_exceeded` y la prueba `CadenasQueElMotorCorta`. Es la regla de 1000 de D10.
+  - El mod falso corta a 1023 al leer, como el motor (`cut_engine_strings`, prueba `MotorCortaCadenas`).
+  - Así el peer nunca lee una cadena cortada de una orden y no necesita comprobarlo.
 
 **[verify en partida]** cómo lee `JsonSerializer` un `bool` ausente y un número en un `int` (F0.3-0 lo marcó `[verify]`).
 
@@ -298,10 +310,10 @@ if (!EffectGuard(order)) { GuardFailed(order); return; }
 
 **Dos escritores de cadenas (P-04):**
 - **`WireId(s)`**, para identificadores (`op_id`, `session`, `epoch`, `inst`, `hash`, motivos fijos y nombres de clase): solo admite `[0-9A-Za-z_.:-]`. Un identificador con otro carácter no se escribe y se trata como un valor malo de quien lo produjo, por ejemplo una orden con un `op_id` raro.
-- **`WireText(s, max)`**, para texto general (`map`, `build`, nombres del modset y `mod_ver`): escribe la cadena JSON con escape, recorriéndola byte a byte, sin `Replace` ni `IndexOf`.
+- **`WireText(s)`**, para texto general (`map`, `build`, nombres del modset y `mod_ver`): escribe la cadena JSON con escape, recorriéndola byte a byte, sin `Replace` ni `IndexOf`.
   - `"` sale como `\"`, `\` como `\\`, y los bytes por debajo de 0x20, como `\u00XX`.
   - Los bytes de 0x80 en adelante pasan tal cual: es UTF-8.
-  - La salida se acota a `max` bytes sin partir un escape. Si no cabe, el valor se trunca en un límite seguro y se registra.
+  - **Nunca recorta (P-10).** El único tope es el del cuerpo entero, en `Send`. Un cuerpo que no cabe no se manda: el hello, por §3.11; el resultado, por el sustituto de abajo; la página, por §3.9.
 
 **Tope:** un cuerpo de más de `DSBX_WIRE_CAP` bytes (lo comprueba `Send`) se sustituye por `error/result_too_large`, con `read` `{}` y el mismo `op_id`, `session` y `epoch`, y se guarda en la caché. Nunca se recorta.
 
@@ -324,9 +336,9 @@ if (!EffectGuard(order)) { GuardFailed(order); return; }
 - `modset_hash`: 64 hex;
 - `classes`: `[[clase, base], ...]`.
 
-**`modset_hash`:** se construye con 8 enteros `string.Hash()` (`1_core/proto/enstring.c:223`) del modset ordenado, cada uno con su sal (`"0|"` … `"7|"`), y cada entero se escribe como 8 hex de sus 32 bits. **No es SHA-256**, porque el motor no lo tiene. Es un identificador estable de 64 hex, y el backend solo comprueba su forma y que coincida entre páginas. Cubre el modset entero, aunque el hello lo recorte (§3.11).
+**`modset_hash`:** se construye con 8 enteros `string.Hash()` (`1_core/proto/enstring.c:223`) del modset ordenado, cada uno con su sal (`"0|"` … `"7|"`), y cada entero se escribe como 8 hex de sus 32 bits. **No es SHA-256**, porque el motor no lo tiene. Es un identificador estable de 64 hex, y el backend solo comprueba su forma y que coincida entre páginas. Cubre el modset entero.
 
-**Páginas:** se llenan clase a clase mientras el cuerpo entero quepa en `DSBX_WIRE_CAP`, midiendo con `Length()`.
+**Páginas:** se llenan clase a clase mientras el cuerpo entero quepa en `DSBX_WIRE_CAP`, midiendo con `Length()`. Una clase que no cabe ni sola en una página vacía se salta y se cuenta en el mismo log que las de nombre raro.
 
 **Subida:**
 - por R, solo cuando R no tiene resultados pendientes;
@@ -359,7 +371,9 @@ Cuerpo escrito a mano: `{"proto":"dsbx1","peer":<role>,"inst":<32 hex>,"epoch":<
   - `"modset"`: los nombres de `GetModInfos` con `WireText`, ordenados;
   - `"actor_engine":"none"`.
 - `inst` son 32 hex por peer y por misión (UUID con `Substring`).
-- **Tope (P-06):** si el hello no cabe en `DSBX_WIRE_CAP`, se quitan nombres del final de `modset` hasta que quepa. Se registra una vez `hello_modset_truncated kept=<n> of=<m>`. El catálogo conserva el modset entero en su `modset_hash`.
+- **Tope (P-06 y P-10): el hello no se recorta nunca.** Si no cabe en `DSBX_WIRE_CAP`, `Send` no lo manda. El peer escribe una vez `hello_too_large bytes=<n>` y se queda en `HELLO` sin conectarse, reintentando cada `retry_ms` (vuelve a leer la configuración).
+  - Así el backend nunca guarda un modset parcial como si fuera entero (`bridge.py:421`, `modset` del hello).
+  - Con el modset de M1 cabe de sobra; G2 mide el tamaño real.
 
 ### 3.12 Logs
 
@@ -370,9 +384,9 @@ Cuerpo escrito a mano: `{"proto":"dsbx1","peer":<role>,"inst":<32 hex>,"epoch":<
   - la pérdida del lease;
   - los resultados abandonados;
   - el catálogo completo o abandonado;
-  - el hello recortado;
+  - el hello que no cabe (`hello_too_large`);
   - el presupuesto agotado.
-- **Nunca** la clave, la URL con la clave ni un cuerpo.
+- **Nunca** la clave, la URL con la clave ni un cuerpo (regla de `Send` de §3.2, M4).
 
 ## 4. Lo que se acredita sin juego y lo que no
 
@@ -411,17 +425,17 @@ Adapta a `DayZSandbox/` las reglas de `qa/tests/test_probe_static.py` de `claude
 | M1 forma | Los ficheros de §2.1 y ninguno más. `$PBOPREFIX$` = `DayZSandbox` e `include.lst` = `*.c`. `config.cpp` con `requiredAddons {"DZ_Data"}`, `dependencies {"Game","Mission"}` y en `defs` exactamente `gameScriptModule` y `missionScriptModule` con sus rutas | (a) añadir `4_World` a `defs` |
 | M2 tokens prohibidos | Ningún `.Replace(`, `JsonLoadFile`, `GET_now`, `POST_now`, `EnableDebug`, `GetGame().GetTime(`, `CallLater(` ni `WriteToString(` | (b) un `.Replace(` en el UUID |
 | M3 FIFO | Ningún `.Remove(` sobre el array de orden de la caché. La expulsión usa `.RemoveOrdered(`, con cualquier índice | (c) `Remove(i)` en la expulsión |
-| M4 clave | `m_Key` solo en su declaración, en `LoadConfig` y en `KeyQuery`. `LoadConfig` comprueba el alfabeto de §3.1. `KeyQuery()` solo dentro del argumento de ruta de `Send`. La clase de configuración solo en `LoadConfig`. `Print`, `Error` y `Debug.` solo en `Log` (F02-H6) | (d) un alias de la clave en otro miembro; (e) `KeyQuery()` dentro del cuerpo de un envío; (f) quitar la comprobación del alfabeto |
+| M4 clave | `m_Key` solo en su declaración, en `LoadConfig` y en `KeyQuery`. `LoadConfig` comprueba el alfabeto de §3.1. `KeyQuery()` solo dentro del argumento de ruta de `Send`. Dentro de `Send`, `ruta` solo en la firma y como argumento de `.GET(` y `.POST(`, y `body`, además, en la comparación con `DSBX_WIRE_CAP` (P-09). La clase de configuración solo en `LoadConfig`. `Print`, `Error` y `Debug.` solo en `Log` (F02-H6) | (d) un alias de la clave en otro miembro; (e) `KeyQuery()` dentro del cuerpo de un envío; (f) quitar la comprobación del alfabeto; (y) un `Log("send " + ruta);` dentro de `Send` |
 | M5 `WIRE_CAP` y `Send` | `const int DSBX_WIRE_CAP = 3500;` una sola vez, igual a `WIRE_CAP` de `app/backend/bridge.py`. `.GET(` y `.POST(` solo dentro de `Send`. `Send` contiene literalmente `body.Length() > DSBX_WIRE_CAP`, y su rama corta el envío. El sustituto `"result_too_large"` aparece | (g) `DSBX_WIRE_CAP = 4000`; (h) quitar la comparación de `Send`; (i) invertirla (`<=`); (j) un `.POST(` fuera de `Send` |
 | M6 validadores | `ValidHello`, `ValidPoll`, `ValidAck` y `ValidOrder` existen y comprueban los campos de §3.5. Los miembros de ms de las clases de lectura son `int` | (k) quitar la comprobación de `ok` en `ValidHello`; (l) `float now_ms` en `DSBX_PollResp` |
 | M7 guarda de efectos | La primera sentencia de `StepRetirar` y de `StepAnotar` es exactamente `if (!EffectGuard(order)) { GuardFailed(order); return; }`. Los cambios de generación (`SetGeneration(`) solo aparecen en esas dos funciones, después de esa línea | (m) quitar la guarda de `StepAnotar`; (n) llamar a `EffectGuard(order);` sin usar su resultado; (o) invertir la condición; (p) `SetGeneration(` antes de la guarda |
 | M8 dedup primero | En `HandleOrder`, la consulta de la caché va antes de cualquier comprobación de `stale_*` o `expired` | (q) mover la comprobación de `expired` antes de la caché |
-| M9 contrato del cable | Los escritores a mano emiten todas las claves que exige `app/backend/bridge.py`: hello y sus campos de servidor, resultado con `generation` aunque sea `null`, y página de catálogo. Las clases de lectura tienen los miembros de las respuestas del bridge. `map`, `build`, `mod_ver` y el modset pasan por `WireText`, y los identificadores, por `WireId` | (r) quitar `"generation"` del escritor del `read`; (s) escribir `map` sin `WireText` |
+| M9 contrato del cable | Los escritores a mano emiten todas las claves que exige `app/backend/bridge.py`: hello y sus campos de servidor, resultado con `generation` aunque sea `null`, y página de catálogo. Las clases de lectura tienen los miembros de las respuestas del bridge. `map`, `build`, `mod_ver` y el modset pasan por `WireText`, y los identificadores, por `WireId`. `WireText` tiene un solo parámetro y nada recorta: `hello_modset_truncated` no aparece, el escritor del hello no quita elementos del modset (`Remove`, `RemoveOrdered`, `Resize` ni `Clear` sobre él) y `hello_too_large` aparece (P-10) | (r) quitar `"generation"` del escritor del `read`; (s) escribir `map` sin `WireText`; (z) volver a quitar nombres del modset hasta que el hello quepa |
 | M10 epoch | `DSBX_RPC_EPOCH` y `DSBX_RPC_EPOCH_REQ` ≥ 1 000 000. El cliente no se presenta sin epoch: `SIN_CONFIG` lo comprueba antes de pasar a `HELLO`. `Event_OnRPC.Insert` y `.Remove` aparecen exactamente una vez cada uno | (t) presentarse sin epoch |
-| M11 errores | El manejador de `OnError` del canal P lleva `EREST_ERROR_CLIENTERROR` a `HELLO`. El del canal R abandona el resultado con ese estado. La regla de «sin poll válido durante `lease_ms`» vuelve a `HELLO` | (u) tratar `CLIENTERROR` en P como un fallo cualquiera; (v) quitar la vuelta a `HELLO` por lease vencido |
+| M11 errores | El manejador de `OnError` del canal P lleva `EREST_ERROR_CLIENTERROR` a `HELLO`, con la espera creciente de §3.4. `EREST_ERROR_CLIENTERROR` solo aparece en ese manejador: R trata todo fallo igual y abandona al cuarto (D1). La regla de «sin poll válido durante `lease_ms`» vuelve a `HELLO` | (u) tratar `CLIENTERROR` en P como un fallo cualquiera; (v) quitar la vuelta a `HELLO` por lease vencido; (x) en R, abandonar al primer `CLIENTERROR`, como la v1.1 |
 | M12 codificación | UTF-8 sin BOM y solo LF en todo `DayZSandbox/` | (w) un CRLF |
 
-**X4:** el orquestador aplica cada mutación (a)-(w) sobre una copia y comprueba que cae la regla de su fila. Si cae otra o no cae ninguna, la regla está mal. Las reglas son de forma: X4 acredita que **discriminan esas mutaciones**, no que el peer se comporte bien (§0).
+**X4:** el orquestador aplica cada mutación (a)-(z) sobre una copia y comprueba que cae la regla de su fila. Si cae otra o no cae ninguna, la regla está mal. Las reglas son de forma: X4 acredita que **discriminan esas mutaciones**, no que el peer se comporte bien (§0).
 
 ### 5.3 PBO: `qa/build_core_pbo.py` (nuevo)
 
@@ -432,7 +446,7 @@ Toma el patrón de `build_pbo.py` de F0.3-0, que hoy vive fuera del repo, en `C:
 4. vuelve a leer el PBO y compara cada fichero byte a byte (sha256) con HEAD;
 5. comprueba que el repo sigue limpio.
 
-Escribe `build_core_pbo.json` con el sha de HEAD, la lista y los hashes.
+Escribe `build_core_pbo.json` con el sha de HEAD, el prefijo, la lista y los hashes. Sale con 0 si todo cuadra, con 1 si hay diferencias y con 2 si falta una precondición (repo sucio, sin git o sin AddonBuilder). Sus pruebas sin AddonBuilder ni git van en `app/tests/test_build_core_pbo.py`: el lector sobre un PBO sintético y la comparación.
 
 ### 5.4 Pruebas de `app/tools/peer_config.py`
 
@@ -440,6 +454,7 @@ Van en `app/tests/test_peer_config.py`:
 - escribe `dsbx_peer.json` con la URL de `bridge_port` y la `peer_key` de un `backend.json` de prueba, con escritura atómica;
 - crea la carpeta si no existe;
 - sale con 2 y sin escribir nada si falta `peer_key` o si tiene caracteres fuera de `[A-Za-z0-9_-]` (por ejemplo, `+` o `&`);
+- sale con 2 también con una clave que acaba en salto de línea (se valida con `re.fullmatch`) y con un `bridge_port` que no es entero, booleano incluido;
 - no imprime la clave en ningún caso.
 
 ## 6. Gate en partida (después, F1b-peers en partida)
@@ -449,9 +464,9 @@ Va después del gate en partida de F0.3-0. Usa el OK fijo de Guillermo para part
 | # | Qué |
 |---|---|
 | G1 carga | El PBO carga en servidor y cliente retail con BattlEye. Hay que resolver cómo se firma o se acepta el PBO (F0.2 lo hizo así; el brief de F0.2, línea 359) |
-| G2 handshake | Los dos peers se presentan. El cliente lleva el epoch del servidor (`client_in_world`). El catálogo llega `complete`, con `n_classes > 0` |
+| G2 handshake | Los dos peers se presentan. El cliente lleva el epoch del servidor (`client_in_world`). El catálogo llega `complete`, con `n_classes > 0`. El hello del servidor, con el modset real, cabe en `WIRE_CAP`: se anotan sus bytes (P-10) |
 | G3 D2 | Desde la web, `apply` → pendiente → ejecutando → aplicado → observado con peers reales; con el predicado que no se cumple, `fallido/lectura_no_cumple` |
-| G4 E1 en retail | Clave mala, sesión vieja, backend reiniciado y polls cortados más de `lease_ms` → 0 efectos nuevos y la cola vieja sin ejecutar (fila E1 del plan, línea 174). **Después de cada uno, el peer se recupera** y una orden nueva llega a observado |
+| G4 E1 en retail | Clave mala, sesión vieja, backend reiniciado y polls cortados más de `lease_ms` → 0 efectos nuevos y la cola vieja sin ejecutar (fila E1 del plan, línea 174). **Después de cada uno, el peer se recupera** y una orden nueva llega a observado. Al acabar, la clave no aparece en los `script*.log` ni en los `.RPT` de servidor y cliente: búsqueda literal, 0 coincidencias (P-09; el motor podría escribir la URL de una petición) |
 | G5 hombre muerto | La ventana de cada peer, servidor y cliente: acepta hasta y rechaza desde, alrededor de `lease_ms`. Con un corte **entre** retirar y anotar, la orden acaba `parcial` (`error/lease_expired`), nunca `fallido` |
 | G6 reloj | El ritmo de `GetTickTime()` frente al reloj monotónico del backend, en marcha normal y con un tirón o una pausa del servidor, y la cota de 100 ms para un efecto ya empezado (brief de F1b-bridge §11) |
 | G7 lo que no se sabe sin motor | Qué `ERestResultState` entrega el motor para 400, 401, 409, 413, 500 y un plazo agotado, y si llama a `OnSuccess` con un 4xx. Dos peticiones en vuelo a la vez: con un acuse retenido 4 s, los `deliver=0` siguen cada 500 ms. Cómo lee `JsonSerializer` un `bool` y un `int`. Una página de catálogo cerca de `WIRE_CAP` aceptada. Los plazos de `SetOption`. Un callback tardío de una petición ya retirada no cambia nada |
@@ -476,26 +491,30 @@ DayZSandbox/                                      §2-§3          [esqueleto: o
   scripts/5_Mission/DSBX_Mission.c                ganchos y RPC del epoch (§2.2, §3.10)
 DayZSandbox_dev/
   plans/2026-11-15-m1-f1b-peers-brief.md          este brief                     [orquestador]
-  app/backend/bridge.py                           solo el origen de los ms (§3.6)          [orquestador]
-  app/tests/test_bridge.py                        solo la prueba MsDesdeElArranque          [orquestador]
-  app/tools/peer_config.py                        §3.1                           [F1bp-1]
-  app/tests/test_peer_config.py                   §5.4                           [F1bp-1]
+  app/backend/bridge.py                           origen de los ms (§3.6) y tope de cadenas (§3.5)        [orquestador]
+  app/tests/test_bridge.py                        MsDesdeElArranque y CadenasQueElMotorCorta              [orquestador]
+  app/tests/fake_mod.py                           corte de cadenas del motor y r_retry_unknown (§3.4)     [orquestador]
+  app/tests/test_fake_mod.py                      MotorCortaCadenas, ReintentoSinVer409, 3 esperas sin carrera  [orquestador]
+  app/tools/peer_config.py                        §3.1                           [F1bp-0; lo corrige el orquestador]
+  app/tests/test_peer_config.py                   §5.4                           [F1bp-0; lo completa el orquestador]
+  qa/build_core_pbo.py                            §5.3                           [F1bp-0; lo rehace el orquestador]
+  app/tests/test_build_core_pbo.py                §5.3                           [F1bp-0; lo rehace el orquestador]
   app/tests/test_mod_static.py                    §5.2                           [F1bp-1]
-  qa/build_core_pbo.py                            §5.3                           [F1bp-1]
 ```
 
 **No se tocan:**
-- `server.py`, `fake_mod.py`, `app/web/` ni las pruebas existentes;
-- en `bridge.py`, nada más que el origen de los ms.
+- `server.py` ni `app/web/`;
+- en `bridge.py`, `fake_mod.py` y las pruebas que ya había, nada más que lo de arriba.
 
-F2 y F6-web cablean `server.py`, `bridge.py` y `fake_mod.py`; el cambio de `bridge.py` se les avisó el 2026-11-15.
+F2 y F6-web cablean `server.py`, `bridge.py` y `fake_mod.py`; los cambios de esta rama en `bridge.py` y `fake_mod.py` se les avisan antes de cada commit que los lleve.
 
 ## 8. Entrega
 
 | Tanda | Quién | Escribe |
 |---|---|---|
-| Esqueleto y bridge | Orquestador | `$PBOPREFIX$`, `include.lst` y `config.cpp`, más los `.c` vacíos con sus clases, para que el linter tenga árbol. Además, el origen de los ms en `bridge.py` con su prueba |
-| F1bp-1 | El primer worker libre: DeepSeek V4.1 en la nube (OpenCode Zen, autorizado por Guillermo el 2026-11-15), si no `agy` o Muse | La lógica de §3, las herramientas y las pruebas de §5 |
+| Esqueleto y ajustes | Orquestador | `$PBOPREFIX$`, `include.lst` y `config.cpp`, más los `.c` vacíos con sus clases, para que el linter tenga árbol. Además, los dos ajustes de `bridge.py` y los dos del mod falso, con sus pruebas |
+| F1bp-0 | Carril gratis de OpenRouter (`cohere/north-mini-code:free`), de 04:44 a 04:49 | `peer_config.py`, `build_core_pbo.py` y sus pruebas. **Recibido:** `peer_config.py` y sus 13 pruebas sirven de base. El orquestador corrige la herramienta (los casos de §5.4 que se colaban y un JSON que no es objeto, que la tumbaba) y añade 3 pruebas: `main` importado con los bytes exactos, esos casos y la clave fuera de stdout y stderr también en los casos malos. `build_core_pbo.py` no sirve (lee el PBO buscando barras, llama a `subprocess.sha256`, que no existe, y su prueba falla): el orquestador lo rehace desde el patrón de F0.3-0, con 7 pruebas. Las 15 mutaciones de las dos herramientas mueren (X3) |
+| F1bp-1 | Argon por `agy` (`gemini-4-argon-high`, `accept-edits`, sin terminal: el gate lo corre el orquestador), con la tanda que cede F0.3. Cadena de Guillermo: Muse, sin cuota hasta el 16-nov → Argon → Carbon → DS4.1 en el GX10 | La lógica de §3 en `DayZSandbox/` y `test_mod_static.py` (§5.2) |
 
 Cada tanda trabaja en una copia aparte del commit congelado. El orquestador:
 - revisa el diff;
@@ -507,7 +526,7 @@ Después revisa el código Sol, como mucho en 2 rondas; luego, el experto de Enf
 ## 9. Riesgos y lo que no se ha medido
 
 - **Sin motor no hay prueba de comportamiento.** El mod falso acredita el contrato y esta parte, la forma. Lo que hace el mod en el motor solo lo dice §6.
-- **Qué deja ver el motor de un fallo (G7).** La política de §3.4 descansa en que un 4xx llegue como `EREST_ERROR_CLIENTERROR`. Si no, el peer tarda hasta `lease_ms` en volver a presentarse, y es seguro pero más lento.
+- **Qué deja ver el motor de un fallo (G7).** La política de §3.4 descansa en que un 4xx llegue como `EREST_ERROR_CLIENTERROR`. Si no, el peer tarda hasta `lease_ms` en volver a presentarse, y es seguro pero más lento. En R no importa: no mira el estado (D1).
 - **`GetTickTime()`:**
   - su resolución empeora con las horas de juego (§3.3);
   - puede pararse en pausas o tirones (G6).
@@ -519,6 +538,8 @@ Después revisa el código Sol, como mucho en 2 rondas; luego, el experto de Enf
 - **El catálogo de vanilla** puede pasar de cien páginas y se sube con cada sesión nueva del backend. Es local, y se gasta de presupuesto lo que se crea, no lo que se reusa.
 - **Firma del PBO en retail con BattlEye:** no está resuelta (G1).
 - **`WIRE_CAP = 3500` es provisional** hasta las cifras en partida de F0.3-0 (G10).
+- **El corte de 1023 está medido con texto ASCII** (BASE-01). Si el motor contara la forma escapada, el tope de 1000 sobre esa forma ya lo cubre (§3.5).
+- **Un modset que no cabe en el hello** deja al servidor sin presentarse (§3.11). Es visible y seguro; G2 mide el margen real.
 
 ## 10. Cambios por la revisión
 
@@ -536,3 +557,16 @@ Después revisa el código Sol, como mucho en 2 rondas; luego, el experto de Enf
 | P-08 · importante · §6 podía aprobar un peer que no se recupera de un fallo | Recuperación obligatoria tras cada corte o reinicio, más G8 de deduplicación, el corte entre pasos en G5 y G9 con la viabilidad del transporte de E2 (§6) |
 
 Además, por la nota de Sol sobre `missionserver.c`: el epoch lo **pide el cliente** por RPC hasta tenerlo, y el empuje del servidor queda como extra (§3.10).
+
+**Ronda 2 de Sol** (`gpt-6.1-sol`, esfuerzo máximo, solo lectura, sobre `290a4a5`, sesión `01a1dd20…`). Veredicto UNSOUND: cierra P-02..P-08, deja P-01 abierto como bloqueante y añade dos importantes. Con el tope de 2 rondas cumplido, arbitra el orquestador (Guillermo, 2026-11-14: «Máximo 2 rondas de Sol»):
+
+| Hallazgo | Arbitraje |
+|---|---|
+| P-01 · bloqueante · abandonar en R al primer `CLIENTERROR` incumple el contrato, que abandona tras 4 fallos o con un 409 `unknown_op`; un 400 por un cuerpo incompleto podría acabar en 200 al reintentar | R trata todo fallo igual y abandona al cuarto: es la primera rama del contrato. No ver el 409 cuesta como mucho 3 POST de más, que el backend contesta igual sin cambiar nada. Queda como la desviación declarada D1 (§3.4), con el modo `r_retry_unknown` del mod falso y la prueba `ReintentoSinVer409`. En P, las vueltas seguidas a `HELLO` por un 4xx esperan cada vez más. Regla M11 y mutación (x) |
+| P-09 · importante · un `Log(ruta)` dentro de `Send` filtraría la clave sin que M4 ni M5 lo vieran | `ruta` y `body` no salen de `Send` salvo hacia `.GET(` y `.POST(` (§3.2). Regla M4 y mutación (y). En partida, la clave se busca en los logs del motor (G4) |
+| P-10 · importante · el hello recortado deja en el backend un modset parcial como si fuera entero | Nada se recorta en silencio: un hello que no cabe no se manda (`hello_too_large`) y `WireText` ya no recorta (§3.8, §3.11). Regla M9 y mutación (z). G2 mide el tamaño real del hello |
+
+Además, fuera de los hallazgos:
+- **Cadenas que el motor corta:** la medida de F0.3-0 (BASE-01, D10) pasa al bridge, con la regla de 1000 sobre la forma escapada, y al mod falso, que corta a 1023 como el motor (§3.5).
+- **Reparto de la entrega:** F1bp-0 para las herramientas de Python y F1bp-1 para Enforce, con lo recibido de F1bp-0 (§7, §8).
+- **Pruebas del mod falso sin carrera:** tres esperas de `test_fake_mod.py` miraban un estado intermedio del envío del resultado. Ahora esperan a la entrada terminada y sin envío pendiente.

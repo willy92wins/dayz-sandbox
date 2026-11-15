@@ -919,6 +919,28 @@ class MsDesdeElArranque(BridgeBase):
         self.assertEqual(poll["now_ms"] - order["issued_ms"], 500)
 
 
+class CadenasQueElMotorCorta(BridgeBase):
+    """Ninguna cadena de una orden pasa de 1000 bytes en el cable: el motor corta a 1023 lo que lee
+    (F0.3-0, BASE-01 y D10). Se cuenta la forma escapada (brief de F1b-peers §3.5)."""
+
+    def test_cadena_de_mas_de_1000_bytes_no_se_encola_y_1000_si(self):
+        env = self.make_env()
+        env.hello()
+        env.reconcile()
+        antes = dict(env.bridge.orders)
+        # 1001 bytes en el cable: ASCII, UTF-8 de dos bytes y comillas que se escapan como \"
+        for larga in ("d" * 1001, "ñ" * 500 + "d", '"' * 500 + "d"):
+            ok, info = env.bridge.enqueue_order(
+                "scene.apply", {"doc_id": larga, "rev": 1, "hash": "a" * 64}, op_id="op-larga")
+            self.assertEqual((ok, info), (False, "wire_cap_exceeded"), larga[:12])
+        self.assertEqual(env.bridge.orders, antes)
+        for i, justa in enumerate(("d" * 1000, "ñ" * 500, '"' * 500)):  # 1000 bytes en el cable
+            ok, order = env.bridge.enqueue_order(
+                "scene.apply", {"doc_id": justa, "rev": 1, "hash": "a" * 64}, op_id="op-justa-%d" % i)
+            self.assertTrue(ok, justa[:12])
+            self.assertEqual(order["op_id"], "op-justa-%d" % i)
+
+
 class ArranqueConBridge(unittest.TestCase):
     """`server.py --config` con bridge: guarda peer_key y con --port 0 no usa el puerto fijo."""
 

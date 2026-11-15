@@ -19,6 +19,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 WIRE_CAP = 3500
+# Tope de cada cadena de una orden. El motor corta a 1023 lo que un peer lee con JsonSerializer
+# (partida diag de F0.3-0, BASE-01; su brief, §15, D10). La regla del proyecto es 1000, con
+# margen, y aqui se cuenta sobre la forma escapada del cable, que nunca es menor que la decodificada.
+STR_CAP = 1000
 DRAIN_S = 2.0  # tope total para descartar el cuerpo de una peticion rechazada (como C-02 de F1b-web)
 BODY_S = 2.0  # tope total para leer el cuerpo de una peticion aceptada
 MAX_DRAIN = 1024 * 1024  # por encima no se descarta: se responde y se cierra
@@ -32,6 +36,18 @@ def _is_hex(value, n):
 
 def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _max_str_bytes(obj):
+    """Bytes de la cadena mas larga dentro de obj (claves y valores, en profundidad), contados
+    como salen en el cable: escapada y en UTF-8, sin las comillas."""
+    if isinstance(obj, str):
+        return len(json.dumps(obj, ensure_ascii=False).encode("utf-8")) - 2
+    if isinstance(obj, dict):
+        return max([0] + [max(_max_str_bytes(k), _max_str_bytes(v)) for k, v in obj.items()])
+    if isinstance(obj, (list, tuple)):
+        return max([0] + [_max_str_bytes(v) for v in obj])
+    return 0
 
 
 def valid_world_read(read):
@@ -235,6 +251,9 @@ class Bridge:
                 order["priority"] = 0
             public = self._public_order(order, self._ms(now))
             if self._wire_poll_len(public, self._ms(now)) > WIRE_CAP:
+                return False, "wire_cap_exceeded"
+            if _max_str_bytes(public) > STR_CAP:
+                # el peer la leeria cortada: tampoco cabe en el cable (brief de F1b-peers §3.5)
                 return False, "wire_cap_exceeded"
             self.orders[(self.session, op_id)] = order
             self.cond.notify_all()

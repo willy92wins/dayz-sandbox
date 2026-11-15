@@ -14,7 +14,7 @@ from pathlib import Path
 
 from app.backend.server import Backend
 from app.backend.store import Store
-from app.tests.fake_mod import FakeMod, valid_ack_response, valid_hello_response, valid_poll_response
+from app.tests.fake_mod import FakeMod, _Entry, valid_ack_response, valid_hello_response, valid_poll_response
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "fixtures"
@@ -146,8 +146,8 @@ class BR5ResultadoPerdido(FakeBase):
         self.assertTrue(wait_until(lambda: fake.effect_count(op_id, "anotar") == 1))
         # los 4 intentos caen sin transmitirse
         self.assertTrue(wait_until(
-            lambda: not any(e.pending for e in fake.server.cache.values()
-                            if e.order["op_id"] == op_id)))
+            lambda: any(e.order["op_id"] == op_id and e.state == "terminada" and not e.pending
+                        for e in fake.server.cache.values())))
         fake.server.drop_all_results = False
         self.wait_state(env, op_id, "observado")
         dups = [b for b in fake.server.sent_results if b["op_id"] == op_id and b["dup"] is True]
@@ -163,8 +163,8 @@ class BR5ResultadoPerdido(FakeBase):
         op_id = r["op_id"]
         self.assertTrue(wait_until(lambda: fake.effect_count(op_id, "anotar") == 1))
         self.assertTrue(wait_until(
-            lambda: not any(e.pending for e in fake.server.cache.values()
-                            if e.order["op_id"] == op_id)))
+            lambda: any(e.order["op_id"] == op_id and e.state == "terminada" and not e.pending
+                        for e in fake.server.cache.values())))
         order = [o for o in fake.server.received_orders if o["op_id"] == op_id][-1]
         entry = [e for e in fake.server.cache.values() if e.order["op_id"] == op_id][0]
         # pasada la ventana de ejecucion pero dentro de la retencion
@@ -566,8 +566,8 @@ class BR22ConfirmacionTardia(FakeBase):
     def _parcial_sin_resultado(self, env, fake, op_id, t_apply):
         self.assertTrue(wait_until(lambda: fake.effect_count(op_id, "anotar") == 1, 5))
         self.assertTrue(wait_until(
-            lambda: not any(e.pending for e in fake.server.cache.values()
-                            if e.order["op_id"] == op_id), 5))
+            lambda: any(e.order["op_id"] == op_id and e.state == "terminada" and not e.pending
+                        for e in fake.server.cache.values()), 5))
         self.assertTrue(wait_until(lambda: time.monotonic() - t_apply > 1.05, 5))
         env.bridge.sweep()
         self.assertEqual(env.op(op_id)["state"], "parcial")
@@ -673,6 +673,66 @@ class BR9MantenimientoDuranteAcuse(FakeBase):
         self.assertTrue(wait_until(lambda: fake.server.maintenance_polls > maint_antes, 1.2))
         self.wait_state(env, b["op_id"], "observado")
         self.assertNotIn("fallido", [e["state"] for e in env.events_for(b["op_id"])])
+
+
+class MotorCortaCadenas(FakeBase):
+    """El mod falso lee las respuestas cortando cada cadena a 1023 bytes, como el motor."""
+
+    def test_cut_engine_strings(self):
+        from app.tests.fake_mod import cut_engine_strings
+        obj = {"a": "x" * 3037, "b": ["y" * 5, {"c": "ñ" * 600}], "n": 7}
+        cortado = cut_engine_strings(obj)
+        self.assertEqual(len(cortado["a"]), 1023)
+        self.assertEqual(cortado["b"][0], "y" * 5)
+        self.assertLessEqual(len(cortado["b"][1]["c"].encode("utf-8")), 1023)
+        self.assertEqual(cortado["n"], 7)
+
+    def test_el_peer_lee_cortada_una_cadena_larga_de_una_orden(self):
+        # Sin la guarda del bridge (STR_CAP subido a mano), una orden con una cadena de 2000 bytes
+        # llega al peer cortada a 1023, que es lo que veria el mod real.
+        from app.backend import bridge as bridge_mod
+        env = self.make_env()
+        fake = self.start_fake(env)
+        tope = bridge_mod.STR_CAP
+        bridge_mod.STR_CAP = 10 ** 6
+        try:
+            ok, order = env.bridge.enqueue_order("state.read", {"pad": "x" * 2000}, internal=True)
+        finally:
+            bridge_mod.STR_CAP = tope
+        self.assertTrue(ok)
+        recibidas = lambda: [o for o in fake.server.received_orders if o["op_id"] == order["op_id"]]
+        self.assertTrue(wait_until(lambda: bool(recibidas()), 8))
+        self.assertEqual(len(recibidas()[0]["args"]["pad"]), 1023)
+
+
+class ReintentoSinVer409(FakeBase):
+    """D1 (brief de F1b-peers §3.4): el peer de Enforce no ve el 409 unknown_op y lo reintenta
+    como cualquier fallo. El backend contesta igual a cada intento y no cambia nada."""
+
+    def _intentos_con_unknown(self, retry_unknown):
+        env = self.make_env()
+        fake = self.start_fake(env, r_retry_unknown=retry_unknown)
+        peer = fake.server
+        order = {"op_id": "op-no-existe", "session": peer.session, "epoch": peer.epoch,
+                 "verb": "state.read", "args": {}}
+        entry = _Entry(peer.session + "|op-no-existe", order, 0.0, 0.0)
+        entry.state = "terminada"
+        entry.result = {"status": "rejected", "reason": "stale_conn", "read": {}}
+        foto = {k: (v["bstate"], v["result_seen"]) for k, v in env.bridge.orders.items()}
+        n0 = len(peer.sent_results)
+        with peer._lock:
+            entry.pending = True
+            peer._pending.append(entry)
+        self.assertTrue(wait_until(lambda: not entry.pending, 8), "el envio no se abandono")
+        self.assertNotIn(entry, peer._pending)
+        self.assertEqual({k: (v["bstate"], v["result_seen"]) for k, v in env.bridge.orders.items()}, foto)
+        return len(peer.sent_results) - n0
+
+    def test_con_el_409_visible_se_abandona_al_primero(self):
+        self.assertEqual(self._intentos_con_unknown(False), 1)
+
+    def test_sin_ver_el_409_se_abandona_al_cuarto_sin_cambiar_el_backend(self):
+        self.assertEqual(self._intentos_con_unknown(True), 4)
 
 
 if __name__ == "__main__":

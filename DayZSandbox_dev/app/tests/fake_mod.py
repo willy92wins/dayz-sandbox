@@ -24,8 +24,23 @@ from collections import OrderedDict
 from urllib.parse import quote
 
 WIRE_CAP = 3500
+# El motor corta a 1023 caracteres cada cadena que lee con JsonSerializer (medido en la partida diag
+# de F0.3-0, BASE-01). El mod falso lee las respuestas igual, para que las pruebas sin juego lo vean.
+ENGINE_STR_CAP = 1023
 REG_SHA = "0" * 64
 _HEX = re.compile(r"[0-9a-fA-F]+")
+
+
+def cut_engine_strings(obj, cap=ENGINE_STR_CAP):
+    """Corta cada cadena de una respuesta leida como la corta el motor (bytes UTF-8)."""
+    if isinstance(obj, str):
+        raw = obj.encode("utf-8")
+        return raw[:cap].decode("utf-8", errors="ignore") if len(raw) > cap else obj
+    if isinstance(obj, dict):
+        return {cut_engine_strings(k, cap): cut_engine_strings(v, cap) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [cut_engine_strings(v, cap) for v in obj]
+    return obj
 
 
 def _is_hex(value, n):
@@ -219,7 +234,7 @@ class _Peer:
             conn.close()
         t_recv = time.monotonic()
         try:
-            obj = json.loads(raw.decode("utf-8")) if raw else {}
+            obj = cut_engine_strings(json.loads(raw.decode("utf-8"))) if raw else {}
         except ValueError:
             obj = {}
         if route is not None and self._overrides.get(route):
@@ -523,7 +538,7 @@ class _Peer:
             return False
         outcome = self._attempt_result(due)
         with self._lock:
-            if outcome in ("ok", "unknown"):
+            if outcome == "ok" or (outcome == "unknown" and not self.fake.r_retry_unknown):
                 due.pending = False
                 if due in self._pending:
                     self._pending.remove(due)
@@ -625,7 +640,7 @@ class FakeMod:
                  deadline_margin_ms=100, retention_extra_ms=1000,
                  work_before_ms=0, work_between_ms=0,
                  catalog_classes=None, catalog_page_size=1,
-                 mod_ver="fake-1", epoch=None):
+                 mod_ver="fake-1", epoch=None, r_retry_unknown=False):
         self.bridge_url = bridge_url
         self.peer_key = peer_key
         self.cache_capacity = int(cache_capacity)
@@ -635,6 +650,9 @@ class FakeMod:
         self.result_retry_ms = tuple(int(x) for x in result_retry_ms) or (250,)
         self.deadline_margin_ms = int(deadline_margin_ms)
         self.retention_extra_ms = int(retention_extra_ms)
+        # Como el peer de Enforce (brief de F1b-peers §3.4, D1): no ve el 409 unknown_op y lo
+        # reintenta como cualquier fallo, hasta el cuarto.
+        self.r_retry_unknown = bool(r_retry_unknown)
         self.mod_ver = mod_ver
         self.catalog_classes = catalog_classes or [["FakeClaseA", "BaseA"],
                                                    ["FakeClaseB", "BaseB"]]
