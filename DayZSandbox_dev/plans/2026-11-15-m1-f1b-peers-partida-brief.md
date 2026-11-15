@@ -1,6 +1,6 @@
 # F1b-peers en partida: arnés G1-G9 y partidas
 
-2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.2, `48452b7`). **v1.6, congelada: rondas 1 y 2 de Sol sobre el brief y sobre el código del arnés, con el tope cumplido y el resto arbitrado por el orquestador, más los arbitrajes de las partidas en DayZ (§10).**
+2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.3; la v1.2 es `48452b7`). **v1.7, congelada: rondas 1 y 2 de Sol sobre el brief y sobre el código del arnés, con el tope cumplido y el resto arbitrado por el orquestador, más los arbitrajes de las partidas en DayZ y de la revisión del experto de Enforce (§10).**
 
 **Por qué ahora.** F0.3-0 pasó su gate en partida en diag y en retail (`origin/main` `4f18c62`): `WIRE_CAP = 3500` está validado (G10 cumplido). La sesión principal ordenó arrancar las partidas el 2026-11-15. El PR de F1b-peers no se mergea hasta que G1-G9 pasen, porque toca el PBO.
 
@@ -305,3 +305,9 @@ Cada tanda trabaja en una copia del commit congelado. El orquestador revisa, cor
 - **El problema:** el disparo de una regla de G5 a puede caer fracciones de milisegundo antes de que se escriba su `case`. El evaluador emparejaba por `t_start_ms` y prefería las ventanas posteriores al caso, así que daba a cada a2500 la ventana del a4500 siguiente. Salía «hueco 4501» en a2500 y «sin lease lost» en a4500.
 - **El arbitraje:** la ventana lleva el `rule_id` de su regla y se empareja por él. Si no lo lleva, va con el caso entre cuyo `t_ms` y el del caso siguiente se escribió la ventana.
 - **Con eso, la partida v1.6 tiene las ocho filas diag en PASA**, G5 incluida: hueco máximo de 2500/2501 ms y `lease lost` en a4500 con la edad en rango.
+
+**H-13, revisión del experto de Enforce (15-nov, «OK con arreglos»), arbitraje del orquestador:**
+- **El mod sí cambia.** Se aplican el MUST y los cuatro SHOULD (brief de F1b-peers §10). Cada arreglo tiene su regla estática y sus mutaciones en `test_mod_static.py` (M6, M7, M11, M14 y M15).
+- **Responde a la pregunta de producto de H-07:** la fila 1 de §3.4 compara ahora con `DSBX_Const.REST_STATE_4XX` (5, lo medido). Un 4xx devuelve el peer al hello sin esperar a `lease_ms`, y un 500 cae en «cualquier otro fallo».
+- **El arnés vuelve al 409.** G4 a (`g4a_409`) y G5 b fuerzan el hello con un 409, el código del `hello_required` del backend (`app/backend/bridge.py:491`). Con el mod nuevo, un 500 ya no devuelve el peer al hello.
+- **G7 no cambia:** sus casos `status*` son medidas. Lo que cambia es qué códigos de P vuelven a presentar el peer: ahora los cuatro 4xx, y ya no el 500.

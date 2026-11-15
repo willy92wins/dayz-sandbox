@@ -490,7 +490,7 @@ REQUIRED_GUARDS = {
     "ValidHello": ["!resp", "!resp.ok", "!IsHex(resp.session,16)", "resp.conn<1", "resp.lease_ms<=0",
                    "resp.hold_ms<=0", "resp.wire_cap<1024"],
     "ValidOrder": ["!order", 'order.op_id==""', "!IsHex(order.session,16)", "order.conn<0",
-                   "!IsHex(order.epoch,32)", "!IsHex(order.inst,32)", 'order.verb==""', "!order.args",
+                   "!IsHex(order.epoch,32)", "!IsHex(order.inst,32)", 'order.verb==""',
                    "order.issued_ms<0", "order.ttl_ms<=0"],
     "ValidPoll": ["!resp", "!resp.ok", "resp.now_ms<0", "!resp.ops", "resp.ops.Count()>1",
                   "resp.ops.Count()==1&&!ValidOrder(resp.ops.Get(0))"],
@@ -538,12 +538,14 @@ def check_m6_validadores(mod_dir: Path) -> list[str]:
             "IsHex(order.epoch, 32)",
             "IsHex(order.inst, 32)",
             "order.verb",
-            "order.args",
             "order.issued_ms",
             "order.ttl_ms",
         ):
             if req not in vo:
                 violations.append(f"M6: ValidOrder no comprueba '{req}'")
+        # Revision Enforce (15-nov, H-08): args lo decide el verbo (bad_args); una sola conducta
+        if re.search(r"\border\s*\.\s*args\b", vo):
+            violations.append("M6: ValidOrder no debe mirar order.args: lo decide el verbo (bad_args)")
 
     if not vp:
         violations.append("M6: falta ValidPoll")
@@ -593,6 +595,15 @@ def check_m7_guarda_efectos(mod_dir: Path) -> list[str]:
         after_guard = stripped[len(literal_guard) :]
         if "SetGeneration(" not in after_guard:
             violations.append(f"M7: {step_fn} debe llamar a SetGeneration( despues de la guarda")
+
+    # Revision Enforce (15-nov): tras un hello nuevo, una orden de otra sesion o presentacion no surte efecto
+    eg_body = re.sub(r"\s+", " ", _find_method_body(peer_code, "EffectGuard"))
+    if not eg_body:
+        violations.append("M7: falta EffectGuard en DSBX_Peer.c")
+    for cond, reason in (("order.session != m_Session", "stale_session"), ("order.conn != m_Conn", "stale_conn")):
+        want = f'if ({cond}) {{ m_GuardFailReason = "{reason}"; return false; }}'
+        if eg_body and want not in eg_body:
+            violations.append(f"M7: EffectGuard debe cortar con '{want}'")
 
     for rel, code in c_files.items():
         if rel == "scripts/3_Game/DSBX_World.c":
@@ -800,27 +811,34 @@ def check_m11_errores(mod_dir: Path) -> list[str]:
     if not p_err_body:
         violations.append("M11: falta OnChannelPError en DSBX_Peer.c")
     else:
+        # Revision Enforce (15-nov, H-07): un 4xx llega con el estado 5, medido en juego; el simbolo
+        # EREST_ERROR_CLIENTERROR vale 6 en el enum del script y casa un 500.
         m_ce = re.search(
-            r"if\s*\(\s*!isTimeout\s*&&\s*errorCode\s*==\s*(?:ERestResultState\s*\.\s*)?EREST_ERROR_CLIENTERROR\s*\)\s*\{",
+            r"if\s*\(\s*!isTimeout\s*&&\s*errorCode\s*==\s*DSBX_Const\s*\.\s*REST_STATE_4XX\s*\)\s*\{",
             p_err_body,
         )
         if not m_ce:
-            violations.append("M11: OnChannelPError debe comprobar errorCode == EREST_ERROR_CLIENTERROR")
+            violations.append("M11: OnChannelPError debe comprobar errorCode == DSBX_Const.REST_STATE_4XX")
         else:
             brace_idx = p_err_body.find("{", m_ce.start())
             ce_block = _extract_block(p_err_body, brace_idx)
             if "m_State = DSBX_Const.ST_HELLO;" not in ce_block or 'm_Session = ""' not in ce_block or "m_Conn = 0" not in ce_block:
-                violations.append("M11: EREST_ERROR_CLIENTERROR en P debe olvidar session/conn y volver a ST_HELLO")
+                violations.append("M11: un 4xx en P debe olvidar session/conn y volver a ST_HELLO")
             if "ComputeBackoffMs(m_ClientErrCountP)" not in ce_block:
-                violations.append("M11: EREST_ERROR_CLIENTERROR en P debe aplicar espera creciente")
+                violations.append("M11: un 4xx en P debe aplicar espera creciente")
 
-    total_ce = len(re.findall(r"\bEREST_ERROR_CLIENTERROR\b", all_code))
-    in_p_ce = len(re.findall(r"\bEREST_ERROR_CLIENTERROR\b", p_err_body))
-    if total_ce != 1 or in_p_ce != 1:
+    const_code = c_files.get("scripts/3_Game/DSBX_Const.c", "")
+    if not re.search(r"\bconst\s+int\s+REST_STATE_4XX\s*=\s*5\s*;", const_code):
+        violations.append("M11: DSBX_Const.REST_STATE_4XX debe valer 5 (estado medido de un 4xx)")
+    total_4xx = len(re.findall(r"\bREST_STATE_4XX\b", peer_code))
+    in_p_4xx = len(re.findall(r"\bREST_STATE_4XX\b", p_err_body))
+    if total_4xx != 1 or in_p_4xx != 1:
         violations.append(
-            f"M11: EREST_ERROR_CLIENTERROR solo puede aparecer 1 vez y dentro de OnChannelPError "
-            f"(total={total_ce}, en_P={in_p_ce})"
+            f"M11: REST_STATE_4XX solo puede usarse 1 vez en DSBX_Peer.c, dentro de OnChannelPError "
+            f"(total={total_4xx}, en_P={in_p_4xx})"
         )
+    if re.search(r"\bEREST_ERROR_CLIENTERROR\b", all_code):
+        violations.append("M11: EREST_ERROR_CLIENTERROR no puede usarse: vale 6 y casa un 500 (H-07)")
 
     ctor = _find_method_body(peer_code, "DSBX_Peer")
     code_no_ctor = peer_code.replace(ctor, "", 1) if ctor else peer_code
@@ -832,7 +850,7 @@ def check_m11_errores(mod_dir: Path) -> list[str]:
     if not r_err_body:
         violations.append("M11: falta OnChannelRError en DSBX_Peer.c")
     else:
-        if "EREST_ERROR_CLIENTERROR" in r_err_body or "errorCode" in r_err_body:
+        if re.search(r"\b(?:REST_STATE_4XX|EREST_\w+|errorCode)\b", r_err_body):
             violations.append("M11: el canal R no debe mirar el codigo de error del motor (D1)")
         if "m_RMaxFailures" not in r_err_body or "RetryGapR(" not in r_err_body:
             violations.append("M11: OnChannelRError debe reintentar con RetryGapR y abandonar en m_RMaxFailures")
@@ -840,7 +858,6 @@ def check_m11_errores(mod_dir: Path) -> list[str]:
         if len(re.findall(r">=\s*m_RMaxFailures\b", r_err_body)) < 2 \
                 or re.search(r"(?:m_Attempts|m_CatFailures)\s*>=?\s*\d", r_err_body):
             violations.append("M11: OnChannelRError debe abandonar resultados y paginas solo con >= m_RMaxFailures")
-    const_code = c_files.get("scripts/3_Game/DSBX_Const.c", "")
     if not re.search(r"\bconst\s+int\s+R_MAX_FAILURES\s*=\s*4\s*;", const_code) \
             or not re.search(r"\bm_RMaxFailures\s*=\s*DSBX_Const\.R_MAX_FAILURES\s*;", peer_code):
         violations.append("M11: R_MAX_FAILURES debe valer 4 y asignarse a m_RMaxFailures")
@@ -920,6 +937,75 @@ def check_m13_gancho_diag(mod_dir: Path) -> list[str]:
     return violations
 
 
+def check_m14_peer_managed(mod_dir: Path) -> list[str]:
+    """MUST de la revision Enforce (15-nov): el motor retiene cada RestCallback (BI T188795). Su m_Peer es
+    debil y solo pasa a null al destruirse el peer si DSBX_Peer hereda de Managed."""
+    violations = []
+    c_files = _read_stripped_c_files(mod_dir)
+    peer_code = c_files.get("scripts/3_Game/DSBX_Peer.c", "")
+    if not re.search(r"\bclass\s+DSBX_Peer\s*:\s*Managed\s*\{", peer_code):
+        violations.append("M14: DSBX_Peer debe heredar de Managed (class DSBX_Peer : Managed)")
+    cb_body = _find_class_body(peer_code, "DSBX_Callback")
+    if not cb_body:
+        violations.append("M14: falta la clase DSBX_Callback en DSBX_Peer.c")
+    else:
+        decls = re.findall(r"(?:\b(ref|autoptr)\s+)?\bDSBX_Peer\s+m_Peer\s*;", cb_body)
+        if len(decls) != 1 or decls[0]:
+            violations.append("M14: DSBX_Callback.m_Peer debe ser una referencia debil (sin ref ni autoptr)")
+    return violations
+
+
+def check_m15_cuarentena(mod_dir: Path) -> list[str]:
+    """SHOULD de la revision Enforce (15-nov): con el backend caido, cada fallo creaba un callback nuevo y el
+    presupuesto de 2000 se agotaba en ~67 min. Un callback cerrado por un fallo o por el vigilante pasa a
+    cuarentena y se reutiliza pasado CALLBACK_QUARANTINE_MS, muy por encima del vigilante, para que una
+    respuesta tardia de la peticion vieja no se tome por la nueva."""
+    violations = []
+    c_files = _read_stripped_c_files(mod_dir)
+    peer_code = c_files.get("scripts/3_Game/DSBX_Peer.c", "")
+    const_code = c_files.get("scripts/3_Game/DSBX_Const.c", "")
+
+    m_q = re.search(r"\bconst\s+int\s+CALLBACK_QUARANTINE_MS\s*=\s*(\d+)\s*;", const_code)
+    m_w = re.search(r"\bconst\s+int\s+WATCHDOG_MS\s*=\s*(\d+)\s*;", const_code)
+    if not m_q or not m_w or int(m_q.group(1)) < 10 * int(m_w.group(1)):
+        violations.append("M15: CALLBACK_QUARANTINE_MS debe existir y valer al menos 10 veces WATCHDOG_MS")
+    if not re.search(r"\bconst\s+int\s+CALLBACK_QUARANTINE_MAX\s*=\s*\d+\s*;", const_code):
+        violations.append("M15: falta CALLBACK_QUARANTINE_MAX")
+
+    def flat(name):
+        return re.sub(r"\s+", " ", _find_method_body(peer_code, name))
+
+    if "if (!success) { Quarantine(cb, canal); return; }" not in flat("SettleCallback"):
+        violations.append("M15: SettleCallback debe mandar a cuarentena el callback de un fallo")
+
+    acquire = flat("AcquireCallback")
+    pop = acquire.find("pool.RemoveOrdered(last);")
+    take = acquire.find("if (!cb) { cb = TakeFromQuarantine(canal); }")
+    create = acquire.find("new DSBX_Callback(")
+    if pop < 0 or take < 0 or create < 0 or not (pop < take < create):
+        violations.append("M15: AcquireCallback debe probar el pool, luego la cuarentena y solo despues crear")
+
+    taker = flat("TakeFromQuarantine")
+    if "(NowMs() - oldest.m_RetiredMs) < DSBX_Const.CALLBACK_QUARANTINE_MS" not in taker \
+            or "quarantine.Get(0)" not in taker or "quarantine.RemoveOrdered(0);" not in taker:
+        violations.append("M15: TakeFromQuarantine solo devuelve el mas antiguo, y solo pasado CALLBACK_QUARANTINE_MS")
+
+    quar = flat("Quarantine")
+    if "cb.Retire();" not in quar or "cb.m_RetiredMs = NowMs();" not in quar \
+            or "quarantine.Count() < DSBX_Const.CALLBACK_QUARANTINE_MAX" not in quar:
+        violations.append("M15: Quarantine debe retirar el callback, sellar m_RetiredMs y respetar CALLBACK_QUARANTINE_MAX")
+
+    for wd, ch in (("WatchdogP", "CH_P"), ("WatchdogR", "CH_R")):
+        body = flat(wd)
+        if f"Quarantine(cb, DSBX_Const.{ch});" not in body or "cb.Retire();" in body:
+            violations.append(f"M15: {wd} debe mandar el callback a cuarentena, no solo retirarlo")
+
+    shutdown = flat("Shutdown")
+    if "DetachAll(m_QuarantineP);" not in shutdown or "DetachAll(m_QuarantineR);" not in shutdown:
+        violations.append("M15: Shutdown debe soltar el peer de los callbacks en cuarentena")
+    return violations
+
+
 ALL_CHECKS = {
     "M1": check_m1_forma,
     "M2": check_m2_tokens_prohibidos,
@@ -934,11 +1020,13 @@ ALL_CHECKS = {
     "M11": check_m11_errores,
     "M12": check_m12_codificacion,
     "M13": check_m13_gancho_diag,
+    "M14": check_m14_peer_managed,
+    "M15": check_m15_cuarentena,
 }
 
 
 class TestModStatic(unittest.TestCase):
-    """Reglas estaticas M1-M12 sobre DayZSandbox/ y discriminacion X4 (a)-(z)."""
+    """Reglas estaticas M1-M15 sobre DayZSandbox/ y discriminacion X4 (a)-(z) y siguientes."""
 
     def test_m1_forma(self):
         self.assertEqual(check_m1_forma(REAL_MOD_DIR), [])
@@ -978,6 +1066,12 @@ class TestModStatic(unittest.TestCase):
 
     def test_m13_gancho_diag(self):
         self.assertEqual(check_m13_gancho_diag(REAL_MOD_DIR), [])
+
+    def test_m14_peer_managed(self):
+        self.assertEqual(check_m14_peer_managed(REAL_MOD_DIR), [])
+
+    def test_m15_cuarentena(self):
+        self.assertEqual(check_m15_cuarentena(REAL_MOD_DIR), [])
 
     def _assert_only_rule_fails(self, rel_file: str, old: str, new: str, expected_rule: str):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1295,6 +1389,104 @@ class TestModStatic(unittest.TestCase):
                 "\t\t{\n\t\t\tif (m_CatSendSession != m_CatSession)\n\t\t\t{\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tm_CatFailures = 0;\n",
                 "\t\t{\n\t\t\tm_CatFailures = 0;\n",
                 "M11",
+            ),
+            # Revision Enforce MUST: DSBX_Peer deja de ser Managed (el m_Peer debil ya no pasa a null)
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "class DSBX_Peer : Managed\n",
+                "class DSBX_Peer\n",
+                "M14",
+            ),
+            # Revision Enforce MUST: el callback sujeta al peer con ref (el motor lo retiene para siempre)
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "\tDSBX_Peer m_Peer;\n",
+                "\tref DSBX_Peer m_Peer;\n",
+                "M14",
+            ),
+            # Revision Enforce SHOULD: EffectGuard deja pasar una orden de otra sesion
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                'if (order.session != m_Session)\n\t\t{\n\t\t\tm_GuardFailReason = "stale_session";\n\t\t\treturn false;\n\t\t}\n',
+                "",
+                "M7",
+            ),
+            # Revision Enforce SHOULD: EffectGuard deja pasar una orden de otra presentacion
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                'if (order.conn != m_Conn)\n\t\t{\n\t\t\tm_GuardFailReason = "stale_conn";\n\t\t\treturn false;\n\t\t}\n',
+                "",
+                "M7",
+            ),
+            # Revision Enforce SHOULD: el 4xx vuelve a mirarse con el simbolo del enum (vale 6: casa un 500)
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "errorCode == DSBX_Const.REST_STATE_4XX)",
+                "errorCode == ERestResultState.EREST_ERROR_CLIENTERROR)",
+                "M11",
+            ),
+            # Revision Enforce SHOULD: el estado medido del 4xx cambia de valor
+            (
+                "scripts/3_Game/DSBX_Const.c",
+                "const int REST_STATE_4XX = 5;",
+                "const int REST_STATE_4XX = 6;",
+                "M11",
+            ),
+            # Revision Enforce SHOULD: el canal R mira el estado 4xx
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "void OnChannelRError(int kind, float now)\n\t{",
+                "void OnChannelRError(int kind, float now)\n\t{\n\t\tif (DSBX_Const.REST_STATE_4XX == 0) { return; }",
+                "M11",
+            ),
+            # Revision Enforce SHOULD: ValidOrder vuelve a rechazar una orden sin args (dos conductas)
+            (
+                "scripts/3_Game/DSBX_Messages.c",
+                "\t\tif (order.issued_ms < 0)\n",
+                "\t\tif (!order.args)\n\t\t{\n\t\t\treturn false;\n\t\t}\n\t\tif (order.issued_ms < 0)\n",
+                "M6",
+            ),
+            # Revision Enforce SHOULD: un fallo vuelve a retirar el callback sin cuarentena
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "\t\t\tQuarantine(cb, canal);\n\t\t\treturn;\n",
+                "\t\t\tcb.Retire();\n\t\t\treturn;\n",
+                "M15",
+            ),
+            # Revision Enforce SHOULD: AcquireCallback ya no reutiliza la cuarentena
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "\t\tif (!cb)\n\t\t{\n\t\t\tcb = TakeFromQuarantine(canal);\n\t\t}\n",
+                "",
+                "M15",
+            ),
+            # Revision Enforce SHOULD: la cuarentena se reutiliza sin esperar
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "if (!oldest || (NowMs() - oldest.m_RetiredMs) < DSBX_Const.CALLBACK_QUARANTINE_MS)",
+                "if (!oldest)",
+                "M15",
+            ),
+            # Revision Enforce SHOULD: el vigilante de P vuelve a retirar sin cuarentena
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "Quarantine(cb, DSBX_Const.CH_P);",
+                "cb.Retire();",
+                "M15",
+            ),
+            # Revision Enforce SHOULD: cuarentena tan corta como el vigilante
+            (
+                "scripts/3_Game/DSBX_Const.c",
+                "const int CALLBACK_QUARANTINE_MS = 60000;",
+                "const int CALLBACK_QUARANTINE_MS = 6000;",
+                "M15",
+            ),
+            # Revision Enforce SHOULD: Shutdown no suelta los callbacks en cuarentena
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "\t\tDetachAll(m_QuarantineP);\n",
+                "",
+                "M15",
             ),
         ]
         for rel_file, old, new, expected_rule in cases:

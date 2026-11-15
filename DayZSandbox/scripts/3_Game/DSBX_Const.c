@@ -32,6 +32,14 @@ class DSBX_Const
 	const int EPOCH_REQ_MS = 2000;
 	const int CALLBACK_POOL_MAX = 4;
 	const int CALLBACK_BUDGET = 2000;
+	// A callback retired after a failure is reused once this long has passed (the engine may repeat
+	// OnError for the same request only while it is being processed). Without reuse, a backend that is
+	// down would spend the budget in about 67 minutes (Enforce review, 15-nov).
+	const int CALLBACK_QUARANTINE_MS = 60000;
+	const int CALLBACK_QUARANTINE_MAX = 32;
+	// Engine state measured in game for an HTTP 4xx (a 409 arrives as 5, a 500 as 6). The script enum
+	// is sequential, so EREST_ERROR_CLIENTERROR is 6 and does not match a 4xx (partida brief, H-07).
+	const int REST_STATE_4XX = 5;
 	const int CATALOG_SCAN_BATCH = 200;
 	const int R_MAX_FAILURES = 4;
 

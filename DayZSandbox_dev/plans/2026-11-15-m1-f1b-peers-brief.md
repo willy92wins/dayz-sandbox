@@ -1,6 +1,6 @@
 # F1b-peers sin juego: mod núcleo `DayZSandbox/` y los dos peers `dsbx1` en Enforce
 
-2026-11-15 · tarea **F1b-peers**, parte sin juego. Rama `claude/f1b-peers` desde `origin/main` (`0634598`, que ya lleva F1b-bridge, PR #9) · spec de implementación (R25) de la continuación que define el brief de F1b-bridge en su §11 ([brief](2026-11-14-m1-f1b-bridge-brief.md), líneas 367-382) · contrato de los peers: el mismo brief, §2.4 (líneas 85-122), congelado y ya en `main` · plan v2, decisiones #3, #5, #8, #10, #22 y #32 · **v1.2, congelada**: ronda 1 de Sol aplicada y ronda 2 arbitrada por el orquestador, con el tope de 2 rondas cumplido (§10).
+2026-11-15 · tarea **F1b-peers**, parte sin juego. Rama `claude/f1b-peers` desde `origin/main` (`0634598`, que ya lleva F1b-bridge, PR #9) · spec de implementación (R25) de la continuación que define el brief de F1b-bridge en su §11 ([brief](2026-11-14-m1-f1b-bridge-brief.md), líneas 367-382) · contrato de los peers: el mismo brief, §2.4 (líneas 85-122), congelado y ya en `main` · plan v2, decisiones #3, #5, #8, #10, #22 y #32 · **v1.3, congelada**: ronda 1 de Sol aplicada, ronda 2 arbitrada por el orquestador con el tope de 2 rondas cumplido, y revisión del experto de Enforce aplicada (§10).
 
 **Por qué ahora.** F1b-bridge dejó en `main` el lado del backend y un mod falso en Python que cumple §2.4 (`app/tests/fake_mod.py`). Falta el mod real para cerrar F1 (plan v2, F1, líneas 80-93). La sesión principal asignó F1b-peers el 2026-11-15. La parte en partida espera al gate en partida de F0.3-0 (§6).
 
@@ -198,10 +198,10 @@ Así que el peer **no distingue** un 409 `hello_required` de un 401 o un 400 por
 
 | Canal y estado | Qué hace el peer |
 |---|---|
-| P, `OnError` con `EREST_ERROR_CLIENTERROR` (un 4xx: `hello_required`, `bad_key` o `bad_request`) | Olvida `session` y `conn` y vuelve a `HELLO`. Las vueltas seguidas por esta fila esperan 250 ms × 2^(n−1), con tope `retry_ms`, y la cuenta vuelve a cero con un poll válido: un 4xx que se repite no presenta al peer en bucle |
+| P, `OnError` con el estado de un 4xx (`hello_required`, `bad_key` o `bad_request`): `DSBX_Const.REST_STATE_4XX`, que vale 5 | Olvida `session` y `conn` y vuelve a `HELLO`. Las vueltas seguidas por esta fila esperan 250 ms × 2^(n−1), con tope `retry_ms`, y la cuenta vuelve a cero con un poll válido: un 4xx que se repite no presenta al peer en bucle |
 | P, cualquier otro fallo (otro `OnError`, `OnTimeout`, watchdog o un 200 que no vale) | No renueva el lease. Reintenta en el mismo estado, con esperas de 250 ms × 2^(n−1) y tope `retry_ms`. **No se vuelve a presentar**, salvo por la regla de abajo |
 | P, sin un poll válido durante más de `lease_ms` | Vuelve a `HELLO`, pase lo que pase. Para entonces el backend ya ha dado la conexión por perdida (§2.5.3) |
-| R, resultado, cualquier fallo: `OnError` con cualquier estado (`CLIENTERROR` incluido), `OnTimeout`, watchdog o un 200 que no vale | Reintento a los 250, 500 y 1000 ms; se abandona al cuarto fallo y el resultado queda en la caché (§2.4.7). **R no mira el estado del motor** (D1) |
+| R, resultado, cualquier fallo: `OnError` con cualquier estado (el de un 4xx incluido), `OnTimeout`, watchdog o un 200 que no vale | Reintento a los 250, 500 y 1000 ms; se abandona al cuarto fallo y el resultado queda en la caché (§2.4.7). **R no mira el estado del motor** (D1) |
 | R, página del catálogo, cualquier fallo | Los mismos reintentos. Al cuarto fallo de una página se abandona el catálogo de esa sesión |
 
 **D1, desviación declarada (arbitraje del orquestador tras la ronda 2 de Sol, P-01).** El contrato abandona un resultado «tras 4 fallos o con un 409 `unknown_op`» (brief de F1b-bridge, línea 121). El motor no deja ver ese 409, así que el peer de Enforce solo aplica la primera rama:
@@ -212,8 +212,8 @@ Así que el peer **no distingue** un 409 `hello_required` de un 401 o un 400 por
 
 El mod falso reproduce esta política con `r_retry_unknown=True`. La prueba `ReintentoSinVer409` acredita que así se abandona al cuarto intento sin que el backend cambie, y que con el modo apagado se abandona al primero. El backend ya acepta esos reintentos, así que el contrato no se toca.
 
-- **[verify en partida]** qué estado entrega el motor para un 400, 401, 409, 413, 500 y un plazo agotado, y si llama a `OnSuccess` con un 4xx (G7).
-- **Si el motor no entrega `CLIENTERROR` para un 4xx,** la regla de `lease_ms` sigue garantizando que el peer se vuelve a presentar. En R no cambia nada, porque no mira el estado.
+- **Medido en partida** (G7, partida diag v1.6, `3806133`): 400, 401, 409 y 413 llegan a `OnError` con el estado 5, en P y en R, y un 500 con el 6. El enum del script es secuencial (`restapi.c:8-22`): `EREST_ERROR_CLIENTERROR` vale 6, aunque su comentario lo iguale a `EREST_ERROR`. Por eso la fila 1 compara con el estado medido y no con el símbolo, que casaba un 500 (revisión de Enforce, §10; brief de partida, H-07 y H-13).
+- **Si otra versión del motor cambia ese estado,** la regla de `lease_ms` sigue garantizando que el peer se vuelve a presentar. En R no cambia nada, porque no mira el estado.
 - **La caché sobrevive** a un hello nuevo (§2.4.4).
 
 ### 3.5 Validación de todo 200 (§2.4.1, H5)
@@ -222,7 +222,7 @@ Funciones con nombre fijo y sin efectos, `ValidHello`, `ValidPoll` y `ValidAck`,
 
 - **hello:** `ok` presente y `true`, `session` de 16 hex, `conn` entero ≥ 1, `lease_ms > 0`, `hold_ms > 0` y `wire_cap ≥ 1024`. El de `conn` lo añadió el mod falso, porque sin él el peer se queda con sesión y sin conexión.
 - **poll:** `ok` presente y `true`, `now_ms` entero ≥ 0 y `ops` lista de 0 o 1 órdenes.
-- **orden:** `op_id` no vacío, `session` de 16 hex, `conn` entero, `epoch` e `inst` de 32 hex, `verb` no vacío, `args` objeto, `issued_ms` entero ≥ 0 y `ttl_ms` entero > 0.
+- **orden:** `op_id` no vacío, `session` de 16 hex, `conn` entero, `epoch` e `inst` de 32 hex, `verb` no vacío, `issued_ms` entero ≥ 0 y `ttl_ms` entero > 0. **`args` no se valida aquí: lo decide el verbo.** `scene.apply` rechaza con `bad_args` y `state.read` no lo usa, así que una orden sin `args` y una con `args:{}` tienen la misma conducta (brief de partida, H-08; revisión de Enforce, §10).
 - **acuse:** `ok` presente y `true`.
 
 Las respuestas se leen con `JsonSerializer.ReadFromString` en clases de mensajes (`DSBX_HelloResp`, `DSBX_PollResp`, `DSBX_Order`, `DSBX_Args` y `DSBX_AckResp`), como `PROBE`.
@@ -291,9 +291,10 @@ if (!EffectGuard(order)) { GuardFailed(order); return; }
 ```
 
 - **`EffectGuard`** comprueba que `lease_age ≤ lease_ms` y que no haya pasado `plazo_local`. `lease_age` es ahora menos el último poll 200 válido, sea entregador o de mantenimiento.
+- **Después, que la orden siga siendo de la `session` y la `conn` actuales** (`stale_session`, `stale_conn`). Tras un hello nuevo, los polls de la sesión nueva renuevan el lease, pero una orden de la anterior ya no surte efecto (revisión de Enforce, §10). Estas dos van al final para que un lease perdido se siga leyendo `lease_expired`.
 - **`GuardFailed`** cierra la orden:
-  - si no hubo efecto todavía, `rejected/lease_expired` o `rejected/expired`;
-  - después de retirar, `error/lease_expired` o `error/expired`.
+  - si no hubo efecto todavía, `rejected/<motivo>`, con `lease_expired`, `expired`, `stale_session` o `stale_conn`;
+  - después de retirar, `error/<motivo>`.
 
   `rejected` queda solo para «no se tocó nada».
 - **La generación del mundo** solo cambia dentro de esas dos funciones y después de esa línea.
@@ -427,15 +428,19 @@ Adapta a `DayZSandbox/` las reglas de `qa/tests/test_probe_static.py` de `claude
 | M3 FIFO | Ningún `.Remove(` sobre el array de orden de la caché. La expulsión usa `.RemoveOrdered(`, con cualquier índice | (c) `Remove(i)` en la expulsión |
 | M4 clave | `m_Key` solo en su declaración, en `LoadConfig` y en `KeyQuery`. `LoadConfig` comprueba el alfabeto de §3.1. `KeyQuery()` solo dentro del argumento de ruta de `Send`. Dentro de `Send`, `ruta` solo en la firma y como argumento de `.GET(` y `.POST(`, y `body`, además, en la comparación con `DSBX_WIRE_CAP` (P-09). La clase de configuración solo en `LoadConfig`. `Print`, `Error` y `Debug.` solo en `Log` (F02-H6) | (d) un alias de la clave en otro miembro; (e) `KeyQuery()` dentro del cuerpo de un envío; (f) quitar la comprobación del alfabeto; (y) un `Log("send " + ruta);` dentro de `Send` |
 | M5 `WIRE_CAP` y `Send` | `const int DSBX_WIRE_CAP = 3500;` una sola vez, igual a `WIRE_CAP` de `app/backend/bridge.py`. `.GET(` y `.POST(` solo dentro de `Send`. `Send` contiene literalmente `body.Length() > DSBX_WIRE_CAP`, y su rama corta el envío. El sustituto `"result_too_large"` aparece | (g) `DSBX_WIRE_CAP = 4000`; (h) quitar la comparación de `Send`; (i) invertirla (`<=`); (j) un `.POST(` fuera de `Send` |
-| M6 validadores | `ValidHello`, `ValidPoll`, `ValidAck` y `ValidOrder` existen y comprueban los campos de §3.5. Los miembros de ms de las clases de lectura son `int` | (k) quitar la comprobación de `ok` en `ValidHello`; (l) `float now_ms` en `DSBX_PollResp` |
-| M7 guarda de efectos | La primera sentencia de `StepRetirar` y de `StepAnotar` es exactamente `if (!EffectGuard(order)) { GuardFailed(order); return; }`. Los cambios de generación (`SetGeneration(`) solo aparecen en esas dos funciones, después de esa línea | (m) quitar la guarda de `StepAnotar`; (n) llamar a `EffectGuard(order);` sin usar su resultado; (o) invertir la condición; (p) `SetGeneration(` antes de la guarda |
+| M6 validadores | `ValidHello`, `ValidPoll`, `ValidAck` y `ValidOrder` existen y comprueban los campos de §3.5. `ValidOrder` no mira `args` (§3.5). Los miembros de ms de las clases de lectura son `int` | (k) quitar la comprobación de `ok` en `ValidHello`; (l) `float now_ms` en `DSBX_PollResp`; volver a rechazar en `ValidOrder` una orden sin `args` |
+| M7 guarda de efectos | La primera sentencia de `StepRetirar` y de `StepAnotar` es exactamente `if (!EffectGuard(order)) { GuardFailed(order); return; }`. Los cambios de generación (`SetGeneration(`) solo aparecen en esas dos funciones, después de esa línea. `EffectGuard` corta con `stale_session` y `stale_conn` (§3.7) | (m) quitar la guarda de `StepAnotar`; (n) llamar a `EffectGuard(order);` sin usar su resultado; (o) invertir la condición; (p) `SetGeneration(` antes de la guarda; quitar de `EffectGuard` el corte de `stale_session` o el de `stale_conn` |
 | M8 dedup primero | En `HandleOrder`, la consulta de la caché va antes de cualquier comprobación de `stale_*` o `expired` | (q) mover la comprobación de `expired` antes de la caché |
 | M9 contrato del cable | Los escritores a mano emiten todas las claves que exige `app/backend/bridge.py`: hello y sus campos de servidor, resultado con `generation` aunque sea `null`, y página de catálogo. Las clases de lectura tienen los miembros de las respuestas del bridge. `map`, `build`, `mod_ver` y el modset pasan por `WireText`, y los identificadores, por `WireId`. `WireText` tiene un solo parámetro y nada recorta: `hello_modset_truncated` no aparece, el escritor del hello no quita elementos del modset (`Remove`, `RemoveOrdered`, `Resize` ni `Clear` sobre él) y `hello_too_large` aparece (P-10) | (r) quitar `"generation"` del escritor del `read`; (s) escribir `map` sin `WireText`; (z) volver a quitar nombres del modset hasta que el hello quepa |
 | M10 epoch | `DSBX_RPC_EPOCH` y `DSBX_RPC_EPOCH_REQ` ≥ 1 000 000. El cliente no se presenta sin epoch: `SIN_CONFIG` lo comprueba antes de pasar a `HELLO`. `Event_OnRPC.Insert` y `.Remove` aparecen exactamente una vez cada uno | (t) presentarse sin epoch |
-| M11 errores | El manejador de `OnError` del canal P lleva `EREST_ERROR_CLIENTERROR` a `HELLO`, con la espera creciente de §3.4. `EREST_ERROR_CLIENTERROR` solo aparece en ese manejador: R trata todo fallo igual y abandona al cuarto (D1). La regla de «sin poll válido durante `lease_ms`» vuelve a `HELLO` | (u) tratar `CLIENTERROR` en P como un fallo cualquiera; (v) quitar la vuelta a `HELLO` por lease vencido; (x) en R, abandonar al primer `CLIENTERROR`, como la v1.1 |
+| M11 errores | El manejador de `OnError` del canal P lleva el estado de un 4xx, `DSBX_Const.REST_STATE_4XX` = 5, a `HELLO`, con la espera creciente de §3.4. `REST_STATE_4XX` solo se usa en ese manejador y `EREST_ERROR_CLIENTERROR` en ningún sitio: R trata todo fallo igual y abandona al cuarto (D1). La regla de «sin poll válido durante `lease_ms`» vuelve a `HELLO` | (u) tratar el 4xx en P como un fallo cualquiera; (v) quitar la vuelta a `HELLO` por lease vencido; (x) en R, abandonar al primer `CLIENTERROR`, como la v1.1; volver a comparar con `EREST_ERROR_CLIENTERROR`; `REST_STATE_4XX` = 6; mirar `REST_STATE_4XX` en R |
 | M12 codificación | UTF-8 sin BOM y solo LF en todo `DayZSandbox/` | (w) un CRLF |
+| M14 peer `Managed` | `class DSBX_Peer : Managed`, y el `m_Peer` de `DSBX_Callback` es una referencia débil, sin `ref` ni `autoptr`. El motor retiene cada callback (BI T188795); con `Managed`, esa referencia pasa a null al destruirse el peer | quitar `: Managed`; `ref DSBX_Peer m_Peer;` |
+| M15 cuarentena de callbacks | Un callback cerrado por un fallo (`SettleCallback`) o por un vigilante pasa a cuarentena (`Quarantine`: `Retire`, `m_RetiredMs` y el tope `CALLBACK_QUARANTINE_MAX`). `AcquireCallback` prueba el pool, luego la cuarentena y solo después crea. `TakeFromQuarantine` devuelve el más antiguo, y solo pasado `CALLBACK_QUARANTINE_MS`, que vale al menos 10 veces `WATCHDOG_MS`. `Shutdown` suelta el peer de los callbacks en cuarentena | retirar sin cuarentena al fallar; no reutilizar la cuarentena; reutilizarla sin esperar; retirar sin cuarentena en el vigilante de P; `CALLBACK_QUARANTINE_MS` = 6000; no soltar la cuarentena en `Shutdown` |
 
-**X4:** el orquestador aplica cada mutación (a)-(z) sobre una copia y comprueba que cae la regla de su fila. Si cae otra o no cae ninguna, la regla está mal. Las reglas son de forma: X4 acredita que **discriminan esas mutaciones**, no que el peer se comporte bien (§0).
+M13, el gancho de G5 solo en diag, es del brief de partida (D-P3). M14 y M15, y lo nuevo de M6, M7 y M11, son de la revisión de Enforce (§10); sus mutaciones van sin letra.
+
+**X4:** el orquestador aplica cada mutación (a)-(z), y las de la revisión de Enforce, sobre una copia y comprueba que cae la regla de su fila. Si cae otra o no cae ninguna, la regla está mal. Las reglas son de forma: X4 acredita que **discriminan esas mutaciones**, no que el peer se comporte bien (§0).
 
 ### 5.3 PBO: `qa/build_core_pbo.py` (nuevo)
 
@@ -526,7 +531,10 @@ Después revisa el código Sol, como mucho en 2 rondas; luego, el experto de Enf
 ## 9. Riesgos y lo que no se ha medido
 
 - **Sin motor no hay prueba de comportamiento.** El mod falso acredita el contrato y esta parte, la forma. Lo que hace el mod en el motor solo lo dice §6.
-- **Qué deja ver el motor de un fallo (G7).** La política de §3.4 descansa en que un 4xx llegue como `EREST_ERROR_CLIENTERROR`. Si no, el peer tarda hasta `lease_ms` en volver a presentarse, y es seguro pero más lento. En R no importa: no mira el estado (D1).
+- **Qué deja ver el motor de un fallo (G7).** La política de §3.4 descansa en que un 4xx llegue con el estado 5, como se midió. Si otra versión del motor lo cambia, el peer tarda hasta `lease_ms` en volver a presentarse, y es seguro pero más lento. En R no importa: no mira el estado (D1).
+- **Una respuesta muy tardía a un callback reutilizado.** Un callback sale de la cuarentena a los 60 s. Si el motor contestara a la petición vieja después, esa respuesta se tomaría por la de la nueva. Los plazos de `SetOption` (3 s de conexión y 3 s de lectura) y el vigilante de 6 s lo hacen improbable. No está medido.
+- **`SetOption` es global.** Hay una sola `RestApi` (`restapi.c:147`, `:175` y `:183`), así que los plazos de 3 s que pone el peer valen para todos los mods del proceso, y otro mod puede cambiarlos. Queda como deuda y pregunta de producto, sin cambio en esta tarea.
+- **La fuga de callbacks es del motor** (BI T188795). No hay forma limpia de liberarlos, y `DestroyRestApi()` afecta a todos los mods (`restapi.c:182`). El informe de salida «Leaked 'DSBX_Callback'» queda acotado por `created_n`, que con la cuarentena deja de crecer cuando el backend está caído.
 - **`GetTickTime()`:**
   - su resolución empeora con las horas de juego (§3.3);
   - puede pararse en pausas o tirones (G6).
@@ -570,3 +578,21 @@ Además, fuera de los hallazgos:
 - **Cadenas que el motor corta:** la medida de F0.3-0 (BASE-01, D10) pasa al bridge, con la regla de 1000 sobre la forma escapada, y al mod falso, que corta a 1023 como el motor (§3.5).
 - **Reparto de la entrega:** F1bp-0 para las herramientas de Python y F1bp-1 para Enforce, con lo recibido de F1bp-0 (§7, §8).
 - **Pruebas del mod falso sin carrera:** tres esperas de `test_fake_mod.py` miraban un estado intermedio del envío del resultado. Ahora esperan a la entrada terminada y sin envío pendiente.
+
+**Revisión del experto de Enforce** (15-nov, sobre `e566fa0`, solo lectura, sin compilar; veredicto «OK con arreglos»). El experto avisó de que su copia de vanilla no cuadraba de versión, así que el orquestador comprobó sus citas contra `P:\scripts`:
+- el enum secuencial (`3_game/http/restapi.c:8-22`);
+- `RestCallback : Managed` (`:50`);
+- `SetOption` en la única `RestApi` (`:147`, `:175` y `:183`);
+- `DestroyRestApi()` global (`:182`).
+
+Las líneas del mod que citaba eran de `e566fa0`. Se aplican el MUST y los cuatro SHOULD; ninguno pide rediseño:
+
+| Hallazgo | Qué cambia |
+|---|---|
+| MUST · `DSBX_Callback` guarda un puntero normal al peer y `DSBX_Peer` no hereda de `Managed`. El motor mantiene vivos los callbacks retirados, así que una respuesta tardía tras volver al menú se ejecutaría sobre un peer liberado | `class DSBX_Peer : Managed`, con `m_Peer` débil: pasa a null al destruirse el peer, y los callbacks ya lo comprueban antes de usarlo. Regla M14 y dos mutaciones. El Pack dice que en `3_Game` todo es `Managed` sin declararlo (`skills/_shared/enscript-style.md`); con la herencia explícita no depende de eso |
+| SHOULD · `EffectGuard` deja pasar órdenes de una sesión anterior después de un hello nuevo | `EffectGuard` corta con `stale_session` y `stale_conn`, después del lease y del plazo (§3.7). Regla M7 y dos mutaciones |
+| SHOULD · la fila 1 de §3.4 compara con el símbolo del enum, que vale 6 y casa un 500, y no con el estado medido | Compara con `DSBX_Const.REST_STATE_4XX` = 5, y `EREST_ERROR_CLIENTERROR` queda prohibido (§3.4). El arnés de partida vuelve a forzar el hello con un 409 (brief de partida, H-13). Regla M11 y tres mutaciones |
+| SHOULD · con el backend caído, el presupuesto de 2000 callbacks se agota en unos 67 minutos | Cuarentena: un callback cerrado por un fallo o por el vigilante se reutiliza a los 60 s (§9). Regla M15 y seis mutaciones |
+| SHOULD · falta una sola conducta para una orden sin `args` | `ValidOrder` no mira `args`, y lo decide el verbo (§3.5). Regla M6 y una mutación |
+
+**Prueba negativa:** el mod sin estos arreglos (`5881d0f`) cae justo en M6, M7, M11, M14 y M15, y pasa las otras diez reglas.

@@ -150,10 +150,9 @@ class DSBX_Messages
 		{
 			return false;
 		}
-		if (!order.args)
-		{
-			return false;
-		}
+		// args is not checked here: the verb decides (scene.apply rejects it with bad_args, state.read
+		// does not use it). In game, a missing args arrives instantiated and empty, so it already ended in
+		// bad_args; this way there is a single behaviour either way (Enforce review, 15-nov; H-08).
 		if (order.issued_ms < 0)
 		{
 			return false;

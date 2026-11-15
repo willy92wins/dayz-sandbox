@@ -94,7 +94,20 @@ class F1bPeersG7(unittest.TestCase):
                 recoveries = [
                     e for e in events[idx:limit] if e.get("ev") == "recovery"
                 ]
-                self.assertEqual(len(recoveries), 1, "%s sin recovery" % name)
+                self.assertTrue(recoveries, "%s sin recovery" % name)
+                # R20: una recuperacion que acaba en fallido/conexion_perdida se reintenta con otra (con
+                # carga, el mod falso puede volver a presentarse en medio). Solo esa salida da otra.
+                finals = {
+                    e.get("op_id"): (e.get("state"), e.get("reason"))
+                    for e in events
+                    if e.get("ev") == "op_state" and e.get("state") in ("observado", "fallido", "parcial")
+                }
+                for rec in recoveries[:-1]:
+                    self.assertEqual(
+                        finals.get(rec.get("op_id")),
+                        ("fallido", "conexion_perdida"),
+                        "%s: recovery repetida sin conexion_perdida" % name,
+                    )
 
             # R10: cada caso acaba con `rules` de rule_ids [] y su rules_active, antes de la recuperacion.
             for pos, (idx, case) in enumerate(cases):

@@ -1,10 +1,14 @@
 class DSBX_Callback : RestCallback
 {
+	// Weak reference: DSBX_Peer is Managed, so this becomes null when the peer is destroyed. The engine
+	// keeps every RestCallback alive (BI T188795), and a late answer after leaving the mission must not
+	// touch a freed peer (Enforce review, 15-nov).
 	DSBX_Peer m_Peer;
 	int m_Channel;
 	int m_Kind;
 	int m_Gen;
 	bool m_Done;
+	float m_RetiredMs;
 
 	void DSBX_Callback(DSBX_Peer peer)
 	{
@@ -13,6 +17,7 @@ class DSBX_Callback : RestCallback
 		m_Kind = 0;
 		m_Gen = 0;
 		m_Done = true;
+		m_RetiredMs = 0;
 	}
 
 	void Arm(DSBX_Peer peer, int channel, int kind, int gen)
@@ -90,7 +95,7 @@ class DSBX_Callback : RestCallback
 	}
 }
 
-class DSBX_Peer
+class DSBX_Peer : Managed
 {
 	static DSBX_Peer s_ClientPeer;
 	static DSBX_Peer s_ServerPeer;
@@ -158,6 +163,8 @@ class DSBX_Peer
 	float m_ActiveSentMsR;
 	ref array<ref DSBX_Callback> m_PoolP;
 	ref array<ref DSBX_Callback> m_PoolR;
+	ref array<ref DSBX_Callback> m_QuarantineP;
+	ref array<ref DSBX_Callback> m_QuarantineR;
 	int m_CallbacksCreatedN;
 	bool m_BudgetExhausted;
 	bool m_BudgetLogged;
@@ -237,6 +244,8 @@ class DSBX_Peer
 		m_ActiveSentMsR = 0.0;
 		m_PoolP = new array<ref DSBX_Callback>();
 		m_PoolR = new array<ref DSBX_Callback>();
+		m_QuarantineP = new array<ref DSBX_Callback>();
+		m_QuarantineR = new array<ref DSBX_Callback>();
 		m_CallbacksCreatedN = 0;
 		m_BudgetExhausted = false;
 		m_BudgetLogged = false;
@@ -337,6 +346,8 @@ class DSBX_Peer
 			j = j + 1;
 		}
 		m_PoolR.Clear();
+		DetachAll(m_QuarantineP);
+		DetachAll(m_QuarantineR);
 		m_Ctx = null;
 		// created_n and the in-flight requests bound the engine's exit report
 		// "Leaked 'DSBX_Callback' script instance (Nx)!" (G1 smoke, diag, 15-nov).
@@ -609,7 +620,11 @@ class DSBX_Peer
 			cb = pool.Get(last);
 			pool.RemoveOrdered(last);
 		}
-		else
+		if (!cb)
+		{
+			cb = TakeFromQuarantine(canal);
+		}
+		if (!cb)
 		{
 			if (m_CallbacksCreatedN >= m_CallbackBudget)
 			{
@@ -647,7 +662,7 @@ class DSBX_Peer
 		}
 		if (!success)
 		{
-			cb.Retire();
+			Quarantine(cb, canal);
 			return;
 		}
 		array<ref DSBX_Callback> pool = m_PoolR;
@@ -661,6 +676,59 @@ class DSBX_Peer
 			return;
 		}
 		cb.Retire();
+	}
+
+	// A callback closed by a failure (or a watchdog) is retired and kept aside: the engine may still repeat
+	// OnError for its request for a short while. It is reused only after CALLBACK_QUARANTINE_MS, so a
+	// backend that stays down does not spend the creation budget (Enforce review, 15-nov).
+	void Quarantine(DSBX_Callback cb, int canal)
+	{
+		cb.Retire();
+		cb.m_RetiredMs = NowMs();
+		array<ref DSBX_Callback> quarantine = m_QuarantineR;
+		if (canal == DSBX_Const.CH_P)
+		{
+			quarantine = m_QuarantineP;
+		}
+		if (quarantine.Count() < DSBX_Const.CALLBACK_QUARANTINE_MAX)
+		{
+			quarantine.Insert(cb);
+		}
+	}
+
+	DSBX_Callback TakeFromQuarantine(int canal)
+	{
+		array<ref DSBX_Callback> quarantine = m_QuarantineR;
+		if (canal == DSBX_Const.CH_P)
+		{
+			quarantine = m_QuarantineP;
+		}
+		if (quarantine.Count() == 0)
+		{
+			return null;
+		}
+		DSBX_Callback oldest = quarantine.Get(0);
+		if (!oldest || (NowMs() - oldest.m_RetiredMs) < DSBX_Const.CALLBACK_QUARANTINE_MS)
+		{
+			return null;
+		}
+		quarantine.RemoveOrdered(0);
+		return oldest;
+	}
+
+	void DetachAll(array<ref DSBX_Callback> callbacks)
+	{
+		int k = 0;
+		while (k < callbacks.Count())
+		{
+			DSBX_Callback item = callbacks.Get(k);
+			if (item)
+			{
+				item.Detach();
+			}
+			k = k + 1;
+		}
+		callbacks.Clear();
 	}
 
 	int Send(int canal, string ruta, string body)
@@ -736,7 +804,9 @@ class DSBX_Peer
 
 	void OnChannelPError(int errorCode, bool isTimeout)
 	{
-		if (!isTimeout && errorCode == ERestResultState.EREST_ERROR_CLIENTERROR)
+		// A 4xx (hello_required, bad_key, bad_request) arrives as REST_STATE_4XX, measured in game; the
+		// script enum symbol EREST_ERROR_CLIENTERROR is 6 and matched a 500 instead (Enforce review, H-07).
+		if (!isTimeout && errorCode == DSBX_Const.REST_STATE_4XX)
 		{
 			m_Session = "";
 			m_Conn = 0;
@@ -831,7 +901,7 @@ class DSBX_Peer
 		m_ActiveCbP = null;
 		m_ActiveKindP = 0;
 		m_ActiveGenP = 0;
-		cb.Retire();
+		Quarantine(cb, DSBX_Const.CH_P);
 		OnChannelPError(0, true);
 	}
 
@@ -851,7 +921,7 @@ class DSBX_Peer
 		m_ActiveCbR = null;
 		m_ActiveKindR = 0;
 		m_ActiveGenR = 0;
-		cb.Retire();
+		Quarantine(cb, DSBX_Const.CH_R);
 		OnChannelRError(kind, now);
 	}
 
@@ -1145,6 +1215,19 @@ class DSBX_Peer
 		if (now > m_ActiveEntry.m_PlazoLocal)
 		{
 			m_GuardFailReason = "expired";
+			return false;
+		}
+		// After a new hello, the polls of the new session renew the lease, but the order may belong to an
+		// older session or presentation: no more effects (Enforce review, 15-nov). Same reasons HandleOrder
+		// uses when the order is delivered. They go last, so a lost lease still reads lease_expired (G5 b4000).
+		if (order.session != m_Session)
+		{
+			m_GuardFailReason = "stale_session";
+			return false;
+		}
+		if (order.conn != m_Conn)
+		{
+			m_GuardFailReason = "stale_conn";
 			return false;
 		}
 		return true;

@@ -1188,19 +1188,21 @@ class LiveRun:
         try:
             if not self._l2b2_write_peer_key(profile, bad):
                 return "peer_config fallo con la clave mala"
-            # Brief v1.5, H-07: un 4xx llega al mod como EREST_ERROR (5) y no lo devuelve al hello; un
-            # 500 llega como 6 (EREST_ERROR_CLIENTERROR) y si. El hello relee la clave del dsbx_peer.json.
-            # R25: el 500 va con un corte de los polls del servidor en vuelo (abort_inflight), para que
+            # Brief v1.7, H-13: un 4xx llega al mod con el estado 5, y el mod lo mira con
+            # DSBX_Const.REST_STATE_4XX y vuelve al hello (con H-07 hacia falta un 500). Un 409 es lo que
+            # da el backend a un poll de una sesion que ya no vale (hello_required). El hello relee la
+            # clave del dsbx_peer.json.
+            # R25: el 409 va con un corte de los polls del servidor en vuelo (abort_inflight), para que
             # el hello ya lleve la clave mala; se espera ver ese hello rechazado (401) antes de abrir
             # la ventana y encolar la orden.
             rule = {
-                "id": "g4a_500",
+                "id": "g4a_409",
                 "abort_inflight": True,
                 "match": {"route": "poll", "peer": "server", "count": 1},
-                "action": {"type": "status", "code": 500, "error": "forced_hello"},
+                "action": {"type": "status", "code": 409, "error": "forced_hello"},
             }
             t_rules = _now_ms()
-            if not self.set_rules(self.next_rules_version(), [rule], ["g4a_500"]):
+            if not self.set_rules(self.next_rules_version(), [rule], ["g4a_409"]):
                 return "rules_not_active"
             if not self._g4a_wait_hello_401(t_rules, G4A_HELLO_401_WAIT_S):
                 return "g4a: sin hello 401 del servidor con la clave mala"
@@ -1213,7 +1215,7 @@ class LiveRun:
             # El case va al cierre de la ventana: el evaluador mide la recuperacion desde el
             # evento case y la ventana ya dura 60 s.
             self.writer.emit(
-                "case", name="a", op_id=op_a, session=session_a, **_rule_fields(["g4a_500"])
+                "case", name="a", op_id=op_a, session=session_a, **_rule_fields(["g4a_409"])
             )
             if not self._l2b2_clear_rules():
                 return "rules_not_active"
@@ -1571,14 +1573,14 @@ class LiveRun:
         self.writer.emit(
             "config", peer="server", qa_step_gap_ms=int(gap), key_sha256=_sha256(cfg["key"])
         )
-        # Un hello fuerza que el peer relea la configuracion. Brief v1.5, H-07: con un 500, que el
-        # motor entrega como 6 (EREST_ERROR_CLIENTERROR) y devuelve el peer al hello; un 409 llega
-        # como 5 y no lo hace (ensayo diag del 15-nov: G5 b no releia la configuracion).
+        # Un hello fuerza que el peer relea la configuracion. Brief v1.7, H-13: un 409 llega al mod
+        # con el estado 5 (DSBX_Const.REST_STATE_4XX) y lo devuelve al hello. Con H-07 hacia falta
+        # un 500, porque el mod miraba EREST_ERROR_CLIENTERROR, que vale 6.
         rule_id = "g56_gap_%d_%d" % (int(gap), self.rules_version + 1)
         rule = {
             "id": rule_id,
             "match": {"route": "poll", "peer": "server", "count": 1},
-            "action": {"type": "status", "code": 500, "error": "forced_hello"},
+            "action": {"type": "status", "code": 409, "error": "forced_hello"},
         }
         mark = self._g56_mark()
         if not self.set_rules(self.next_rules_version(), [rule], [rule_id]):
