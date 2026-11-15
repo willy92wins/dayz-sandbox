@@ -212,15 +212,26 @@ def _row_code(fault):
     return code, bad
 
 
-def _n6_ctx(accept_ms, apply_ms, pose_read_ms, read_pose=None, reject_ms=626, lease_ms=600, accepts=None):
+def _n6_ctx(
+    accept_ms,
+    apply_ms,
+    pose_read_ms,
+    read_pose=None,
+    reject_ms=626,
+    lease_ms=600,
+    accepts=None,
+    mutate_log=None,
+):
     """Evidencia N6 minima con el rpc_log y la pose que produce un peer de reloj controlado.
 
     El peer aplica una pose diferida en el frame siguiente y solo la descarta si su lease ya no
-    vale en ese frame (`fake_peer.py:1106-1110`). El reloj lo mueve el test para fijar la edad del
-    lease al recibir y al aplicar.
+    vale en ese frame (`fake_peer.py`, `_apply`), y anota el resultado en la entrada del rpc_log. El
+    reloj lo mueve el test para fijar la edad del lease al recibir y al aplicar.
 
     `accepts = [(recibida_ms, aplicada_ms), ...]` sustituye a la unica aceptada `(accept_ms, apply_ms)`:
     la i-esima lleva `seq0 + i` y la pose `x = 7200 + i`. Despues llega una rechazada en `reject_ms`.
+    `mutate_log(entries)` cambia una copia del rpc_log antes de evaluar, para simular un peer defectuoso
+    o una sonda sin registro de aplicacion.
     """
     import fake_peer
     import s_puente_eval
@@ -264,6 +275,9 @@ def _n6_ctx(accept_ms, apply_ms, pose_read_ms, read_pose=None, reject_ms=626, le
     )
     if read_pose is None:
         read_pose = peer.pose
+    log_entries = [dict(entry) for entry in peer.rpc_log]
+    if mutate_log is not None:
+        mutate_log(log_entries)
     log_done_ms = max(float(pose_read_ms), float(reject_ms) + 1.0)
     bridge = [
         {
@@ -296,7 +310,7 @@ def _n6_ctx(accept_ms, apply_ms, pose_read_ms, read_pose=None, reject_ms=626, le
                 "status": "done",
                 "dup": False,
                 "done_ms": log_done_ms,
-                "read": {"has": ["rpc_log"], "rpc_log": list(peer.rpc_log)},
+                "read": {"has": ["rpc_log"], "rpc_log": log_entries},
             },
         },
         {
@@ -423,67 +437,127 @@ class E2ESpuenteTests(unittest.TestCase):
                     code, bad = _row_code(fault)
                     self.assertEqual(code, expected, bad)
 
+    # --- N6 con reloj controlado (F02-H3). La pose inicial del peer es x=7300; la i-esima aceptada, x=7200+i. ---
+    _PRE_BURST = ([7300.0, 370.0, 7300.0], [0.0, 0.0, 0.0])
+
+    @staticmethod
+    def _pose_of(i):
+        return ([7200.0 + i, 360.0, 7200.0], [90.0, 0.0, 0.0])
+
+    @staticmethod
+    def _strip_apply(entries):
+        for entry in entries:
+            for key in ("apply_ms", "apply_lease_age_ms", "applied_b"):
+                entry.pop(key, None)
+
     def test_n6_applies_last_accepted_pose_when_lease_is_valid(self):
         status, detail, _ = _n6_ctx(566, 599, 630)
-        self.assertEqual(status, "pass", detail)
+        self.assertEqual((status, detail), ("pass", ""))
+
+    def test_n6_peer_records_apply_outcome(self):
+        def check(entries):
+            accepted = [e for e in entries if e["decision"] == "accepted"]
+            self.assertEqual([(e["apply_ms"], e["apply_lease_age_ms"], e["applied_b"]) for e in accepted],
+                             [(110.0, 110.0, 1), (601.0, 601.0, 0)])
+            self.assertNotIn("applied_b", [k for e in entries if e["decision"] != "accepted" for k in e])
+
+        _n6_ctx(None, None, 640, accepts=[(100, 110), (566, 601)], mutate_log=check)
+
+    def test_n6_discarded_single_accept_is_not_required_but_not_pass(self):
+        # 566/601: el peer descarta por lease caducado (no se exige como ultima aceptada, no es FALLA). No se
+        # aplico ninguna de la rafaga y la pose de antes no esta en la evidencia: INCONCLUSO.
+        status, detail, _ = _n6_ctx(566, 601, 630)
+        self.assertEqual((status, detail), ("missing", "no burst pose applied"))
 
     def test_n6_excuses_pose_discarded_after_lease_expiry(self):
-        status, detail, _ = _n6_ctx(566, 601, 630)
-        self.assertEqual(status, "pass", detail)
-        self.assertEqual(detail, "pose discarded after lease expiry")
+        status, detail, _ = _n6_ctx(None, None, 640, accepts=[(300, 310), (566, 601)])
+        self.assertEqual((status, detail), ("pass", "pose discarded after lease expiry"))
+
+    def test_n6_slow_frame_discard_passes_without_frame_bound(self):
+        # Sol delta MEN 2: peer a 2 Hz, la segunda llega a 300 y el frame siguiente es a 800 (lease 600).
+        status, detail, _ = _n6_ctx(None, None, 900, accepts=[(100, 110), (300, 800)], reject_ms=850)
+        self.assertEqual((status, detail), ("pass", "pose discarded after lease expiry"))
 
     def test_n6_fails_pose_discarded_while_lease_is_valid(self):
-        status, detail, _ = _n6_ctx(
-            100,
-            150,
-            200,
-            read_pose=([7300.0, 370.0, 7300.0], [0.0, 0.0, 0.0]),
-        )
-        self.assertEqual(status, "fail", detail)
-        self.assertEqual(detail, "pose is not last accepted")
+        status, detail, _ = _n6_ctx(100, 150, 200, read_pose=self._PRE_BURST)
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
 
     def test_n6_fails_must_apply_pose_dropped_even_if_read_after_expiry(self):
-        # Llega con 500 ms de lease restante: tuvo que aplicarse. Que la lectura sea posterior a la caducidad
-        # (600 <= 700) no excusa nada; en la rafaga real todas las aceptadas comparten esa caducidad.
-        status, detail, _ = _n6_ctx(
-            100,
-            150,
-            700,
-            read_pose=([7300.0, 370.0, 7300.0], [0.0, 0.0, 0.0]),
-        )
-        self.assertEqual(status, "fail", detail)
-        self.assertEqual(detail, "pose is not last accepted")
+        # Se aplico con lease vigente (150 <= 600); que la lectura sea posterior a la caducidad no excusa nada.
+        status, detail, _ = _n6_ctx(100, 150, 700, read_pose=self._PRE_BURST)
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
 
-    def test_n6_excuses_discarded_tail_after_last_must_apply(self):
-        # A (100) y B (300) llegan con 500 y 300 ms de lease: obligadas. C (560) llega con 40 ms y el peer la
-        # descarta al aplicarla a los 601 ms. La pose es la de B, la ultima obligada.
-        status, detail, _ = _n6_ctx(None, None, 640, accepts=[(100, 110), (300, 310), (560, 601)])
-        self.assertEqual(status, "pass", detail)
-        self.assertEqual(detail, "pose discarded after lease expiry")
-
-    def test_n6_fails_pose_older_than_last_must_apply(self):
-        # Misma rafaga, pero la pose leida es la de A: B era obligada y no se aplico.
+    def test_n6_fails_peer_keeping_first_pose_sol_delta_bloq(self):
+        # Sol delta BLOQ 1: recepciones 100/400/560, frames 110/410/570, lectura 640; el peer conserva la primera.
         status, detail, _ = _n6_ctx(
-            None,
-            None,
-            640,
-            accepts=[(100, 110), (300, 310), (560, 601)],
-            read_pose=([7200.0, 360.0, 7200.0], [90.0, 0.0, 0.0]),
+            None, None, 640, accepts=[(100, 110), (400, 410), (560, 570)], read_pose=self._pose_of(0)
         )
-        self.assertEqual(status, "fail", detail)
-        self.assertEqual(detail, "pose is not last accepted")
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
+
+    def test_n6_fails_discard_logged_with_valid_lease(self):
+        # Sol delta BLOQ 1, sin obligadas: aceptada a 400, descartada a 410 con el lease vigente.
+        def discard(entries):
+            entries[0]["applied_b"] = 0
+
+        status, detail, _ = _n6_ctx(400, 410, 640, read_pose=self._PRE_BURST, mutate_log=discard)
+        self.assertEqual((status, detail), ("fail", "pose apply contradicts lease"))
+
+    def test_n6_fails_apply_logged_with_expired_lease(self):
+        def apply_late(entries):
+            entries[1]["applied_b"] = 1
+
+        status, detail, _ = _n6_ctx(
+            None, None, 640, accepts=[(100, 110), (566, 601)], read_pose=self._pose_of(1), mutate_log=apply_late
+        )
+        self.assertEqual((status, detail), ("fail", "pose apply contradicts lease"))
+
+    def test_n6_fails_pose_of_rejected_rpc(self):
+        # Sol delta BLOQ 1: la pose leida es la de la RPC rechazada por lease.
+        status, detail, _ = _n6_ctx(None, None, 640, accepts=[(100, 110), (300, 310)], read_pose=self._pose_of(2))
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
+
+    def test_n6_fails_pose_older_than_last_applied(self):
+        status, detail, _ = _n6_ctx(
+            None, None, 640, accepts=[(100, 110), (300, 310), (560, 601)], read_pose=self._pose_of(0)
+        )
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
 
     def test_n6_fails_when_no_burst_pose_was_applied(self):
-        # Un peer que no aplica ninguna pose diferida: la pose sigue siendo la de antes de la rafaga.
+        status, detail, _ = _n6_ctx(
+            None, None, 640, accepts=[(100, 110), (300, 310), (560, 601)], read_pose=self._PRE_BURST
+        )
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
+
+    def test_n6_without_apply_record_earlier_accepted_pose_is_missing(self):
+        # Sonda real (sin registro de aplicacion): la pose de una aceptada anterior puede ser un descarte valido.
         status, detail, _ = _n6_ctx(
             None,
             None,
             640,
             accepts=[(100, 110), (300, 310), (560, 601)],
-            read_pose=([7300.0, 370.0, 7300.0], [0.0, 0.0, 0.0]),
+            read_pose=self._pose_of(1),
+            mutate_log=self._strip_apply,
         )
-        self.assertEqual(status, "fail", detail)
-        self.assertEqual(detail, "pose is not last accepted")
+        self.assertEqual((status, detail), ("missing", "pose mismatch without apply evidence"))
+
+    def test_n6_without_apply_record_foreign_pose_fails(self):
+        # Sin registro: con aceptadas en dos recepciones distintas, las primeras se aplicaron; una pose que no es
+        # de ninguna aceptada (la de antes de la rafaga, o la de una rechazada) es FALLA.
+        for pose in (self._PRE_BURST, self._pose_of(3)):
+            with self.subTest(pose=pose[0][0]):
+                status, detail, _ = _n6_ctx(
+                    None,
+                    None,
+                    640,
+                    accepts=[(100, 110), (300, 310), (560, 601)],
+                    read_pose=pose,
+                    mutate_log=self._strip_apply,
+                )
+                self.assertEqual((status, detail), ("fail", "pose is not an accepted pose"))
+
+    def test_n6_without_apply_record_last_accepted_pose_passes(self):
+        status, detail, _ = _n6_ctx(566, 599, 630, mutate_log=self._strip_apply)
+        self.assertEqual((status, detail), ("pass", ""))
 
     def test_cpu_load_kills_partially_created_burners(self):
         created = []

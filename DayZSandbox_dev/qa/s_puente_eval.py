@@ -478,61 +478,65 @@ def _n6(ctx):
         return "fail", "lease_age outside window", metrics
     if not order_ok:
         return "fail", "accepted after rejected_lease", metrics
-    if not pose_ok:
-        if not _n6_discard_credited(accepted, lease, seq0, p0, pose_read, last, pose_body.get("done_ms")):
-            return "fail", "pose is not last accepted", metrics
-        return "pass", "pose discarded after lease expiry", metrics
-    return "pass", "", metrics
+    status, detail = _n6_pose_check(accepted, lease, seq0, p0, pose_read, pose_ok)
+    return status, detail, metrics
 
 
-# F02-H3 (`plans/2026-11-14-m1-f0.3-0-brief.md:669-673`): la sonda aplica la pose aceptada en el frame siguiente y la
-# descarta si en ese frame el lease ya no vale (`fake_peer.py:1106-1110`). Es el margen maximo que se concede a ese
-# aplazamiento de un frame: una aceptada que llego con mas lease restante que esto tuvo que aplicarse. Un frame que
-# tarde mas que esto justo al caducar el lease es el residual de entorno de M2 (carga extrema), no un descarte valido.
-N6_DEFER_MAX_MS = 250.0
+def _n6_has_apply_record(entry):
+    applied = entry.get("applied_b")
+    return (
+        _finite(entry.get("apply_ms"))
+        and _finite(entry.get("apply_lease_age_ms"))
+        and not isinstance(applied, bool)
+        and applied in (0, 1)
+    )
 
 
-def _n6_discard_credited(accepted, lease, seq0, p0, pose_read, last, done_ms):
-    """True si la pose leida se explica por descartes F02-H3 que acredita el propio registro del peer.
+def _n6_pose_check(accepted, lease, seq0, p0, pose_read, pose_ok):
+    """Pose final de N6 alineada con F02-H3 (`plans/2026-11-14-m1-f0.3-0-brief.md:669-673`).
 
-    El lease restante al recibir cada aceptada es `lease - lease_age_ms`, en el reloj del peer. Solo una
-    aceptada con lease restante <= N6_DEFER_MAX_MS pudo encontrarse el lease caducado en el frame
-    siguiente; las demas tuvieron que aplicarse.
-    - Si hay alguna aceptada obligada, la pose leida tiene que ser la de la ultima obligada o la de una
-      aceptada posterior (todas las posteriores pudieron descartarse). Una pose anterior, o ninguna de la
-      rafaga, es FALLA aunque el lease haya caducado antes de leer: en la rafaga de N6 todas las aceptadas
-      comparten la misma caducidad, asi que eso solo no acredita nada.
-    - Si ninguna es obligada (todas llegaron en el margen final del lease), queda la comprobacion de
-      `_lease_expired_before_apply`.
+    El peer aplica la pose aceptada en el frame siguiente y la descarta si en ese frame su lease ya no
+    vale (`fake_peer.py`, `_apply`). Solo el registro del propio peer acredita un descarte: en cada
+    aceptada del `rpc_log`, `apply_ms`, `apply_lease_age_ms` y `applied_b`, anotados al aplicar.
+    - **Con ese registro en todas las aceptadas:** cada resultado tiene que casar con el lease en ese
+      instante (aplicada si y solo si `apply_lease_age_ms <= lease`), y la pose leida tiene que ser la de
+      la ultima aplicada. Si ninguna se aplico, la pose de antes de la rafaga no esta en la evidencia:
+      `missing`.
+    - **Sin el registro** (la sonda real todavia no lo da), con la pose de la ultima aceptada: `pass`.
+      Si no lo es:
+      - **pose de una aceptada anterior:** las posteriores pudieron descartarse, asi que es `missing`,
+        nunca `pass`. Que el lease caducara antes de leer no acredita nada, porque en la rafaga todas las
+        aceptadas comparten caducidad.
+      - **pose de ninguna aceptada:** solo seria valido si se hubieran descartado todas. Con aceptadas en
+        dos instantes de recepcion distintos, eso es imposible: el peer aplica antes de drenar en cada
+        frame, y las del primer instante se aplicaron con el lease vigente, porque la siguiente se acepto
+        despues. Es FALLA.
     """
     ordered = sorted(accepted, key=lambda e: (e["recv_ms"], e["seq"]))
-    if not ordered or not all(_finite(e.get("lease_age_ms")) for e in ordered):
-        return False
-    must = [i for i, e in enumerate(ordered) if lease - e["lease_age_ms"] > N6_DEFER_MAX_MS]
-    if must:
-        for entry in ordered[must[-1]:]:
-            expect_j = [p0[0] + (entry["seq"] - seq0), p0[1], p0[2]]
-            if _pose_match(pose_read, expect_j, [90, 0, 0]):
-                return True
-        return False
-    return _lease_expired_before_apply(last, lease, done_ms)
-
-
-def _lease_expired_before_apply(entry, lease, observed_ms):
-    """Caso en que todas las aceptadas llegaron con lease restante <= N6_DEFER_MAX_MS.
-
-    Cualquiera pudo descartarse (F02-H3, `fake_peer.py:1106-1110`), asi que la pose leida no se puede
-    exigir. Lo minimo es que el lease hubiera caducado antes de leer la pose: la caducidad en el reloj del
-    peer es `recv_ms - lease_age_ms + lease` de la ultima aceptada. Si es posterior al `done_ms` de la
-    lectura, el lease seguia vigente y la pose aceptada tenia que haberse aplicado; el desajuste es FALLA.
-    """
-    if not isinstance(entry, dict):
-        return False
-    recv_ms = entry.get("recv_ms")
-    age_ms = entry.get("lease_age_ms")
-    if not (_finite(recv_ms) and _finite(age_ms) and _finite(observed_ms)):
-        return False
-    return recv_ms - age_ms + lease <= observed_ms
+    if not ordered or not all(_n6_has_apply_record(e) for e in ordered):
+        if pose_ok:
+            return "pass", ""
+        for entry in ordered:
+            if _pose_match(pose_read, [p0[0] + (entry["seq"] - seq0), p0[1], p0[2]], [90, 0, 0]):
+                return "missing", "pose mismatch without apply evidence"
+        if len({entry["recv_ms"] for entry in ordered}) >= 2:
+            return "fail", "pose is not an accepted pose"
+        return "missing", "pose mismatch without apply evidence"
+    for entry in ordered:
+        if entry["apply_ms"] < entry["recv_ms"]:
+            return "fail", "pose applied before received"
+        if bool(entry["applied_b"]) != (entry["apply_lease_age_ms"] <= lease):
+            return "fail", "pose apply contradicts lease"
+    applied = [e for e in ordered if e["applied_b"] == 1]
+    if not applied:
+        return ("fail", "pose applied without apply record") if pose_ok else ("missing", "no burst pose applied")
+    last_applied = max(applied, key=lambda e: (e["apply_ms"], e["recv_ms"], e["seq"]))
+    expect_j = [p0[0] + (last_applied["seq"] - seq0), p0[1], p0[2]]
+    if not _pose_match(pose_read, expect_j, [90, 0, 0]):
+        return "fail", "pose is not last applied"
+    if last_applied is ordered[-1]:
+        return "pass", ""
+    return "pass", "pose discarded after lease expiry"
 
 
 def _n6_server(ctx):
