@@ -11,6 +11,7 @@ import json
 import shutil
 import subprocess
 import sys
+import types
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,18 +19,49 @@ from unittest import mock
 
 import f03_common
 import f2p_eval
-import f2p_run
 import gate_core
 import m1_gate
 
 SPIKE = "F2P"
 ORACLE_FILES = {
-    "qa/f2p_eval.py": b"ORIGIN = 'temp-repo'\ndef evaluate(part_dir):\n    return None\n",
-    "qa/f2p_mutants.py": b"EXPECTED_MUTANTS = {}\nEXPECTED_HARNESS_TESTS = {}\n",
+    "qa/f2p_eval.py": (
+        b"import f2p_mutants\n"
+        b"ORIGIN = 'temp-repo'\n"
+        b"MUT_ORIGIN = f2p_mutants.ORIGIN\n"
+        b"MARKS = []\n"
+        b"def mark():\n    MARKS.append(ORIGIN)\n    return ORIGIN\n"
+        b"def evaluate(part_dir):\n    return None\n"
+    ),
+    "qa/f2p_mutants.py": b"ORIGIN = 'temp-repo'\nEXPECTED_MUTANTS = {}\nEXPECTED_HARNESS_TESTS = {}\n",
     "qa/tests/test_f2p_offline.py": b"import unittest\n",
     "qa/fixtures/f2p_base.json": b'{"a": 1}\n',
 }
 PREFIX = "DayZSandbox_dev/"
+# Runner del repo temporal (fuera del conjunto del oraculo): ejecuta el evaluador verificado y escribe el manifest de
+# la parte por PartContext, como hace el gate real; deja constancia en evidence/integration.json.
+RUN_SRC = b"""import json
+from pathlib import Path
+
+import f03_common
+import f2p_eval
+
+
+def run(args, evidence, argv):
+    marker = f2p_eval.mark()
+    ctx = f03_common.PartContext(
+        base_dir=Path(evidence), part_name="run", spike_id="F2P", args=args, argv=list(argv), spawn_offline_peers=False
+    )
+    manifest = ctx.finalize_manifest()
+    info = {
+        "marker": marker,
+        "eval_file": f2p_eval.__file__,
+        "mut_origin": f2p_eval.MUT_ORIGIN,
+        "oracle_commit_arg": args.oracle_commit,
+        "identity_oracle_commit": manifest["identity"]["oracle_commit"],
+    }
+    Path(evidence, "integration.json").write_text(json.dumps(info), encoding="utf-8")
+    return 2
+"""
 
 
 def _git(root, *args):
@@ -61,6 +93,7 @@ class _TempRepo(unittest.TestCase):
             path = self.root / "DayZSandbox_dev" / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
+        (self.qa / "f2p_run.py").write_bytes(RUN_SRC)
         _git(self.root, "init", "-q")
         _git(self.root, "config", "user.email", "qa@example.invalid")
         _git(self.root, "config", "user.name", "QA")
@@ -70,20 +103,26 @@ class _TempRepo(unittest.TestCase):
         patcher = mock.patch.object(m1_gate, "_oracle_context", return_value=(self.root, self.qa))
         patcher.start()
         self.addCleanup(patcher.stop)
-        run_patcher = mock.patch.object(f2p_run, "run", return_value=2)
-        self.run_mock = run_patcher.start()
-        self.addCleanup(run_patcher.stop)
         self.evidence = self.tmp / "ev"
-        saved = {n: sys.modules.get(n) for n in ("f2p_eval", "f2p_mutants")}
+        # el runner, el evaluador y los mutantes salen del repo temporal; ninguno puede estar precargado
+        saved = {n: sys.modules.pop(n, None) for n in ("f2p_eval", "f2p_mutants", "f2p_run")}
+        sys.path.insert(0, str(self.qa))
+        importlib.invalidate_caches()
 
         def _restore():
+            sys.path.remove(str(self.qa))
             for name, mod in saved.items():
-                if mod is None:
-                    sys.modules.pop(name, None)
-                else:
+                sys.modules.pop(name, None)
+                if mod is not None:
                     sys.modules[name] = mod
 
         self.addCleanup(_restore)
+
+    def ran(self):
+        return (self.evidence / "integration.json").is_file()
+
+    def integration(self):
+        return json.loads((self.evidence / "integration.json").read_text(encoding="utf-8"))
 
     def commit_all(self, message):
         _git(self.root, "add", "-A")
@@ -117,22 +156,22 @@ class OracleCommitNegativeTests(_TempRepo):
         path = self.disk("qa/f2p_eval.py")
         path.write_bytes(path.read_bytes().replace(b"None", b"Nonf"))
         self.assert_inconcluso(_run_main(self.argv()), [f"modified:{PREFIX}qa/f2p_eval.py"])
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
         self.assertEqual(sorted(p.name for p in self.evidence.iterdir()), ["oracle_check.json", "verdict.json"])
 
     def test_n2_deleted_mutants(self):
         self.disk("qa/f2p_mutants.py").unlink()
         self.assert_inconcluso(_run_main(self.argv()), [f"deleted:{PREFIX}qa/f2p_mutants.py"])
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
 
     def test_n3_added_fixture(self):
         self.disk("qa/fixtures/f2p_extra.json").write_bytes(b"{}\n")
         self.assert_inconcluso(_run_main(self.argv()), [f"added:{PREFIX}qa/fixtures/f2p_extra.json"])
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
 
     def test_n4_unknown_commit(self):
         self.assert_inconcluso(_run_main(self.argv(sha="0" * 40)), ["commit_unavailable"])
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
 
     def test_n4b_option_like_commit(self):
         argv = self.argv()
@@ -147,7 +186,7 @@ class OracleCommitNegativeTests(_TempRepo):
         self.assert_inconcluso(
             _run_main(self.argv(sha=sha2)), [f"missing_at_commit:{PREFIX}qa/tests/test_f2p_offline.py"]
         )
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
 
     def test_n6_evaluate_only_leaves_part_verdicts_intact(self):
         part = self.evidence / "run"
@@ -174,7 +213,7 @@ class OracleCommitNegativeTests(_TempRepo):
         _git(self.root, "commit", "-q", "-m", "move head")
         path.write_bytes(ORACLE_FILES["qa/f2p_eval.py"])  # el disco vuelve a casar con self.sha; HEAD no
         self.assert_inconcluso(_run_main(self.argv()), [f"head_differs:{PREFIX}qa/f2p_eval.py"])
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
 
     def test_n13_modified_mutants_module_is_never_imported(self):
         sentinel = self.tmp / "sentinel.txt"
@@ -196,7 +235,7 @@ class OracleCommitNegativeTests(_TempRepo):
         code = _run_main(self.argv("--part", "run"))
         self.assert_inconcluso(code, [f"modified:{PREFIX}qa/f2p_mutants.py"])
         self.assertFalse(sentinel.exists())
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
 
     def test_n13_control_sentinel_fires_if_the_module_is_imported(self):
         sentinel = self.tmp / "sentinel.txt"
@@ -221,7 +260,7 @@ class OracleCommitNegativeTests(_TempRepo):
         pkg.mkdir()
         (pkg / "__init__.py").write_bytes(b"evaluate = None\n")
         self.assert_inconcluso(_run_main(self.argv()), [f"shadow_package:{PREFIX}qa/f2p_eval"])
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
 
     def test_shadow_loose_bytecode_is_oracle_modified(self):
         self.disk("qa/f2p_mutants.pyc").write_bytes(b"\0\0\0\0")
@@ -245,7 +284,7 @@ class OracleCommitNegativeTests(_TempRepo):
         self.addCleanup(sys.path.remove, str(self.qa))
         importlib.invalidate_caches()
         _run_main(self.argv())
-        self.run_mock.assert_called_once()
+        self.assertTrue(self.ran())
         self.assertFalse(sentinel.exists())
         self.assertEqual(sys.modules["f2p_eval"].ORIGIN, "temp-repo")
 
@@ -266,7 +305,7 @@ class OracleCommitNegativeTests(_TempRepo):
         with mock.patch.object(gate_core, "_git_bytes", side_effect=fake):
             code = _run_main(self.argv())
         self.assert_inconcluso(code, ["enumeration_failed:commit", "enumeration_failed:head"])
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
 
     def test_fixture_only_in_head_is_head_differs(self):
         self.disk("qa/fixtures/f2p_head.json").write_bytes(b"{}\n")
@@ -289,7 +328,7 @@ class OracleCommitNegativeTests(_TempRepo):
         _git(self.root, "branch", hexbranch, "HEAD")
         shutil.rmtree(self.evidence, ignore_errors=True)
         self.assert_inconcluso(_run_main(self.argv(sha=hexbranch)), ["commit_unavailable"])
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
 
     def test_read_error_is_failed_check_not_exit_1(self):
         real = Path.read_bytes
@@ -302,7 +341,7 @@ class OracleCommitNegativeTests(_TempRepo):
         with mock.patch.object(Path, "read_bytes", boom):
             code = _run_main(self.argv())
         self.assert_inconcluso(code, ["check_error:PermissionError"])
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
 
     def _evaluate_only_with_alias(self, make_alias):
         part = self.evidence / "run"
@@ -344,6 +383,84 @@ class OracleCommitNegativeTests(_TempRepo):
         self.assertEqual((part / "verdict.json").read_bytes(), b"part\n")
         self.assertEqual(json.loads(root_file.read_text(encoding="utf-8")), {"k": 1})
 
+    # ---- ronda 3 (Sol r2) ----
+    def test_preloaded_oracle_or_runner_module_fails_closed(self):
+        for name in ("f2p_eval", "f2p_mutants", "f2p_run"):
+            with self.subTest(name=name):
+                shutil.rmtree(self.evidence, ignore_errors=True)
+                sys.modules[name] = types.ModuleType(name)
+                try:
+                    self.assert_inconcluso(_run_main(self.argv()), [f"preloaded_module:{name}"])
+                finally:
+                    sys.modules.pop(name, None)
+                self.assertFalse(self.ran())
+
+    def test_git_escaped_fixture_name_is_in_the_census(self):
+        name = "f2p_\u00f1.json"
+        self.disk(f"qa/fixtures/{name}").write_bytes(b"{}\n")
+        sha2 = self.commit_all("accent fixture")
+        self.disk(f"qa/fixtures/{name}").unlink()
+        self.assert_inconcluso(_run_main(self.argv(sha=sha2)), [f"deleted:{PREFIX}qa/fixtures/{name}"])
+
+    def test_evidence_subfolder_alias_via_patched_realpath_is_refused(self):
+        part = self.evidence / "run"
+        (part / "samples").mkdir(parents=True)
+        (part / "manifest.json").write_bytes(b"{}\n")
+        (part / "verdict.json").write_bytes(b"part\n")
+        real = os.path.realpath
+        evidence = self.evidence
+
+        def fake(path, *a, **k):
+            return str(evidence) if Path(path).name == "run" else real(path, *a, **k)
+
+        with mock.patch.object(os.path, "realpath", fake):
+            reason = m1_gate._alias_reason(evidence)
+            code = _run_main(self.argv("--evaluate-only"))
+        self.assertIn("subfolder", reason)
+        self.assertEqual(code, 2)
+        self.assertEqual((part / "verdict.json").read_bytes(), b"part\n")
+        self.assertFalse((evidence / "oracle_check.json").exists())
+
+    def test_evidence_subfolder_junction_to_evidence_is_refused(self):
+        ev = self.evidence
+        (ev / "samples").mkdir(parents=True)
+        (ev / "manifest.json").write_bytes(b"{}\n")
+        (ev / "verdict.json").write_bytes(b"root\n")
+        link = ev / "run"
+        try:
+            os.symlink(ev, link, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            proc = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(ev)], capture_output=True, text=True)
+            if proc.returncode != 0:
+                self.skipTest(f"no se puede crear symlink ni junction en este host: {proc.stdout.strip()}")
+        self.addCleanup(lambda: os.rmdir(link) if os.path.lexists(link) and (link.is_symlink() or os.path.isjunction(link)) else None)
+        self.disk("qa/f2p_eval.py").write_bytes(b"changed\n")
+        code = _run_main(self.argv("--evaluate-only"))
+        self.assertEqual(code, 2)
+        self.assertEqual((ev / "verdict.json").read_bytes(), b"root\n")
+        self.assertFalse((ev / "oracle_check.json").exists())
+
+    def test_failure_writing_oracle_check_does_not_corrupt_hardlinked_part(self):
+        part = self.evidence / "run"
+        (part / "samples").mkdir(parents=True)
+        (part / "manifest.json").write_bytes(b"{}\n")
+        (part / "verdict.json").write_bytes(b"part\n")
+        os.link(part / "verdict.json", self.evidence / "verdict.json")
+        real = gate_core.write_json
+
+        def flaky(path, obj):
+            if Path(path).name == "oracle_check.json":
+                raise OSError("injected")
+            return real(path, obj)
+
+        with mock.patch.object(gate_core, "write_json", flaky):
+            code = _run_main(self.argv("--evaluate-only"))
+        self.assertEqual(code, 2)
+        self.assertEqual((part / "verdict.json").read_bytes(), b"part\n")
+        root = json.loads((self.evidence / "verdict.json").read_text(encoding="utf-8"))
+        self.assertEqual(root["exit_code"], 2)
+        self.assertEqual(root["error"]["type"], "OSError")
+
     def test_n9_oracle_commit_with_s_puente_is_usage_error(self):
         code = _run_main(["spike", "S-puente", "--both", "--build", "offline", "--evidence", str(self.evidence),
                           "--oracle-commit", self.sha])
@@ -355,9 +472,9 @@ class OracleCommitPositiveTests(_TempRepo):
     def test_p1_intact_oracle_runs_and_records_commit(self):
         code = _run_main(self.argv())
         self.assertEqual(code, 2)
-        self.run_mock.assert_called_once()
-        args = self.run_mock.call_args[0][0]
-        self.assertEqual(args.oracle_commit, self.sha)
+        self.assertTrue(self.ran())
+        info = self.integration()
+        self.assertEqual(info["oracle_commit_arg"], self.sha)
         check = self.check_json()
         self.assertTrue(check["ok"])
         self.assertEqual(check["problems"], [])
@@ -372,30 +489,46 @@ class OracleCommitPositiveTests(_TempRepo):
         self.assertEqual(loaded.ORIGIN, "temp-repo")
         self.assertEqual(Path(loaded.__file__), Path(os.path.realpath(self.disk("qa/f2p_eval.py"))))
         self.assertEqual(Path(sys.modules["f2p_mutants"].__file__), Path(os.path.realpath(self.disk("qa/f2p_mutants.py"))))
-        # la parte lleva identity.oracle_commit; sin la opcion, null
-        manifest = _part_manifest(self.tmp / "p", oracle_commit=args.oracle_commit)
-        self.assertEqual(manifest["identity"]["oracle_commit"], self.sha)
+        # misma invocacion: el evaluador que corrio es el verificado y el manifest de la parte lleva el sha completo
+        self.assertEqual(info["marker"], "temp-repo")
+        self.assertEqual(info["mut_origin"], "temp-repo")  # el import cruzado eval -> mutants resolvio al verificado
+        self.assertEqual(Path(info["eval_file"]), Path(os.path.realpath(self.disk("qa/f2p_eval.py"))))
+        self.assertEqual(info["identity_oracle_commit"], self.sha)
+        manifest = json.loads((self.evidence / "run" / "manifest.json").read_text(encoding="utf-8")) \
+            if (self.evidence / "run" / "manifest.json").is_file() else None
+        if manifest is not None:
+            self.assertEqual(manifest["identity"]["oracle_commit"], self.sha)
         self.assertIsNone(_part_manifest(self.tmp / "q")["identity"]["oracle_commit"])
 
     def test_unknown_part_with_intact_oracle_exits_2_without_running(self):
         code = _run_main(self.argv("--part", "nope"))
         self.assertEqual(code, 2)
-        self.run_mock.assert_not_called()
+        self.assertFalse(self.ran())
         self.assertTrue(self.check_json()["ok"])
+
+    def test_accented_fixture_intact_is_ok(self):
+        name = "f2p_\u00f1.json"
+        self.disk(f"qa/fixtures/{name}").write_bytes(b"{}\n")
+        sha2 = self.commit_all("accent fixture")
+        _run_main(self.argv(sha=sha2))
+        check = self.check_json()
+        self.assertTrue(check["ok"], check["problems"])
+        self.assertIn(f"{PREFIX}qa/fixtures/{name}", [f["path"] for f in check["files"]])
+        self.assertTrue(self.ran())
 
     def test_known_part_with_intact_oracle_runs(self):
         _run_main(self.argv("--part", "run"))
-        self.run_mock.assert_called_once()
+        self.assertTrue(self.ran())
 
     def test_short_sha_is_stored_resolved(self):
         _run_main(self.argv(sha=self.sha[:10]))
-        self.assertEqual(self.run_mock.call_args[0][0].oracle_commit, self.sha)
+        self.assertEqual(self.integration()["oracle_commit_arg"], self.sha)
 
     def test_without_option_nothing_is_checked(self):
-        self.disk("qa/f2p_eval.py").write_bytes(b"changed\n")
+        self.disk("qa/fixtures/f2p_base.json").write_bytes(b"changed\n")
         code = _run_main(["spike", SPIKE, "--both", "--build", "offline", "--evidence", str(self.evidence)])
         self.assertEqual(code, 2)
-        self.run_mock.assert_called_once()
+        self.assertTrue(self.ran())
         self.assertFalse((self.evidence / "oracle_check.json").exists())
 
 

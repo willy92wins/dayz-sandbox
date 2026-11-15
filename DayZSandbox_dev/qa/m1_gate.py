@@ -139,6 +139,26 @@ def _oracle_context():
     return (Path(root) if root else qa_dir.parent), qa_dir
 
 
+def _is_alias(path):
+    """True si `path` es un enlace, una junction o resuelve a otra ruta (alias de directorio)."""
+    path = Path(path)
+    if path.is_symlink() or getattr(os.path, "isjunction", lambda _p: False)(path):
+        return True
+    return os.path.normcase(os.path.realpath(path)) != os.path.normcase(os.path.abspath(path))
+
+
+def _alias_reason(evidence):
+    """Motivo (str) si la carpeta de evidencia o una subcarpeta directa es un alias; None si no."""
+    evidence = Path(evidence)
+    if evidence.exists() and _is_alias(evidence):
+        return f"evidence folder is a link or resolves elsewhere: {evidence}"
+    if evidence.is_dir():
+        for child in sorted(evidence.iterdir()):
+            if (child.is_dir() or child.is_symlink()) and _is_alias(child):
+                return f"evidence subfolder is a link or resolves elsewhere: {child}"
+    return None
+
+
 def _write_root_file(evidence, name, obj):
     """Escribe evidence/name sin atravesar enlaces: un enlace (simbolico, duro o que resuelva fuera de la raiz) se
     desvincula antes y se escribe un fichero nuevo, para no alterar el fichero de una parte."""
@@ -230,6 +250,10 @@ def main(argv=None):
         if args.cmd == "spike" and getattr(args, "oracle_commit", None) is not None:
             # Antes de importar o correr nada del spike: el oraculo debe ser byte a byte el del commit congelado.
             check = oracle_check
+            alias = _alias_reason(evidence)
+            if alias:
+                print(f"oracle check refused: {alias}", file=sys.stderr)
+                return 2
             _write_root_file(evidence, "oracle_check.json", check)
             if not check["ok"]:
                 _write_root_file(
@@ -245,8 +269,9 @@ def main(argv=None):
     except Exception as exc:
         if accepted and evidence.is_dir():
             try:
-                gate_core.write_json(
-                    evidence / "verdict.json",
+                _write_root_file(
+                    evidence,
+                    "verdict.json",
                     gate_core.make_verdict(
                         getattr(args, "id", args.cmd),
                         2,

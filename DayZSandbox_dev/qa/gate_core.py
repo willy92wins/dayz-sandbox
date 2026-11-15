@@ -6,6 +6,7 @@ import os
 import platform
 import re
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -183,6 +184,10 @@ def _check_oracle_files(spike_id, commit, repo_root, qa_dir, collect, result):
         problems.append("commit_unavailable")
         return
     result["commit"] = resolved
+    # Un modulo del oraculo (o el runner) ya importado no esta verificado: falla cerrado.
+    for mod_name in (f"{base}_eval", f"{base}_mutants", SPIKE_REGISTRY[spike_id][0]):
+        if mod_name in sys.modules:
+            problems.append(f"preloaded_module:{mod_name}")
 
     def blob_at(rev, path):
         code, data = _git_bytes(repo_root, "rev-parse", "--verify", "--quiet", f"{rev}:{path}")
@@ -194,13 +199,14 @@ def _check_oracle_files(spike_id, commit, repo_root, qa_dir, collect, result):
     pattern = f"{base}_*.json".lower()
 
     def census(rev, label):
-        code, data = _git_bytes(repo_root, "ls-tree", "--name-only", rev, f"{fixtures_dir}/")
+        # -z: nombres delimitados por NUL y sin entrecomillar/escapar (un nombre con ñ no desaparece del censo)
+        code, data = _git_bytes(repo_root, "ls-tree", "-z", "--name-only", rev, f"{fixtures_dir}/")
         if code != 0:
             problems.append(f"enumeration_failed:{label}")
             return set()
         found = set()
-        for line in data.decode("utf-8", "replace").splitlines():
-            name = line.strip().rsplit("/", 1)[-1]
+        for raw in data.split(b"\0"):
+            name = raw.decode("utf-8", "surrogateescape").rsplit("/", 1)[-1]
             if name and fnmatch.fnmatchcase(name.lower(), pattern):
                 found.add(f"{fixtures_dir}/{name}")
         return found
@@ -249,24 +255,31 @@ def _check_oracle_files(spike_id, commit, repo_root, qa_dir, collect, result):
 
 
 def load_verified_oracle(spike_id, collect, *, qa_dir):
-    """Carga `<base>_eval` y `<base>_mutants` desde los bytes verificados (sin .pyc, sin paquetes) en sys.modules."""
-    import sys
+    """Carga `<base>_eval` y `<base>_mutants` desde los bytes verificados (sin .pyc, sin paquetes) en sys.modules.
+
+    Registra los dos modulos nuevos (vacios) antes de ejecutar ninguno y ejecuta mutants y luego eval, para que un
+    import cruzado resuelva siempre al verificado.
+    """
     import types
 
     qa_dir = Path(os.path.realpath(qa_dir if qa_dir is not None else Path(__file__).resolve().parent))
     base = oracle_base(spike_id)
-    for name in (f"{base}_eval", f"{base}_mutants"):
-        source = collect[f"{name}.py"]
+    order = (f"{base}_mutants", f"{base}_eval")
+    staged = []
+    for name in order:
         path = str(qa_dir / f"{name}.py")
         module = types.ModuleType(name)
         module.__file__ = path
-        code = compile(source, path, "exec")
+        staged.append((name, module, compile(collect[f"{name}.py"], path, "exec")))
+    for name, module, _code in staged:
         sys.modules[name] = module
-        try:
+    try:
+        for _name, module, code in staged:
             exec(code, module.__dict__)  # noqa: S102 - bytes ya verificados contra el commit congelado
-        except BaseException:
+    except BaseException:
+        for name, _module, _code in staged:
             sys.modules.pop(name, None)
-            raise
+        raise
 
 
 def git_harness(repo_root=None):
