@@ -242,6 +242,7 @@ class _SyntheticPartBuilder:
             strings={
                 "job": job_id,
                 "state": "running",
+                "resource": "per_census",
                 "area_tag": area_tag,
                 "server_epoch": inst,
                 "director_uid": self.director_uid if director_present_b else "",
@@ -1333,7 +1334,7 @@ class _SyntheticPartBuilder:
                 "q9_pitch_deg": 0.0,
                 "q9_roll_deg": 0.0,
                 "max_hp": 100.0,
-                "health_hp": 100.0,
+                "health_hp": 100.0 * float(ent["health_mark_ratio"]) if float(ent["health_mark_ratio"]) > 0.0 else 100.0,
                 "spawn_tick_ms": self.tick_ms,
             })
             wit_rows.append({
@@ -1357,7 +1358,7 @@ class _SyntheticPartBuilder:
                 "pitch_deg": 0.0,
                 "roll_deg": 0.0,
                 "max_hp": 100.0,
-                "health_hp": 100.0,
+                "health_hp": 100.0 * float(ent["health_mark_ratio"]) if float(ent["health_mark_ratio"]) > 0.0 else 100.0,
                 "inv_children_n": 2.0 if lid == "b_chest_own" else (3.0 if lid == "b_act_1" else 0.0),
                 "spawn_tick_ms": self.tick_ms,
             })
@@ -2037,6 +2038,47 @@ class TestSPersistOracleOffline(unittest.TestCase):
     # End-to-End tests requiring runner & extension implementation (ENCARGO.md §4.1)
     # =========================================================================
 
+    def _verify_gate_evidence_with_frozen_oracle(self, ev_dir: Path) -> dict[str, Any]:
+        expected_parts = ["run"] + [f"mut-{m}" for m in s_persist_mutants.EXPECTED_MUTANTS]
+        for pname in expected_parts:
+            pdir = ev_dir / pname
+            if not (
+                pdir.is_dir()
+                and (pdir / "manifest.json").is_file()
+                and (pdir / "part.json").is_file()
+                and (pdir / "samples" / "bridge.jsonl").is_file()
+                and (pdir / "samples" / "scenario.jsonl").is_file()
+            ):
+                return {"verdict": "INCONCLUSO", "exit_code": 2, "reason": f"missing_part_files:{pname}"}
+            if pname.startswith("mut-") and not (pdir / "injection.json").is_file():
+                return {"verdict": "INCONCLUSO", "exit_code": 2, "reason": f"missing_injection:{pname}"}
+            v = s_persist_eval.evaluate(pdir, repo_root=REPO_ROOT)
+            gate_core.write_json(pdir / "verdict.json", v)
+            c_map = _checks_by_id(v)
+            if pname == "run":
+                if v["exit_code"] != 0 or v["verdict"] != "PASA":
+                    return {"verdict": v["verdict"], "exit_code": v["exit_code"], "reason": "run_not_pasa"}
+                if any(c_map[cid]["status"] != "pass" for cid in s_persist_eval.CHECK_IDS):
+                    return {"verdict": "FALLA", "exit_code": 1, "reason": "run_check_not_pass"}
+            else:
+                mname = pname[len("mut-") :]
+                mspec = s_persist_mutants.EXPECTED_MUTANTS[mname]
+                must_fail = set(mspec["must_fail_checks"])
+                if v["exit_code"] != 1 or v["verdict"] != "FALLA":
+                    return {"verdict": "INCONCLUSO", "exit_code": 2, "reason": f"mutant_not_falla:{pname}"}
+                for cid in s_persist_eval.CHECK_IDS:
+                    exp_st = "fail" if cid in must_fail else "pass"
+                    if c_map[cid]["status"] != exp_st:
+                        return {"verdict": "INCONCLUSO", "exit_code": 2, "reason": f"mutant_check_mismatch:{pname}:{cid}"}
+        agg = f03_common.aggregate_spike(
+            ev_dir,
+            "S-persist",
+            repo_root=REPO_ROOT,
+            expected_mutants=s_persist_mutants.EXPECTED_MUTANTS,
+            expected_harness_tests=s_persist_mutants.EXPECTED_HARNESS_TESTS,
+        )
+        return agg
+
     def test_e2e_m1_gate_spike_s_persist_offline_all(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ev_dir = Path(tmp) / "e2e_offline"
@@ -2053,17 +2095,25 @@ class TestSPersistOracleOffline(unittest.TestCase):
             root_verdict = json.loads((ev_dir / "verdict.json").read_text(encoding="utf-8"))
             self.assertEqual(root_verdict["verdict"], "PASA")
             self.assertEqual(root_verdict["exit_code"], 0)
+            # BLOQ 1: Re-evaluate every part and re-aggregate with the frozen oracle
+            verified_agg = self._verify_gate_evidence_with_frozen_oracle(ev_dir)
+            self.assertEqual(verified_agg["exit_code"], 0, msg=json.dumps(verified_agg, indent=2))
+            self.assertEqual(verified_agg["verdict"], "PASA")
 
     def test_e2e_lease_expired_blocks_effects_and_allows_cleanup_e1(self) -> None:
-        import tempfile
-        import json as _json
+        import os
+        import time
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tf:
-            _json.dump({
-                "url": "http://127.0.0.1:18999/",
-                "key": "test-key",
-                "retry_ms": 2000,
-                "callback_budget": 2000,
-            }, tf)
+            json.dump(
+                {
+                    "url": "http://127.0.0.1:18999/",
+                    "key": "test-key",
+                    "retry_ms": 2000,
+                    "callback_budget": 2000,
+                },
+                tf,
+            )
             config_path = tf.name
         try:
             now_box = [1000.0]
@@ -2075,35 +2125,730 @@ class TestSPersistOracleOffline(unittest.TestCase):
                 "",
                 clock_ms_fn=lambda: now_box[0],
             )
+            peer.hello_ok = True
             peer.last_ok_ms = 1000.0
-            # Advance virtual clock past PEER_LEASE_TIMEOUT_MS (5000 ms) without polling
+            self.assertTrue(peer.lease_valid())
+
+            def _make_valid_op(
+                op_id: str,
+                verb: str,
+                payload: dict[str, Any],
+                issued_ms: float,
+                ttl_ms: int = 10000,
+            ) -> dict[str, Any]:
+                norm_args = f03_common._normalize_new_verb_args(payload, "")
+                return {
+                    "op_id": op_id,
+                    "verb": verb,
+                    "args": norm_args,
+                    "inst": peer.inst,
+                    "ttl_ms": ttl_ms,
+                    "issued_ms": float(issued_ms),
+                }
+
+            # 1) While lease is valid, prepare state on peer (apply scene_a_clean + spawn raw a_foreign_ground + start census job)
+            fixture = json.loads(
+                (QA_DIR / "fixtures" / "s_persist_fixture.json").read_text(encoding="utf-8")
+            )
+            in_scol = ["logical_id", "parent_id", "cat", "class_name", "slot_name"]
+            in_ncol = ["req_x_m", "req_z_m", "req_yaw_deg", "health_mark_ratio", "must_vanish_b"]
+            clean_in_rows = [
+                {
+                    "logical_id": e["logical_id"],
+                    "parent_id": e["parent_id"],
+                    "cat": e["cat"],
+                    "class_name": e["class_name"],
+                    "slot_name": e["slot_name"],
+                    "req_x_m": float(e["req_x_m"]),
+                    "req_z_m": float(e["req_z_m"]),
+                    "req_yaw_deg": float(e["req_yaw_deg"]),
+                    "health_mark_ratio": float(e["health_mark_ratio"]),
+                    "must_vanish_b": float(e["must_vanish_on_restart_b"]),
+                }
+                for e in fixture["scenes"]["scene_a_clean"]["entities"]
+            ]
+            prep_results: list[dict[str, Any]] = []
+            prep_apply_op = _make_valid_op(
+                "op-prep-apply",
+                "per_apply_scene",
+                wire.pack_payload(
+                    scalars_str={
+                        "scene_id": "scene_a_clean",
+                        "scene_op_id": "prep-scop-1",
+                        "expect_epoch": peer.inst,
+                        "q9_pathway": "a",
+                    },
+                    scalars_num={"gen_n": 1.0},
+                    num_cols=in_ncol,
+                    str_cols=in_scol,
+                    row_dicts=clean_in_rows,
+                ),
+                now_box[0],
+            )
+            peer._start_op(prep_apply_op, now_box[0], time.monotonic(), prep_results)
+
+            prep_raw_op = _make_valid_op(
+                "op-prep-raw",
+                "per_spawn_raw",
+                wire.pack_payload(
+                    scalars_str={
+                        "tag": "a_foreign_ground",
+                        "mode": "foreign_ground",
+                        "class_name": "WaterBottle",
+                        "child_cargo_class": "",
+                        "target_scene_id": "",
+                        "target_parent_id": "",
+                    },
+                    scalars_num={
+                        "x_m": 4504.0,
+                        "z_m": 10202.0,
+                        "yaw_deg": 25.0,
+                        "health_mark_ratio": 0.615,
+                    },
+                ),
+                now_box[0],
+            )
+            peer._start_op(prep_raw_op, now_box[0], time.monotonic(), prep_results)
+
+            prep_status_op = _make_valid_op(
+                "op-prep-status", "per_status", wire.pack_payload(), now_box[0]
+            )
+            peer._start_op(prep_status_op, now_box[0], time.monotonic(), prep_results)
+
+            prep_census_op = _make_valid_op(
+                "op-prep-census",
+                "per_census_start",
+                wire.pack_payload(
+                    scalars_str={"area_tag": "t1_pre_transition_census:area_a"},
+                    scalars_num={
+                        "center_x_m": 4500.0,
+                        "center_z_m": 10200.0,
+                        "radius_m": 60.0,
+                        "include_director_b": 1.0,
+                    },
+                ),
+                now_box[0],
+            )
+            peer._start_op(prep_census_op, now_box[0], time.monotonic(), prep_results)
+
+            prep_by_id = {r["op_id"]: r for r in prep_results}
+            self.assertEqual(prep_by_id["op-prep-apply"]["status"], "done")
+            self.assertEqual(prep_by_id["op-prep-raw"]["status"], "done")
+            self.assertEqual(prep_by_id["op-prep-status"]["status"], "done")
+            self.assertEqual(prep_by_id["op-prep-census"]["status"], "done")
+            _, prep_st_n, _ = _unpack(prep_by_id["op-prep-status"]["read"])
+            self.assertEqual(prep_st_n["registered_total_n"], 6.0)
+            self.assertEqual(prep_st_n["scenes_count_n"], 1.0)
+
+            # 2) Advance virtual clock past PEER_LEASE_TIMEOUT_MS (5000 ms) without polling so lease expires
             now_box[0] = 7500.0
-            # Lease expiration is checked lazily via lease_valid()
+            self.assertFalse(peer.lease_valid())
+
+            # Stepping jobs after lease expiry must fail the running per_census job with lease_expired
+            peer._step_extensions_and_jobs(0.05)
 
             results: list[dict[str, Any]] = []
+            jr_op = _make_valid_op(
+                "op-jr-expired",
+                "job_read",
+                wire.pack_payload(scalars_str={"job": "op-prep-census"}, scalars_num={"page_n": 0.0}),
+                now_box[0],
+            )
+            peer._start_op(jr_op, now_box[0], time.monotonic(), results)
+
             for idx, verb in enumerate(
                 ("per_apply_scene", "per_reset_scene", "per_child_transition", "per_spawn_raw", "per_census_start")
             ):
-                op = {"op_id": f"op-exp-{idx}", "verb": verb, "args": wire.pack_payload()}
-                peer._start_op(op, now_box[0], 1.0, results)
-            clean_op = {
-                "op_id": "op-clean",
-                "verb": "per_cleanup_qa",
-                "args": wire.pack_payload(scalars_str={"cleanup_tag": "t6"}),
-            }
-            peer._start_op(clean_op, now_box[0], 1.0, results)
+                op = _make_valid_op(f"op-exp-{idx}", verb, wire.pack_payload(), now_box[0])
+                peer._start_op(op, now_box[0], time.monotonic(), results)
+
+            # Check per_status before cleanup: prepared state must still be intact (6 own entities, 1 scene)
+            mid_status_op = _make_valid_op(
+                "op-mid-status", "per_status", wire.pack_payload(), now_box[0]
+            )
+            peer._start_op(mid_status_op, now_box[0], time.monotonic(), results)
+
+            # 3) per_cleanup_qa is allowed even with expired lease and cleans up the prepared state
+            clean_op = _make_valid_op(
+                "op-clean",
+                "per_cleanup_qa",
+                wire.pack_payload(scalars_str={"cleanup_tag": "t6"}),
+                now_box[0],
+            )
+            peer._start_op(clean_op, now_box[0], time.monotonic(), results)
+
+            post_status_op = _make_valid_op(
+                "op-post-status", "per_status", wire.pack_payload(), now_box[0]
+            )
+            peer._start_op(post_status_op, now_box[0], time.monotonic(), results)
+
             by_id = {r["op_id"]: r for r in results}
+            jr_s, _, _ = _unpack(by_id["op-jr-expired"]["read"])
+            self.assertEqual(jr_s["state"], "failed")
+            self.assertEqual(jr_s["reason"], "lease_expired")
+
             for idx in range(5):
                 r = by_id.get(f"op-exp-{idx}")
                 self.assertIsNotNone(r)
                 self.assertEqual(r["status"], "error")
                 self.assertEqual(r["reason"], "lease_expired")
+
+            _, mid_st_n, _ = _unpack(by_id["op-mid-status"]["read"])
+            self.assertEqual(mid_st_n["registered_total_n"], 6.0)
+            self.assertEqual(mid_st_n["scenes_count_n"], 1.0)
+
             r_clean = by_id.get("op-clean")
             self.assertIsNotNone(r_clean)
             self.assertEqual(r_clean["status"], "done")
+            _, clean_n, _ = _unpack(r_clean["read"])
+            self.assertEqual(clean_n["cleaned_own_n"], 6.0)
+            self.assertGreaterEqual(clean_n["cleaned_raw_n"], 1.0)
+
+            _, post_st_n, _ = _unpack(by_id["op-post-status"]["read"])
+            self.assertEqual(post_st_n["registered_total_n"], 0.0)
+            self.assertEqual(post_st_n["scenes_count_n"], 0.0)
         finally:
-            import os
             os.unlink(config_path)
+
+    # =========================================================================
+    # Negative tests for Sol's 12 BLOQs (ARREGLOS_r3_sol.md §3)
+    # =========================================================================
+
+    def test_neg_bloq01_fabricator_runner_rejected_by_frozen_oracle(self) -> None:
+        """BLOQ 1: A runner that writes verdict.json=PASA without valid samples/parts is rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ev_dir = Path(tmp) / "fabricated_gate"
+            ev_dir.mkdir(parents=True, exist_ok=True)
+            gate_core.write_json(
+                ev_dir / "verdict.json",
+                {"schema": "m1-verdict-v1", "id": "S-persist", "verdict": "PASA", "exit_code": 0, "checks": [], "metrics": {}, "reasons": []},
+            )
+            for pname in ("run", "mut-unprotected_leak", "mut-foreign_wiped"):
+                pdir = ev_dir / pname
+                (pdir / "samples").mkdir(parents=True, exist_ok=True)
+                gate_core.write_json(
+                    pdir / "verdict.json",
+                    {"schema": "m1-verdict-v1", "id": "S-persist", "verdict": "PASA", "exit_code": 0, "checks": [], "metrics": {}, "reasons": []},
+                )
+            verified = self._verify_gate_evidence_with_frozen_oracle(ev_dir)
+            self.assertIn(verified["exit_code"], (1, 2))
+            self.assertNotEqual(verified["verdict"], "PASA")
+
+    def test_neg_bloq02_orders_missing_inst_or_ttl_rejected_before_ext(self) -> None:
+        """BLOQ 2: Orders missing inst or ttl_ms/issued_ms are rejected by Peer._start_op and fail evaluation."""
+        import os
+        import time
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tf:
+            json.dump({"url": "http://127.0.0.1:18999/", "key": "k"}, tf)
+            config_path = tf.name
+        try:
+            now_box = [1000.0]
+            peer = fake_peer.Peer(config_path, "server", 0, 30.0, "", clock_ms_fn=lambda: now_box[0])
+            peer.hello_ok = True
+            peer.last_ok_ms = 1000.0
+            res_bucket: list[dict[str, Any]] = []
+            # Missing inst -> rejected/stale_instance
+            peer._start_op({"op_id": "no-inst", "verb": "per_cleanup_qa", "args": wire.pack_payload()}, now_box[0], time.monotonic(), res_bucket)
+            # Missing ttl_ms/issued_ms -> rejected/expired
+            peer._start_op({"op_id": "no-ttl", "verb": "per_cleanup_qa", "inst": peer.inst, "args": wire.pack_payload()}, now_box[0], time.monotonic(), res_bucket)
+            by_id = {r["op_id"]: r for r in res_bucket}
+            self.assertEqual(by_id["no-inst"]["status"], "rejected")
+            self.assertEqual(by_id["no-inst"]["reason"], "stale_instance")
+            self.assertEqual(by_id["no-ttl"]["status"], "rejected")
+            self.assertEqual(by_id["no-ttl"]["reason"], "expired")
+        finally:
+            os.unlink(config_path)
+
+        # In evaluator: if per_cleanup_qa or census is rejected with stale_instance/expired, verdict is not PASA
+        with tempfile.TemporaryDirectory() as tmp:
+            part_dir = _SyntheticPartBuilder("run").build_into(Path(tmp) / "stale_inst_trace")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            res["status"] = "rejected"
+                            res["reason"] = "stale_instance"
+                            break
+            bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertIn(verdict["exit_code"], (1, 2))
+            self.assertNotEqual(verdict["verdict"], "PASA")
+
+    def test_neg_bloq03_post_restart_census_reuses_old_job_pages(self) -> None:
+        """BLOQ 3: Reusing t0 job_id in t5_post_restart_census without t5 job_read/job_free is rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "reuse_job_t5")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+            t0_jobs_by_area: dict[str, str] = {}
+            t5_jobs_to_strip: set[str] = set()
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            atag = u_s.get("area_tag", "")
+                            if atag.startswith("t0_baseline_census:"):
+                                aid = atag.split(":", 1)[1]
+                                t0_jobs_by_area[aid] = u_s["job"]
+                            elif atag in ("t5_post_restart_census:area_a", "t5_post_restart_census:area_b"):
+                                aid = atag.split(":", 1)[1]
+                                old_jid = t0_jobs_by_area[aid]
+                                t5_jobs_to_strip.add(u_s["job"])
+                                u_s["job"] = old_jid
+                                res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
+
+            filtered: list[dict[str, Any]] = []
+            for ev in events:
+                if ev.get("ev") in ("enq", "poll"):
+                    args = ev.get("args") or ((ev.get("ops") or [{}])[0].get("args") if ev.get("ops") else None)
+                    verb = ev.get("verb") or ((ev.get("ops") or [{}])[0].get("verb") if ev.get("ops") else "")
+                    if verb in ("job_read", "job_free") and isinstance(args, dict):
+                        u_s, _, _ = _unpack(args)
+                        if u_s.get("job") in t5_jobs_to_strip:
+                            continue
+                elif ev.get("ev") == "result":
+                    res_list = ev.get("results") or []
+                    if res_list and res_list[0].get("verb") in ("job_read", "job_free"):
+                        u_s, _, _ = _unpack(res_list[0]["read"])
+                        if u_s.get("job") in t5_jobs_to_strip:
+                            continue
+                filtered.append(ev)
+
+            bpath.write_text("\n".join(json.dumps(e) for e in filtered) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertIn(verdict["exit_code"], (1, 2))
+            self.assertNotEqual(verdict["verdict"], "PASA")
+            self.assertIn("reused_census_job_id", verdict["reasons"])
+
+    def test_neg_bloq04_per01_census_zero_health_or_unlabeled_duplicate(self) -> None:
+        """BLOQ 4: PER-01 rejects alive_b=max_hp=health_hp=0 in census OR an extra unlabeled Barrel_Green."""
+        # Subcase A: alive_b = max_hp = health_hp = 0 in t1_pre_transition_census
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "zero_hp_census")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            t1_pre_jobs: set[str] = set()
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            u_s, _, _ = _unpack(res["read"])
+                            if "t1_pre_transition_census" in u_s.get("area_tag", ""):
+                                t1_pre_jobs.add(u_s["job"])
+                        elif res.get("verb") == "job_read":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("job") in t1_pre_jobs:
+                                for row in u_r:
+                                    if row.get("own_logical_id") == "a_prop_1":
+                                        row["alive_b"] = 0.0
+                                        row["max_hp"] = 0.0
+                                        row["health_hp"] = 0.0
+                                res["read"] = builder._pack_ext_read(
+                                    strings=u_s,
+                                    numbers=u_n,
+                                    ncol=res["read"]["ncol"],
+                                    scol=res["read"]["scol"],
+                                    rows=u_r,
+                                )
+            bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 1)
+            self.assertEqual(_checks_by_id(verdict)["PER-01"]["status"], "fail")
+
+        # Subcase B: Duplicate Barrel_Green labeled as foreign (own_b=0, own_logical_id="") in t1_pre and t3_post
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "unlabeled_dup_barrel")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            target_jobs: set[str] = set()
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("area_tag") in (
+                                "t1_pre_transition_census:area_a",
+                                "t3_post_reset_census:area_a",
+                            ):
+                                target_jobs.add(u_s["job"])
+                                u_n["rows_captured_n"] = float(u_n["rows_captured_n"]) + 1.0
+                                res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
+                        elif res.get("verb") == "job_read":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("job") in target_jobs:
+                                u_n["rows_total_n"] = float(u_n["rows_total_n"]) + 1.0
+                                if int(round(u_n["page_n"])) == int(round(u_n["pages_n"])) - 1:
+                                    u_r.append({
+                                        "class_name": "Barrel_Green",
+                                        "loc_kind": "ground",
+                                        "parent_class": "",
+                                        "parent_net_id": "",
+                                        "slot_name": "",
+                                        "owner_uid": "",
+                                        "own_logical_id": "",
+                                        "net_id": "1:9999",
+                                        "pers_id": "0:0:0:0",
+                                        "own_b": 0.0,
+                                        "in_radius_b": 1.0,
+                                        "alive_b": 1.0,
+                                        "ai_agent_b": 0.0,
+                                        "pos_x_m": 4502.0,
+                                        "pos_y_m": _surface_y(4502.0, 10202.0),
+                                        "pos_z_m": 10202.0,
+                                        "yaw_deg": 15.0,
+                                        "pitch_deg": 0.0,
+                                        "roll_deg": 0.0,
+                                        "max_hp": 100.0,
+                                        "health_hp": 100.0,
+                                        "inv_children_n": 0.0,
+                                        "spawn_tick_ms": 1500.0,
+                                    })
+                                res["read"] = builder._pack_ext_read(
+                                    strings=u_s,
+                                    numbers=u_n,
+                                    ncol=res["read"]["ncol"],
+                                    scol=res["read"]["scol"],
+                                    rows=u_r,
+                                )
+            bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 1)
+            c_map = _checks_by_id(verdict)
+            self.assertEqual(c_map["PER-01"]["status"], "fail")
+            self.assertEqual(c_map["PER-03"]["status"], "fail")
+            self.assertEqual(c_map["PER-04"]["status"], "fail")
+
+    def test_neg_bloq05_retained_containers_and_foreign_cargo_displaced_n52(self) -> None:
+        """BLOQ 5: Moving retained containers and their foreign/cross cargo by 10 m after reset fails PER-05."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "moved_retained_n52")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            t3_post_a_jobs: set[str] = set()
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            u_s, _, _ = _unpack(res["read"])
+                            if u_s.get("area_tag") == "t3_post_reset_census:area_a":
+                                t3_post_a_jobs.add(u_s["job"])
+                        elif res.get("verb") == "job_read":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("job") in t3_post_a_jobs:
+                                for row in u_r:
+                                    if row.get("class_name") in (
+                                        "WoodenCrate",
+                                        "SeaChest",
+                                        "FirstAidKit",
+                                        "SewingKit",
+                                        "Compass",
+                                        "BandageDressing",
+                                    ):
+                                        row["pos_x_m"] = float(row["pos_x_m"]) + 10.0
+                                res["read"] = builder._pack_ext_read(
+                                    strings=u_s,
+                                    numbers=u_n,
+                                    ncol=res["read"]["ncol"],
+                                    scol=res["read"]["scol"],
+                                    rows=u_r,
+                                )
+            bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 1)
+            self.assertEqual(_checks_by_id(verdict)["PER-05"]["status"], "fail")
+
+    def test_neg_bloq06_foreign_items_in_wrong_parent_container(self) -> None:
+        """BLOQ 6: Placing a_foreign_in_chest and a_foreign_in_child_kit in another container fails PER-01/04/05."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "wrong_foreign_parent")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            wrong_parent_nid = builder.entities_by_lid["b_chest_foreign"]["net_id"]
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "job_read":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            for row in u_r:
+                                if row.get("class_name") in ("Compass", "BandageDressing"):
+                                    row["parent_net_id"] = wrong_parent_nid
+                                    row["parent_class"] = "SeaChest"
+                            res["read"] = builder._pack_ext_read(
+                                strings=u_s,
+                                numbers=u_n,
+                                ncol=res["read"]["ncol"],
+                                scol=res["read"]["scol"],
+                                rows=u_r,
+                            )
+            bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 1)
+            c_map = _checks_by_id(verdict)
+            self.assertEqual(c_map["PER-01"]["status"], "fail")
+            self.assertEqual(c_map["PER-04"]["status"], "fail")
+            self.assertEqual(c_map["PER-05"]["status"], "fail")
+
+    def test_neg_bloq07_unaccredited_reachable_volume_before_or_after_restart_n49(self) -> None:
+        """BLOQ 7: Unaccredited time gap between last pre-restart census and t5 census returns INCONCLUSO."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "unaccredited_gap_n49")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            # Advance t5_post_restart_census snap_tick_ms by 12000 ms (12 s * 6 m/s = 72 m > 60 m disk)
+            t5_jobs: set[str] = set()
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if "t5_post_restart_census:area_b" in u_s.get("area_tag", ""):
+                                t5_jobs.add(u_s["job"])
+                                u_n["snap_tick_ms"] = float(u_n["snap_tick_ms"]) + 12000.0
+                                res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
+                        elif res.get("verb") == "job_read":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("job") in t5_jobs:
+                                for tk in ("start_tick_ms", "end_tick_ms", "onjobend_tick_ms", "released_tick_ms"):
+                                    u_n[tk] = float(u_n[tk]) + 12000.0
+                                res["read"] = builder._pack_ext_read(
+                                    strings=u_s,
+                                    numbers=u_n,
+                                    ncol=res["read"]["ncol"],
+                                    scol=res["read"]["scol"],
+                                    rows=u_r,
+                                )
+            bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 2)
+            c_map = _checks_by_id(verdict)
+            self.assertEqual(c_map["PER-08"]["status"], "missing")
+            self.assertIn("post_restart_creature_coverage_missing", c_map["PER-08"]["detail"])
+
+    def test_neg_bloq08_per10_source_omission_and_substitution(self) -> None:
+        """BLOQ 8: Substituting DSBX_QA_X_Persist.c with DSBX_QA_Stamp.c in persist_files is rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "subst_stamp_c")
+            stamp_rel = "DayZSandbox_dev/qa/probe/DayZSandbox_QA/scripts/3_Game/DSBX_QA_Stamp.c"
+            proc = subprocess.run(
+                ["git", "show", f"{builder.git_head}:{stamp_rel}"],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                timeout=15,
+                check=True,
+            )
+            stamp_text = proc.stdout.decode("utf-8")
+            spath = part_dir / "samples" / "scenario.jsonl"
+            events = [json.loads(l) for l in spath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            for ev in events:
+                if ev.get("ev") == "probe_sources_at_commit":
+                    ev["persist_files"] = {stamp_rel: stamp_text}
+            spath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 2)
+            c_map = _checks_by_id(verdict)
+            self.assertEqual(c_map["PER-10"]["status"], "missing")
+            self.assertEqual(c_map["PER-10"]["detail"], "artifact_unverified")
+
+    def test_neg_bloq09_per02_fixed_zero_spawn_tick_or_short_hold(self) -> None:
+        """BLOQ 9: Setting crow['spawn_tick_ms']=0 with snap_tick_ms=600000 when created at 1520 fails PER-02."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "zero_spawn_tick")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            t2_jobs: set[str] = set()
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if "t2_census_10min" in u_s.get("area_tag", ""):
+                                t2_jobs.add(u_s["job"])
+                                u_n["snap_tick_ms"] = 600000.0
+                                res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
+                        elif res.get("verb") == "job_read":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("job") in t2_jobs:
+                                for tk in ("start_tick_ms", "end_tick_ms", "onjobend_tick_ms", "released_tick_ms"):
+                                    u_n[tk] = 600000.0
+                                for row in u_r:
+                                    if row.get("own_logical_id") == "a_inf_1":
+                                        row["spawn_tick_ms"] = 0.0
+                                res["read"] = builder._pack_ext_read(
+                                    strings=u_s,
+                                    numbers=u_n,
+                                    ncol=res["read"]["ncol"],
+                                    scol=res["read"]["scol"],
+                                    rows=u_r,
+                                )
+            bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 1)
+            self.assertEqual(_checks_by_id(verdict)["PER-02"]["status"], "fail")
+
+    def test_neg_bloq10_per09_invented_apple_witness_scene_rejected(self) -> None:
+        """BLOQ 10: Replacing the 11 witness entities of scene_b with Apple fails PER-09."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "apple_witness")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            wit_jobs: set[str] = set()
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            u_s, _, _ = _unpack(res["read"])
+                            if u_s.get("area_tag") in (
+                                "t5_witness_pre_census:area_b",
+                                "t5_witness_post_census:area_b",
+                            ):
+                                wit_jobs.add(u_s["job"])
+                        elif res.get("verb") == "job_read":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("job") in wit_jobs:
+                                for row in u_r:
+                                    if int(round(float(row.get("own_b", 0.0)))) == 1:
+                                        row["class_name"] = "Apple"
+                                        row["loc_kind"] = "ground"
+                                        row["parent_class"] = ""
+                                        row["parent_net_id"] = ""
+                                        row["slot_name"] = ""
+                                        row["inv_children_n"] = 0.0
+                                res["read"] = builder._pack_ext_read(
+                                    strings=u_s,
+                                    numbers=u_n,
+                                    ncol=res["read"]["ncol"],
+                                    scol=res["read"]["scol"],
+                                    rows=u_r,
+                                )
+            bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 1)
+            self.assertEqual(_checks_by_id(verdict)["PER-09"]["status"], "fail")
+
+    def test_neg_bloq11_per09_interleaved_polls_and_wrong_semantic_order(self) -> None:
+        """BLOQ 11: Interleaved polls/ops between witness status and census pass; wrong semantic order fails."""
+        # 1) Honest trace with 10 interleaved operations between wit_pre_status and wit_pre_census -> PASA
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "interleaved_wit")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            new_events: list[dict[str, Any]] = []
+            for ev in events:
+                if ev.get("ev") == "enq" and ev.get("verb") == "per_census_start":
+                    u_s, _, _ = _unpack(ev["args"])
+                    if u_s.get("area_tag") == "t5_witness_pre_census:area_b":
+                        for k in range(10):
+                            noop_id = f"interleaved-noop-{k}"
+                            new_events.append({"ev": "enq", "peer": "client", "op_id": noop_id, "verb": "cli_Ping", "args": {}, "h_ms": 620000.0 + k})
+                            new_events.append({
+                                "ev": "result",
+                                "peer": "client",
+                                "inst": builder.client_inst,
+                                "results": [{"op_id": noop_id, "verb": "cli_Ping", "status": "done", "reason": "", "dup": 0, "recv_ms": 620000.0 + k, "done_ms": 620000.5 + k, "frame_recv": 100, "frame_done": 100, "read": {}}],
+                            })
+                new_events.append(ev)
+            bpath.write_text("\n".join(json.dumps(e) for e in new_events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 0, msg=json.dumps(verdict, indent=2))
+            self.assertEqual(_checks_by_id(verdict)["PER-09"]["status"], "pass")
+
+        # 2) Dishonest trace where post-stale witness status is omitted -> INCONCLUSO (exit_code == 2)
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "missing_post_wit_status")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            seen_stale_apply = False
+            filtered: list[dict[str, Any]] = []
+            for ev in events:
+                if ev.get("ev") == "result":
+                    res_list = ev.get("results") or []
+                    if res_list and res_list[0].get("verb") == "per_apply_scene" and res_list[0].get("reason") == "stale_epoch":
+                        seen_stale_apply = True
+                    elif seen_stale_apply and res_list and res_list[0].get("verb") == "per_status":
+                        continue
+                filtered.append(ev)
+            bpath.write_text("\n".join(json.dumps(e) for e in filtered) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertIn(verdict["exit_code"], (1, 2))
+            self.assertNotEqual(_checks_by_id(verdict)["PER-09"]["status"], "pass")
+
+    def test_neg_bloq12_resource_arbitrary_no_lock_and_concurrent_contention(self) -> None:
+        """BLOQ 12: Changing census resource to 'arbitrary_no_lock' or overlapping census jobs is rejected."""
+        # Subcase A: resource changed to "arbitrary_no_lock" in job_read
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "arbitrary_no_lock")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") in ("per_census_start", "job_read"):
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if "resource" in u_s:
+                                u_s["resource"] = "arbitrary_no_lock"
+                                res["read"] = builder._pack_ext_read(
+                                    strings=u_s,
+                                    numbers=u_n,
+                                    ncol=res["read"].get("ncol"),
+                                    scol=res["read"].get("scol"),
+                                    rows=u_r,
+                                )
+            bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertIn(verdict["exit_code"], (1, 2))
+            self.assertNotEqual(verdict["verdict"], "PASA")
+            self.assertIn("invalid_census_resource", verdict["reasons"])
+
+        # Subcase B: Two per_census_start jobs overlap in time on the server (unprotected concurrent contention)
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "overlapping_census")
+            bpath = part_dir / "samples" / "bridge.jsonl"
+            events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            # Make t0_baseline_census:area_b start before t0_baseline_census:area_a released its lock
+            t0_a_job = None
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("area_tag") == "t0_baseline_census:area_a":
+                                t0_a_job = u_s["job"]
+                        elif res.get("verb") == "job_read" and t0_a_job:
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("job") == t0_a_job:
+                                u_n["end_tick_ms"] = float(u_n["start_tick_ms"]) + 5000.0
+                                u_n["onjobend_tick_ms"] = float(u_n["start_tick_ms"]) + 5000.0
+                                u_n["released_tick_ms"] = float(u_n["start_tick_ms"]) + 5000.0
+                                res["read"] = builder._pack_ext_read(
+                                    strings=u_s,
+                                    numbers=u_n,
+                                    ncol=res["read"]["ncol"],
+                                    scol=res["read"]["scol"],
+                                    rows=u_r,
+                                )
+            bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertIn(verdict["exit_code"], (1, 2))
+            self.assertNotEqual(verdict["verdict"], "PASA")
+            self.assertIn("unprotected_census_resource_overlap", verdict["reasons"])
 
 
 if __name__ == "__main__":

@@ -288,18 +288,23 @@ def scan_persist_enforcescript_sources(persist_files: dict[str, str]) -> list[st
     return violations
 
 
+def _normalize_probe_rel_path(rel_path: str) -> str:
+    norm = rel_path.replace("\\", "/").lstrip("/")
+    if norm.startswith("DayZSandbox_dev/"):
+        norm = norm[len("DayZSandbox_dev/") :]
+    return norm
+
+
 def _git_show_text(repo_root: Path, git_head: str, rel_path: str) -> str | None:
-    rel_norm = rel_path.replace("\\", "/")
-    candidates = [rel_norm]
-    if not rel_norm.startswith("DayZSandbox_dev/"):
-        candidates.append(f"DayZSandbox_dev/{rel_norm}")
-    else:
-        candidates.append(rel_norm[len("DayZSandbox_dev/"):])
+    rel_norm = _normalize_probe_rel_path(rel_path)
+    candidates = [rel_norm, f"DayZSandbox_dev/{rel_norm}"]
+    top = f03_common._git_toplevel(repo_root)
+    cwd = str(top if top is not None else repo_root)
     for cand in candidates:
         try:
             proc = subprocess.run(
                 ["git", "show", f"{git_head}:{cand}"],
-                cwd=str(repo_root),
+                cwd=cwd,
                 capture_output=True,
                 timeout=15,
                 check=False,
@@ -312,6 +317,49 @@ def _git_show_text(repo_root: Path, git_head: str, rel_path: str) -> str | None:
             except UnicodeDecodeError:
                 return None
     return None
+
+
+def _get_required_persist_sources_at_commit(repo_root: Path, git_head: str) -> dict[str, str] | None:
+    top = f03_common._git_toplevel(repo_root)
+    if top is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "ls-tree",
+                "-r",
+                "--name-only",
+                git_head,
+                "--",
+                "qa/probe/DayZSandbox_QA",
+                "DayZSandbox_dev/qa/probe/DayZSandbox_QA",
+            ],
+            cwd=str(top),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    required: dict[str, str] = {}
+    for raw_line in proc.stdout.splitlines():
+        p = raw_line.strip()
+        if not p:
+            continue
+        norm_p = _normalize_probe_rel_path(p)
+        fname = Path(norm_p).name
+        if norm_p.startswith("qa/probe/DayZSandbox_QA/scripts/") and fname.startswith("DSBX_QA_X_Persist") and fname.endswith(".c"):
+            content = _git_show_text(repo_root, git_head, norm_p)
+            if content is None:
+                return None
+            required[norm_p] = content
+    if not required:
+        return None
+    return required
 
 
 def _is_finite_num(v: Any) -> bool:
@@ -560,6 +608,8 @@ def _parse_bridge_timeline(
                         any_lost_or_timeout = True
                     if bop.reason == "lease_expired":
                         any_lease_expired = True
+                    if bop.reason in ("stale_instance", "expired"):
+                        any_lost_or_timeout = True
         elif ev_type in ("lost", "expire", "op_timeout", "result_lost", "abandoned"):
             any_lost_or_timeout = True
             oid = str(ev.get("op_id") or "")
@@ -577,50 +627,35 @@ def _parse_bridge_timeline(
             if oid and stg:
                 scen_census_stage[oid] = (stg, aid)
 
-    # Collect job_read pages and job_free per job_id
-    job_pages_by_job: dict[str, dict[int, list[dict[str, Any]]]] = {}
-    job_meta_by_job: dict[str, dict[str, Any]] = {}
-    job_freed: set[str] = set()
+    any_reused_census_job_id = False
+    any_invalid_census_resource = False
+    any_census_overlap = False
+
+    # Count per_census_start occurrences per job_id and collect all job_read / job_free ops by job_id
+    census_start_ops_by_job: dict[str, list[_BridgeOperation]] = {}
+    job_read_ops_by_job: dict[str, list[_BridgeOperation]] = {}
+    job_free_ops_by_job: dict[str, list[_BridgeOperation]] = {}
 
     for bop in ordered_ops:
-        if bop.verb == "job_read" and bop.status == "done":
+        if bop.verb == "per_census_start" and bop.status == "done":
+            out_u = _unpack_any_payload(bop.read)
+            out_s = out_u[0] if out_u else {}
+            jid = out_s.get("job") or bop.op_id
+            if jid:
+                census_start_ops_by_job.setdefault(jid, []).append(bop)
+        elif bop.verb == "job_read" and bop.status == "done":
             in_unpacked = _unpack_any_payload(bop.args)
             out_unpacked = _unpack_any_payload(bop.read)
             if not in_unpacked or not out_unpacked:
                 continue
-            in_s, in_n, _ = in_unpacked
-            out_s, out_n, out_rows = out_unpacked
+            in_s, _in_n, _ = in_unpacked
+            out_s, _out_n, _out_rows = out_unpacked
             job_id = out_s.get("job") or in_s.get("job") or ""
-            state = out_s.get("state", "")
             reason = out_s.get("reason", "")
             if reason == "lease_expired":
                 any_lease_expired = True
-            if not job_id:
-                continue
-            if state == "done":
-                page_n = int(round(out_n.get("page_n", in_n.get("page_n", 0.0))))
-                job_pages_by_job.setdefault(job_id, {})[page_n] = out_rows
-                job_meta_by_job[job_id] = {
-                    "state": state,
-                    "reason": reason,
-                    "pages_n": int(round(out_n.get("pages_n", 0.0))),
-                    "rows_total_n": int(round(out_n.get("rows_total_n", 0.0))),
-                    "start_tick_ms": float(out_n.get("start_tick_ms", 0.0)),
-                    "end_tick_ms": float(out_n.get("end_tick_ms", 0.0)),
-                    "onjobend_tick_ms": float(out_n.get("onjobend_tick_ms", 0.0)),
-                    "released_tick_ms": float(out_n.get("released_tick_ms", 0.0)),
-                }
-            elif state in ("failed", "timed_out", "stopped", "expired"):
-                job_meta_by_job.setdefault(job_id, {
-                    "state": state,
-                    "reason": reason,
-                    "pages_n": 0,
-                    "rows_total_n": 0,
-                    "start_tick_ms": 0.0,
-                    "end_tick_ms": 0.0,
-                    "onjobend_tick_ms": 0.0,
-                    "released_tick_ms": 0.0,
-                })
+            if job_id:
+                job_read_ops_by_job.setdefault(job_id, []).append(bop)
         elif bop.verb == "job_free" and bop.status == "done":
             in_unpacked = _unpack_any_payload(bop.args)
             out_unpacked = _unpack_any_payload(bop.read)
@@ -630,7 +665,11 @@ def _parse_bridge_timeline(
             if not job_id and in_unpacked:
                 job_id = in_unpacked[0].get("job", "")
             if job_id:
-                job_freed.add(job_id)
+                job_free_ops_by_job.setdefault(job_id, []).append(bop)
+
+    for jid, s_ops in census_start_ops_by_job.items():
+        if len(s_ops) > 1:
+            any_reused_census_job_id = True
 
     server_epoch_old = server_epochs[0] if server_epochs else ""
     server_epoch_new = ""
@@ -693,6 +732,7 @@ def _parse_bridge_timeline(
 
     censuses: list[dict[str, Any]] = []
     mid_batches_by_area: dict[str, list[dict[str, Any]]] = {}
+    active_census_windows_by_inst: dict[str, list[tuple[int, int, float, float]]] = {}
 
     for bop in ordered_ops:
         if bop.verb != "per_census_start":
@@ -714,33 +754,125 @@ def _parse_bridge_timeline(
                 area_id = scen_area
 
         job_id = out_s.get("job") or bop.op_id
-        jmeta = job_meta_by_job.get(job_id)
-        pages_map = job_pages_by_job.get(job_id, {})
+        c_epoch = out_s.get("server_epoch") or bop.inst
+        snap_tick_ms = float(out_n.get("snap_tick_ms", 0.0))
         rows_captured = int(round(out_n.get("rows_captured_n", -1.0))) if out_n else -1
+        start_res = out_s.get("resource", "")
+        if start_res and start_res != "per_census":
+            any_invalid_census_resource = True
 
         reconstructed_rows: list[dict[str, Any]] = []
         job_complete = False
+        free_done_ms = 0.0
+        released_tick_ms = 0.0
+
+        # Bind per_census_start -> job_read -> job_free strictly to this single execution (BLOQ 3 & BLOQ 12)
         if (
             bop.status == "done"
-            and jmeta is not None
-            and jmeta.get("state") == "done"
-            and jmeta.get("end_tick_ms", 0.0) > 0.0
-            and jmeta.get("onjobend_tick_ms", 0.0) > 0.0
-            and jmeta.get("released_tick_ms", 0.0) > 0.0
-            and job_id in job_freed
+            and bop.peer == "server"
+            and c_epoch
+            and (not bop.inst or bop.inst == c_epoch)
+            and (not out_s.get("server_epoch") or out_s.get("server_epoch") == c_epoch)
+            and (not start_res or start_res == "per_census")
+            and len(census_start_ops_by_job.get(job_id, [])) == 1
         ):
-            pages_n = jmeta["pages_n"]
-            rows_total_n = jmeta["rows_total_n"]
-            if rows_total_n == 0 and pages_n == 0:
-                if 0 in pages_map and len(pages_map[0]) == 0 and rows_captured == 0:
-                    job_complete = True
-            elif pages_n > 0 and all(p in pages_map for p in range(pages_n)):
-                for p in range(pages_n):
-                    reconstructed_rows.extend(pages_map[p])
-                if len(reconstructed_rows) == rows_total_n and (
-                    rows_captured < 0 or len(reconstructed_rows) == rows_captured
-                ):
-                    job_complete = True
+            all_jr = job_read_ops_by_job.get(job_id, [])
+            all_jf = job_free_ops_by_job.get(job_id, [])
+            # Find matching job_free after bop.seq_idx on the same peer and server epoch
+            valid_jf = [
+                jf
+                for jf in all_jf
+                if jf.seq_idx > bop.seq_idx
+                and jf.peer == "server"
+                and jf.inst == c_epoch
+                and ((_unpack_any_payload(jf.read) or ({}, {}, []))[0].get("freed", "1") == "1")
+            ]
+            # Disallow any job_read or job_free for this job_id before bop.seq_idx or on a different inst
+            bad_lifecycle = any(
+                op.seq_idx <= bop.seq_idx or op.peer != "server" or op.inst != c_epoch
+                for op in (all_jr + all_jf)
+            )
+            if bad_lifecycle:
+                any_reused_census_job_id = True
+            elif valid_jf:
+                jf_op = valid_jf[0]
+                free_done_ms = float(jf_op.done_ms or jf_op.recv_ms or 0.0)
+                # Disallow any job_read succeeding after job_free
+                if any(jr.seq_idx >= jf_op.seq_idx for jr in all_jr):
+                    any_reused_census_job_id = True
+                else:
+                    pages_map: dict[int, list[dict[str, Any]]] = {}
+                    jmeta: dict[str, Any] | None = None
+                    jr_invalid = False
+                    first_done_jr_seq = jf_op.seq_idx
+                    for jr in all_jr:
+                        if not (bop.seq_idx < jr.seq_idx < jf_op.seq_idx):
+                            jr_invalid = True
+                            break
+                        in_jr = _unpack_any_payload(jr.args)
+                        out_jr = _unpack_any_payload(jr.read)
+                        if not in_jr or not out_jr:
+                            jr_invalid = True
+                            break
+                        jr_in_s, jr_in_n, _ = in_jr
+                        jr_out_s, jr_out_n, jr_out_rows = out_jr
+                        if jr_out_s.get("resource") != "per_census":
+                            any_invalid_census_resource = True
+                            jr_invalid = True
+                            break
+                        jr_state = jr_out_s.get("state", "")
+                        if jr_state == "done":
+                            first_done_jr_seq = min(first_done_jr_seq, jr.seq_idx)
+                            page_n = int(round(jr_out_n.get("page_n", jr_in_n.get("page_n", 0.0))))
+                            pages_map[page_n] = jr_out_rows
+                            jmeta = {
+                                "state": jr_state,
+                                "reason": jr_out_s.get("reason", ""),
+                                "pages_n": int(round(jr_out_n.get("pages_n", 0.0))),
+                                "rows_total_n": int(round(jr_out_n.get("rows_total_n", 0.0))),
+                                "start_tick_ms": float(jr_out_n.get("start_tick_ms", 0.0)),
+                                "end_tick_ms": float(jr_out_n.get("end_tick_ms", 0.0)),
+                                "onjobend_tick_ms": float(jr_out_n.get("onjobend_tick_ms", 0.0)),
+                                "released_tick_ms": float(jr_out_n.get("released_tick_ms", 0.0)),
+                            }
+                        elif jr_state in ("failed", "timed_out", "stopped", "expired"):
+                            jr_invalid = True
+                            break
+
+                    if (
+                        not jr_invalid
+                        and jmeta is not None
+                        and jmeta.get("state") == "done"
+                        and jmeta["start_tick_ms"] > 0.0
+                        and jmeta["end_tick_ms"] >= jmeta["start_tick_ms"]
+                        and jmeta["onjobend_tick_ms"] >= jmeta["end_tick_ms"]
+                        and jmeta["released_tick_ms"] >= jmeta["onjobend_tick_ms"]
+                        and snap_tick_ms > 0.0
+                        and abs(jmeta["start_tick_ms"] - snap_tick_ms) <= 50.0
+                    ):
+                        released_tick_ms = jmeta["released_tick_ms"]
+                        # Check E9 resource contention: no other per_census_start in c_epoch may overlap
+                        prev_windows = active_census_windows_by_inst.setdefault(c_epoch, [])
+                        for p_start_seq, p_done_seq, _p_start_t, p_rel_t in prev_windows:
+                            if bop.seq_idx < p_done_seq or snap_tick_ms < p_rel_t - 1e-6:
+                                any_census_overlap = True
+                                jr_invalid = True
+                                break
+                        prev_windows.append((bop.seq_idx, first_done_jr_seq, snap_tick_ms, released_tick_ms))
+
+                        if not jr_invalid:
+                            pages_n = jmeta["pages_n"]
+                            rows_total_n = jmeta["rows_total_n"]
+                            if rows_total_n == 0 and pages_n == 0:
+                                if 0 in pages_map and len(pages_map[0]) == 0 and rows_captured == 0:
+                                    job_complete = True
+                            elif pages_n > 0 and all(p in pages_map for p in range(pages_n)):
+                                for p in range(pages_n):
+                                    reconstructed_rows.extend(pages_map[p])
+                                if len(reconstructed_rows) == rows_total_n and (
+                                    rows_captured < 0 or len(reconstructed_rows) == rows_captured
+                                ):
+                                    job_complete = True
 
         c_entry: dict[str, Any] = {
             "op_id": bop.op_id,
@@ -748,7 +880,7 @@ def _parse_bridge_timeline(
             "seq_idx": bop.seq_idx,
             "status": bop.status,
             "reason": bop.reason,
-            "inst": out_s.get("server_epoch") or bop.inst,
+            "inst": c_epoch,
             "raw_area_tag": raw_tag,
             "area_id": area_id,
             "stage": explicit_stage,
@@ -756,8 +888,10 @@ def _parse_bridge_timeline(
             "center_z_m": float(cz) if cz is not None else 0.0,
             "radius_m": float(rad) if rad is not None else 60.0,
             "include_director_b": inc_dir,
-            "snap_tick_ms": float(out_n.get("snap_tick_ms", 0.0)),
+            "snap_tick_ms": snap_tick_ms,
             "snap_frame": int(round(out_n.get("snap_frame", 0.0))),
+            "released_tick_ms": released_tick_ms,
+            "free_done_ms": free_done_ms,
             "rows_captured_n": rows_captured,
             "director_uid": out_s.get("director_uid", ""),
             "director_present_b": int(round(out_n.get("director_present_b", 0.0))),
@@ -811,6 +945,9 @@ def _parse_bridge_timeline(
         "censuses": censuses,
         "any_lost_or_timeout": any_lost_or_timeout,
         "any_lease_expired": any_lease_expired,
+        "any_reused_census_job_id": any_reused_census_job_id,
+        "any_invalid_census_resource": any_invalid_census_resource,
+        "any_census_overlap": any_census_overlap,
     }
 
 
@@ -890,6 +1027,12 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
 
     if timeline["any_lease_expired"]:
         reasons.append("lease_expired")
+    if timeline["any_reused_census_job_id"]:
+        reasons.append("reused_census_job_id")
+    if timeline["any_invalid_census_resource"]:
+        reasons.append("invalid_census_resource")
+    if timeline["any_census_overlap"]:
+        reasons.append("unprotected_census_resource_overlap")
 
     # Check hello peers (both server and client must have hello 200 with matching build & proto)
     req_peers = ("server", "client") if manifest.get("both", True) else ("server",)
@@ -1152,13 +1295,23 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     per01_fail.append(f"{aid}:duplicate_net_id:{nid}")
                 seen_nids.add(nid)
 
+        expected_nids_by_area: dict[str, set[str]] = {aid: set() for aid in required_base_areas}
+        for aid in required_base_areas:
+            c_pre_a = census_by_stage_area[("t1_pre_transition_census", aid)]
+            if c_pre_a["include_director_b"] == 1:
+                for bf in baseline_director_rows:
+                    bf_nid = str(bf.get("net_id") or "")
+                    if bf_nid:
+                        expected_nids_by_area[aid].add(bf_nid)
+
         for sc_id in expected_scenes_per01:
-            out_s, _out_n, in_r, out_r = applied_scenes_final[sc_id]
+            out_s, out_n, in_r, out_r = applied_scenes_final[sc_id]
             sc_fixture = fixture["scenes"].get(sc_id, {})
             fix_entities = {e["logical_id"]: e for e in sc_fixture.get("entities", [])}
             sc_area = sc_fixture.get("area_id", "area_a")
             area_c_rows = t1_pre_rows_by_area.get(sc_area, [])
             census_by_net_id = {str(r.get("net_id") or ""): r for r in area_c_rows}
+            q9_tick_ms = float(out_n.get("q9_tick_ms", 0.0))
 
             if out_s.get("apply_status") != "ok":
                 per01_fail.append(f"{sc_id}:apply_status={out_s.get('apply_status')}")
@@ -1194,11 +1347,31 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if not _valid_net_id(nid, lid) or nid not in census_by_net_id:
                     per01_fail.append(f"{lid}:missing_in_t1_pre_census")
                     continue
+                expected_nids_by_area.setdefault(sc_area, set()).add(nid)
                 crow = census_by_net_id[nid]
                 if str(crow.get("class_name") or "") != f_ent["class_name"]:
                     per01_fail.append(f"{lid}:census_class_mismatch")
                 if str(crow.get("own_logical_id") or "") != lid or int(round(float(crow.get("own_b", 0.0)))) != 1:
                     per01_fail.append(f"{lid}:census_ownership_mismatch")
+
+                # BLOQ 4 & BLOQ 9: verify alive_b, max_hp, health_hp, pers_id, and spawn_tick_ms on census row
+                c_alive = int(round(float(crow.get("alive_b", 0.0))))
+                c_max_hp = float(crow.get("max_hp", 0.0))
+                c_hp = float(crow.get("health_hp", 0.0))
+                if c_alive != 1:
+                    per01_fail.append(f"{lid}:census_alive_b!=1")
+                if not (c_max_hp > 0.0 and c_hp > 0.0):
+                    per01_fail.append(f"{lid}:census_nonpositive_hp")
+                elif abs(c_max_hp - max_hp) > 1e-2 or abs(c_hp - health_hp) > 1e-2:
+                    per01_fail.append(f"{lid}:census_hp_mismatch")
+                elif ratio > 0.0 and abs(c_hp - c_max_hp * ratio) > 1e-2:
+                    per01_fail.append(f"{lid}:census_health_mark_mismatch")
+                if str(crow.get("pers_id") or "") != "0:0:0:0":
+                    per01_fail.append(f"{lid}:census_nonzero_pers_id")
+                o_spawn_t = float(orow.get("spawn_tick_ms", 0.0))
+                c_spawn_t = float(crow.get("spawn_tick_ms", -1.0))
+                if o_spawn_t <= 0.0 or (q9_tick_ms > 0.0 and abs(o_spawn_t - q9_tick_ms) > 50.0) or abs(c_spawn_t - o_spawn_t) > 1e-3:
+                    per01_fail.append(f"{lid}:spawn_tick_mismatch")
 
                 cat = f_ent["cat"]
                 parent_id = f_ent["parent_id"]
@@ -1207,6 +1380,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         per01_fail.append(f"{lid}:ai_agent_b!=1")
                     if int(round(float(crow.get("ai_agent_b", 0.0)))) != 1:
                         per01_fail.append(f"{lid}:census_ai_agent_b!=1")
+                else:
+                    if int(round(float(orow.get("ai_agent_b", -1.0)))) != 0 or int(round(float(crow.get("ai_agent_b", -1.0)))) != 0:
+                        per01_fail.append(f"{lid}:unexpected_ai_agent_b")
 
                 if parent_id == "":
                     if orow.get("obs_loc_kind") != "ground" or crow.get("loc_kind") != "ground":
@@ -1262,9 +1438,10 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 else:
                     parent_orow = out_by_lid.get(parent_id)
                     parent_nid = str(parent_orow.get("net_id") or "") if parent_orow else ""
+                    parent_cname = str(parent_orow.get("class_name") or "") if parent_orow else ""
                     if str(orow.get("obs_parent_net_id") or "") != parent_nid:
                         per01_fail.append(f"{lid}:obs_parent_net_id_mismatch")
-                    if str(crow.get("parent_net_id") or "") != parent_nid:
+                    if str(crow.get("parent_net_id") or "") != parent_nid or str(crow.get("parent_class") or "") != parent_cname:
                         per01_fail.append(f"{lid}:census_parent_net_id_mismatch")
                     req_slot = f_ent["slot_name"]
                     obs_loc = str(orow.get("obs_loc_kind") or "")
@@ -1288,6 +1465,100 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             ]
             if len(own_rows_sc) != len(fix_entities):
                 per01_fail.append(f"{sc_id}:own_census_count={len(own_rows_sc)}!={len(fix_entities)}")
+
+        # BLOQ 4 & BLOQ 6: validate all expected per_spawn_raw items and their exact container parents in t1_pre_transition_census
+        expected_raw_tags = [
+            f"{retained_pfx}_foreign_ground",
+            f"{retained_pfx}_foreign_in_chest",
+            f"{retained_pfx}_foreign_in_child_kit",
+            "b_foreign_in_chest",
+            "c_persistent_control",
+        ]
+        for rtag in expected_raw_tags:
+            rdef = fixture.get("raw_spawns", {}).get(rtag)
+            if not rdef or rtag not in spawn_raw_ops or rtag not in bridge_spawn_info:
+                per01_fail.append(f"missing_raw_spawn:{rtag}")
+                continue
+            r_out_s, r_out_n = spawn_raw_ops[rtag]
+            r_area = rdef["area_id"]
+            r_nid = str(r_out_s.get("net_id") or "")
+            r_cname = rdef["class_name"]
+            r_ratio = float(rdef.get("health_mark_ratio", 0.0))
+            r_max_hp = float(r_out_n.get("max_hp", 0.0))
+            r_hp = float(r_out_n.get("health_hp", 0.0))
+            if r_out_s.get("spawn_status") != "ok" or r_out_s.get("class_name") != r_cname:
+                per01_fail.append(f"{rtag}:raw_spawn_failed")
+            if not (r_max_hp > 0.0 and r_hp > 0.0) or (r_ratio > 0.0 and abs(r_hp - r_max_hp * r_ratio) > 1e-2):
+                per01_fail.append(f"{rtag}:raw_spawn_hp_invalid")
+            area_rmap = {str(r.get("net_id") or ""): r for r in t1_pre_rows_by_area.get(r_area, [])}
+            rcrow = area_rmap.get(r_nid)
+            if not rcrow:
+                per01_fail.append(f"{rtag}:missing_in_t1_pre_census")
+                continue
+            expected_nids_by_area.setdefault(r_area, set()).add(r_nid)
+            rc_alive = int(round(float(rcrow.get("alive_b", 0.0))))
+            rc_max_hp = float(rcrow.get("max_hp", 0.0))
+            rc_hp = float(rcrow.get("health_hp", 0.0))
+            if (
+                rcrow.get("class_name") != r_cname
+                or rc_alive != 1
+                or int(round(float(rcrow.get("own_b", -1.0)))) != 0
+                or str(rcrow.get("own_logical_id") or "") != ""
+                or not (rc_max_hp > 0.0 and rc_hp > 0.0)
+                or abs(rc_max_hp - r_max_hp) > 1e-2
+                or abs(rc_hp - r_hp) > 1e-2
+            ):
+                per01_fail.append(f"{rtag}:census_raw_state_invalid")
+            if rdef["mode"] == "foreign_in_cargo":
+                tgt_pid = rdef["target_parent_id"]
+                exp_pnid = bridge_spawn_info.get(tgt_pid, {}).get("net_id", "")
+                exp_pclass = bridge_spawn_info.get(tgt_pid, {}).get("class_name", "")
+                if (
+                    not exp_pnid
+                    or r_out_s.get("obs_loc_kind") != "cargo"
+                    or r_out_s.get("obs_parent_net_id") != exp_pnid
+                    or not str(r_out_s.get("obs_slot_name") or "").startswith("Cargo")
+                    or rcrow.get("loc_kind") != "cargo"
+                    or rcrow.get("parent_net_id") != exp_pnid
+                    or rcrow.get("parent_class") != exp_pclass
+                    or not str(rcrow.get("slot_name") or "").startswith("Cargo")
+                ):
+                    per01_fail.append(f"{rtag}:wrong_parent_container")
+            else:
+                if (
+                    r_out_s.get("obs_loc_kind") != "ground"
+                    or rcrow.get("loc_kind") != "ground"
+                    or rcrow.get("parent_net_id") != ""
+                    or math.hypot(
+                        float(rcrow.get("pos_x_m", 0.0)) - float(rdef["x_m"]),
+                        float(rcrow.get("pos_z_m", 0.0)) - float(rdef["z_m"]),
+                    )
+                    >= 0.5
+                ):
+                    per01_fail.append(f"{rtag}:wrong_ground_placement")
+                if rdef["mode"] == "persistent_control":
+                    fp_children = [
+                        r
+                        for r in t1_pre_rows_by_area.get("area_c", [])
+                        if r.get("class_name") == rdef.get("child_cargo_class", "Fireplace")
+                        and r.get("loc_kind") == "cargo"
+                        and r.get("parent_net_id") == r_nid
+                        and int(round(float(r.get("alive_b", 0.0)))) == 1
+                        and float(r.get("max_hp", 0.0)) > 0.0
+                        and float(r.get("health_hp", 0.0)) > 0.0
+                    ]
+                    if len(fp_children) != 1:
+                        per01_fail.append("c_persistent_control:missing_child_in_t1_pre")
+                    else:
+                        expected_nids_by_area.setdefault("area_c", set()).add(str(fp_children[0].get("net_id") or ""))
+
+        # BLOQ 4: verify complete row accounting in every area of t1_pre_transition_census (rejects unlabeled duplicates)
+        for aid in required_base_areas:
+            area_rows_all = t1_pre_rows_by_area.get(aid, [])
+            actual_nids = {str(r.get("net_id") or "") for r in area_rows_all}
+            exp_nids = expected_nids_by_area.get(aid, set())
+            if len(area_rows_all) != len(exp_nids) or actual_nids != exp_nids:
+                per01_fail.append(f"{aid}:unexpected_or_extra_census_rows:{len(area_rows_all)}!={len(exp_nids)}")
 
         # Check scene_op_id idempotency on retained_scene_id
         if idempotent_hits_by_scene.get(retained_scene_id, 0) < 1:
@@ -1340,14 +1611,24 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             in_rad = int(round(float(crow.get("in_radius_b", -1.0))))
             if in_rad not in (0, 1):
                 per02_fail.append(f"{cid}:invalid_in_radius_b")
-            if int(round(float(crow.get("alive_b", 0.0)))) != 1 or int(round(float(crow.get("ai_agent_b", 0.0)))) != 1:
+            if (
+                int(round(float(crow.get("alive_b", 0.0)))) != 1
+                or int(round(float(crow.get("ai_agent_b", 0.0)))) != 1
+                or float(crow.get("max_hp", 0.0)) <= 0.0
+                or float(crow.get("health_hp", 0.0)) <= 0.0
+            ):
                 per02_fail.append(f"{cid}:dead_or_no_ai_at_t2")
-            spawn_t = float(crow.get("spawn_tick_ms", sp_info["spawn_tick_ms"]))
+            # BLOQ 9: require crow["spawn_tick_ms"] to match the creation tick from per_apply_scene
+            auth_spawn_t = float(sp_info.get("spawn_tick_ms", 0.0))
+            row_spawn_t = float(crow.get("spawn_tick_ms", -1.0))
+            if auth_spawn_t <= 0.0 or abs(row_spawn_t - auth_spawn_t) > 1e-3:
+                per02_fail.append(f"{cid}:spawn_tick_mismatch")
+                continue
             snap_t = float(c2["snap_tick_ms"])
-            if build_kind in ("diag", "retail") and (snap_t - spawn_t < 600000.0):
-                per02_missing.append("hold_under_600s")
-            elif snap_t < spawn_t:
+            if snap_t < auth_spawn_t:
                 per02_missing.append("negative_hold_elapsed")
+            elif snap_t - auth_spawn_t < 600000.0:
+                per02_missing.append("hold_under_600s")
 
         if per02_fail:
             checks["PER-02"] = {"status": "fail", "detail": ";".join(per02_fail)}
@@ -1465,12 +1746,31 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             ):
                 per03_fail.append("second_clean_reset_not_idempotent")
 
-        # (4) t3_post_reset_census of area_a: 0 entities of scene_a_clean, baseline_director_foreign + b_act_1_gloves_dir intact
+        # (4) t3_post_reset_census of area_a: 0 entities of scene_a_clean, no unexpected unlabeled survivors, director intact
         clean_lids = {e["logical_id"] for e in fixture["scenes"]["scene_a_clean"]["entities"]}
         clean_nids = {bridge_spawn_info[lid]["net_id"] for lid in clean_lids if lid in bridge_spawn_info}
+        allowed_area_a_post_nids: set[str] = set()
+        if not uses_mut_area:
+            for alid in (
+                "a_prop_2",
+                "a_cont_1",
+                "a_cont_1_child",
+                "b_cross_child",
+                "a_foreign_ground",
+                "a_foreign_in_chest",
+                "a_foreign_in_child_kit",
+            ):
+                anid = bridge_spawn_info.get(alid, {}).get("net_id", "")
+                if anid:
+                    allowed_area_a_post_nids.add(anid)
+
         for r in c_t3_post_a["rows"]:
-            if str(r.get("own_logical_id") or "") in clean_lids or str(r.get("net_id") or "") in clean_nids:
-                per03_fail.append(f"scene_a_clean_survivor:{r.get('own_logical_id') or r.get('class_name')}")
+            rnid = str(r.get("net_id") or "")
+            rlid = str(r.get("own_logical_id") or "")
+            if rlid in clean_lids or rnid in clean_nids:
+                per03_fail.append(f"scene_a_clean_survivor:{rlid or r.get('class_name')}")
+            elif r.get("owner_uid") != director_uid_t0 and rnid not in allowed_area_a_post_nids:
+                per03_fail.append(f"unexpected_area_a_survivor:{r.get('class_name')}:{rnid}")
 
         # Check baseline_director_foreign and WorkingGloves_Yellow in director
         t3_post_all_dir_rows: dict[str, dict[str, Any]] = {}
@@ -1542,20 +1842,70 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         if obs_ret_ids != exp_retained_ids:
             per04_fail.append(f"retained_ids={sorted(obs_ret_ids)}")
 
+        exp_foreign_desc = {
+            f"{retained_pfx}_prop_2": 1,
+            f"{retained_pfx}_cont_1": 2,
+            f"{retained_pfx}_cont_1_child": 1,
+        }
+        for rrow in rr_rows:
+            rlid = str(rrow.get("logical_id") or "")
+            if rlid in exp_foreign_desc:
+                if int(round(float(rrow.get("foreign_descendants_n", -1.0)))) != exp_foreign_desc[rlid]:
+                    per04_fail.append(f"foreign_descendants_mismatch:{rlid}")
+
+        pre_ret_by_nid = {str(r.get("net_id") or ""): r for r in c_t3_pre_ret["rows"]}
         post_by_nid = {str(r.get("net_id") or ""): r for r in c_t3_post_ret["rows"]}
         for dlid in sorted(exp_deleted_ids):
             dnid = bridge_spawn_info.get(dlid, {}).get("net_id", "")
             if dnid in post_by_nid or any(str(r.get("own_logical_id") or "") == dlid for r in c_t3_post_ret["rows"]):
                 per04_fail.append(f"deleted_entity_survived:{dlid}")
 
+        prop2_nid = bridge_spawn_info.get(f"{retained_pfx}_prop_2", {}).get("net_id", "")
         cont1_nid = bridge_spawn_info.get(f"{retained_pfx}_cont_1", {}).get("net_id", "")
+        kit_nid = bridge_spawn_info.get(f"{retained_pfx}_cont_1_child", {}).get("net_id", "")
+        f_ground_nid = bridge_spawn_info.get(f"{retained_pfx}_foreign_ground", {}).get("net_id", "")
+        f_chest_nid = bridge_spawn_info.get(f"{retained_pfx}_foreign_in_chest", {}).get("net_id", "")
+        f_kit_nid = bridge_spawn_info.get(f"{retained_pfx}_foreign_in_child_kit", {}).get("net_id", "")
+        cross_nid = bridge_spawn_info.get("b_cross_child", {}).get("net_id", "")
+
         for rlid in sorted(exp_retained_ids):
             rnid = bridge_spawn_info.get(rlid, {}).get("net_id", "")
+            r_pre_c = pre_ret_by_nid.get(rnid)
             r_post = post_by_nid.get(rnid)
-            if not r_post or int(round(float(r_post.get("alive_b", 0.0)))) != 1:
+            if not r_pre_c or not r_post or int(round(float(r_post.get("alive_b", 0.0)))) != 1:
                 per04_fail.append(f"retained_entity_missing:{rlid}")
-            elif rlid == f"{retained_pfx}_cont_1_child" and r_post.get("parent_net_id") != cont1_nid:
-                per04_fail.append("retained_child_kit_wrong_parent")
+            elif rlid == f"{retained_pfx}_cont_1_child":
+                if (
+                    r_pre_c.get("loc_kind") != "cargo"
+                    or r_pre_c.get("parent_net_id") != cont1_nid
+                    or r_post.get("loc_kind") != "cargo"
+                    or r_post.get("parent_net_id") != cont1_nid
+                ):
+                    per04_fail.append("retained_child_kit_wrong_parent")
+            else:
+                if r_pre_c.get("loc_kind") != "ground" or r_post.get("loc_kind") != "ground":
+                    per04_fail.append(f"retained_root_not_on_ground:{rlid}")
+
+        # BLOQ 6: verify foreign items and cross-scene child are inside the required containers before and after reset
+        for stg_lbl, m_by_nid in (("pre", pre_ret_by_nid), ("post", post_by_nid)):
+            r_cross = m_by_nid.get(cross_nid)
+            r_fc = m_by_nid.get(f_chest_nid)
+            r_fk = m_by_nid.get(f_kit_nid)
+            if not r_cross or r_cross.get("loc_kind") != "cargo" or r_cross.get("parent_net_id") != prop2_nid or r_cross.get("parent_class") != "WoodenCrate":
+                per04_fail.append(f"{stg_lbl}:b_cross_child_not_in_prop_2")
+            if not r_fc or r_fc.get("loc_kind") != "cargo" or r_fc.get("parent_net_id") != cont1_nid or r_fc.get("parent_class") != "SeaChest":
+                per04_fail.append(f"{stg_lbl}:foreign_in_chest_wrong_parent")
+            if not r_fk or r_fk.get("loc_kind") != "cargo" or r_fk.get("parent_net_id") != kit_nid or r_fk.get("parent_class") != "FirstAidKit":
+                per04_fail.append(f"{stg_lbl}:foreign_in_child_kit_wrong_parent")
+
+        # BLOQ 4: verify no unexpected non-director rows survive in retained_area_id
+        expected_ret_post_nids = {prop2_nid, cont1_nid, kit_nid, cross_nid, f_ground_nid, f_chest_nid, f_kit_nid}
+        for r in c_t3_post_ret["rows"]:
+            if r.get("owner_uid") == director_uid_t0:
+                continue
+            rnid = str(r.get("net_id") or "")
+            if rnid not in expected_ret_post_nids:
+                per04_fail.append(f"unexpected_retained_area_survivor:{r.get('class_name')}:{rnid}")
 
         if per04_fail:
             checks["PER-04"] = {"status": "fail", "detail": ";".join(per04_fail[:5])}
@@ -1563,7 +1913,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             checks["PER-04"] = {"status": "pass", "detail": "ok"}
 
     # =========================================================================
-    # PER-05: Intactness of foreign items, cross-scene child, and scene_b during reset
+    # PER-05: Intactness of foreign items, cross-scene child, retained containers, and scene_b during reset
     # =========================================================================
     c_t3_pre_b = census_by_stage_area.get(("t3_pre_reset_census", "area_b"))
     c_t3_post_b = census_by_stage_area.get(("t3_post_reset_census", "area_b"))
@@ -1594,6 +1944,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     post_map[str(r.get("net_id") or "")] = r
 
         static_referents = [
+            f"{retained_pfx}_prop_2",
+            f"{retained_pfx}_cont_1",
+            f"{retained_pfx}_cont_1_child",
             f"{retained_pfx}_foreign_ground",
             f"{retained_pfx}_foreign_in_chest",
             f"{retained_pfx}_foreign_in_child_kit",
@@ -1623,11 +1976,31 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             }
         else:
             per05_fail: list[str] = []
-            # Verify b_cross_child is inside *_prop_2 in t3_pre_reset_census
+            # BLOQ 6: Verify exact container hierarchy in t3_pre_reset_census before reset
             prop2_nid = bridge_spawn_info.get(f"{retained_pfx}_prop_2", {}).get("net_id", "")
-            cross_nid = bridge_spawn_info["b_cross_child"]["net_id"]
-            if pre_map[cross_nid].get("parent_net_id") != prop2_nid or pre_map[cross_nid].get("loc_kind") != "cargo":
-                per05_fail.append("b_cross_child_not_in_prop_2_pre_reset")
+            cont1_nid = bridge_spawn_info.get(f"{retained_pfx}_cont_1", {}).get("net_id", "")
+            kit_nid = bridge_spawn_info.get(f"{retained_pfx}_cont_1_child", {}).get("net_id", "")
+            b_chest_own_nid = bridge_spawn_info.get("b_chest_own", {}).get("net_id", "")
+            b_chest_for_nid = bridge_spawn_info.get("b_chest_foreign", {}).get("net_id", "")
+
+            required_cargo_parents = [
+                ("b_cross_child", prop2_nid, "WoodenCrate"),
+                (f"{retained_pfx}_foreign_in_chest", cont1_nid, "SeaChest"),
+                (f"{retained_pfx}_cont_1_child", cont1_nid, "SeaChest"),
+                (f"{retained_pfx}_foreign_in_child_kit", kit_nid, "FirstAidKit"),
+                ("b_foreign_in_chest", b_chest_for_nid, "SeaChest"),
+                ("b_chest_own_child", b_chest_own_nid, "SeaChest"),
+            ]
+            for child_id, exp_pnid, exp_pclass in required_cargo_parents:
+                cnid = bridge_spawn_info[child_id]["net_id"]
+                c_row_pre = pre_map[cnid]
+                if (
+                    c_row_pre.get("loc_kind") != "cargo"
+                    or c_row_pre.get("parent_net_id") != exp_pnid
+                    or c_row_pre.get("parent_class") != exp_pclass
+                    or not str(c_row_pre.get("slot_name") or "").startswith("Cargo")
+                ):
+                    per05_fail.append(f"{child_id}:wrong_parent_pre_reset")
 
             for ref_id in static_referents:
                 rnid = bridge_spawn_info[ref_id]["net_id"]
@@ -1653,7 +2026,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     per05_fail.append(f"{ref_id}:state_or_location_changed")
                     continue
 
-                if r_pre.get("loc_kind") == "ground":
+                # BLOQ 5 (N52): check pose and orientation stability on ALL world referents (ground, retained containers, cargo, attachments)
+                if not r_pre.get("owner_uid"):
                     for coord_k in ("pos_x_m", "pos_y_m", "pos_z_m"):
                         if not (_is_finite_num(r_pre.get(coord_k)) and _is_finite_num(r_post.get(coord_k))):
                             per05_fail.append(f"{ref_id}:nonfinite_{coord_k}")
@@ -1776,33 +2150,113 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     else:
                         checks["PER-06"] = {"status": "pass", "detail": "ok"}
 
-    # Helper for N39 & N49 creature post-restart disk coverage
+    # Helper for N39 & N49 creature post-restart disk coverage (BLOQ 7: accredits reachable volume until save and first t5 census)
     t5_censuses = [
         c for c in censuses_by_stage.get("t5_post_restart_census", [])
         if c["job_complete"] and c["inst"] == server_epoch_new
     ]
 
-    def _creature_covered_in_t5(creature_lid: str, stages_to_check: tuple[str, ...]) -> bool:
+    old_epoch_ticks: list[float] = []
+    new_epoch_start_ticks: list[float] = []
+    for h in hellos:
+        raw_h = h.get("raw") if isinstance(h.get("raw"), dict) else {}
+        hms = raw_h.get("h_ms")
+        if _is_finite_num(hms) and float(hms) > 0.0:
+            if h.get("peer") == "server" and h.get("inst") == server_epoch_old:
+                old_epoch_ticks.append(float(hms))
+            elif h.get("peer") == "server" and server_epoch_new and h.get("inst") == server_epoch_new:
+                new_epoch_start_ticks.append(float(hms))
+    for bop in ordered_ops:
+        if bop.peer != "server":
+            continue
+        if bop.inst == server_epoch_old:
+            for tval in (bop.recv_ms, bop.done_ms):
+                if tval > 0.0:
+                    old_epoch_ticks.append(tval)
+        elif server_epoch_new and bop.inst == server_epoch_new:
+            if bop.recv_ms > 0.0:
+                new_epoch_start_ticks.append(bop.recv_ms)
+    for c_item in censuses:
+        if c_item["inst"] == server_epoch_old:
+            for tk in ("snap_tick_ms", "released_tick_ms", "free_done_ms"):
+                if float(c_item.get(tk, 0.0)) > 0.0:
+                    old_epoch_ticks.append(float(c_item[tk]))
+        elif server_epoch_new and c_item["inst"] == server_epoch_new:
+            if float(c_item.get("snap_tick_ms", 0.0)) > 0.0:
+                new_epoch_start_ticks.append(float(c_item["snap_tick_ms"]))
+
+    max_old_srv_tick_ms = max(old_epoch_ticks, default=0.0)
+    first_new_epoch_tick_ms = min(new_epoch_start_ticks, default=0.0)
+
+    def _creature_covered_in_t5(
+        creature_lid: str,
+        stages_to_check: tuple[str, ...],
+        *,
+        is_reset_branch: bool = False,
+    ) -> bool:
         sp_info = bridge_spawn_info.get(creature_lid)
-        if not sp_info:
+        if not sp_info or not t5_censuses or max_old_srv_tick_ms <= 0.0 or first_new_epoch_tick_ms <= 0.0:
             return False
         cnid = sp_info["net_id"]
-        observed_positions: list[tuple[float, float]] = []
+        stage_obs: list[tuple[float, float, float]] = []
         for stg in stages_to_check:
+            found_in_stage = False
             for c_item in censuses_by_stage.get(stg, []):
                 if not c_item["job_complete"]:
                     continue
                 for r in c_item["rows"]:
                     if str(r.get("own_logical_id") or "") == creature_lid or str(r.get("net_id") or "") == cnid:
-                        observed_positions.append((float(r.get("pos_x_m", 0.0)), float(r.get("pos_z_m", 0.0))))
-        if not observed_positions:
-            return False
-        for lx, lz in observed_positions:
-            covered = any(
-                math.hypot(lx - float(tc["center_x_m"]), lz - float(tc["center_z_m"]))
-                <= float(tc["radius_m"]) - 15.0 + 1e-6
-                for tc in t5_censuses
-            )
+                        if int(round(float(r.get("alive_b", 0.0)))) != 1:
+                            return False
+                        snap_t = float(c_item.get("snap_tick_ms", 0.0))
+                        if snap_t <= 0.0:
+                            return False
+                        stage_obs.append((snap_t, float(r.get("pos_x_m", 0.0)), float(r.get("pos_z_m", 0.0))))
+                        found_in_stage = True
+            if not found_in_stage:
+                return False
+        for i in range(1, len(stage_obs)):
+            if stage_obs[i][0] < stage_obs[i - 1][0]:
+                return False
+
+        last_obs_tick_ms = stage_obs[-1][0]
+        if is_reset_branch:
+            if not ret_resets or c_t3_post_ret is None or not c_t3_post_ret["job_complete"]:
+                return False
+            reset_tick_ms = float(ret_resets[0][1].get("tick_ms", 0.0))
+            post_ret_snap_ms = float(c_t3_post_ret.get("snap_tick_ms", 0.0))
+            if reset_tick_ms < last_obs_tick_ms or post_ret_snap_ms < reset_tick_ms:
+                return False
+            if any(
+                str(r.get("own_logical_id") or "") == creature_lid or str(r.get("net_id") or "") == cnid
+                for r in c_t3_post_ret["rows"]
+            ):
+                return False
+            dt_pre_ms = max(0.0, reset_tick_ms - last_obs_tick_ms) + max(0.0, max_old_srv_tick_ms - post_ret_snap_ms)
+        else:
+            if max_old_srv_tick_ms < last_obs_tick_ms:
+                return False
+            dt_pre_ms = max(0.0, max_old_srv_tick_ms - last_obs_tick_ms)
+
+        v_bound_m_s = 6.0
+        for i in range(1, len(stage_obs)):
+            dt_s = (stage_obs[i][0] - stage_obs[i - 1][0]) / 1000.0
+            if dt_s > 1e-3:
+                dist_m = math.hypot(stage_obs[i][1] - stage_obs[i - 1][1], stage_obs[i][2] - stage_obs[i - 1][2])
+                v_bound_m_s = max(v_bound_m_s, dist_m / dt_s)
+
+        for _obs_t, lx, lz in stage_obs:
+            covered = False
+            for tc in t5_censuses:
+                tc_snap_ms = float(tc.get("snap_tick_ms", 0.0))
+                if tc_snap_ms < first_new_epoch_tick_ms:
+                    continue
+                dt_post_ms = max(0.0, tc_snap_ms - first_new_epoch_tick_ms)
+                dt_unsampled_s = (dt_pre_ms + dt_post_ms) / 1000.0
+                reach_r_m = max(15.0, v_bound_m_s * dt_unsampled_s)
+                if math.hypot(lx - float(tc["center_x_m"]), lz - float(tc["center_z_m"])) + reach_r_m <= float(tc["radius_m"]) + 1e-6:
+                    covered = True
+                    break
             if not covered:
                 return False
         return True
@@ -1843,9 +2297,17 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         or c_t5_a["director_uid"] != director_uid_t0
     ):
         checks["PER-07"] = {"status": "missing", "detail": "director_absent_or_uid_mismatch"}
-    elif not (
-        _creature_covered_in_t5(f"{retained_pfx}_inf_1", ("t2_census_10min", "t3_pre_reset_census"))
-        and _creature_covered_in_t5(f"{retained_pfx}_ani_1", ("t2_census_10min", "t3_pre_reset_census"))
+    elif post_t3_mutating_old_ops or not (
+        _creature_covered_in_t5(
+            f"{retained_pfx}_inf_1",
+            ("t2_census_10min", "t3_pre_reset_census"),
+            is_reset_branch=True,
+        )
+        and _creature_covered_in_t5(
+            f"{retained_pfx}_ani_1",
+            ("t2_census_10min", "t3_pre_reset_census"),
+            is_reset_branch=True,
+        )
     ):
         checks["PER-07"] = {"status": "missing", "detail": "post_restart_creature_coverage_missing"}
     else:
@@ -2091,6 +2553,14 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     c_wit_pre = census_by_stage_area.get(("t5_witness_pre_census", "area_b"))
     c_wit_post = census_by_stage_area.get(("t5_witness_post_census", "area_b"))
 
+    wit_apply_ops = [
+        op
+        for op in ordered_ops
+        if server_epoch_new
+        and op.inst == server_epoch_new
+        and op.verb == "per_apply_scene"
+        and op.status == "done"
+    ]
     stale_reset_ops = [
         op
         for op in ordered_ops
@@ -2107,13 +2577,20 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         and op.verb == "per_apply_scene"
         and (_unpack_any_payload(op.args) or ({}, {}, []))[0].get("expect_epoch") == server_epoch_old
     ]
+    cleanup_ops_new = [
+        op
+        for op in ordered_ops
+        if server_epoch_new and op.inst == server_epoch_new and op.verb == "per_cleanup_qa"
+    ]
+    cleanup_new_seq = min((op.seq_idx for op in cleanup_ops_new), default=10**9)
 
     if len(server_hello_insts) < 2:
         checks["PER-09"] = {"status": "missing", "detail": "missing_post_restart_hello"}
     elif not server_epoch_new or server_epoch_new == server_epoch_old:
         checks["PER-09"] = {"status": "fail", "detail": "server_epoch_not_rotated"}
     elif (
-        c_wit_pre is None
+        not wit_apply_ops
+        or c_wit_pre is None
         or c_wit_post is None
         or not c_wit_pre["job_complete"]
         or not c_wit_post["job_complete"]
@@ -2121,18 +2598,28 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     ):
         checks["PER-09"] = {"status": "missing", "detail": "missing_witness_census"}
     else:
+        wit_apply_op = wit_apply_ops[0]
+        stale_seqs = [op.seq_idx for op in (stale_reset_ops + stale_apply_ops)]
+        first_stale_op_seq = min(stale_seqs, default=10**9)
+        last_stale_op_seq = max(stale_seqs, default=-1)
+
+        # BLOQ 11: associate witness status and censuses by semantic operation order, not log-line count
         wit_pre_status = [
             (bop, s, n, r)
             for (bop, s, n, r) in status_ops_new
-            if bop.seq_idx >= c_wit_pre["seq_idx"] - 5
-            and (not stale_reset_ops or bop.seq_idx < stale_reset_ops[0].seq_idx)
+            if wit_apply_op.seq_idx < bop.seq_idx < first_stale_op_seq
         ]
         wit_post_status = [
             (bop, s, n, r)
             for (bop, s, n, r) in status_ops_new
-            if stale_apply_ops and bop.seq_idx > stale_apply_ops[-1].seq_idx
+            if last_stale_op_seq >= 0 and last_stale_op_seq < bop.seq_idx < cleanup_new_seq
         ]
-        if not wit_pre_status or not wit_post_status:
+        if (
+            not wit_pre_status
+            or not wit_post_status
+            or not (wit_apply_op.seq_idx < c_wit_pre["seq_idx"] < first_stale_op_seq)
+            or not (last_stale_op_seq < c_wit_post["seq_idx"] < cleanup_new_seq)
+        ):
             checks["PER-09"] = {"status": "missing", "detail": "missing_witness_status"}
         else:
             per09_fail: list[str] = []
@@ -2144,6 +2631,46 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 op.status != "rejected" or op.reason != "stale_epoch" for op in stale_apply_ops
             ):
                 per09_fail.append("stale_apply_not_rejected")
+
+            # BLOQ 10: validate the witness per_apply_scene and census rows against fixture["scenes"]["scene_b"]
+            wit_in_u = _unpack_any_payload(wit_apply_op.args)
+            wit_out_u = _unpack_any_payload(wit_apply_op.read)
+            wit_in_s, _wit_in_n, _wit_in_r = wit_in_u if wit_in_u else ({}, {}, [])
+            wit_out_s, wit_out_n, wit_out_r = wit_out_u if wit_out_u else ({}, {}, [])
+            fix_scene_b = {e["logical_id"]: e for e in fixture["scenes"]["scene_b"]["entities"]}
+            wit_op_id = wit_out_s.get("scene_op_id") or wit_in_s.get("scene_op_id") or ""
+            if (
+                wit_in_s.get("scene_id") != "scene_b"
+                or wit_out_s.get("scene_id") != "scene_b"
+                or wit_out_s.get("apply_status") != "ok"
+                or int(round(float(wit_out_n.get("gen_n", 0.0)))) != 1
+                or len(wit_out_r) != len(fix_scene_b)
+                or not wit_op_id
+            ):
+                per09_fail.append("witness_apply_scene_invalid")
+
+            wit_out_by_lid = {str(r.get("logical_id") or ""): r for r in wit_out_r}
+            wit_nid_by_lid: dict[str, str] = {}
+            old_scene_b_nids = {
+                bridge_spawn_info[lid]["net_id"]
+                for lid in fix_scene_b
+                if lid in bridge_spawn_info
+            }
+            for wlid, wf_ent in fix_scene_b.items():
+                worow = wit_out_by_lid.get(wlid)
+                if not worow:
+                    per09_fail.append(f"witness_apply_missing:{wlid}")
+                    continue
+                wnid = str(worow.get("net_id") or "")
+                if (
+                    not _valid_net_id(wnid, wlid)
+                    or wnid in old_scene_b_nids
+                    or worow.get("class_name") != wf_ent["class_name"]
+                    or int(round(float(worow.get("ok_b", 0.0)))) != 1
+                    or int(round(float(worow.get("alive_b", 0.0)))) != 1
+                ):
+                    per09_fail.append(f"witness_apply_row_invalid:{wlid}")
+                wit_nid_by_lid[wlid] = wnid
 
             _bop_pre, _s_pre, n_pre, r_pre = wit_pre_status[-1]
             _bop_post, _s_post, n_post, r_post = wit_post_status[0]
@@ -2157,6 +2684,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 or int(round(float(sc_b_pre.get("own_alive_n", 0.0)))) != 11
                 or int(round(float(sc_b_post.get("gen_n", 0.0)))) != 1
                 or int(round(float(sc_b_post.get("own_alive_n", 0.0)))) != 11
+                or sc_b_pre.get("last_op_id") != wit_op_id
                 or sc_b_pre.get("last_op_id") != sc_b_post.get("last_op_id")
                 or int(round(float(n_pre.get("registered_total_n", -1.0))))
                 != int(round(float(n_post.get("registered_total_n", -2.0))))
@@ -2167,9 +2695,69 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
 
             pre_w_map = {str(r.get("net_id") or ""): r for r in c_wit_pre["rows"]}
             post_w_map = {str(r.get("net_id") or ""): r for r in c_wit_post["rows"]}
-            if len(pre_w_map) < 11 or set(pre_w_map.keys()) != set(post_w_map.keys()):
+            if (
+                len(c_wit_pre["rows"]) != len(pre_w_map)
+                or len(c_wit_post["rows"]) != len(post_w_map)
+                or len(pre_w_map) < 11
+                or set(pre_w_map.keys()) != set(post_w_map.keys())
+            ):
                 per09_fail.append("witness_census_added_or_removed_entities")
             else:
+                for wlid, wf_ent in fix_scene_b.items():
+                    wnid = wit_nid_by_lid.get(wlid, "")
+                    wrow = pre_w_map.get(wnid)
+                    if not wrow:
+                        per09_fail.append(f"witness_census_missing:{wlid}")
+                        continue
+                    wcat = wf_ent["cat"]
+                    wpid = wf_ent["parent_id"]
+                    exp_ai = 1 if wcat in ("infected", "animal") else 0
+                    if (
+                        wrow.get("class_name") != wf_ent["class_name"]
+                        or wrow.get("own_logical_id") != wlid
+                        or int(round(float(wrow.get("own_b", 0.0)))) != 1
+                        or int(round(float(wrow.get("alive_b", 0.0)))) != 1
+                        or int(round(float(wrow.get("ai_agent_b", -1.0)))) != exp_ai
+                        or float(wrow.get("max_hp", 0.0)) <= 0.0
+                        or float(wrow.get("health_hp", 0.0)) <= 0.0
+                        or str(wrow.get("pers_id") or "") != "0:0:0:0"
+                    ):
+                        per09_fail.append(f"witness_census_row_invalid:{wlid}")
+                        continue
+                    if wpid == "":
+                        if (
+                            wrow.get("loc_kind") != "ground"
+                            or wrow.get("parent_net_id") != ""
+                            or math.hypot(
+                                float(wrow.get("pos_x_m", 0.0)) - float(wf_ent["req_x_m"]),
+                                float(wrow.get("pos_z_m", 0.0)) - float(wf_ent["req_z_m"]),
+                            )
+                            >= 0.5
+                        ):
+                            per09_fail.append(f"witness_root_placement_invalid:{wlid}")
+                    else:
+                        exp_wpnid = wit_nid_by_lid.get(wpid, "")
+                        exp_wpclass = fix_scene_b[wpid]["class_name"]
+                        wslot_req = wf_ent["slot_name"]
+                        if wrow.get("parent_net_id") != exp_wpnid or wrow.get("parent_class") != exp_wpclass:
+                            per09_fail.append(f"witness_child_parent_invalid:{wlid}")
+                        elif wslot_req == "Cargo":
+                            if wrow.get("loc_kind") != "cargo" or not str(wrow.get("slot_name") or "").startswith("Cargo"):
+                                per09_fail.append(f"witness_child_cargo_invalid:{wlid}")
+                        else:
+                            if wrow.get("loc_kind") != "attachment" or wrow.get("slot_name") != wslot_req:
+                                per09_fail.append(f"witness_child_attachment_invalid:{wlid}")
+
+                # Verify no unexpected non-director rows in witness census
+                allowed_wit_nids = set(wit_nid_by_lid.values())
+                for wnid, wpre in pre_w_map.items():
+                    if wnid not in allowed_wit_nids and wpre.get("owner_uid") != director_uid_t0:
+                        if not (
+                            wpre.get("class_name") == "OrienteeringCompass"
+                            and int(round(float(wpre.get("own_b", -1.0)))) == 0
+                        ):
+                            per09_fail.append(f"witness_unexpected_entity:{wpre.get('class_name')}:{wnid}")
+
                 creature_classes_w = {"ZmbF_CitizenANormal_Beige", "Animal_BosTaurus_Brown"}
                 for wnid, wpre in pre_w_map.items():
                     wpost = post_w_map[wnid]
@@ -2185,7 +2773,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     ):
                         per09_fail.append(f"witness_entity_changed:{wnid}")
                         continue
-                    if wpre.get("class_name") not in creature_classes_w and wpre.get("loc_kind") == "ground":
+                    if wpre.get("class_name") not in creature_classes_w and not wpre.get("owner_uid"):
                         for ck in ("pos_x_m", "pos_y_m", "pos_z_m"):
                             if abs(float(wpost.get(ck, 0.0)) - float(wpre.get(ck, 0.0))) > 1e-4:
                                 per09_fail.append(f"witness_pos_changed:{wnid}:{ck}")
@@ -2236,13 +2824,29 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             ):
                 checks["PER-10"] = {"status": "missing", "detail": "artifact_unverified"}
             else:
-                # Verify byte-for-byte match against git show <git_head>:<rel_path>
-                git_mismatch = False
-                for rel_p, recorded_text in persist_files.items():
-                    git_text = _git_show_text(repo_root, git_head, str(rel_p))
-                    if git_text is None or git_text != recorded_text:
+                # BLOQ 8: Enumerate all DSBX_QA_X_Persist*.c sources in git_head and require exact set + byte-for-byte match
+                required_git_sources = _get_required_persist_sources_at_commit(repo_root, git_head)
+                norm_recorded: dict[str, str] = {}
+                git_mismatch = required_git_sources is None
+                if not git_mismatch:
+                    for rel_p, recorded_text in persist_files.items():
+                        if not isinstance(rel_p, str) or not isinstance(recorded_text, str):
+                            git_mismatch = True
+                            break
+                        norm_p = _normalize_probe_rel_path(rel_p)
+                        if norm_p in norm_recorded:
+                            git_mismatch = True
+                            break
+                        norm_recorded[norm_p] = recorded_text
+                    if (
+                        not git_mismatch
+                        and required_git_sources is not None
+                        and (
+                            set(norm_recorded.keys()) != set(required_git_sources.keys())
+                            or any(norm_recorded[k] != required_git_sources[k] for k in required_git_sources)
+                        )
+                    ):
                         git_mismatch = True
-                        break
 
                 if git_mismatch:
                     checks["PER-10"] = {"status": "missing", "detail": "artifact_unverified"}
