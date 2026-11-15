@@ -1038,10 +1038,10 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
         return _inconclusive("artifact_unverified")
 
     # N27 + F0.3-0 §13 A3: Verificar wire_cap historico en identity.params contra git_head
-    verified_params, params_err = f03_common.verify_eval_params_at_commit(manifest, repo_root=root)
-    if params_err is not None or verified_params is None:
+    params_ok, params_err = f03_common.verify_eval_params_at_commit(manifest, repo_root=root)
+    if not params_ok:
         return _inconclusive(params_err or "params_unverified")
-    historical_wire_cap = int(verified_params["wire_cap"])
+    historical_wire_cap = int(identity["params"]["wire_cap"])
 
     # Verificar excesos de cable y errores tecnicos de transporte en bridge.jsonl
     for row in bridge_rows:
@@ -1411,7 +1411,7 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
         map01_detail = "invalid_crs"
     elif provenance.get("tile_urls") != [] or provenance.get("external_domains") != []:
         map01_ok = False
-        map01_detail = "external_tiles_or_domains_present"
+        map01_detail = "tiles_or_domains_present"
     elif source_kind not in ("mod_relief_plan_b", "dayz_tools_sat"):
         map01_ok = False
         map01_detail = "invalid_source_kind"

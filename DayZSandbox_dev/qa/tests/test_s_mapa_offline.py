@@ -20,6 +20,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import zlib
@@ -1066,10 +1067,12 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             self.assertGreaterEqual(abs(vp["certified_z_m"] - 7680.0), 1500.0)
 
         # Comprobar que los hashes estaticos en qa/fixtures/s_mapa_puntos.json coinciden con el calculo real
+        cert_git_head = fx["certifying_capture"]["certifying_git_head"]
+        fixture_probe_stamp = f03_common.compute_probe_stamp_at_commit(cert_git_head, repo_root=REPO_ROOT)
         expected_fx = _compute_stamped_fixture(
             fx,
-            cert_git_head=fx["certifying_capture"]["certifying_git_head"],
-            cert_probe_stamp=self.real_probe_stamp,
+            cert_git_head=cert_git_head,
+            cert_probe_stamp=fixture_probe_stamp,
         )
         expected_luma_shas = {
             pid: expected_fx["certifying_capture"]["patches"][pid]["patch_luma_sha256"]
@@ -1083,12 +1086,12 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             actual_luma_shas,
             expected_luma_shas,
             f"Actualizar patch_luma_sha256 en s_mapa_puntos.json a: {json.dumps(expected_luma_shas)} "
-            f"y probe_stamp={self.real_probe_stamp} y certifying_capture_sha256={expected_fx['accreditation']['certifying_capture_sha256']}",
+            f"y probe_stamp={fixture_probe_stamp} y certifying_capture_sha256={expected_fx['accreditation']['certifying_capture_sha256']}",
         )
         self.assertEqual(
             fx["accreditation"]["certifying_probe_stamp"],
-            self.real_probe_stamp,
-            f"probe_stamp esperado={self.real_probe_stamp}",
+            fixture_probe_stamp,
+            f"probe_stamp esperado={fixture_probe_stamp}",
         )
         self.assertEqual(
             fx["accreditation"]["certifying_capture_sha256"],
@@ -1096,7 +1099,7 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             f"certifying_capture_sha256 esperado={expected_fx['accreditation']['certifying_capture_sha256']}",
         )
 
-    def test_run_and_all_four_mutants_and_aggregation(self) -> None:
+    def test_e2e_run_and_all_four_mutants_and_aggregation(self) -> None:
         """Verifica run/ (con ent_id_n == 0 en colocaciones validas, N23), los 4 mutantes y aggregate_spike."""
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "ev_s_mapa"
@@ -1740,7 +1743,7 @@ class SMapaOracleOfflineTests(unittest.TestCase):
                     "ttl_ms": 5000,
                     "verb": "map_feature_locate",
                 }
-                srv._start_op(op_bad, 10.0, 1.0, bucket_bad)
+                srv._start_op(op_bad, 10.0, time.monotonic(), bucket_bad)
                 self.assertEqual(len(bucket_bad), 1)
                 self.assertEqual(bucket_bad[0]["status"], "rejected")
                 self.assertEqual(bucket_bad[0]["reason"], "bad_args")
@@ -1763,7 +1766,7 @@ class SMapaOracleOfflineTests(unittest.TestCase):
                     "ttl_ms": 5000,
                     "verb": "map_feature_locate",
                 }
-                srv._start_op(op_ok, 11.0, 1.0, bucket_ok)
+                srv._start_op(op_ok, 11.0, time.monotonic(), bucket_ok)
                 self.assertEqual(len(bucket_ok), 1)
                 self.assertEqual(bucket_ok[0]["status"], "done")
                 u_read = wire.unpack_payload(bucket_ok[0]["read"])
@@ -1773,7 +1776,7 @@ class SMapaOracleOfflineTests(unittest.TestCase):
 
     def test_e2e_probe_map_c_single_create_object_ex_and_implemented(self) -> None:
         """Verifica que DSBX_QA_X_Map.c implementa los verbos y contiene una unica llamada a CreateObjectEx(."""
-        c_path = wire.REAL_PROBE_DIR / "scripts" / "4_World" / "DSBX_QA_X_Map.c"
+        c_path = wire.REAL_PROBE_DIR / "scripts" / "5_Mission" / "DSBX_QA_X_Map.c"
         txt = c_path.read_text(encoding="utf-8")
         self.assertNotIn('"not_implemented"', txt)
         self.assertIn("SpawnTrackedObject", txt)

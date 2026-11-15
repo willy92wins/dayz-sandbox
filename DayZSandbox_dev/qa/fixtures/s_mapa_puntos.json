@@ -132,8 +132,8 @@
     "accredited_offline": true,
     "accredited_ingame": false,
     "certifying_evidence_relpath": "samples/s_mapa_certifying_capture.json",
-    "certifying_capture_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "certifying_probe_stamp": "0000000000000000"
+    "certifying_capture_sha256": "09528b34cbb0a1b7c0aef1c4d2249d276c8146b3733cf77e6d22d44dced481d4",
+    "certifying_probe_stamp": "02952a5a9658cc6e"
   },
   "certifying_capture": {
     "schema": "dsbx.map.certifying_capture.v4",
@@ -145,14 +145,14 @@
     "step_px_m": 3.75,
     "certifying_build": "offline",
     "certifying_git_head": "0c730f0",
-    "certifying_probe_stamp": "0000000000000000",
+    "certifying_probe_stamp": "02952a5a9658cc6e",
     "certifying_wire_cap": 3500,
     "certifying_hello": {
       "ev": "hello",
       "peer": "server",
       "proto": "qa0",
       "build": "offline",
-      "probe_ver": "dsbx-qa1+0000000000000000"
+      "probe_ver": "dsbx-qa1+02952a5a9658cc6e"
     },
     "global_luma_range": {
       "y_min_m": 0.0,
@@ -199,7 +199,7 @@
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
         ],
-        "patch_luma_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "patch_luma_sha256": "7d33e14e29531fbfffdcf3dc1b4b325de1b176bf0c0af0439525a83c4986858a",
         "patch_row_ops": [
           {
             "order": {
@@ -282,7 +282,7 @@
           101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101,
           101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101
         ],
-        "patch_luma_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "patch_luma_sha256": "925848db6f85c3220e402ad9845a67e295e75c84e74d345171720262be67d1ba",
         "patch_row_ops": [
           {
             "order": {
@@ -365,7 +365,7 @@
           181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181,
           181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181, 181
         ],
-        "patch_luma_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "patch_luma_sha256": "71117b31c0a8519b8cd859b9bd38f3793d1cbd7e75cf358964831f8f1efaa6e0",
         "patch_row_ops": [
           {
             "order": {
@@ -448,7 +448,7 @@
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
         ],
-        "patch_luma_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "patch_luma_sha256": "a846e84148ecb79f7eab0497de538e69ba7f02681dbe633539e6f8f3a7f58b0a",
         "patch_row_ops": [
           {
             "order": {
@@ -531,7 +531,7 @@
           6, 6, 6, 6, 6, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0,
           6, 6, 6, 6, 6, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0
         ],
-        "patch_luma_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "patch_luma_sha256": "067203ed1448dc2834532e9540ab1ac828ae9b2a46e8547294c4f75143690715",
         "patch_row_ops": [
           {
             "order": {
@@ -614,7 +614,7 @@
           221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221,
           221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221, 221
         ],
-        "patch_luma_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "patch_luma_sha256": "5c87ecca2066d3b6bf8ab3686ba2d786683cdd56c6ea5337c01e2db40ad64157",
         "patch_row_ops": [
           {
             "order": {
