@@ -63,6 +63,16 @@ def wait_op(env, op_id, state, reason=None, timeout=15.0):
     return env.op(op_id)
 
 
+def wait_new_epoch(env, fake, timeout=12.0):
+    """Tras `restart_mission()`: el bridge ya presenta el epoch nuevo del mod y ha
+    reconciliado con el. `reconciled` solo no basta: viene en True del epoch viejo."""
+    def ready():
+        srv = env.bridge.peers.get("server") or {}
+        return (srv.get("epoch") == fake.epoch and not srv.get("lost")
+                and env.bridge.reconciled)
+    return wait_until(ready, timeout)
+
+
 def dist3(a, b):
     return math.sqrt(
         (float(a[0]) - float(b[0])) ** 2
@@ -809,7 +819,7 @@ class F2A3Reset(LiveBase):
         self._applied(env)
         old_epoch = fake.epoch
         fake.restart_mission()
-        self.assertTrue(wait_until(lambda: env.bridge.reconciled, 10))
+        self.assertTrue(wait_new_epoch(env, fake, 10))
         before = world.census()
         srv = fake.server
         order = {
@@ -861,7 +871,7 @@ class F2A4Restart(LiveBase):
         # epoch nuevo: registro vacio justo despues y apply nuevo sin extras
         fake.restart_mission()
         self.assertEqual(fake.world.registry_snapshot(), [])
-        self.assertTrue(wait_until(lambda: env2.bridge.reconciled, 12))
+        self.assertTrue(wait_new_epoch(env2, fake))
         r3 = env2.apply()
         self.assertTrue(r3.get("ok"), r3)
         env2.wait_state(r3["op_id"], "observado")
@@ -906,7 +916,7 @@ class F2A4Restart(LiveBase):
                          ("parcial", "sin_resultado"))
         fake.server.drop_all_results = False
         fake.restart_mission()
-        self.assertTrue(wait_until(lambda: env.bridge.reconciled, 12))
+        self.assertTrue(wait_new_epoch(env, fake))
         time.sleep(0.5)
         op = env.op(op_id)
         self.assertEqual(op["state"], "parcial")
