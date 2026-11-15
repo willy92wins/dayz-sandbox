@@ -155,6 +155,7 @@ def _write_synthetic_base_part(
     cb_created_before: int = 3,
     cb_created_after: int | None = None,
     cb_pooled_after: int = 2,
+    cb_pooled_before: int | None = None,
 ) -> dict:
     """Construye una parte sintetica completa de F0.3-0 (13/13 checks en pass por defecto)."""
     pdir = Path(part_dir)
@@ -565,7 +566,12 @@ def _write_synthetic_base_part(
             "done",
             "",
             wire.pack_payload(
-                scalars_num={"callbacks_created_n": cb_created_before, "callback_budget_n": 2000, "callbacks_inflight_n": 1, "callbacks_pooled_n": cb_pooled_after}
+                scalars_num={
+                    "callbacks_created_n": cb_created_before,
+                    "callback_budget_n": 2000,
+                    "callbacks_inflight_n": 1,
+                    "callbacks_pooled_n": cb_pooled_after if cb_pooled_before is None else cb_pooled_before,
+                }
             ),
         )
         e12_ids = [_emit_op(peer, "qa_echo", wire.empty_payload(), "done", "", wire.empty_payload()) for _ in range(50)]
@@ -2294,8 +2300,8 @@ class CommonAndEvalF03Tests(unittest.TestCase):
 
             # H2 de Sol r1: con historia previa de fallos (contador de toda la vida, D5), BASE-12 en run/ acredita
             # crecimiento cero durante las 50 ordenes y el pool en su tope, no un valor absoluto bajo.
-            def _base12(created_before, created_after, pooled):
-                b_h2 = _clone_base(f"b_h2_{created_before}_{created_after}_{pooled}")
+            def _base12(created_before, created_after, pooled, pooled_before=None):
+                b_h2 = _clone_base(f"b_h2_{created_before}_{created_after}_{pooled}_{pooled_before}")
                 _write_synthetic_base_part(
                     b_h2 / "run",
                     git_head=head1,
@@ -2303,6 +2309,7 @@ class CommonAndEvalF03Tests(unittest.TestCase):
                     cb_created_before=created_before,
                     cb_created_after=created_after,
                     cb_pooled_after=pooled,
+                    cb_pooled_before=pooled_before,
                 )
                 v_run = f03_base_eval.evaluate(b_h2 / "run", repo_root=root)
                 return next(c for c in v_run["checks"] if c["id"] == "BASE-12")
@@ -2312,6 +2319,9 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             self.assertEqual((c_grew["status"], c_grew["detail"]), ("fail", "callbacks_grew:50->51"))
             c_pool = _base12(50, 50, 9)
             self.assertEqual((c_pool["status"], c_pool["detail"]), ("fail", "pool_out_of_bounds:9"))
+            # N4 de Sol r2: D7 exige el tope en CADA muestra; pool inicial 9 y final 4 tiene que fallar.
+            c_pool_first = _base12(50, 50, 4, pooled_before=9)
+            self.assertEqual((c_pool_first["status"], c_pool_first["detail"]), ("fail", "pool_out_of_bounds:9"))
 
             b_run_exh = _clone_base("b_run_exh")
             _write_jsonl(
@@ -2391,10 +2401,13 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             self.assertEqual(v_shift, v_base)
 
     @staticmethod
-    def _append_server_poll_before_cut(part: Path, *, before_cut_ms: float, held_ms: float | None) -> None:
+    def _append_server_poll_before_cut(
+        part: Path, *, before_cut_ms: float, held_ms: float | None, tick_s_override: float | None = None
+    ) -> None:
         """Anade un poll 200 del servidor justo antes del corte de BASE-08, retenido held_ms por el bridge.
 
         Como el bridge real, tick_s es de cuando el peer envio el poll y t_ms de la respuesta.
+        tick_s_override fuerza el tick_s (p. ej. el 0 que pone el bridge si el peer no lo manda).
         """
         scen = f03_common.read_jsonl(part / "samples" / "scenario.jsonl")
         b08 = [r for r in scen if r.get("check") == "BASE-08" and r.get("peer") == "server"]
@@ -2415,6 +2428,8 @@ class CommonAndEvalF03Tests(unittest.TestCase):
         }
         if held_ms is not None:
             poll["held_ms"] = held_ms
+        if tick_s_override is not None:
+            poll["tick_s"] = tick_s_override
         bridge_path = part / "samples" / "bridge.jsonl"
         rows = f03_common.read_jsonl(bridge_path)
         rows.append(poll)
@@ -2438,6 +2453,42 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             self.assertEqual(verdict["exit_code"], 1)
             c8 = next(c for c in verdict["checks"] if c["id"] == "BASE-08")
             self.assertEqual((c8["status"], c8["detail"]), ("fail", "job_a_ended_before_cut"))
+
+    def _base08_verdict(self, tmp: str, name: str, *, start_off: float, end_off: float, zero_tick: bool = False) -> dict:
+        root = Path(tmp) / f"repo_{name}"
+        root.mkdir()
+        head = _init_temp_git_repo(root)
+        stamp = f03_common.compute_probe_stamp_at_commit(head, repo_root=root)
+        part = Path(tmp) / name
+        _write_synthetic_base_part(part, git_head=head, probe_stamp=stamp)
+        _set_base08_trace(part, peer="server", a_start_offset_ms=start_off, a_end_offset_ms=end_off)
+        if zero_tick:
+            self._append_server_poll_before_cut(part, before_cut_ms=25.0, held_ms=0.0, tick_s_override=0.0)
+        return f03_base_eval.evaluate(part, repo_root=root)
+
+    def test_base08_zero_tick_s_anchor_is_missing(self):
+        # N1 de Sol r2: A acabo 500 ms antes del corte (dura 700 ms, 12 filas). Con un ancla tick_s = 0 (el bridge pone
+        # 0 si el peer no lo manda o no se parsea), el veredicto completo pasaba de 1 FALLA a 0 PASA. Ahora: missing.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = self._base08_verdict(tmp, "case_zero_tick", start_off=-1200.0, end_off=-500.0, zero_tick=True)
+            self.assertEqual(verdict["exit_code"], 2)
+            c8 = next(c for c in verdict["checks"] if c["id"] == "BASE-08")
+            self.assertEqual((c8["status"], c8["detail"]), ("missing", "no_pre_cut_poll"))
+
+    def test_base08_d8_threshold_both_sides(self):
+        # N2 de Sol r2: D8 clasifica con end - start >= max_duration_ms (1200), sin banda simetrica.
+        # 1100 ms con reason job_timeout es prematuro -> fail; 1400 ms (timeout propio visto un frame tarde) -> missing.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            v_pre = self._base08_verdict(tmp, "case_1100", start_off=-1400.0, end_off=-300.0)
+            c_pre = next(c for c in v_pre["checks"] if c["id"] == "BASE-08")
+            self.assertEqual((c_pre["status"], c_pre["detail"]), ("fail", "job_a_ended_before_cut"))
+            self.assertEqual(v_pre["exit_code"], 1)
+            v_late = self._base08_verdict(tmp, "case_1400", start_off=-1700.0, end_off=-300.0)
+            c_late = next(c for c in v_late["checks"] if c["id"] == "BASE-08")
+            self.assertEqual((c_late["status"], c_late["detail"]), ("missing", "witness_window_missed"))
+            self.assertEqual(v_late["exit_code"], 2)
 
     def test_base08_pre_cut_poll_without_held_ms_is_missing(self):
         # D9: un poll previo al corte sin held_ms no da ancla fiable -> BASE-08 missing (no_pre_cut_poll), la parte da 2.

@@ -116,6 +116,27 @@ def _find_pre_cut_poll(bridge_rows: list[dict], peer: str, cut_start_ms: float) 
     return best
 
 
+def _poll_anchor(poll: dict | None) -> tuple[float, float, float] | None:
+    """(tick_s, t_ms, held_ms) de un poll 200 valido como ancla de D8/D9, o None (fallo cerrado).
+
+    Exige los tres campos presentes y finitos, tick_s > 0 (el bridge pone 0 si el peer no lo manda o no se parsea)
+    y held_ms >= 0 (N1 de Sol r2).
+    """
+    if poll is None or "tick_s" not in poll or "held_ms" not in poll or "t_ms" not in poll:
+        return None
+    try:
+        tick_s = float(poll["tick_s"])
+        t_ms = float(poll["t_ms"])
+        held_ms = float(poll["held_ms"])
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(tick_s) and math.isfinite(t_ms) and math.isfinite(held_ms)):
+        return None
+    if tick_s <= 0.0 or held_ms < 0.0:
+        return None
+    return tick_s, t_ms, held_ms
+
+
 def _enq_num_arg(idx: dict, op_id, name: str) -> float | None:
     if not isinstance(op_id, str):
         return None
@@ -451,20 +472,25 @@ def _eval_base_08(scen_rows: list[dict], bridge_rows: list[dict], idx: dict, req
         # D8 (con D9, brief v4.5.3): anclar el corte al reloj del peer con el ultimo poll 200 previo al corte (cota baja).
         # El bridge retiene el poll hasta hold_ms: tick_s es de cuando el peer lo envio y t_ms de la respuesta, asi que
         # la llegada al bridge es t_ms - held_ms. Sin tick_s o sin held_ms no hay ancla: missing (fallo cerrado).
+        # N1 de Sol r2: un tick_s no positivo o no finito (el bridge convierte un parseo invalido en 0) tampoco es ancla.
         pre_poll = _find_pre_cut_poll(bridge_rows, peer, cut_start_ms)
-        if pre_poll is None or "tick_s" not in pre_poll or "held_ms" not in pre_poll:
+        anchor = _poll_anchor(pre_poll)
+        if anchor is None:
             return _chk("BASE-08", "missing", "no_pre_cut_poll")
-        poll_recv_ms = float(pre_poll.get("t_ms", 0.0)) - float(pre_poll["held_ms"])
-        cut_start_peer = float(pre_poll["tick_s"]) * 1000.0 + (cut_start_ms - poll_recv_ms)
+        tick_s, poll_t_ms, held_ms = anchor
+        poll_recv_ms = poll_t_ms - held_ms
+        cut_start_peer = tick_s * 1000.0 + (cut_start_ms - poll_recv_ms)
 
         start_t = float(meta_a["num"].get("start_tick_ms", 0.0))
         end_t = float(meta_a["num"].get("end_tick_ms", 0.0))
         if not (end_t > cut_start_peer + CUT_MARGIN_MS):
+            # D8 (brief v4.5.3, §11): caduco por su propio timeout si reason == job_timeout y
+            # end - start >= max_duration_ms (un frame tardio no lo convierte en prematuro); si no, prematuro.
             max_duration_ms = _enq_num_arg(idx, row.get("start_op_id"), "max_duration_ms")
             if (
                 meta_a["str"].get("reason") == "job_timeout"
                 and max_duration_ms is not None
-                and abs((end_t - start_t) - max_duration_ms) <= 150.0
+                and (end_t - start_t) >= max_duration_ms
             ):
                 return _chk("BASE-08", "missing", "witness_window_missed")
             return _chk("BASE-08", "fail", "job_a_ended_before_cut")
@@ -841,6 +867,7 @@ def _eval_base_12(
         a_unp = _unpack_result_read(aev["result"])
         created_before = int(b_unp["num"].get("callbacks_created_n", -1))
         created_after = int(a_unp["num"].get("callbacks_created_n", -2))
+        pooled_before = int(b_unp["num"].get("callbacks_pooled_n", -1))
         pooled_after = int(a_unp["num"].get("callbacks_pooled_n", -1))
         budget_n = int(a_unp["num"].get("callback_budget_n", 0))
         if budget_n != 2000:
@@ -850,8 +877,10 @@ def _eval_base_12(
         # su tope; acotar el contador absoluto suspendia una mision sana (H2 de Sol r1).
         if created_after != created_before:
             return _chk("BASE-12", "fail", f"callbacks_grew:{created_before}->{created_after}")
-        if not (0 <= pooled_after <= CALLBACK_POOL_MAX):
-            return _chk("BASE-12", "fail", f"pool_out_of_bounds:{pooled_after}")
+        # D7: el pool dentro de su tope en CADA muestra, la inicial y la final (N4 de Sol r2).
+        for pooled in (pooled_before, pooled_after):
+            if not (0 <= pooled <= CALLBACK_POOL_MAX):
+                return _chk("BASE-12", "fail", f"pool_out_of_bounds:{pooled}")
     return _chk("BASE-12", "pass", "ok")
 
 
