@@ -13,6 +13,11 @@ EXPECTED_MUTANTS = {
         "must_fail_checks": ["PER-04", "PER-05"],
         "allowed_non_pass": {},
     },
+    "census_resource_bypass": {
+        "expected_exit_code": 1,
+        "must_fail_checks": ["PER-09"],
+        "allowed_non_pass": {},
+    },
 }
 
 EXPECTED_HARNESS_TESTS = {}

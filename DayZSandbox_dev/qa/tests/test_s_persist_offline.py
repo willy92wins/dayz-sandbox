@@ -1624,6 +1624,30 @@ class _SyntheticPartBuilder:
                 encoding="utf-8",
             )
 
+        # Apply census_resource_bypass mutant fabrication: create overlapping census jobs
+        if self.fault_code == "census_resource_bypass":
+            t0_a_job = None
+            for ev in self.bridge_events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("area_tag") == "t0_baseline_census:area_a":
+                                t0_a_job = u_s["job"]
+                        elif res.get("verb") == "job_read" and t0_a_job:
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("job") == t0_a_job:
+                                u_n["end_tick_ms"] = float(u_n["start_tick_ms"]) + 5000.0
+                                u_n["onjobend_tick_ms"] = float(u_n["start_tick_ms"]) + 5000.0
+                                u_n["released_tick_ms"] = float(u_n["start_tick_ms"]) + 5000.0
+                                res["read"] = self._pack_ext_read(
+                                    strings=u_s,
+                                    numbers=u_n,
+                                    ncol=res["read"]["ncol"],
+                                    scol=res["read"]["scol"],
+                                    rows=u_r,
+                                )
+
         with (samples_dir / "bridge.jsonl").open("w", encoding="utf-8", newline="\n") as bf:
             for ev in self.bridge_events:
                 bf.write(json.dumps(ev, sort_keys=True) + "\n")
@@ -1697,6 +1721,7 @@ class TestSPersistOracleOffline(unittest.TestCase):
                 ("run", "", "a1b2c3d4e5f60718"),
                 ("mut-unprotected_leak", "omit_nopersistency_flag", "b2c3d4e5f6071829"),
                 ("mut-foreign_wiped", "reset_wipe_radius_25m", "c3d4e5f60718293a"),
+                ("mut-census_resource_bypass", "census_resource_bypass", "d4e5f60718293a4b"),
             ):
                 pdir = _SyntheticPartBuilder(pname, nonce=nonce, fault_code=fcode).build_into(base / pname)
                 v = s_persist_eval.evaluate(pdir, repo_root=REPO_ROOT)
@@ -3021,11 +3046,37 @@ class TestSPersistOracleOffline(unittest.TestCase):
                                         lid = str(row.get("logical_id") or "")
                                         if lid in old_nids:
                                             row["net_id"] = old_nids[lid]
-                                    # Need to preserve ncol/scol from the original read
                                     orig_read = res["read"]
                                     ncol = orig_read.get("ncol", [])
                                     scol = orig_read.get("scol", [])
                                     res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, ncol=ncol, scol=scol, rows=u_r)
+            # Also update census job_read results for t5_witness_pre_census and t5_witness_post_census
+            # to use the same reused net_ids so the census matches the apply scene
+            witness_jobs: set[str] = set()
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_census_start":
+                            u_s, _, _ = _unpack(res["read"])
+                            if u_s.get("area_tag") in (
+                                "t5_witness_pre_census:area_b",
+                                "t5_witness_post_census:area_b",
+                            ):
+                                witness_jobs.add(u_s["job"])
+                        elif res.get("verb") == "job_read":
+                            u_s, u_n, u_r = _unpack(res["read"])
+                            if u_s.get("job") in witness_jobs:
+                                for row in u_r:
+                                    lid = str(row.get("own_logical_id") or "")
+                                    if lid in old_nids:
+                                        row["net_id"] = old_nids[lid]
+                                res["read"] = builder._pack_ext_read(
+                                    strings=u_s,
+                                    numbers=u_n,
+                                    ncol=res["read"]["ncol"],
+                                    scol=res["read"]["scol"],
+                                    rows=u_r,
+                                )
             bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
             verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
             self.assertEqual(verdict["exit_code"], 0, msg=json.dumps(verdict, indent=2))
@@ -3232,6 +3283,21 @@ class TestSPersistOracleOffline(unittest.TestCase):
             part_dir = builder.build_into(Path(tmp) / "bloq07_job_free")
             bpath = part_dir / "samples" / "bridge.jsonl"
             events = [json.loads(l) for l in bpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+            # Remove shutdown/startup markers to make n49_extremes_accredited = False
+            filtered_events = []
+            for ev in events:
+                if ev.get("ev") == "result":
+                    for res in ev.get("results") or []:
+                        if res.get("verb") == "per_status":
+                            u_s, _, _ = _unpack(res["read"])
+                            if u_s.get("shutdown_marker") == "1" or u_s.get("startup_marker") == "1":
+                                break
+                    else:
+                        filtered_events.append(ev)
+                        continue
+                    continue
+                filtered_events.append(ev)
+            events = filtered_events
             # Add proper job_free with contractual minimal response and shift chronology by 12s
             # This should make only PER-08 missing (N49) while other checks pass
             t5_jobs: set[str] = set()
@@ -3273,8 +3339,8 @@ class TestSPersistOracleOffline(unittest.TestCase):
             for cid in ("PER-01", "PER-02", "PER-03", "PER-04", "PER-05", "PER-06", "PER-07", "PER-09", "PER-10"):
                 self.assertEqual(c_map[cid]["status"], "pass", msg=f"{cid}: {c_map[cid]['detail']}")
 
-    def test_sol2_12_e2e_orders_complete_valid_lease_then_block(self) -> None:
-        """Sol r2 MEN 12: E2E orders complete/valid - effect with valid lease, then block on expiry."""
+    def test_e2e_12_e2e_orders_complete_valid_lease_then_block(self) -> None:
+        """Sol r2 MEN 12: E2E orders complete/valid - effect with valid lease, then block on expiry. Requires implementation."""
         import os
         import time
 

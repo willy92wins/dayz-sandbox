@@ -745,7 +745,7 @@ def _parse_bridge_timeline(
         cx = out_n.get("center_x_m", in_n.get("center_x_m"))
         cz = out_n.get("center_z_m", in_n.get("center_z_m"))
         rad = out_n.get("radius_m", in_n.get("radius_m", 60.0))
-        inc_dir = int(round(in_n.get("include_director_b", out_n.get("include_director_b", 0.0))))
+        inc_dir = int(round(out_n.get("include_director_b", in_n.get("include_director_b", 0.0))))
         area_id = _infer_area_id(raw_tag, cx, cz, fixture)
         explicit_stage = _extract_stage_from_tag(raw_tag, {**in_s, **out_s})
         if not explicit_stage and bop.op_id in scen_census_stage:
@@ -1031,7 +1031,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         reasons.append("reused_census_job_id")
     if timeline["any_invalid_census_resource"]:
         reasons.append("invalid_census_resource")
-    if timeline["any_census_overlap"]:
+    census_overlap_detected = timeline["any_census_overlap"]
+    if census_overlap_detected:
         reasons.append("unprotected_census_resource_overlap")
 
     # Check hello peers (both server and client must have hello 200 with matching build & proto)
@@ -1897,6 +1898,39 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if r_pre_c.get("loc_kind") != "ground" or r_post.get("loc_kind") != "ground":
                     per04_fail.append(f"retained_root_not_on_ground:{rlid}")
 
+        # Nuevo 7: validate inv_children_n for retained containers against censused children
+        # Count actual children in pre_reset census for each retained container
+        retained_container_ids = [
+            f"{retained_pfx}_cont_1",
+            f"{retained_pfx}_cont_1_child",
+            f"{retained_pfx}_prop_2",
+        ]
+        for cont_lid in retained_container_ids:
+            cont_nid = bridge_spawn_info.get(cont_lid, {}).get("net_id", "")
+            if not cont_nid:
+                continue
+            r_pre_c = pre_ret_by_nid.get(cont_nid)
+            if not r_pre_c:
+                continue
+            declared_inv = int(round(float(r_pre_c.get("inv_children_n", -1.0))))
+            if declared_inv >= 0:
+                # Count actual children in pre_ret_by_nid with this parent_net_id
+                actual_children = sum(
+                    1 for r in pre_ret_by_nid.values()
+                    if str(r.get("parent_net_id") or "") == cont_nid
+                    and int(round(float(r.get("own_b", 0.0)))) == 1
+                )
+                # Also count foreign children that are in this container
+                # Foreign items have own_b=0 but are in the container
+                foreign_children = sum(
+                    1 for r in pre_ret_by_nid.values()
+                    if str(r.get("parent_net_id") or "") == cont_nid
+                    and int(round(float(r.get("own_b", 1.0)))) == 0
+                )
+                total_children = actual_children + foreign_children
+                if declared_inv != total_children:
+                    per04_fail.append(f"inv_children_n_mismatch:{cont_lid}:declared={declared_inv},censused={total_children}")
+
         # BLOQ 6: verify foreign items and cross-scene child are inside the required containers before and after reset
         for stg_lbl, m_by_nid in (("pre", pre_ret_by_nid), ("post", post_by_nid)):
             r_cross = m_by_nid.get(cross_nid)
@@ -2592,235 +2626,239 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     # =========================================================================
     # PER-09: Epoch change after restart and stale_epoch rejection with witness scene
     # =========================================================================
-    c_wit_pre = census_by_stage_area.get(("t5_witness_pre_census", "area_b"))
-    c_wit_post = census_by_stage_area.get(("t5_witness_post_census", "area_b"))
-
-    wit_apply_ops = [
-        op
-        for op in ordered_ops
-        if server_epoch_new
-        and op.inst == server_epoch_new
-        and op.verb == "per_apply_scene"
-        and op.status == "done"
-    ]
-    stale_reset_ops = [
-        op
-        for op in ordered_ops
-        if server_epoch_new
-        and op.inst == server_epoch_new
-        and op.verb == "per_reset_scene"
-        and (_unpack_any_payload(op.args) or ({}, {}, []))[0].get("expect_epoch") == server_epoch_old
-    ]
-    stale_apply_ops = [
-        op
-        for op in ordered_ops
-        if server_epoch_new
-        and op.inst == server_epoch_new
-        and op.verb == "per_apply_scene"
-        and (_unpack_any_payload(op.args) or ({}, {}, []))[0].get("expect_epoch") == server_epoch_old
-    ]
-    cleanup_ops_new = [
-        op
-        for op in ordered_ops
-        if server_epoch_new and op.inst == server_epoch_new and op.verb == "per_cleanup_qa"
-    ]
-    cleanup_new_seq = min((op.seq_idx for op in cleanup_ops_new), default=10**9)
-
-    if len(server_hello_insts) < 2:
-        checks["PER-09"] = {"status": "missing", "detail": "missing_post_restart_hello"}
-    elif not server_epoch_new or server_epoch_new == server_epoch_old:
-        checks["PER-09"] = {"status": "fail", "detail": "server_epoch_not_rotated"}
-    elif (
-        not wit_apply_ops
-        or c_wit_pre is None
-        or c_wit_post is None
-        or not c_wit_pre["job_complete"]
-        or not c_wit_post["job_complete"]
-        or c_wit_pre["job_id"] == c_wit_post["job_id"]
-    ):
-        checks["PER-09"] = {"status": "missing", "detail": "missing_witness_census"}
+    # If census resource overlap was already detected, skip witness validation (fabrication takes precedence)
+    if census_overlap_detected:
+        checks["PER-09"] = {"status": "fail", "detail": "unprotected_census_resource_overlap"}
     else:
-        wit_apply_op = wit_apply_ops[0]
-        stale_seqs = [op.seq_idx for op in (stale_reset_ops + stale_apply_ops)]
-        first_stale_op_seq = min(stale_seqs, default=10**9)
-        last_stale_op_seq = max(stale_seqs, default=-1)
+        c_wit_pre = census_by_stage_area.get(("t5_witness_pre_census", "area_b"))
+        c_wit_post = census_by_stage_area.get(("t5_witness_post_census", "area_b"))
 
-        # BLOQ 11: associate witness status and censuses by semantic operation order, not log-line count
-        wit_pre_status = [
-            (bop, s, n, r)
-            for (bop, s, n, r) in status_ops_new
-            if wit_apply_op.seq_idx < bop.seq_idx < first_stale_op_seq
+        wit_apply_ops = [
+            op
+            for op in ordered_ops
+            if server_epoch_new
+            and op.inst == server_epoch_new
+            and op.verb == "per_apply_scene"
+            and op.status == "done"
         ]
-        wit_post_status = [
-            (bop, s, n, r)
-            for (bop, s, n, r) in status_ops_new
-            if last_stale_op_seq >= 0 and last_stale_op_seq < bop.seq_idx < cleanup_new_seq
+        stale_reset_ops = [
+            op
+            for op in ordered_ops
+            if server_epoch_new
+            and op.inst == server_epoch_new
+            and op.verb == "per_reset_scene"
+            and (_unpack_any_payload(op.args) or ({}, {}, []))[0].get("expect_epoch") == server_epoch_old
         ]
-        if (
-            not wit_pre_status
-            or not wit_post_status
-            or not (wit_apply_op.seq_idx < c_wit_pre["seq_idx"] < first_stale_op_seq)
-            or not (last_stale_op_seq < c_wit_post["seq_idx"] < cleanup_new_seq)
+        stale_apply_ops = [
+            op
+            for op in ordered_ops
+            if server_epoch_new
+            and op.inst == server_epoch_new
+            and op.verb == "per_apply_scene"
+            and (_unpack_any_payload(op.args) or ({}, {}, []))[0].get("expect_epoch") == server_epoch_old
+        ]
+        cleanup_ops_new = [
+            op
+            for op in ordered_ops
+            if server_epoch_new and op.inst == server_epoch_new and op.verb == "per_cleanup_qa"
+        ]
+        cleanup_new_seq = min((op.seq_idx for op in cleanup_ops_new), default=10**9)
+
+        if len(server_hello_insts) < 2:
+            checks["PER-09"] = {"status": "missing", "detail": "missing_post_restart_hello"}
+        elif not server_epoch_new or server_epoch_new == server_epoch_old:
+            checks["PER-09"] = {"status": "fail", "detail": "server_epoch_not_rotated"}
+        elif (
+            not wit_apply_ops
+            or c_wit_pre is None
+            or c_wit_post is None
+            or not c_wit_pre["job_complete"]
+            or not c_wit_post["job_complete"]
+            or c_wit_pre["job_id"] == c_wit_post["job_id"]
         ):
-            checks["PER-09"] = {"status": "missing", "detail": "missing_witness_status"}
+            checks["PER-09"] = {"status": "missing", "detail": "missing_witness_census"}
         else:
-            per09_fail: list[str] = []
-            if not stale_reset_ops or any(
-                op.status != "rejected" or op.reason != "stale_epoch" for op in stale_reset_ops
-            ):
-                per09_fail.append("stale_reset_not_rejected")
-            if not stale_apply_ops or any(
-                op.status != "rejected" or op.reason != "stale_epoch" for op in stale_apply_ops
-            ):
-                per09_fail.append("stale_apply_not_rejected")
+            wit_apply_op = wit_apply_ops[0]
+            stale_seqs = [op.seq_idx for op in (stale_reset_ops + stale_apply_ops)]
+            first_stale_op_seq = min(stale_seqs, default=10**9)
+            last_stale_op_seq = max(stale_seqs, default=-1)
 
-            # BLOQ 10: validate the witness per_apply_scene and census rows against fixture["scenes"]["scene_b"]
-            wit_in_u = _unpack_any_payload(wit_apply_op.args)
-            wit_out_u = _unpack_any_payload(wit_apply_op.read)
-            wit_in_s, _wit_in_n, _wit_in_r = wit_in_u if wit_in_u else ({}, {}, [])
-            wit_out_s, wit_out_n, wit_out_r = wit_out_u if wit_out_u else ({}, {}, [])
-            fix_scene_b = {e["logical_id"]: e for e in fixture["scenes"]["scene_b"]["entities"]}
-            wit_op_id = wit_out_s.get("scene_op_id") or wit_in_s.get("scene_op_id") or ""
+            # BLOQ 11: associate witness status and censuses by semantic operation order, not log-line count
+            wit_pre_status = [
+                (bop, s, n, r)
+                for (bop, s, n, r) in status_ops_new
+                if wit_apply_op.seq_idx < bop.seq_idx < first_stale_op_seq
+            ]
+            wit_post_status = [
+                (bop, s, n, r)
+                for (bop, s, n, r) in status_ops_new
+                if last_stale_op_seq >= 0 and last_stale_op_seq < bop.seq_idx < cleanup_new_seq
+            ]
             if (
-                wit_in_s.get("scene_id") != "scene_b"
-                or wit_out_s.get("scene_id") != "scene_b"
-                or wit_out_s.get("apply_status") != "ok"
-                or int(round(float(wit_out_n.get("gen_n", 0.0)))) != 1
-                or len(wit_out_r) != len(fix_scene_b)
-                or not wit_op_id
+                not wit_pre_status
+                or not wit_post_status
+                or not (wit_apply_op.seq_idx < c_wit_pre["seq_idx"] < first_stale_op_seq)
+                or not (last_stale_op_seq < c_wit_post["seq_idx"] < cleanup_new_seq)
             ):
-                per09_fail.append("witness_apply_scene_invalid")
-
-            wit_out_by_lid = {str(r.get("logical_id") or ""): r for r in wit_out_r}
-            wit_nid_by_lid: dict[str, str] = {}
-            # Nuevo 4: unicidad por epoch - solo verificar dentro del epoch nuevo, no contra epoch viejo
-            # old_scene_b_nids = { ... }  # REMOVIDO: no se exige unicidad entre epochs
-            for wlid, wf_ent in fix_scene_b.items():
-                worow = wit_out_by_lid.get(wlid)
-                if not worow:
-                    per09_fail.append(f"witness_apply_missing:{wlid}")
-                    continue
-                wnid = str(worow.get("net_id") or "")
-                if (
-                    not _valid_net_id(wnid, wlid)
-                    or worow.get("class_name") != wf_ent["class_name"]
-                    or int(round(float(worow.get("ok_b", 0.0)))) != 1
-                    or int(round(float(worow.get("alive_b", 0.0)))) != 1
-                ):
-                    per09_fail.append(f"witness_apply_row_invalid:{wlid}")
-                wit_nid_by_lid[wlid] = wnid
-
-            _bop_pre, _s_pre, n_pre, r_pre = wit_pre_status[-1]
-            _bop_post, _s_post, n_post, r_post = wit_post_status[0]
-
-            sc_b_pre = next((r for r in r_pre if r.get("scene_id") == "scene_b"), None)
-            sc_b_post = next((r for r in r_post if r.get("scene_id") == "scene_b"), None)
-            if (
-                not sc_b_pre
-                or not sc_b_post
-                or int(round(float(sc_b_pre.get("gen_n", 0.0)))) != 1
-                or int(round(float(sc_b_pre.get("own_alive_n", 0.0)))) != 11
-                or int(round(float(sc_b_post.get("gen_n", 0.0)))) != 1
-                or int(round(float(sc_b_post.get("own_alive_n", 0.0)))) != 11
-                or sc_b_pre.get("last_op_id") != wit_op_id
-                or sc_b_pre.get("last_op_id") != sc_b_post.get("last_op_id")
-                or int(round(float(n_pre.get("registered_total_n", -1.0))))
-                != int(round(float(n_post.get("registered_total_n", -2.0))))
-                or int(round(float(n_pre.get("scenes_count_n", -1.0))))
-                != int(round(float(n_post.get("scenes_count_n", -2.0))))
-            ):
-                per09_fail.append("witness_status_mismatch")
-
-            # Nuevo 6: exigir inclusión y cobertura del director en t5 áreas obligatorias
-            # Per brief :234, t5 debe incluir director en area_a, area_b, retained_area_id
-            required_t5_director_areas = ["area_a", "area_b", retained_area_id]
-            for aid in required_t5_director_areas:
-                c_t5_dir = census_by_stage_area.get(("t5_post_restart_census", aid))
-                if not c_t5_dir or not c_t5_dir["job_complete"]:
-                    per09_fail.append(f"t5_missing_census:{aid}")
-                    continue
-                if c_t5_dir["include_director_b"] != 1:
-                    per09_fail.append(f"t5_director_not_included:{aid}")
-                if c_t5_dir["director_present_b"] != 1 or c_t5_dir["director_inv_readable_b"] != 1:
-                    per09_fail.append(f"t5_director_unreadable:{aid}")
-                # Verificar que el inventario del director tiene las prendas esperadas
-                dir_inv_count = int(round(c_t5_dir.get("director_inv_count_n", -1.0)))
-                if dir_inv_count < 2:  # al menos Jeans_Blue + WorkingGloves
-                    per09_fail.append(f"t5_director_inv_underpopulated:{aid}:{dir_inv_count}")
-
-            pre_w_map = {str(r.get("net_id") or ""): r for r in c_wit_pre["rows"]}
-            post_w_map = {str(r.get("net_id") or ""): r for r in c_wit_post["rows"]}
-            if (
-                len(c_wit_pre["rows"]) != len(pre_w_map)
-                or len(c_wit_post["rows"]) != len(post_w_map)
-                or len(pre_w_map) < 11
-                or set(pre_w_map.keys()) != set(post_w_map.keys())
-            ):
-                per09_fail.append("witness_census_added_or_removed_entities")
+                checks["PER-09"] = {"status": "missing", "detail": "missing_witness_status"}
             else:
-                for wlid, wf_ent in fix_scene_b.items():
-                    wnid = wit_nid_by_lid.get(wlid, "")
-                    wrow = pre_w_map.get(wnid)
-                    if not wrow:
-                        per09_fail.append(f"witness_census_missing:{wlid}")
-                        continue
-                    wcat = wf_ent["cat"]
-                    wpid = wf_ent["parent_id"]
-                    exp_ai = 1 if wcat in ("infected", "animal") else 0
-                    if (
-                        wrow.get("class_name") != wf_ent["class_name"]
-                        or wrow.get("own_logical_id") != wlid
-                        or int(round(float(wrow.get("own_b", 0.0)))) != 1
-                        or int(round(float(wrow.get("alive_b", 0.0)))) != 1
-                        or int(round(float(wrow.get("ai_agent_b", -1.0)))) != exp_ai
-                        or float(wrow.get("max_hp", 0.0)) <= 0.0
-                        or float(wrow.get("health_hp", 0.0)) <= 0.0
-                        or str(wrow.get("pers_id") or "") != "0:0:0:0"
-                    ):
-                        per09_fail.append(f"witness_census_row_invalid:{wlid}")
-                        continue
-                    if wpid == "":
-                        wcat = wf_ent["cat"]
-                        # Nuevo 5: solo raíces estáticas (prop, container, vehicle, actor) tienen checkpoint de colocación en Q9
-                        # Criaturas (infected, animal) pueden moverse después de Q9
-                        if wcat in ("prop", "container", "vehicle", "actor"):
-                            if (
-                                wrow.get("loc_kind") != "ground"
-                                or wrow.get("parent_net_id") != ""
-                                or math.hypot(
-                                    float(wrow.get("pos_x_m", 0.0)) - float(wf_ent["req_x_m"]),
-                                    float(wrow.get("pos_z_m", 0.0)) - float(wf_ent["req_z_m"]),
-                                )
-                                >= 0.5
-                            ):
-                                per09_fail.append(f"witness_root_placement_invalid:{wlid}")
-                    else:
-                        exp_wpnid = wit_nid_by_lid.get(wpid, "")
-                        exp_wpclass = fix_scene_b[wpid]["class_name"]
-                        wslot_req = wf_ent["slot_name"]
-                        if wrow.get("parent_net_id") != exp_wpnid or wrow.get("parent_class") != exp_wpclass:
-                            per09_fail.append(f"witness_child_parent_invalid:{wlid}")
-                        elif wslot_req == "Cargo":
-                            if wrow.get("loc_kind") != "cargo" or not str(wrow.get("slot_name") or "").startswith("Cargo"):
-                                per09_fail.append(f"witness_child_cargo_invalid:{wlid}")
-                        else:
-                            if wrow.get("loc_kind") != "attachment" or wrow.get("slot_name") != wslot_req:
-                                per09_fail.append(f"witness_child_attachment_invalid:{wlid}")
+                per09_fail: list[str] = []
+                if not stale_reset_ops or any(
+                    op.status != "rejected" or op.reason != "stale_epoch" for op in stale_reset_ops
+                ):
+                    per09_fail.append("stale_reset_not_rejected")
+                if not stale_apply_ops or any(
+                    op.status != "rejected" or op.reason != "stale_epoch" for op in stale_apply_ops
+                ):
+                    per09_fail.append("stale_apply_not_rejected")
 
-                    # Nuevo 7: contrastar inv_children_n con el árbol censado y bajas propias previstas
-                    inv_children = int(round(float(wrow.get("inv_children_n", -1.0))))
-                    if inv_children >= 0:
-                        # Contar hijos reales en pre_w_map que tengan este wnid como parent_net_id
-                        # Solo contar entidades propias (own_b=1), no director foreign ni otros ajenos
-                        actual_children = sum(
-                            1 for r in pre_w_map.values()
-                            if str(r.get("parent_net_id") or "") == wnid
-                            and int(round(float(r.get("own_b", 0.0)))) == 1
-                        )
-                        # El inv_children_n declarado debe coincidir con el conteo censado actual
-                        # Las bajas previstas (must_vanish_on_restart_b) se verifican por separado en PER-07/08
-                        if inv_children != actual_children:
-                            per09_fail.append(f"inv_children_n_mismatch:{wlid}:declared={inv_children},censused={actual_children}")
+                # BLOQ 10: validate the witness per_apply_scene and census rows against fixture["scenes"]["scene_b"]
+                wit_in_u = _unpack_any_payload(wit_apply_op.args)
+                wit_out_u = _unpack_any_payload(wit_apply_op.read)
+                wit_in_s, _wit_in_n, _wit_in_r = wit_in_u if wit_in_u else ({}, {}, [])
+                wit_out_s, wit_out_n, wit_out_r = wit_out_u if wit_out_u else ({}, {}, [])
+                fix_scene_b = {e["logical_id"]: e for e in fixture["scenes"]["scene_b"]["entities"]}
+                wit_op_id = wit_out_s.get("scene_op_id") or wit_in_s.get("scene_op_id") or ""
+                if (
+                    wit_in_s.get("scene_id") != "scene_b"
+                    or wit_out_s.get("scene_id") != "scene_b"
+                    or wit_out_s.get("apply_status") != "ok"
+                    or int(round(float(wit_out_n.get("gen_n", 0.0)))) != 1
+                    or len(wit_out_r) != len(fix_scene_b)
+                    or not wit_op_id
+                ):
+                    per09_fail.append("witness_apply_scene_invalid")
+
+                wit_out_by_lid = {str(r.get("logical_id") or ""): r for r in wit_out_r}
+                wit_nid_by_lid: dict[str, str] = {}
+                # Nuevo 4: unicidad por epoch - solo verificar dentro del epoch nuevo, no contra epoch viejo
+                # old_scene_b_nids = { ... }  # REMOVIDO: no se exige unicidad entre epochs
+                for wlid, wf_ent in fix_scene_b.items():
+                    worow = wit_out_by_lid.get(wlid)
+                    if not worow:
+                        per09_fail.append(f"witness_apply_missing:{wlid}")
+                        continue
+                    wnid = str(worow.get("net_id") or "")
+                    if (
+                        not _valid_net_id(wnid, wlid)
+                        or worow.get("class_name") != wf_ent["class_name"]
+                        or int(round(float(worow.get("ok_b", 0.0)))) != 1
+                        or int(round(float(worow.get("alive_b", 0.0)))) != 1
+                    ):
+                        per09_fail.append(f"witness_apply_row_invalid:{wlid}")
+                    wit_nid_by_lid[wlid] = wnid
+
+                _bop_pre, _s_pre, n_pre, r_pre = wit_pre_status[-1]
+                _bop_post, _s_post, n_post, r_post = wit_post_status[0]
+
+                sc_b_pre = next((r for r in r_pre if r.get("scene_id") == "scene_b"), None)
+                sc_b_post = next((r for r in r_post if r.get("scene_id") == "scene_b"), None)
+                if (
+                    not sc_b_pre
+                    or not sc_b_post
+                    or int(round(float(sc_b_pre.get("gen_n", 0.0)))) != 1
+                    or int(round(float(sc_b_pre.get("own_alive_n", 0.0)))) != 11
+                    or int(round(float(sc_b_post.get("gen_n", 0.0)))) != 1
+                    or int(round(float(sc_b_post.get("own_alive_n", 0.0)))) != 11
+                    or sc_b_pre.get("last_op_id") != wit_op_id
+                    or sc_b_pre.get("last_op_id") != sc_b_post.get("last_op_id")
+                    or int(round(float(n_pre.get("registered_total_n", -1.0))))
+                    != int(round(float(n_post.get("registered_total_n", -2.0))))
+                    or int(round(float(n_pre.get("scenes_count_n", -1.0))))
+                    != int(round(float(n_post.get("scenes_count_n", -2.0))))
+                ):
+                    per09_fail.append("witness_status_mismatch")
+
+                # Nuevo 6: exigir inclusión y cobertura del director en t5 áreas obligatorias
+                # Per brief :234, t5 debe incluir director en area_a, area_b, retained_area_id
+                required_t5_director_areas = ["area_a", "area_b", retained_area_id]
+                for aid in required_t5_director_areas:
+                    c_t5_dir = census_by_stage_area.get(("t5_post_restart_census", aid))
+                    if not c_t5_dir or not c_t5_dir["job_complete"]:
+                        per09_fail.append(f"t5_missing_census:{aid}")
+                        continue
+                    if c_t5_dir["include_director_b"] != 1:
+                        per09_fail.append(f"t5_director_not_included:{aid}")
+                    if c_t5_dir["director_present_b"] != 1 or c_t5_dir["director_inv_readable_b"] != 1:
+                        per09_fail.append(f"t5_director_unreadable:{aid}")
+                    # Verificar que el inventario del director tiene las prendas esperadas
+                    dir_inv_count = int(round(c_t5_dir.get("director_inv_count_n", -1.0)))
+                    if dir_inv_count < 2:  # al menos Jeans_Blue + WorkingGloves
+                        per09_fail.append(f"t5_director_inv_underpopulated:{aid}:{dir_inv_count}")
+
+                pre_w_map = {str(r.get("net_id") or ""): r for r in c_wit_pre["rows"]}
+                post_w_map = {str(r.get("net_id") or ""): r for r in c_wit_post["rows"]}
+                if (
+                    len(c_wit_pre["rows"]) != len(pre_w_map)
+                    or len(c_wit_post["rows"]) != len(post_w_map)
+                    or len(pre_w_map) < 11
+                    or set(pre_w_map.keys()) != set(post_w_map.keys())
+                ):
+                    per09_fail.append("witness_census_added_or_removed_entities")
+                else:
+                    for wlid, wf_ent in fix_scene_b.items():
+                        wnid = wit_nid_by_lid.get(wlid, "")
+                        wrow = pre_w_map.get(wnid)
+                        if not wrow:
+                            per09_fail.append(f"witness_census_missing:{wlid}")
+                            continue
+                        wcat = wf_ent["cat"]
+                        wpid = wf_ent["parent_id"]
+                        exp_ai = 1 if wcat in ("infected", "animal") else 0
+                        if (
+                            wrow.get("class_name") != wf_ent["class_name"]
+                            or wrow.get("own_logical_id") != wlid
+                            or int(round(float(wrow.get("own_b", 0.0)))) != 1
+                            or int(round(float(wrow.get("alive_b", 0.0)))) != 1
+                            or int(round(float(wrow.get("ai_agent_b", -1.0)))) != exp_ai
+                            or float(wrow.get("max_hp", 0.0)) <= 0.0
+                            or float(wrow.get("health_hp", 0.0)) <= 0.0
+                            or str(wrow.get("pers_id") or "") != "0:0:0:0"
+                        ):
+                            per09_fail.append(f"witness_census_row_invalid:{wlid}")
+                            continue
+                        if wpid == "":
+                            wcat = wf_ent["cat"]
+                            # Nuevo 5: solo raíces estáticas (prop, container, vehicle, actor) tienen checkpoint de colocación en Q9
+                            # Criaturas (infected, animal) pueden moverse después de Q9
+                            if wcat in ("prop", "container", "vehicle", "actor"):
+                                if (
+                                    wrow.get("loc_kind") != "ground"
+                                    or wrow.get("parent_net_id") != ""
+                                    or math.hypot(
+                                        float(wrow.get("pos_x_m", 0.0)) - float(wf_ent["req_x_m"]),
+                                        float(wrow.get("pos_z_m", 0.0)) - float(wf_ent["req_z_m"]),
+                                    )
+                                    >= 0.5
+                                ):
+                                    per09_fail.append(f"witness_root_placement_invalid:{wlid}")
+                        else:
+                            exp_wpnid = wit_nid_by_lid.get(wpid, "")
+                            exp_wpclass = fix_scene_b[wpid]["class_name"]
+                            wslot_req = wf_ent["slot_name"]
+                            if wrow.get("parent_net_id") != exp_wpnid or wrow.get("parent_class") != exp_wpclass:
+                                per09_fail.append(f"witness_child_parent_invalid:{wlid}")
+                            elif wslot_req == "Cargo":
+                                if wrow.get("loc_kind") != "cargo" or not str(wrow.get("slot_name") or "").startswith("Cargo"):
+                                    per09_fail.append(f"witness_child_cargo_invalid:{wlid}")
+                            else:
+                                if wrow.get("loc_kind") != "attachment" or wrow.get("slot_name") != wslot_req:
+                                    per09_fail.append(f"witness_child_attachment_invalid:{wlid}")
+
+                        # Nuevo 7: contrastar inv_children_n con el árbol censado y bajas propias previstas
+                        inv_children = int(round(float(wrow.get("inv_children_n", -1.0))))
+                        if inv_children >= 0:
+                            # Contar hijos reales en pre_w_map que tengan este wnid como parent_net_id
+                            # Solo contar entidades propias (own_b=1), no director foreign ni otros ajenos
+                            actual_children = sum(
+                                1 for r in pre_w_map.values()
+                                if str(r.get("parent_net_id") or "") == wnid
+                                and int(round(float(r.get("own_b", 0.0)))) == 1
+                            )
+                            # El inv_children_n declarado debe coincidir con el conteo censado actual
+                            # Las bajas previstas (must_vanish_on_restart_b) se verifican por separado en PER-07/08
+                            if inv_children != actual_children:
+                                per09_fail.append(f"inv_children_n_mismatch:{wlid}:declared={inv_children},censused={actual_children}")
 
                 # Verify no unexpected non-director rows in witness census
                 allowed_wit_nids = set(wit_nid_by_lid.values())
@@ -2867,37 +2905,34 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                             if _angle_diff_deg(float(wpost.get(ak, 0.0)), float(wpre.get(ak, 0.0))) > 1e-3:
                                 per09_fail.append(f"witness_ang_changed:{wnid}:{ak}")
 
-            if per09_fail:
-                checks["PER-09"] = {"status": "fail", "detail": ";".join(per09_fail[:5])}
-            else:
-                checks["PER-09"] = {"status": "pass", "detail": "ok"}
+                if per09_fail:
+                    checks["PER-09"] = {"status": "fail", "detail": ";".join(per09_fail[:5])}
+                else:
+                    # Nuevo 10: t6 cleanup censuses - require complete cleanup censuses
+                    # Survivors QA -> FALLA; census absent -> INCONCLUSO (brief :284)
+                    t6_censuses = [
+                        c for c in censuses_by_stage.get("t6_post_cleanup_census", [])
+                        if c["inst"] == server_epoch_new
+                    ]
+                    required_t6_areas = required_base_areas
+                    t6_survivors: list[str] = []
+                    t6_missing_areas: list[str] = []
+                    for aid in required_t6_areas:
+                        c_t6 = census_by_stage_area.get(("t6_post_cleanup_census", aid))
+                        if c_t6 is None or not c_t6["job_complete"]:
+                            t6_missing_areas.append(aid)
+                            continue
+                        # Check for non-director survivors
+                        for r in c_t6["rows"]:
+                            if r.get("owner_uid") != director_uid_t0 and int(round(float(r.get("alive_b", 0.0)))) == 1:
+                                t6_survivors.append(f"{r.get('class_name')}:{r.get('net_id')}")
 
-    # =========================================================================
-    # Nuevo 10: t6 cleanup censuses - require complete cleanup censuses
-    # Survivors QA -> FALLA; census absent -> INCONCLUSO (brief :284)
-    # =========================================================================
-    t6_censuses = [
-        c for c in censuses_by_stage.get("t6_post_cleanup_census", [])
-        if c["inst"] == server_epoch_new
-    ]
-    required_t6_areas = required_base_areas
-    t6_survivors: list[str] = []
-    t6_missing_areas: list[str] = []
-    for aid in required_t6_areas:
-        c_t6 = census_by_stage_area.get(("t6_post_cleanup_census", aid))
-        if c_t6 is None or not c_t6["job_complete"]:
-            t6_missing_areas.append(aid)
-            continue
-        # Check for non-director survivors
-        for r in c_t6["rows"]:
-            if r.get("owner_uid") != director_uid_t0 and int(round(float(r.get("alive_b", 0.0)))) == 1:
-                t6_survivors.append(f"{r.get('class_name')}:{r.get('net_id')}")
-
-    if t6_missing_areas:
-        checks["PER-09"] = {"status": "missing", "detail": f"t6_cleanup_census_absent:{','.join(t6_missing_areas)}"}
-    elif t6_survivors:
-        checks["PER-09"] = {"status": "fail", "detail": f"t6_cleanup_survivors:{';'.join(t6_survivors[:5])}"}
-    # If no missing areas and no survivors, PER-09 passes (already set above)
+                    if t6_missing_areas:
+                        checks["PER-09"] = {"status": "missing", "detail": f"t6_cleanup_census_absent:{','.join(t6_missing_areas)}"}
+                    elif t6_survivors:
+                        checks["PER-09"] = {"status": "fail", "detail": f"t6_cleanup_survivors:{';'.join(t6_survivors[:5])}"}
+                    else:
+                        checks["PER-09"] = {"status": "pass", "detail": "ok"}
 
     # =========================================================================
     # PER-10: Static non-storage analysis on git_head + cold storage restore
@@ -3033,12 +3068,17 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     checks_list = _checks_as_list(checks)
     failed = [c["id"] for c in checks_list if c["status"] == "fail"]
     if failed:
+        # Include fabrication reasons (reused_census_job_id, lease_expired, etc.) in FALLA verdict
+        out_reasons = list(failed)
+        for r in reasons:
+            if r not in out_reasons:
+                out_reasons.append(r)
         return gate_core.make_verdict(
             SPIKE_ID,
             1,
             checks=checks_list,
             metrics=metrics,
-            reasons=failed,
+            reasons=out_reasons,
         )
 
     if any(c["status"] != "pass" for c in checks_list) or reasons:
