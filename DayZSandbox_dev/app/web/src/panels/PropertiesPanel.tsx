@@ -14,7 +14,9 @@ import {
   deleteSelectedEntities,
   duplicateSelectedEntity,
   getState,
+  NO_CHANGE,
   releaseFieldLease,
+  SceneOp,
   setFieldDraft,
   setState,
   useStudioStore,
@@ -131,87 +133,81 @@ export async function confirmFieldValue(
   const ent = isAmbient ? null : st.doc.entities.find((e) => e.id === targetId);
   if (!isAmbient && !ent) return true;
 
-  const currentDocVal = isAmbient
-    ? st.doc.ambiente[field]
-    : (ent as SceneEntity)[field];
-
   const isNumeric = propSchema.type === 'number' || propSchema.type === 'integer';
   let parsedValue: unknown = rawDraft;
-
   if (isNumeric) {
     const normalized = rawDraft.trim().replace(',', '.');
     const num = Number(normalized);
     parsedValue = normalized !== '' && Number.isFinite(num) ? num : rawDraft;
-    if (
-      typeof parsedValue === 'number' &&
-      typeof currentDocVal === 'number' &&
-      parsedValue === currentDocVal
-    ) {
-      clearFieldErrorAndDraft(targetId, field);
-      return true;
-    }
-  } else {
-    if (rawDraft === String(currentDocVal ?? '')) {
-      clearFieldErrorAndDraft(targetId, field);
-      return true;
-    }
   }
+  // «Sin cambios» se decide al salir de la fila, con el documento ya releído tras las tandas
+  // anteriores: aquí el documento puede ser viejo (revisión de Sol, R2-05).
+  const sameAsDoc = (docVal: unknown): boolean =>
+    isNumeric
+      ? typeof parsedValue === 'number' && typeof docVal === 'number' && parsedValue === docVal
+      : rawDraft === String(docVal ?? '');
+  const ctx = { targetId, field, rawValue: rawDraft };
 
   if (isAmbient) {
     return commitSceneOps(
       'Cambiar el ambiente',
-      [{ name: 'ambient.set', args: { [field]: parsedValue } }],
-      { targetId, field, rawValue: rawDraft }
+      () => {
+        const amb = getState().doc?.ambiente;
+        if (!amb) return null;
+        if (sameAsDoc(amb[field])) return NO_CHANGE;
+        return [{ name: 'ambient.set', args: { [field]: parsedValue } }];
+      },
+      ctx
     );
   }
 
   const entity = ent as SceneEntity;
-  if (field === 'x' || field === 'z') {
-    // La otra coordenada se lee cuando la tanda sale de la fila, ya con el documento releído tras
-    // la tanda anterior: si no, X y luego Z perdían X (revisión de Sol, F01).
-    return commitSceneOps(
-      `Mover ${entity.name}`,
-      () => {
-        const cur = getState().doc?.entities.find((e) => e.id === entity.id);
-        if (!cur) return null;
-        const nextX = field === 'x' ? parsedValue : cur.x;
-        const nextZ = field === 'z' ? parsedValue : cur.z;
-        return [{ name: 'entity.move', target: entity.id, args: { x: nextX, z: nextZ } }];
-      },
-      { targetId, field, rawValue: rawDraft }
-    );
-  }
-
   if (field === 'cls') {
     const catClasses = st.catalog?.classes?.[entity.kind] ?? [];
     if (typeof parsedValue === 'string' && !catClasses.includes(parsedValue)) {
       clearFieldErrorAndDraft(targetId, field);
       return true;
     }
-    return commitSceneOps(
-      `Cambiar la clase de ${entity.name}`,
-      [{ name: 'entity.set', target: entity.id, args: { cls: parsedValue } }],
-      { targetId, field, rawValue: rawDraft }
-    );
   }
 
-  if (field === 'name') {
-    return commitSceneOps(
-      `Cambiar el nombre de ${entity.name}`,
-      [{ name: 'entity.set', target: entity.id, args: { name: parsedValue } }],
-      { targetId, field, rawValue: rawDraft }
-    );
+  let label: string;
+  let makeOps: (cur: SceneEntity) => SceneOp[];
+  if (field === 'x' || field === 'z') {
+    // La otra coordenada se lee cuando la tanda sale de la fila, ya con el documento releído tras
+    // la tanda anterior: si no, X y luego Z perdían X (revisión de Sol, F01).
+    label = `Mover ${entity.name}`;
+    makeOps = (cur) => [
+      {
+        name: 'entity.move',
+        target: entity.id,
+        args: { x: field === 'x' ? parsedValue : cur.x, z: field === 'z' ? parsedValue : cur.z },
+      },
+    ];
+  } else if (field === 'cls') {
+    label = `Cambiar la clase de ${entity.name}`;
+    makeOps = () => [{ name: 'entity.set', target: entity.id, args: { cls: parsedValue } }];
+  } else if (field === 'name') {
+    label = `Cambiar el nombre de ${entity.name}`;
+    makeOps = () => [{ name: 'entity.set', target: entity.id, args: { name: parsedValue } }];
+  } else if (field === 'yaw') {
+    label = `Girar ${entity.name}`;
+    makeOps = () => [{ name: 'entity.set', target: entity.id, args: { yaw: parsedValue } }];
+  } else {
+    return true;
   }
 
-  if (field === 'yaw') {
-    return commitSceneOps(
-      `Girar ${entity.name}`,
-      [{ name: 'entity.set', target: entity.id, args: { yaw: parsedValue } }],
-      { targetId, field, rawValue: rawDraft }
-    );
-  }
-
-  return true;
+  return commitSceneOps(
+    label,
+    () => {
+      const cur = getState().doc?.entities.find((e) => e.id === entity.id);
+      // La entidad desapareció mientras esperaba: no queda nada que confirmar (F07 ya retiró su
+      // borrador).
+      if (!cur) return NO_CHANGE;
+      if (sameAsDoc((cur as unknown as Record<string, unknown>)[field])) return NO_CHANGE;
+      return makeOps(cur);
+    },
+    ctx
+  );
 }
 
 export async function confirmActiveFieldBeforeApply(): Promise<boolean> {

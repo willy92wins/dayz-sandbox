@@ -211,6 +211,7 @@ export function setFlash(message: string | null) {
 }
 
 export function resetStudioState() {
+  resetCommitQueue();
   state = {
     view: 'studio',
     loginMessage: null,
@@ -583,6 +584,11 @@ export function applyIncomingSceneDoc(
         return target !== 'ambiente' && !alive.has(target);
       };
       if (Object.keys(prev.drafts).some(gone) || Object.keys(prev.rejectedDrafts).some(gone)) {
+        // La generación sube también aquí: una respuesta tardía de esa entidad no puede resucitar
+        // sus borradores (revisión de Sol, R2-03).
+        for (const k of new Set([...Object.keys(prev.drafts), ...Object.keys(prev.rejectedDrafts)])) {
+          if (gone(k)) bumpDraftGen(k);
+        }
         patch.drafts = Object.fromEntries(Object.entries(prev.drafts).filter(([k]) => !gone(k)));
         patch.rejectedDrafts = Object.fromEntries(
           Object.entries(prev.rejectedDrafts).filter(([k]) => !gone(k))
@@ -609,15 +615,17 @@ export function applyIncomingSceneDoc(
   });
 }
 
-export async function fetchAuthoritativeScene(markCommit: boolean): Promise<void> {
+// Devuelve si llegó un documento: la fila de commitSceneOps no construye la tanda siguiente sobre una
+// lectura fallida (revisión de Sol, R2-01).
+export async function fetchAuthoritativeScene(markCommit: boolean): Promise<boolean> {
   try {
-    const res = await fetch('/api/scene', { credentials: 'same-origin' });
+    const res = await fetchWithTimeout('/api/scene', { credentials: 'same-origin' });
     if (res.status === 401) {
       handleSessionExpired();
-      return;
+      return false;
     }
     markBackendAlive();
-    if (!res.ok) return;
+    if (!res.ok) return false;
     const snap = (await res.json()) as {
       doc_id: string;
       rev: number;
@@ -625,8 +633,10 @@ export async function fetchAuthoritativeScene(markCommit: boolean): Promise<void
       doc: SceneDoc;
     };
     applyIncomingSceneDoc(snap.doc_id, snap.rev, snap.hash, snap.doc, markCommit);
+    return true;
   } catch {
     markBackendDown();
+    return false;
   }
 }
 
@@ -838,14 +848,76 @@ export interface SceneOp {
   args?: Record<string, unknown>;
 }
 
-// Los cambios del documento van en fila: cada tanda se construye cuando le toca, después de que la
-// anterior haya releído el documento (fetchAuthoritativeScene). Así un movimiento que manda X y Z
-// toma la otra coordenada del documento bueno y no pisa la edición anterior (revisión de Sol, F01).
+// Los cambios del documento van en fila: cada tanda se construye cuando le toca y solo con un
+// documento que ya incluya las tandas confirmadas antes (revisión de Sol, F01 y R2-01). Así un
+// movimiento que manda X y Z toma la otra coordenada del documento bueno y no pisa la edición
+// anterior.
 let commitChain: Promise<unknown> = Promise.resolve();
+// Última revisión que el backend devolvió a una tanda nuestra, por documento: la tanda siguiente no
+// se construye hasta que el documento de la web la alcance.
+let lastAck: { docId: string; rev: number } | null = null;
+// Una tanda sin respuesta en el plazo deja el resultado en duda: antes de la siguiente hay que releer
+// la escena (R2-04).
+let resyncNeeded = false;
+
+const REQUEST_TIMEOUT_MS = 10000;
+const FRESH_ATTEMPTS = 3;
+const FRESH_WAIT_MS = 300;
+
+// Lo que devuelve un constructor cuando el valor ya es el del documento releído: no hay nada que
+// mandar (R2-05).
+export const NO_CHANGE = 'sin-cambios' as const;
+export type SceneOpsBuilder = () => SceneOp[] | null | typeof NO_CHANGE;
+
+// Ninguna petición de la escena se queda colgada para siempre: pasado el plazo se cancela (R2-04).
+async function fetchWithTimeout(input: string, init: RequestInit = {}): Promise<Response> {
+  const ctl = new AbortController();
+  const timer = window.setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: ctl.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function isDocFresh(): boolean {
+  if (resyncNeeded || !state.docInfo) return false;
+  if (!lastAck || lastAck.docId !== state.docInfo.doc_id) return true;
+  return state.docInfo.rev >= lastAck.rev;
+}
+
+// Antes de construir una tanda, el documento de la web tiene que incluir las anteriores. Si la
+// lectura autoritativa falla se reintenta un poco; si sigue sin llegar, la tanda no sale (R2-01).
+// Una lectura que sí llega, hecha después de las tandas anteriores, es la verdad del backend aunque
+// su revisión no alcance la última confirmada (una escena reiniciada, o la respuesta simulada de
+// una prueba): con ella se sigue.
+async function ensureFreshDoc(): Promise<boolean> {
+  let fresh = isDocFresh();
+  for (let attempt = 0; attempt < FRESH_ATTEMPTS && !fresh; attempt++) {
+    if (attempt > 0) await new Promise((r) => window.setTimeout(r, FRESH_WAIT_MS));
+    if (await fetchAuthoritativeScene(false)) {
+      resyncNeeded = false;
+      lastAck = null;
+      fresh = true;
+    }
+  }
+  if (!fresh) return false;
+  if (state.notice?.kind === 'escena-sin-releer' || state.notice?.kind === 'sin-respuesta') {
+    setState({ notice: null });
+  }
+  return true;
+}
+
+// Con una sesión nueva, la fila empieza de cero: nada de la anterior la retiene.
+export function resetCommitQueue(): void {
+  commitChain = Promise.resolve();
+  lastAck = null;
+  resyncNeeded = false;
+}
 
 export function commitSceneOps(
   label: string,
-  ops: SceneOp[] | (() => SceneOp[] | null),
+  ops: SceneOp[] | SceneOpsBuilder,
   context?: { targetId?: string; field?: string; rawValue?: string }
 ): Promise<boolean> {
   // La generación del borrador se toma al encolar, no al salir de la fila (ver commitSceneOpsNow).
@@ -858,26 +930,45 @@ export function commitSceneOps(
 
 async function commitSceneOpsNow(
   label: string,
-  opsOrBuilder: SceneOp[] | (() => SceneOp[] | null),
+  opsOrBuilder: SceneOp[] | SceneOpsBuilder,
   context: { targetId?: string; field?: string; rawValue?: string } | undefined,
   genAtEnqueue: number
 ): Promise<boolean> {
   if (state.sinBackend || !state.docInfo) return false;
   const fieldKey =
     context?.targetId && context?.field ? `${context.targetId}:${context.field}` : null;
-  // El borrador que esta tanda iba a confirmar cambió mientras esperaba en la fila: ya lo mandó una
-  // tanda anterior (salir del campo con la respuesta de Intro aún en camino), se descartó con Esc o
-  // se volvió a escribir. Mandarlo ahora pisaría lo que haya llegado después, como un cambio de la
-  // IA (N2). Cuenta como hecho si ya no queda borrador; si hay uno más nuevo, queda pendiente.
-  if (fieldKey && (draftGen[fieldKey] ?? 0) !== genAtEnqueue) {
-    return state.drafts[fieldKey] === undefined;
+  // El borrador que esta tanda iba a confirmar ya no está: lo confirmó una tanda anterior (salir del
+  // campo con la respuesta de Intro aún en camino, N2) o se descartó con Esc. Mandarlo ahora pisaría
+  // lo que haya llegado después, como un cambio de la IA. Si en cambio hay un borrador más nuevo,
+  // esta confirmación se pidió expresamente y sale igual, y su éxito no borra ese borrador (R2-02).
+  if (fieldKey && (draftGen[fieldKey] ?? 0) !== genAtEnqueue && state.drafts[fieldKey] === undefined) {
+    return true;
   }
-  const ops = typeof opsOrBuilder === 'function' ? opsOrBuilder() : opsOrBuilder;
+  if (!(await ensureFreshDoc())) {
+    setState({
+      notice: {
+        kind: 'escena-sin-releer',
+        message: 'No se pudo releer la escena: el cambio no se ha mandado y sigue en su campo.',
+      },
+    });
+    return false;
+  }
+  if (state.sinBackend || !state.docInfo) return false;
+  const built = typeof opsOrBuilder === 'function' ? opsOrBuilder() : opsOrBuilder;
+  if (built === NO_CHANGE) {
+    // El valor ya es el del documento releído: no se manda nada (R2-05).
+    if (context?.targetId && context?.field && fieldKey && (draftGen[fieldKey] ?? 0) === genAtEnqueue) {
+      clearFieldErrorAndDraft(context.targetId, context.field);
+    }
+    return true;
+  }
+  const ops = built;
   if (!ops || ops.length === 0) return false;
   const reqId = nextRequestId('ops');
   const genAtSend = genAtEnqueue;
+  const docIdAtSend = state.docInfo.doc_id;
   try {
-    const res = await fetch('/api/scene/ops', {
+    const res = await fetchWithTimeout('/api/scene/ops', {
       method: 'POST',
       credentials: 'same-origin',
       headers: {
@@ -895,6 +986,7 @@ async function commitSceneOpsNow(
     markBackendAlive();
     const data = (await res.json().catch(() => null)) as {
       ok?: boolean;
+      rev?: number;
       code?: string;
       pointer?: string;
       msg?: string;
@@ -908,6 +1000,11 @@ async function commitSceneOpsNow(
     }
 
     if (res.ok && data?.ok) {
+      if (typeof data.rev === 'number') {
+        if (!lastAck || lastAck.docId !== docIdAtSend || data.rev > lastAck.rev) {
+          lastAck = { docId: docIdAtSend, rev: data.rev };
+        }
+      }
       if (Array.isArray(data.created) && data.created.length > 0) {
         pendingCreatedEntityId = data.created[0];
       }
@@ -932,6 +1029,13 @@ async function commitSceneOpsNow(
       const key = `${context.targetId}:${context.field}`;
       // El borrador cambió o se descartó (Esc) mientras volvía la respuesta: no se resucita.
       if ((draftGen[key] ?? 0) !== genAtSend) return false;
+      // Su entidad ya no existe (la borró otra edición): tampoco (revisión de Sol, R2-03).
+      if (
+        context.targetId !== 'ambiente' &&
+        !state.doc?.entities.some((e) => e.id === context.targetId)
+      ) {
+        return false;
+      }
       const rawValue = context.rawValue ?? state.drafts[key] ?? '';
       const rej: RejectedDraft = {
         targetId: context.targetId,
@@ -974,7 +1078,20 @@ async function commitSceneOpsNow(
       }));
     }
     return false;
-  } catch {
+  } catch (err) {
+    // Sin respuesta en el plazo: el backend pudo aplicarla o no. El borrador se queda en su campo
+    // y la tanda siguiente relee la escena antes de construirse (R2-04).
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      resyncNeeded = true;
+      setState({
+        notice: {
+          kind: 'sin-respuesta',
+          message:
+            'El backend no respondió a tiempo: el cambio puede haberse aplicado o no. Se relee la escena antes del siguiente.',
+        },
+      });
+      return false;
+    }
     markBackendDown();
     return false;
   }

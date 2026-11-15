@@ -2081,6 +2081,306 @@ async function runS5(browser) {
       assert(entF1.x === 7111 && entF1.z === 7222, "S5(-): X y luego Z perdieron X (F01): " + JSON.stringify({ x: entF1.x, z: entF1.z }));
     }
 
+    // ---- Regresiones de la ronda 2 de Sol del código (R2-01, R2-02, R2-04 y el NEGATIVO de Ctrl+Intro) ----
+    const xOf = async () => (await cmd({ cmd: "snapshot" })).doc.entities.find((x) => x.id === eid);
+    const releaseLeases = async () => {
+      const dl = Date.now() + 5000;
+      while (Date.now() < dl) {
+        if ((await cmd({ cmd: "leases" })).leases.length === 0) return;
+        await sleep(80);
+      }
+    };
+
+    // R2-02: X=7100 con Intro mientras otra tanda está en camino, y después 7200 sin Intro: la
+    // confirmación de 7100 sale igual; Esc descarta solo el 7200
+    {
+      let releaseA;
+      const gateA = new Promise((r) => {
+        releaseA = r;
+      });
+      let heldA = false;
+      const holdFirstOps = async (route) => {
+        if (route.request().method() === "POST" && !heldA) {
+          heldA = true;
+          await gateA; // la petición no llega al backend hasta soltarla
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", holdFirstOps);
+      try {
+        await page.locator("#f-yaw").focus();
+        await waitEditable(page, "#f-yaw");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("33");
+        await page.keyboard.press("Enter");
+        const dA = Date.now() + 3000;
+        while (!heldA && Date.now() < dA) await sleep(50);
+        assert(heldA, "S5(-): R2-02: no salio el POST del rumbo");
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7100");
+        await page.keyboard.press("Enter");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7200");
+        releaseA();
+        await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.x === 7100;
+        }, "R2-02: X=7100 confirmado con Intro", 8000).catch(async (err) => {
+          const e = await xOf();
+          throw new Error("S5(-): la confirmacion de X=7100 se perdio al escribir 7200 despues (R2-02): x=" + (e && e.x) + " · " + err.message);
+        });
+        await sleep(300);
+        assert((await page.locator("#f-x").inputValue()) === "7200", "S5(-): R2-02: el borrador 7200 no siguio en el campo");
+        await page.keyboard.press("Escape");
+        await sleep(300);
+        const vAfterEsc = await page.locator("#f-x").inputValue();
+        const eAfterEsc = await xOf();
+        assert(
+          eAfterEsc.x === 7100 && vAfterEsc === "7100",
+          "S5(-): tras Esc, X no se quedo en 7100 (R2-02): " + JSON.stringify({ x: eAfterEsc.x, campo: vAfterEsc })
+        );
+      } finally {
+        releaseA();
+        await sleep(200);
+        await page.unroute("**/api/scene/ops", holdFirstOps);
+        await page.locator("#f-x").evaluate((el) => el.blur());
+        await sleep(200);
+      }
+    }
+
+    // NEGATIVO de la ronda 2: Ctrl+Intro con la confirmacion del campo aun en camino sigue hasta Aplicar
+    {
+      let releaseRespN;
+      const gateRespN = new Promise((r) => {
+        releaseRespN = r;
+      });
+      let seenN = false;
+      const holdRespN = async (route) => {
+        if (route.request().method() === "POST" && !seenN) {
+          seenN = true;
+          const resp = await route.fetch();
+          await gateRespN;
+          await route.fulfill({ response: resp });
+          return;
+        }
+        await continueSafe(route);
+      };
+      let applyPostsN = 0;
+      const onApplyN = (req) => {
+        if (req.method() === "POST" && new URL(req.url()).pathname === "/api/apply") applyPostsN += 1;
+      };
+      await page.route("**/api/scene/ops", holdRespN);
+      page.on("request", onApplyN);
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7600");
+        await page.keyboard.press("Enter");
+        await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.x === 7600;
+        }, "NEG-R2: X=7600 en el backend", 8000);
+        const applyRespP = page.waitForResponse(
+          (r) => new URL(r.url()).pathname === "/api/apply" && r.request().method() === "POST",
+          { timeout: 8000 }
+        );
+        await page.keyboard.press("Control+Enter");
+        await sleep(200);
+        releaseRespN();
+        const applyResp = await applyRespP.catch(() => null);
+        assert(
+          applyResp && applyResp.status() === 200 && applyPostsN === 1,
+          "S5(-): Ctrl+Intro con la confirmacion del campo en camino no siguio hasta Aplicar (NEGATIVO R2): " +
+            JSON.stringify({ status: applyResp && applyResp.status(), posts: applyPostsN })
+        );
+      } finally {
+        releaseRespN();
+        page.off("request", onApplyN);
+        await sleep(200);
+        await page.unroute("**/api/scene/ops", holdRespN);
+        await page.locator("#f-x").evaluate((el) => el.blur());
+        await sleep(200);
+      }
+    }
+
+    // R2-04: una tanda que no vuelve nunca no deja la fila parada: pasado el plazo sale el aviso y la
+    // edicion siguiente se manda
+    {
+      let releaseHang;
+      const gateHang = new Promise((r) => {
+        releaseHang = r;
+      });
+      let hung = false;
+      let hungRoute = null;
+      const hangFirstOps = async (route) => {
+        if (route.request().method() === "POST" && !hung) {
+          hung = true;
+          hungRoute = route;
+          await gateHang; // no se suelta nunca durante la prueba
+          return;
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", hangFirstOps);
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7500");
+        await page.keyboard.press("Enter");
+        await page
+          .locator('[data-aviso="sin-respuesta"]')
+          .first()
+          .waitFor({ state: "visible", timeout: 16000 })
+          .catch(() => {
+            throw new Error("S5(-): una tanda sin respuesta no dio el aviso sin-respuesta en 16 s (R2-04)");
+          });
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7501");
+        await page.keyboard.press("Enter");
+        await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.x === 7501;
+        }, "R2-04: X=7501 tras el plazo", 8000).catch(async (err) => {
+          const e = await xOf();
+          throw new Error("S5(-): tras una tanda sin respuesta la fila siguio parada (R2-04): x=" + (e && e.x) + " · " + err.message);
+        });
+      } finally {
+        releaseHang();
+        if (hungRoute) {
+          try {
+            await hungRoute.abort();
+          } catch (e) {
+            // la página ya canceló esa petición
+          }
+        }
+        await page.unroute("**/api/scene/ops", hangFirstOps);
+        await page.locator("#f-x").evaluate((el) => el.blur());
+        await sleep(200);
+      }
+    }
+
+    // R2-01: sin SSE y con las lecturas de la escena fallando, X y luego Z no pierden X: Z no sale
+    // (aviso escena-sin-releer y su borrador se queda) y sale bien cuando la lectura vuelve
+    {
+      let fail503 = false;
+      const sceneFail = async (route) => {
+        if (fail503 && route.request().method() === "GET") {
+          await route.fulfill({ status: 503, contentType: "application/json; charset=utf-8", body: '{"ok":false,"code":"internal","msg":"x"}' });
+          return;
+        }
+        await continueSafe(route);
+      };
+      const sseCut4 = async (route) => {
+        await route.fulfill({ status: 503, contentType: "text/plain; charset=utf-8", body: "sse-cut" });
+      };
+      await page.route("**/api/events", sseCut4);
+      await page.route("**/api/scene", sceneFail);
+      try {
+        await releaseLeases();
+        await page.goto(BASE + "/");
+        await page.locator('[data-testid="barra-superior"]').waitFor({ state: "visible", timeout: 10000 });
+        await page.getByText("Reconectando…", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
+        await page.locator('[data-panel="jerarquia"] [data-entity-id="' + eid + '"]').click();
+        await activatePanel(page, "propiedades");
+        const before = await xOf();
+        fail503 = true;
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7311");
+        await page.keyboard.press("Tab");
+        await waitEditable(page, "#f-z");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7322");
+        await page.keyboard.press("Enter");
+        await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.x === 7311;
+        }, "R2-01: X=7311", 8000);
+        await page
+          .locator('[data-aviso="escena-sin-releer"]')
+          .first()
+          .waitFor({ state: "visible", timeout: 8000 })
+          .catch(() => {
+            throw new Error("S5(-): R2-01: sin lectura de la escena no salio el aviso escena-sin-releer");
+          });
+        const mid = await xOf();
+        assert(
+          mid.x === 7311 && mid.z === before.z,
+          "S5(-): sin lectura de la escena, Z salio con la X vieja y la perdio (R2-01): " +
+            JSON.stringify({ x: mid.x, z: mid.z, zAntes: before.z })
+        );
+        assert((await page.locator("#f-z").inputValue()) === "7322", "S5(-): R2-01: el borrador de Z no se quedo en su campo");
+        fail503 = false;
+        await page.keyboard.press("Enter");
+        const fin = await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.z === 7322;
+        }, "R2-01: Z=7322 cuando vuelve la lectura", 8000);
+        const eFin = fin.doc.entities.find((x) => x.id === eid);
+        assert(eFin.x === 7311 && eFin.z === 7322, "S5(-): R2-01: al volver la lectura, X y Z no quedaron bien: " + JSON.stringify({ x: eFin.x, z: eFin.z }));
+
+        // R2-05: todavía sin SSE. X=7400 con la respuesta retenida; volver a escribir 7311 (el valor
+        // que la web aún cree que hay) y Ctrl+Intro: X tiene que acabar en 7311 y Aplicar dar 200
+        let releaseR5;
+        const gateR5 = new Promise((r) => {
+          releaseR5 = r;
+        });
+        let seenR5 = false;
+        const holdRespR5 = async (route) => {
+          if (route.request().method() === "POST" && !seenR5) {
+            seenR5 = true;
+            const resp = await route.fetch();
+            await gateR5;
+            await route.fulfill({ response: resp });
+            return;
+          }
+          await continueSafe(route);
+        };
+        await page.route("**/api/scene/ops", holdRespR5);
+        try {
+          await page.locator("#f-x").focus();
+          await waitEditable(page, "#f-x");
+          await page.keyboard.press("Control+a");
+          await page.keyboard.type("7400");
+          await page.keyboard.press("Enter");
+          await waitForSnap((s) => {
+            const e = s.doc.entities.find((x) => x.id === eid);
+            return !!e && e.x === 7400;
+          }, "R2-05: X=7400 en el backend", 8000);
+          await page.keyboard.press("Control+a");
+          await page.keyboard.type("7311");
+          const applyRespR5 = page.waitForResponse(
+            (r) => new URL(r.url()).pathname === "/api/apply" && r.request().method() === "POST",
+            { timeout: 10000 }
+          );
+          await page.keyboard.press("Control+Enter");
+          await sleep(300);
+          releaseR5();
+          const respR5 = await applyRespR5.catch(() => null);
+          await sleep(500);
+          const eR5 = await xOf();
+          assert(
+            eR5.x === 7311 && respR5 && respR5.status() === 200,
+            "S5(-): Ctrl+Intro con un «sin cambios» decidido sobre el documento viejo perdio X=7311 (R2-05): " +
+              JSON.stringify({ x: eR5.x, apply: respR5 && respR5.status() })
+          );
+        } finally {
+          releaseR5();
+          await sleep(200);
+          await page.unroute("**/api/scene/ops", holdRespR5);
+        }
+      } finally {
+        fail503 = false;
+        await page.unroute("**/api/scene", sceneFail);
+        await page.unroute("**/api/events", sseCut4);
+      }
+    }
+
     console.log("S5 OK");
   } finally {
     await context.close();
@@ -3580,6 +3880,86 @@ async function runS10(browser) {
       );
     } finally {
       await page.unroute("**/api/catalog", catInventada);
+    }
+
+    // R2-03 (ronda 2 de Sol): un 422 que llega después de que otra edición borrara la entidad no
+    // resucita su borrador ni vuelve a bloquear «Aplicar». El préstamo se pierde sin salir del campo
+    // (renovaciones rechazadas, como en F05): salir lo reconfirmaría y esa tanda taparía el defecto.
+    {
+      const snapR3 = await cmd({ cmd: "snapshot" });
+      const victim = snapR3.doc.entities[snapR3.doc.entities.length - 1];
+      let releaseR3;
+      const gateR3 = new Promise((r) => {
+        releaseR3 = r;
+      });
+      let seenR3 = false;
+      const holdRespR3 = async (route) => {
+        if (route.request().method() === "POST" && !seenR3) {
+          seenR3 = true;
+          const resp = await route.fetch(); // el backend ya lo rechaza; solo se retiene la respuesta
+          await gateR3;
+          await route.fulfill({ response: resp });
+          return;
+        }
+        await continueSafe(route);
+      };
+      const failRenewR3 = async (route) => {
+        const req = route.request();
+        if (req.method() === "POST" && /\/api\/lease\/[^/]+\/renew$/.test(new URL(req.url()).pathname)) {
+          await route.fulfill({
+            status: 409,
+            contentType: "application/json; charset=utf-8",
+            body: JSON.stringify({ ok: false, code: "lease_expired", pointer: "", msg: "caducado" }),
+          });
+          return;
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", holdRespR3);
+      try {
+        await page.locator('[data-panel="jerarquia"] [data-entity-id="' + victim.id + '"]').click();
+        await activatePanel(page, "propiedades");
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.route("**/api/lease/**", failRenewR3);
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("99999");
+        await page.keyboard.press("Enter");
+        const dR3 = Date.now() + 3000;
+        while (!seenR3 && Date.now() < dR3) await sleep(50);
+        assert(seenR3, "S10(-): R2-03: no salio el POST de X=99999");
+        // Sin renovaciones, el backend caduca el préstamo (3 s) con el foco todavía en X
+        const dl3 = Date.now() + 8000;
+        while (Date.now() < dl3) {
+          if ((await cmd({ cmd: "leases" })).leases.length === 0) break;
+          await sleep(100);
+        }
+        assert((await cmd({ cmd: "leases" })).leases.length === 0, "S10(-): R2-03: el prestamo no caduco sin renovaciones");
+        const rDel3 = await cmd({
+          cmd: "ai_ops",
+          label: "IA borra la entidad del campo rechazado",
+          ops: [{ name: "entity.delete", target: victim.id, args: {} }],
+        });
+        assert(rDel3.ok, "S10(-): R2-03: ai_ops entity.delete fallo: " + JSON.stringify(rDel3));
+        await page.waitForFunction(
+          (id) => !document.querySelector('[data-panel="jerarquia"] [data-entity-id="' + id + '"]'),
+          victim.id,
+          { timeout: 5000 }
+        );
+        await sleep(300);
+        releaseR3();
+        await sleep(800);
+        const applyOff = await page.locator('[data-testid="accion-principal"] button').first().isDisabled();
+        assert(
+          !applyOff,
+          "S10(-): un 422 tardio de una entidad ya borrada volvio a bloquear Aplicar (R2-03)"
+        );
+      } finally {
+        releaseR3();
+        await sleep(200);
+        await page.unroute("**/api/scene/ops", holdRespR3);
+        await page.unroute("**/api/lease/**", failRenewR3);
+      }
     }
 
     console.log("S10 OK");

@@ -177,6 +177,8 @@ export type NoticeKind =
   | 'deshacer-parcial'
   | 'perfil-no-guardado'
   | 'quitar-no-disponible'
+  | 'escena-sin-releer'
+  | 'sin-respuesta'
   | 'info';
 
 export interface NoticeItem {

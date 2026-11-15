@@ -430,6 +430,31 @@ class T8Atomico(ProfileBase):
         self.assertIn("replace", calls)
         self.assertLess(calls.index("fsync"), calls.index("replace"))
 
+    def test_al_hacer_fsync_el_temporal_ya_tiene_el_perfil_entero(self):
+        # fsync antes de vaciar el búfer (flush) sincronizaría un temporal vacío o a medias: al
+        # hacer fsync, el temporal tiene que contener ya el perfil completo (ronda 2 de Sol, NEGATIVO).
+        paths, seen = [], []
+        real_mkstemp, real_fsync = profile_mod.tempfile.mkstemp, profile_mod.os.fsync
+
+        def spy_mkstemp(*a, **kw):
+            fd, path = real_mkstemp(*a, **kw)
+            paths.append(path)
+            return fd, path
+
+        def spy_fsync(fd):
+            with open(paths[-1], encoding="utf-8") as fh:
+                seen.append(fh.read())
+            return real_fsync(fd)
+
+        body = valid_profile(keymap={"aplicar": "Shift+F8", "deshacer": None})
+        with mock.patch.object(profile_mod.tempfile, "mkstemp", side_effect=spy_mkstemp), \
+                mock.patch.object(profile_mod.os, "fsync", side_effect=spy_fsync):
+            st, _ = self.env.req("POST", "/api/profile", body, key=HK)
+        self.assertEqual(st, 200)
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0].endswith("\n"), repr(seen[0][-20:]))
+        self.assertEqual(json.loads(seen[0]), body)
+
     def test_replace_ocupado_un_momento_se_reintenta_y_guarda(self):
         # En Windows, os.replace da PermissionError si otro tiene el perfil abierto en ese instante
         # (un antivirus, un indexador o el profile_read del arnés del E2E): se reintenta y se guarda.
