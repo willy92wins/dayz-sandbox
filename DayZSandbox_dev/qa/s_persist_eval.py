@@ -1611,6 +1611,17 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             in_rad = int(round(float(crow.get("in_radius_b", -1.0))))
             if in_rad not in (0, 1):
                 per02_fail.append(f"{cid}:invalid_in_radius_b")
+            # Nuevo 8: comprobar class_name contra fixture y creación observada en t2
+            f_ent = None
+            for sc_name in (retained_scene_id, "scene_a_clean", "scene_b", "scene_d"):
+                sc_fixture = fixture["scenes"].get(sc_name, {})
+                if cid in {e["logical_id"] for e in sc_fixture.get("entities", [])}:
+                    for e in sc_fixture.get("entities", []):
+                        if e["logical_id"] == cid:
+                            f_ent = e
+                            break
+            if f_ent and crow.get("class_name") != f_ent["class_name"]:
+                per02_fail.append(f"{cid}:t2_class_mismatch:{crow.get('class_name')}!={f_ent['class_name']}")
             if (
                 int(round(float(crow.get("alive_b", 0.0)))) != 1
                 or int(round(float(crow.get("ai_agent_b", 0.0)))) != 1
@@ -2189,6 +2200,25 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     max_old_srv_tick_ms = max(old_epoch_ticks, default=0.0)
     first_new_epoch_tick_ms = min(new_epoch_start_ticks, default=0.0)
 
+    # N49 accreditation: require explicit last_stop_tick_ms and first_load_tick_ms from peer lifecycle
+    # If not provided by the peer (no explicit shutdown/startup markers), we cannot accredit the
+    # temporal extremes and must return INCONCLUSO for creature coverage checks.
+    # The peer exposes these via per_status.server_epoch lifecycle or dedicated events.
+    # Here we check if we have explicit markers for the transition boundaries.
+    has_explicit_stop_marker = any(
+        bop.verb == "per_status" and bop.status == "done"
+        and str((_unpack_any_payload(bop.read) or ({}, {}, []))[0].get("server_epoch") or "") == server_epoch_old
+        and str((_unpack_any_payload(bop.read) or ({}, {}, []))[0].get("shutdown_marker") or "") == "1"
+        for bop in ordered_ops
+    )
+    has_explicit_start_marker = any(
+        bop.verb == "per_status" and bop.status == "done"
+        and str((_unpack_any_payload(bop.read) or ({}, {}, []))[0].get("server_epoch") or "") == server_epoch_new
+        and str((_unpack_any_payload(bop.read) or ({}, {}, []))[0].get("startup_marker") or "") == "1"
+        for bop in ordered_ops
+    )
+    n49_extremes_accredited = has_explicit_stop_marker and has_explicit_start_marker
+
     def _creature_covered_in_t5(
         creature_lid: str,
         stages_to_check: tuple[str, ...],
@@ -2197,6 +2227,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     ) -> bool:
         sp_info = bridge_spawn_info.get(creature_lid)
         if not sp_info or not t5_censuses or max_old_srv_tick_ms <= 0.0 or first_new_epoch_tick_ms <= 0.0:
+            return False
+        # N49: if temporal extremes are not accredited, coverage cannot be verified
+        if not n49_extremes_accredited:
             return False
         cnid = sp_info["net_id"]
         stage_obs: list[tuple[float, float, float]] = []
@@ -2272,7 +2305,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         for op in ordered_ops
         if op.inst == server_epoch_old
         and op.seq_idx > t3_post_max_seq
-        and op.verb not in ("job_read", "job_free", "job_stop")
+        and op.verb not in ("job_read", "job_free", "job_stop", "per_status")
     ]
 
     # =========================================================================
@@ -2298,7 +2331,11 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         or c_t5_a["director_uid"] != director_uid_t0
     ):
         checks["PER-07"] = {"status": "missing", "detail": "director_absent_or_uid_mismatch"}
-    elif post_t3_mutating_old_ops or not (
+    elif post_t3_mutating_old_ops:
+        checks["PER-07"] = {"status": "missing", "detail": "post_t3_mutating_old_ops"}
+    elif not n49_extremes_accredited:
+        checks["PER-07"] = {"status": "missing", "detail": "post_restart_creature_coverage_missing:N49_extremes_unaccredited"}
+    elif not (
         _creature_covered_in_t5(
             f"{retained_pfx}_inf_1",
             ("t2_census_10min", "t3_pre_reset_census"),
@@ -2450,7 +2487,11 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         or c_t5_b["director_uid"] != director_uid_t0
     ):
         checks["PER-08"] = {"status": "missing", "detail": "director_absent_or_uid_mismatch"}
-    elif post_t3_mutating_old_ops or not (
+    elif post_t3_mutating_old_ops:
+        checks["PER-08"] = {"status": "missing", "detail": "post_t3_mutating_old_ops"}
+    elif not n49_extremes_accredited:
+        checks["PER-08"] = {"status": "missing", "detail": "post_restart_creature_coverage_missing:N49_extremes_unaccredited"}
+    elif not (
         _creature_covered_in_t5("b_inf_1", ("t2_census_10min", "t3_pre_reset_census", "t3_post_reset_census"))
         and _creature_covered_in_t5("b_ani_1", ("t2_census_10min", "t3_pre_reset_census", "t3_post_reset_census"))
     ):
@@ -2652,11 +2693,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
 
             wit_out_by_lid = {str(r.get("logical_id") or ""): r for r in wit_out_r}
             wit_nid_by_lid: dict[str, str] = {}
-            old_scene_b_nids = {
-                bridge_spawn_info[lid]["net_id"]
-                for lid in fix_scene_b
-                if lid in bridge_spawn_info
-            }
+            # Nuevo 4: unicidad por epoch - solo verificar dentro del epoch nuevo, no contra epoch viejo
+            # old_scene_b_nids = { ... }  # REMOVIDO: no se exige unicidad entre epochs
             for wlid, wf_ent in fix_scene_b.items():
                 worow = wit_out_by_lid.get(wlid)
                 if not worow:
@@ -2665,7 +2703,6 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 wnid = str(worow.get("net_id") or "")
                 if (
                     not _valid_net_id(wnid, wlid)
-                    or wnid in old_scene_b_nids
                     or worow.get("class_name") != wf_ent["class_name"]
                     or int(round(float(worow.get("ok_b", 0.0)))) != 1
                     or int(round(float(worow.get("alive_b", 0.0)))) != 1
@@ -2693,6 +2730,23 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 != int(round(float(n_post.get("scenes_count_n", -2.0))))
             ):
                 per09_fail.append("witness_status_mismatch")
+
+            # Nuevo 6: exigir inclusión y cobertura del director en t5 áreas obligatorias
+            # Per brief :234, t5 debe incluir director en area_a, area_b, retained_area_id
+            required_t5_director_areas = ["area_a", "area_b", retained_area_id]
+            for aid in required_t5_director_areas:
+                c_t5_dir = census_by_stage_area.get(("t5_post_restart_census", aid))
+                if not c_t5_dir or not c_t5_dir["job_complete"]:
+                    per09_fail.append(f"t5_missing_census:{aid}")
+                    continue
+                if c_t5_dir["include_director_b"] != 1:
+                    per09_fail.append(f"t5_director_not_included:{aid}")
+                if c_t5_dir["director_present_b"] != 1 or c_t5_dir["director_inv_readable_b"] != 1:
+                    per09_fail.append(f"t5_director_unreadable:{aid}")
+                # Verificar que el inventario del director tiene las prendas esperadas
+                dir_inv_count = int(round(c_t5_dir.get("director_inv_count_n", -1.0)))
+                if dir_inv_count < 2:  # al menos Jeans_Blue + WorkingGloves
+                    per09_fail.append(f"t5_director_inv_underpopulated:{aid}:{dir_inv_count}")
 
             pre_w_map = {str(r.get("net_id") or ""): r for r in c_wit_pre["rows"]}
             post_w_map = {str(r.get("net_id") or ""): r for r in c_wit_post["rows"]}
@@ -2726,16 +2780,20 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         per09_fail.append(f"witness_census_row_invalid:{wlid}")
                         continue
                     if wpid == "":
-                        if (
-                            wrow.get("loc_kind") != "ground"
-                            or wrow.get("parent_net_id") != ""
-                            or math.hypot(
-                                float(wrow.get("pos_x_m", 0.0)) - float(wf_ent["req_x_m"]),
-                                float(wrow.get("pos_z_m", 0.0)) - float(wf_ent["req_z_m"]),
-                            )
-                            >= 0.5
-                        ):
-                            per09_fail.append(f"witness_root_placement_invalid:{wlid}")
+                        wcat = wf_ent["cat"]
+                        # Nuevo 5: solo raíces estáticas (prop, container, vehicle, actor) tienen checkpoint de colocación en Q9
+                        # Criaturas (infected, animal) pueden moverse después de Q9
+                        if wcat in ("prop", "container", "vehicle", "actor"):
+                            if (
+                                wrow.get("loc_kind") != "ground"
+                                or wrow.get("parent_net_id") != ""
+                                or math.hypot(
+                                    float(wrow.get("pos_x_m", 0.0)) - float(wf_ent["req_x_m"]),
+                                    float(wrow.get("pos_z_m", 0.0)) - float(wf_ent["req_z_m"]),
+                                )
+                                >= 0.5
+                            ):
+                                per09_fail.append(f"witness_root_placement_invalid:{wlid}")
                     else:
                         exp_wpnid = wit_nid_by_lid.get(wpid, "")
                         exp_wpclass = fix_scene_b[wpid]["class_name"]
@@ -2748,6 +2806,21 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         else:
                             if wrow.get("loc_kind") != "attachment" or wrow.get("slot_name") != wslot_req:
                                 per09_fail.append(f"witness_child_attachment_invalid:{wlid}")
+
+                    # Nuevo 7: contrastar inv_children_n con el árbol censado y bajas propias previstas
+                    inv_children = int(round(float(wrow.get("inv_children_n", -1.0))))
+                    if inv_children >= 0:
+                        # Contar hijos reales en pre_w_map que tengan este wnid como parent_net_id
+                        # Solo contar entidades propias (own_b=1), no director foreign ni otros ajenos
+                        actual_children = sum(
+                            1 for r in pre_w_map.values()
+                            if str(r.get("parent_net_id") or "") == wnid
+                            and int(round(float(r.get("own_b", 0.0)))) == 1
+                        )
+                        # El inv_children_n declarado debe coincidir con el conteo censado actual
+                        # Las bajas previstas (must_vanish_on_restart_b) se verifican por separado en PER-07/08
+                        if inv_children != actual_children:
+                            per09_fail.append(f"inv_children_n_mismatch:{wlid}:declared={inv_children},censused={actual_children}")
 
                 # Verify no unexpected non-director rows in witness census
                 allowed_wit_nids = set(wit_nid_by_lid.values())
@@ -2762,6 +2835,18 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 creature_classes_w = {"ZmbF_CitizenANormal_Beige", "Animal_BosTaurus_Brown"}
                 for wnid, wpre in pre_w_map.items():
                     wpost = post_w_map[wnid]
+                    # Nuevo 9: validar filas crudas del censo testigo posterior coherentes con estado declarado
+                    # Verificar alive_b, health_hp, ai_agent_b contra el estado declarado en per_status
+                    # Only count own_b=1 entities (witness scene entities), not director foreign or other foreign
+                    declared_alive = int(round(float(sc_b_post.get("own_alive_n", -1.0)))) if sc_b_post else -1
+                    actual_alive = sum(
+                        1 for r in post_w_map.values()
+                        if int(round(float(r.get("own_b", 0.0)))) == 1
+                        and int(round(float(r.get("alive_b", 0.0)))) == 1
+                    )
+                    if declared_alive >= 0 and actual_alive != declared_alive:
+                        per09_fail.append(f"witness_post_census_alive_mismatch:declared={declared_alive},actual={actual_alive}")
+
                     if (
                         wpost.get("class_name") != wpre.get("class_name")
                         or wpost.get("loc_kind") != wpre.get("loc_kind")
@@ -2786,6 +2871,33 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 checks["PER-09"] = {"status": "fail", "detail": ";".join(per09_fail[:5])}
             else:
                 checks["PER-09"] = {"status": "pass", "detail": "ok"}
+
+    # =========================================================================
+    # Nuevo 10: t6 cleanup censuses - require complete cleanup censuses
+    # Survivors QA -> FALLA; census absent -> INCONCLUSO (brief :284)
+    # =========================================================================
+    t6_censuses = [
+        c for c in censuses_by_stage.get("t6_post_cleanup_census", [])
+        if c["inst"] == server_epoch_new
+    ]
+    required_t6_areas = required_base_areas
+    t6_survivors: list[str] = []
+    t6_missing_areas: list[str] = []
+    for aid in required_t6_areas:
+        c_t6 = census_by_stage_area.get(("t6_post_cleanup_census", aid))
+        if c_t6 is None or not c_t6["job_complete"]:
+            t6_missing_areas.append(aid)
+            continue
+        # Check for non-director survivors
+        for r in c_t6["rows"]:
+            if r.get("owner_uid") != director_uid_t0 and int(round(float(r.get("alive_b", 0.0)))) == 1:
+                t6_survivors.append(f"{r.get('class_name')}:{r.get('net_id')}")
+
+    if t6_missing_areas:
+        checks["PER-09"] = {"status": "missing", "detail": f"t6_cleanup_census_absent:{','.join(t6_missing_areas)}"}
+    elif t6_survivors:
+        checks["PER-09"] = {"status": "fail", "detail": f"t6_cleanup_survivors:{';'.join(t6_survivors[:5])}"}
+    # If no missing areas and no survivors, PER-09 passes (already set above)
 
     # =========================================================================
     # PER-10: Static non-storage analysis on git_head + cold storage restore
