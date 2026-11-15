@@ -62,6 +62,9 @@ PIDS_TIMEOUT_S = 180
 G9_OPS = 100
 G9_WAIT_S = 5.0
 OBSERVED_WAIT_S = 60.0
+RECOVERY_WINDOW_S = 60.0  # R20
+RECOVERY_STABLE_WAIT_S = 30.0  # R20
+G4A_HELLO_401_WAIT_S = 30.0  # R25
 
 LAST_SECRETS = ()
 
@@ -227,12 +230,11 @@ def _count_in_file(path, needles, chunk=4 * 1024 * 1024):
 class EvidenceWriter:
     """Escribe samples/<G>.jsonl con una linea por evento, UTF-8 y LF, ordenadas por t_ms.
 
-    Un evento puede llevar un t_ms anterior al de su escritura (apply.t_ms es el de antes del POST,
-    op_state.t_ms el del suceso del backend): se retiene HOLDBACK_MS y se escribe en orden de t_ms, y
-    `end()` vuelca lo que quede. El evaluador exige que t_ms no retroceda en el fichero.
+    R27: un evento puede llevar un t_ms anterior al de su escritura (apply.t_ms es el de antes del
+    POST, op_state.t_ms el del suceso del backend). Se guardan todos los eventos del escenario y
+    `end()` los escribe ordenados por (t_ms, orden de emision); no hay ventana de retencion. El
+    evaluador exige que t_ms no retroceda en el fichero.
     """
-
-    HOLDBACK_MS = 1500.0
 
     def __init__(self, samples_dir):
         self.samples_dir = samples_dir
@@ -248,19 +250,7 @@ class EvidenceWriter:
             self.scenario = scenario
             path = os.path.join(self.samples_dir, scenario + ".jsonl")
             self._fh = open(path, "w", encoding="utf-8", newline="\n")
-
-    def _write_pending(self, upto_ms):
-        if self._fh is None:
             self._pending = []
-            return
-        ready = sorted((p for p in self._pending if upto_ms is None or p[0] <= upto_ms),
-                       key=lambda p: (p[0], p[1]))
-        if not ready:
-            return
-        self._pending = [p for p in self._pending if not (upto_ms is None or p[0] <= upto_ms)]
-        for _t, _n, line in ready:
-            self._fh.write(line + "\n")
-        self._fh.flush()
 
     def emit(self, ev, t_ms=None, **fields):
         with self._lock:
@@ -271,13 +261,13 @@ class EvidenceWriter:
             line = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
             self._seq += 1
             self._pending.append((obj["t_ms"], self._seq, line))
-            self._write_pending(_now_ms() - self.HOLDBACK_MS)
 
     def end(self):
         with self._lock:
             if self._fh is not None:
                 try:
-                    self._write_pending(None)
+                    for _t, _n, line in sorted(self._pending, key=lambda p: (p[0], p[1])):
+                        self._fh.write(line + "\n")
                     self._fh.flush()
                 finally:
                     self._fh.close()
@@ -757,12 +747,54 @@ class LiveRun:
         )
         return op_id
 
+    def _server_conn(self):
+        """`conn` del servidor si esta presentado y no `lost`; None si no."""
+        try:
+            with self.bridge.cond:
+                rec = self.bridge.peers.get("server")
+                if not rec or rec.get("lost"):
+                    return None
+                return rec.get("conn")
+        except Exception:
+            return None
+
+    def wait_server_stable(self, timeout, stable_s=1.0):
+        """R20: espera a que el servidor este en bridge.peers, no `lost` y con `conn` sin cambiar
+        durante `stable_s`. True si lo logra dentro de `timeout`."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        since = None
+        last = None
+        while True:
+            conn = self._server_conn()
+            now = time.monotonic()
+            if conn is None:
+                since, last = None, None
+            elif since is None or conn != last:
+                since, last = now, conn
+            elif now - since >= stable_s:
+                return True
+            if now >= deadline:
+                return False
+            time.sleep(0.05)
+
     def recovery(self, web):
-        status, op_id = self.apply_emit(web)
-        self.writer.emit("recovery", op_id=op_id, session=web.last_session)
-        if op_id:
-            self.wait_op(op_id, {"observado"}, OBSERVED_WAIT_S)
-        return op_id
+        """R20: encola la orden de recuperacion con el servidor presentado y estable (hasta 30 s); si
+        acaba en fallido/conexion_perdida, reintenta con otra `recovery`. Todo dentro de 60 s."""
+        t_end = time.monotonic() + RECOVERY_WINDOW_S
+        op_id = None
+        while True:
+            self.wait_server_stable(min(RECOVERY_STABLE_WAIT_S, max(0.0, t_end - time.monotonic())))
+            status, op_id = self.apply_emit(web)
+            self.writer.emit("recovery", op_id=op_id, session=web.last_session)
+            if not op_id:
+                return op_id
+            left = t_end - time.monotonic()
+            final = self.wait_op(op_id, {"observado", "fallido", "parcial"}, max(0.0, left))
+            if final is None or final[0] == "observado":
+                return op_id
+            if final == ("fallido", "conexion_perdida") and t_end - time.monotonic() > 0:
+                continue
+            return op_id
 
     def next_rules_version(self):
         self.rules_version += 1
@@ -900,6 +932,7 @@ class LiveRun:
                 "route": "poll",
                 "peer": "server",
                 "resp_has_op": True,
+                "resp_op_prefix": "op-",  # R19
                 "nth": 1,
                 "count": 1,
             },
@@ -1157,13 +1190,20 @@ class LiveRun:
                 return "peer_config fallo con la clave mala"
             # Brief v1.5, H-07: un 4xx llega al mod como EREST_ERROR (5) y no lo devuelve al hello; un
             # 500 llega como 6 (EREST_ERROR_CLIENTERROR) y si. El hello relee la clave del dsbx_peer.json.
+            # R25: el 500 va con un corte de los polls del servidor en vuelo (abort_inflight), para que
+            # el hello ya lleve la clave mala; se espera ver ese hello rechazado (401) antes de abrir
+            # la ventana y encolar la orden.
             rule = {
                 "id": "g4a_500",
+                "abort_inflight": True,
                 "match": {"route": "poll", "peer": "server", "count": 1},
                 "action": {"type": "status", "code": 500, "error": "forced_hello"},
             }
+            t_rules = _now_ms()
             if not self.set_rules(self.next_rules_version(), [rule], ["g4a_500"]):
                 return "rules_not_active"
+            if not self._g4a_wait_hello_401(t_rules, G4A_HELLO_401_WAIT_S):
+                return "g4a: sin hello 401 del servidor con la clave mala"
             t_start = _now_ms()
             op_a = self._l2b2_apply_ttl(web, "a", 2000, emit_case=False)
             session_a = web.last_session
@@ -1188,6 +1228,24 @@ class LiveRun:
                     self._l2b2_write_peer_key(profile, self.secrets[0])
                 except Exception:
                     pass
+
+    def _g4a_wait_hello_401(self, since_ms, timeout):
+        """R25: espera, hasta `timeout` s, a una linea de proxy.jsonl con un hello del servidor y
+        upstream_status 401 servida desde `since_ms` (reloj del arnes)."""
+        deadline = time.monotonic() + timeout
+        while True:
+            for line in _read_jsonl(self.proxy_log):
+                if (
+                    line.get("route") == "hello"
+                    and line.get("peer") == "server"
+                    and line.get("upstream_status") == 401
+                ):
+                    t = line.get("t_done_ms", line.get("t_ms"))
+                    if not isinstance(t, (int, float)) or t >= since_ms:
+                        return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
 
     def _g4_case_b(self):
         # La orden de la sesion vieja no puede tener `effect` ni en la sesion vieja ni despues:
@@ -1313,7 +1371,10 @@ class LiveRun:
             op_a = self.apply_case(web, "a", ["g8a_drop"])
             if op_a:
                 self.wait_op(op_a, {"observado"}, OBSERVED_WAIT_S)
-                self._g8_wait_second_result(op_a, t0, 10.0)
+                if not self._g8_wait_second_result(op_a, t0, 10.0):
+                    # R23: sin repeticion del resultado no hay caso; se cierra la inyeccion y se aborta.
+                    self._l2b2_clear_rules()
+                    return True, "g8a: no se vio la repeticion del resultado"
             if not self._l2b2_clear_rules():
                 return True, "rules_not_active"
             self.recovery(web)
@@ -1564,7 +1625,10 @@ class LiveRun:
         rule_id = "g5b_cut_%d" % gap
         rule = {
             "id": rule_id,
-            "match": {"route": "poll", "peer": "server", "resp_has_op": True, "count": 1},
+            "match": {
+                "route": "poll", "peer": "server", "resp_has_op": True, "resp_op_prefix": "op-",
+                "count": 1,
+            },  # R19
             "action": {"type": "then_cut_ms", "ms": 6000, "routes": ["hello", "poll"]},
         }
         if not self._g56_set_gap(gap):
@@ -1777,7 +1841,10 @@ class LiveRun:
         # Una regla de respuesta `pass` deja su rule_id en proxy.jsonl (fault_proxy.py, _forward_and_serve).
         rule = {
             "id": rule_id,
-            "match": {"route": "poll", "peer": "server", "resp_has_op": True, "count": 1},
+            "match": {
+                "route": "poll", "peer": "server", "resp_has_op": True, "resp_op_prefix": "op-",
+                "count": 1,
+            },  # R19
             "action": {"type": "pass"},
         }
         problems = []
@@ -1958,7 +2025,7 @@ class LiveRun:
             (
                 "measure_no_args_P",
                 {"ops.0.args": {"$delete": True}},
-                {"resp_has_op": True},
+                {"resp_has_op": True, "resp_op_prefix": "op-"},  # R19
                 True,
             ),
         )
@@ -1994,6 +2061,7 @@ class LiveRun:
             "poll",
             {"type": "rewrite", "set": {"ops.0.args": {}}},
             resp_has_op=True,
+            resp_op_prefix="op-",  # R19
         )
         if not self._g7_case_apply_p(web, "measure_args_empty_P", rule):
             return True, "rules_not_active"

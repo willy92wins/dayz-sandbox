@@ -438,6 +438,7 @@ class FaultProxy:
                     "req_id": req_id,
                     "rule_id": None,
                     "rules_version": version,
+                    "rule_version": None,
                     "t_ms": int(round(t0 * 1000.0)),
                     "method": method,
                     "route": route,
@@ -473,6 +474,8 @@ class FaultProxy:
         window = self._active_window(req["peer"], req["route"])
         if window is not None:
             entry["rule_id"] = window["rule_id"]
+            with self._lock:
+                entry["rule_version"] = self._state.version
             if window["mode"] == "cut":
                 entry["action"] = "then_cut_ms"
                 entry["aborted"] = True
@@ -502,7 +505,7 @@ class FaultProxy:
             self._finish(entry, t0)
             return
 
-        rule = self._select_request_rule(req)
+        rule = self._select_request_rule(req, entry)
         if rule is not None:
             self._run_action(handler, entry, rule, req, method, url, body, t0)
             return
@@ -639,7 +642,7 @@ class FaultProxy:
         self._serve(handler, entry, status, ctype, data)
         self._finish(entry, t0)
 
-    def _select_request_rule(self, req):
+    def _select_request_rule(self, req, entry):
         with self._lock:
             for rule in self._state.rules:
                 match = _as_dict(rule.get("match"))
@@ -648,6 +651,7 @@ class FaultProxy:
                 if not _match_request(match, req):
                     continue
                 if self._consume(rule):
+                    entry["rule_version"] = self._state.version
                     return rule
         return None
 
@@ -669,7 +673,15 @@ class FaultProxy:
                     continue
                 if not _match_request(match, req):
                     continue
+                prefix = match.get("resp_op_prefix")
+                if prefix is not None:
+                    # R19: si no casa, no consume nth/count.
+                    first = ops[0]
+                    op_id = first.get("op_id") if isinstance(first, dict) else None
+                    if not isinstance(prefix, str) or not isinstance(op_id, str)                             or not op_id.startswith(prefix):
+                        continue
                 if self._consume(rule):
+                    entry["rule_version"] = self._state.version
                     return rule
         return None
 
@@ -723,11 +735,14 @@ class FaultProxy:
                 ("127.0.0.1", self.upstream_port), timeout=UPSTREAM_CONNECT_TIMEOUT_S
             )
             entry["upstream"] = sock
-            sock.sendall(self._build_request(method, url, body))
+            # R17: bajo el candado, o la barrera ya la abortó (no se manda nada) o queda marcada como
+            # reenviada ANTES de mandar, de modo que una barrera posterior la aborta y _serve no la sirve.
             with self._lock:
+                if entry["aborted"]:
+                    return None
                 entry["forwarded"] = True
-                aborted_now = entry["aborted"]
-            if aborted_now:
+            sock.sendall(self._build_request(method, url, body))
+            if entry["aborted"]:
                 return None
             sock.settimeout(0.25)
             buffer = b""
@@ -886,6 +901,7 @@ class FaultProxy:
             "req_id": entry["req_id"],
             "rule_id": entry["rule_id"],
             "rules_version": entry["rules_version"],
+            "rule_version": entry["rule_version"],
             "t_ms": entry["t_ms"],
             "t_done_ms": entry["t_done_ms"],
             "method": entry["method"],

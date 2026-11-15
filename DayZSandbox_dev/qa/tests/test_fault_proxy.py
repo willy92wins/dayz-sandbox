@@ -37,6 +37,7 @@ class FakeBridgeState:
         self.poll_gate = threading.Event()
         self.poll_gate.set()
         self.poll_arrived = threading.Event()
+        self.poll_op_id = None
 
     def record(self, method, path):
         with self.lock:
@@ -93,6 +94,11 @@ class FakeBridgeHandler(BaseHTTPRequestHandler):
                                 "id": 1,
                                 "session": "s",
                                 "args": {"rev": 1},
+                                **(
+                                    {"op_id": self.state.poll_op_id}
+                                    if self.state.poll_op_id is not None
+                                    else {}
+                                ),
                             }
                         ],
                     },
@@ -797,6 +803,163 @@ class AbortBarrierOrderTests(FaultProxyTestBase):
         lines = self.wait_log(1)
         self.assertFalse(lines[0]["aborted"])
         self.assertEqual(lines[0]["rules_version"], 1)
+
+
+class _SendallHookSocket:
+    """Envuelve el socket al upstream: antes del sendall real ejecuta un gancho."""
+
+    def __init__(self, sock, before_sendall):
+        self._sock = sock
+        self._before = before_sendall
+
+    def sendall(self, data):
+        self._before()
+        return self._sock.sendall(data)
+
+    def __getattr__(self, name):
+        return getattr(self._sock, name)
+
+
+class ForwardRaceR17Tests(FaultProxyTestBase):
+    """R17 (Z-02): la barrera que se instala entre 'decidir reenviar' y 'mandar' aborta la peticion."""
+
+    def test_barrier_between_mark_and_send_aborts_request(self):
+        self.start_proxy([])
+        self.wait_active(1)
+        fired = []
+        real_create = fault_proxy.socket.create_connection
+
+        def before_sendall():
+            if fired:
+                return
+            fired.append(True)
+            # Justo antes de mandar la peticion se activa la version 2 con barrera (abort_inflight).
+            self.write_rules(
+                2,
+                [
+                    {
+                        "id": "cut",
+                        "match": {"route": "poll", "peer": "client"},
+                        "action": {"type": "pass"},
+                        "abort_inflight": True,
+                    }
+                ],
+            )
+            self.proxy._maybe_reload()
+
+        def create(address, *args, **kwargs):
+            sock = real_create(address, *args, **kwargs)
+            # socket es el modulo global: solo se envuelve la conexion del proxy al upstream.
+            if address[1] == self.bridge_port:
+                return _SendallHookSocket(sock, before_sendall)
+            return sock
+
+        fault_proxy.socket.create_connection = create
+        try:
+            outcome = request_or_none(
+                self.proxy.port, "GET", "/poll?key=K17&peer=client&deliver=1", timeout=10.0
+            )
+        finally:
+            fault_proxy.socket.create_connection = real_create
+        self.assertTrue(fired)
+        self.assertIsNone(outcome, "se sirvio la respuesta de una peticion abortada por la barrera")
+        lines = self.wait_log(1)
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0]["aborted"])
+        self.assertEqual(lines[0]["resp_bytes"], 0)
+        self.assertEqual(self.state.count(), 0, "la peticion abortada llego al upstream")
+
+
+class RuleVersionR18Tests(FaultProxyTestBase):
+    """R18 (Z-07): rule_version es la version vigente cuando actuo la regla."""
+
+    def test_response_rule_installed_after_receipt_logs_new_rule_version(self):
+        self.state.retain_poll = True
+        self.state.poll_gate.clear()
+        self.start_proxy([])
+        self.wait_active(1)
+        outcome = {}
+
+        def client():
+            outcome["value"] = request_or_none(
+                self.proxy.port, "GET", "/poll?key=K18&peer=client&deliver=1", timeout=15.0
+            )
+
+        thread = threading.Thread(target=client, daemon=True)
+        thread.start()
+        self.assertTrue(self.state.poll_arrived.wait(8.0))
+        self.write_rules(
+            2,
+            [
+                {
+                    "id": "rw",
+                    "match": {"route": "poll", "peer": "client", "resp_has_op": True},
+                    "action": {"type": "rewrite", "set": {"now_ms": 5}},
+                }
+            ],
+        )
+        self.wait_active(2)
+        self.state.poll_gate.set()
+        thread.join(timeout=8.0)
+        self.assertFalse(thread.is_alive())
+        self.assertIsNotNone(outcome.get("value"))
+        lines = self.wait_log(1)
+        self.assertEqual(lines[0]["rule_id"], "rw")
+        self.assertEqual(lines[0]["rules_version"], 1)
+        self.assertEqual(lines[0]["rule_version"], 2)
+
+    def test_request_rule_and_no_rule_versions(self):
+        self.start_proxy(
+            [
+                {
+                    "id": "st",
+                    "match": {"route": "catalog", "peer": "any"},
+                    "action": {"type": "status", "code": 503},
+                }
+            ],
+            version=7,
+        )
+        self.wait_active(7)
+        request(self.proxy.port, "POST", "/catalog?key=K18&peer=client")
+        request(self.proxy.port, "POST", "/result?key=K18&peer=client")
+        lines = sorted(self.wait_log(2), key=lambda line: line["req_id"])
+        self.assertEqual(lines[0]["rule_version"], 7)
+        self.assertIsNone(lines[1]["rule_version"])
+        self.assertEqual(lines[1]["rules_version"], 7)
+
+
+class RespOpPrefixR19Tests(FaultProxyTestBase):
+    """R19: resp_op_prefix solo casa con ops[0].op_id que empieza por el prefijo y no consume si no casa."""
+
+    def test_prefix_filters_response_rule_without_consuming(self):
+        self.start_proxy(
+            [
+                {
+                    "id": "rw",
+                    "match": {
+                        "route": "poll",
+                        "peer": "client",
+                        "resp_has_op": True,
+                        "resp_op_prefix": "op-",
+                        "nth": 1,
+                        "count": 1,
+                    },
+                    "action": {"type": "rewrite", "set": {"now_ms": 5}},
+                }
+            ]
+        )
+        self.wait_active(1)
+        self.state.poll_op_id = "rd-1"
+        status, data = request(self.proxy.port, "GET", "/poll?key=K19&peer=client&deliver=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data)["now_ms"], 111)
+        self.state.poll_op_id = "op-3"
+        status, data = request(self.proxy.port, "GET", "/poll?key=K19&peer=client&deliver=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data)["now_ms"], 5)
+        lines = sorted(self.wait_log(2), key=lambda line: line["req_id"])
+        self.assertIsNone(lines[0]["rule_id"])
+        self.assertEqual(lines[1]["rule_id"], "rw")
 
 
 class ActivePathTests(FaultProxyTestBase):

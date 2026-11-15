@@ -14,6 +14,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -716,6 +717,249 @@ class F1bPeersUnits(unittest.TestCase):
             writer.end()
             got = [e["ev"] for e in _load_jsonl(os.path.join(tmp, "G9.jsonl"))]
             self.assertEqual(got, ["apply", "op_state", "recovery"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_writer_r27_evento_tardio_y_sin_retencion(self):
+        """R27: un evento emitido tarde con t_ms muy anterior queda en su sitio; nada se escribe
+        antes de `end`; los eventos tras el cierre se ignoran."""
+        live = self.live
+        tmp = tempfile.mkdtemp(prefix="dsbx-f1bp-w27-")
+        try:
+            writer = live.EvidenceWriter(tmp)
+            self.assertFalse(hasattr(writer, "HOLDBACK_MS"))
+            writer.begin("G3")
+            t = live._now_ms()
+            writer.emit("start", t_ms=t)
+            writer.emit("a", t_ms=t + 10000.0)
+            writer.emit("b", t_ms=t + 20000.0)
+            writer.emit("tardio", t_ms=t + 5.0)
+            writer.emit("tardio2", t_ms=t + 5.0)
+            path = os.path.join(tmp, "G3.jsonl")
+            self.assertEqual(_load_jsonl(path), [], "nada se escribe antes de end()")
+            writer.end()
+            writer.emit("tras_cierre", t_ms=t)
+            got = [e["ev"] for e in _load_jsonl(path)]
+            self.assertEqual(got, ["start", "tardio", "tardio2", "a", "b"])
+            ts = [e["t_ms"] for e in _load_jsonl(path)]
+            self.assertEqual(ts, sorted(ts))
+            # key_scan (append) tras el cierre sigue funcionando
+            writer.append("G3", "key_scan", files=[], hits=0, unreadable=[])
+            self.assertEqual(_load_jsonl(path)[-1]["ev"], "key_scan")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- R19
+    def _capture_rules(self, call):
+        live = self.live
+        seen = []
+
+        class Stop(Exception):
+            pass
+
+        class FakeWeb:
+            def __init__(self, *a, **k):
+                pass
+
+            def open_session(self):
+                pass
+
+        orig = live.WebClient
+        live.WebClient = FakeWeb
+        try:
+            try:
+                call(seen, Stop)
+            except Stop:
+                pass
+            except RuntimeError:
+                pass
+        finally:
+            live.WebClient = orig
+        return seen
+
+    def _bare_orch(self):
+        live = self.live
+        run = live.LiveRun.__new__(live.LiveRun)
+        run.backend = None
+        run.secrets = ("k0", "k1", "k2")
+        run.args = argparse.Namespace(g6_clock_s=0.0)
+        run.fake_mode = False
+        run.rules_version = 0
+        run.next_rules_version = lambda: 1
+        return run
+
+    def test_r19_prefijo_op_en_las_reglas_de_respuesta(self):
+        live = self.live
+
+        def g3(seen, Stop):
+            run = self._bare_orch()
+            run.store = type("S", (), {"snapshot": lambda self: {"rev": 1}})()
+            run.apply_case = lambda web, name, ids=None: None
+            run.wait_op = lambda *a, **k: None
+
+            def set_rules(version, rules, ids):
+                seen.extend(rules)
+                raise Stop()
+
+            run.set_rules = set_rules
+            run.run_g3_body()
+
+        def g5(seen, Stop):
+            run = self._bare_orch()
+            run._g56_set_gap = lambda gap: True
+            run._g56_mark = lambda: None
+            run._g56_clear_rules = lambda: None
+
+            def set_rules(version, rules, ids):
+                seen.extend(rules)
+                raise Stop()
+
+            run.set_rules = set_rules
+            run._g56_case_b(object(), 2500)
+
+        def g6(seen, Stop):
+            run = self._bare_orch()
+            run.writer = type("W", (), {"emit": lambda self, *a, **k: None})()
+            run.bridge = type("B", (), {"ttl_ms": 1, "cond": threading.RLock()})()
+            run._l2b2_hook = lambda bridge: None
+            run._g56_mark = lambda: None
+            run._g56_clear_rules = lambda: None
+
+            def set_rules(version, rules, ids):
+                seen.extend(rules)
+                raise Stop()
+
+            run.set_rules = set_rules
+            run.run_g6_body()
+
+        def g7(seen, Stop):
+            run = self._bare_orch()
+
+            def case(web, name, rule, **kw):
+                seen.append((name, rule))
+                return True
+
+            run._g7_case = case
+            run._g7_case_apply_p = lambda web, name, rule: case(web, name, rule)
+            run.run_g7_body()
+
+        for label, call, rule_id in (
+            ("G3 c", g3, "g3c-rewrite"), ("G5 b", g5, "g5b_cut_2500"), ("G6", g6, "g6_deliver"),
+        ):
+            rules = self._capture_rules(call)
+            self.assertEqual([r["id"] for r in rules], [rule_id], label)
+            self.assertTrue(rules[0]["match"]["resp_has_op"], label)
+            self.assertEqual(rules[0]["match"]["resp_op_prefix"], "op-", label)
+        g7_rules = dict(self._capture_rules(g7))
+        for name in ("measure_no_args_P", "measure_args_empty_P"):
+            self.assertEqual(g7_rules[name]["match"]["resp_op_prefix"], "op-", name)
+            self.assertTrue(g7_rules[name]["match"]["resp_has_op"], name)
+        for name, rule in g7_rules.items():
+            if name not in ("measure_no_args_P", "measure_args_empty_P"):
+                self.assertNotIn("resp_op_prefix", rule["match"], name)
+
+    # --- R20
+    def _recovery_run(self, results, peers):
+        live = self.live
+        run = live.LiveRun.__new__(live.LiveRun)
+        events = []
+        run.writer = type("W", (), {"emit": lambda self, ev, **f: events.append((ev, f))})()
+        run.bridge = type("B", (), {"cond": threading.RLock(), "peers": peers})()
+        n = {"i": 0}
+
+        def apply_emit(web):
+            n["i"] += 1
+            return 200, "op-%d" % n["i"]
+
+        run.apply_emit = apply_emit
+        run.wait_op = lambda op_id, states, timeout: results.pop(0)
+        web = type("Web", (), {"last_session": "s-1"})()
+        return run, web, events
+
+    def test_r20_recovery_reintenta_con_conexion_perdida(self):
+        live = self.live
+        peers = {"server": {"conn": 3, "lost": False}}
+        results = [("fallido", "conexion_perdida"), ("fallido", "conexion_perdida"), ("observado", None)]
+        run, web, events = self._recovery_run(results, peers)
+        run.wait_server_stable = lambda timeout, stable_s=1.0: True
+        op = run.recovery(web)
+        self.assertEqual(op, "op-3")
+        self.assertEqual([f["op_id"] for ev, f in events if ev == "recovery"], ["op-1", "op-2", "op-3"])
+        self.assertEqual(results, [])
+        # otro fallo que no es conexion_perdida no se reintenta
+        run, web, events = self._recovery_run([("fallido", "timeout")], peers)
+        run.wait_server_stable = lambda timeout, stable_s=1.0: True
+        self.assertEqual(run.recovery(web), "op-1")
+        self.assertEqual(len([1 for ev, _f in events if ev == "recovery"]), 1)
+
+    def test_r20_recovery_espera_servidor_estable(self):
+        live = self.live
+        import threading as th
+        import time
+        peers = {}
+        run, web, events = self._recovery_run([("observado", None)], peers)
+        self.assertFalse(run.wait_server_stable(0.3, stable_s=0.2), "sin servidor no hay estable")
+        peers["server"] = {"conn": 1, "lost": True}
+        self.assertFalse(run.wait_server_stable(0.3, stable_s=0.2), "lost no es estable")
+        peers["server"] = {"conn": 1, "lost": False}
+
+        def bump():
+            for conn in (2, 3):
+                time.sleep(0.15)
+                peers["server"] = {"conn": conn, "lost": False}
+
+        t0 = time.monotonic()
+        th.Thread(target=bump, daemon=True).start()
+        self.assertTrue(run.wait_server_stable(3.0, stable_s=0.4))
+        self.assertGreaterEqual(time.monotonic() - t0, 0.3 + 0.4 - 0.05, "el cambio de conn reinicia la espera")
+
+    # --- R23
+    def test_r23_g8a_aborta_sin_repeticion(self):
+        live = self.live
+        run = live.LiveRun.__new__(live.LiveRun)
+        run._l2b2_state = lambda: None
+        run._l2b2_hook = lambda bridge: None
+        run.bridge = None
+        run._l2b2_new_web = lambda: object()
+        run.next_rules_version = lambda: 1
+        run.set_rules = lambda *a, **k: True
+        run.apply_case = lambda *a, **k: "op-1"
+        run.wait_op = lambda *a, **k: ("observado", None)
+        run._g8_wait_second_result = lambda *a, **k: False
+        cleared = []
+        run._l2b2_clear_rules = lambda: cleared.append(1) or True
+        run._l2b2_stop_pollers = lambda: None
+        recov = []
+        run.recovery = lambda web: recov.append(1)
+        aborted, reason = run.run_g8_body()
+        self.assertTrue(aborted)
+        self.assertIn("repeticion", reason)
+        self.assertEqual(recov, [], "G8 no sigue tras abortar")
+        self.assertEqual(cleared, [1])
+
+    # --- R25
+    def test_r25_espera_del_hello_401(self):
+        live = self.live
+        tmp = tempfile.mkdtemp(prefix="dsbx-f1bp-r25-")
+        try:
+            run = live.LiveRun.__new__(live.LiveRun)
+            run.proxy_log = os.path.join(tmp, "proxy.jsonl")
+
+            def write(lines):
+                with open(run.proxy_log, "w", encoding="utf-8", newline="\n") as fh:
+                    for line in lines:
+                        fh.write(json.dumps(line) + "\n")
+
+            self.assertFalse(run._g4a_wait_hello_401(0.0, 0.2), "sin fichero")
+            write([
+                {"route": "hello", "peer": "server", "upstream_status": 200, "t_done_ms": 500.0},
+                {"route": "hello", "peer": "client", "upstream_status": 401, "t_done_ms": 600.0},
+                {"route": "poll", "peer": "server", "upstream_status": 401, "t_done_ms": 600.0},
+                {"route": "hello", "peer": "server", "upstream_status": 401, "t_done_ms": 100.0},
+            ])
+            self.assertFalse(run._g4a_wait_hello_401(200.0, 0.2), "401 anterior a la regla no vale")
+            write([{"route": "hello", "peer": "server", "upstream_status": 401, "t_done_ms": 700.0}])
+            self.assertTrue(run._g4a_wait_hello_401(200.0, 0.2))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
