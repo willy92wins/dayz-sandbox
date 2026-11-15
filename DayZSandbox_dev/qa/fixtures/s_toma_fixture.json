@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "spike_id": "S-toma",
+  "action_name": "UADsbxQaTakeStop",
+  "expected_default_key": "kF9",
+  "candidate_keys": [
+    "kF9",
+    "kF10",
+    "kBackslash",
+    "kRBracket"
+  ],
+  "director": {
+    "id": "dir_main",
+    "director_id": "dir_main",
+    "pos_m": [100.0, 10.0, 98.0],
+    "yaw_deg": 180.0,
+    "in_block_b": 0,
+    "other_id": "dir_other",
+    "other_engine_uid": "qa-uid-dir-other"
+  },
+  "actors": [
+    {
+      "id": "actor_1",
+      "actor_id": "actor_1",
+      "real_class": "SurvivorM_Mirek",
+      "role": "move_to",
+      "mark_pos_m": [102.0, 10.0, 104.0],
+      "dest_pos_m": [108.0, 10.0, 104.0],
+      "yaw_deg": 90.0,
+      "wardrobe": [
+        {
+          "slot_name": "Body",
+          "item_class": "TShirt_Blue"
+        },
+        {
+          "slot_name": "Legs",
+          "item_class": "Jeans_Blue"
+        }
+      ]
+    },
+    {
+      "id": "actor_2",
+      "actor_id": "actor_2",
+      "real_class": "SurvivorF_Eva",
+      "role": "gesture",
+      "mark_pos_m": [104.0, 10.0, 104.0],
+      "yaw_deg": 180.0,
+      "wardrobe": [
+        {
+          "slot_name": "Body",
+          "item_class": "TShirt_Beige"
+        },
+        {
+          "slot_name": "Legs",
+          "item_class": "Jeans_Black"
+        }
+      ],
+      "cues": [
+        {
+          "cue_id": "cue_1",
+          "at_ms": 0.0,
+          "emote_id": 13,
+          "cmd_id": 1051,
+          "loop_b": 1,
+          "pending_b": 0,
+          "future_b": 0
+        },
+        {
+          "cue_id": "cue_2",
+          "at_ms": 2600.0,
+          "emote_id": 1,
+          "cmd_id": 1000,
+          "loop_b": 0,
+          "pending_b": 1,
+          "future_b": 0
+        },
+        {
+          "cue_id": "cue_3",
+          "at_ms": 4300.0,
+          "emote_id": 44,
+          "cmd_id": 1050,
+          "loop_b": 0,
+          "pending_b": 0,
+          "future_b": 1
+        }
+      ]
+    }
+  ],
+  "infected": {
+    "id": "zmb_1",
+    "infected_id": "zmb_1",
+    "real_class": "ZmbM_CitizenASkinny_Base",
+    "dist_to_director_m": 1.1,
+    "pos_m": [100.0, 10.0, 99.1],
+    "expected_ammo_type": "MeleeZombie"
+  },
+  "camera_path": {
+    "path_hash": "b6_cam_v1_8f3a1c",
+    "duration_ms": 4500.0,
+    "keyframes": [
+      {
+        "t_ms": 0.0,
+        "pos_m": [96.0, 11.8, 96.0],
+        "yaw_deg": 35.0,
+        "pitch_deg": -8.0,
+        "roll_deg": 0.0,
+        "fov_deg": 60.0
+      },
+      {
+        "t_ms": 1000.0,
+        "pos_m": [98.0, 11.9, 97.5],
+        "yaw_deg": 38.0,
+        "pitch_deg": -7.5,
+        "roll_deg": 0.0,
+        "fov_deg": 58.0
+      },
+      {
+        "t_ms": 2000.0,
+        "pos_m": [100.0, 12.0, 99.0],
+        "yaw_deg": 41.0,
+        "pitch_deg": -7.0,
+        "roll_deg": 0.0,
+        "fov_deg": 56.0
+      },
+      {
+        "t_ms": 3000.0,
+        "pos_m": [102.0, 12.1, 100.5],
+        "yaw_deg": 44.0,
+        "pitch_deg": -6.5,
+        "roll_deg": 0.0,
+        "fov_deg": 54.0
+      },
+      {
+        "t_ms": 4500.0,
+        "pos_m": [105.0, 12.2, 102.5],
+        "yaw_deg": 48.0,
+        "pitch_deg": -6.0,
+        "roll_deg": 0.0,
+        "fov_deg": 52.0
+      }
+    ]
+  }
+}
