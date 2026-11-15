@@ -57,10 +57,6 @@ _FLAT_PATCHES = (
     (6680.0, 2628.0, 2.0, 6.5),
     (13210.0, 4200.0, 30.0, 1.25),
 )
-# Caja local de la clase de barril: (min y, max y).
-_BARREL_BOX = (-0.5625, 0.5625)
-
-
 def _q64(val):
     return round(float(val) * 64.0) / 64.0
 
@@ -103,8 +99,9 @@ class _Roi:
 class _World:
     """Motor simulado: terreno, calzada, raycast, censo de objetos y creacion rastreada."""
 
-    def __init__(self, rois):
+    def __init__(self, rois, barrel_box):
         self.rois = rois
+        self.barrel_box = barrel_box
         self.seq = 0
         self._next_id = 4000000
         self.live = []
@@ -171,7 +168,7 @@ class _World:
             return None
         self.seq += 1
         self._next_id += 1
-        obj = {"id": self._next_id, "class": class_name, "pos": [x, y, z], "box": _BARREL_BOX}
+        obj = {"id": self._next_id, "class": class_name, "pos": [x, y, z], "box": self.barrel_box}
         self.live.append(obj)
         return obj
 
@@ -187,7 +184,14 @@ def _load_world():
     for pid in ("C1", "C2", "C3", "V1", "V2", "V3"):
         p = patches[pid]
         rois.append(_Roi(p["world_roi_m"], p["samples_256"]))
-    return _World(rois)
+    # La caja local (ClippingInfo, min y / max y) de la clase de barril es la que leyo la captura
+    # certificadora al colocar en P_GROUND: el motor simulado da la misma caja para la misma clase en
+    # cualquier colocacion (BLOQ 5 del oraculo).
+    cert_read = wire.unpack_payload(
+        data["certifying_capture"]["surfaces"]["P_GROUND"]["place_ground_op"]["result"]["read"]
+    )
+    box = (float(cert_read["num"]["bbox_min_y_m"]), float(cert_read["num"]["bbox_max_y_m"]))
+    return _World(rois, box)
 
 
 def _bad_args():
