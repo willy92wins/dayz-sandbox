@@ -453,6 +453,29 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		return true;
 	}
 
+	// Salud sin excepciones. Object.GetMaxHealth/GetHealth/SetHealth tiran una Virtual Machine Exception en objetos sin
+	// sistema de daño (restos de vehiculo del mapa, p. ej. Land_Wreck_Uaz): "No DamageSystemData or not initialized yet".
+	// Object.HasDamageSystem(): P:/scripts/3_game/entities/object.c:976. Sin sistema de daño max_hp y health_hp valen -1
+	// (centinela: el cable no admite NaN). Unico sitio de la sonda que lee salud; la prueba estatica lo exige.
+	protected void ReadHealth(Object obj, out float maxHp, out float healthHp)
+	{
+		maxHp = -1.0;
+		healthHp = -1.0;
+		if (!obj || !obj.HasDamageSystem())
+			return;
+		maxHp = obj.GetMaxHealth("", "");
+		healthHp = obj.GetHealth("", "");
+	}
+
+	// SetHealth con la misma guarda (y solo con vida maxima > 0 y ratio > 0).
+	protected void ApplyHealthRatio(Object obj, float maxHp, float ratio)
+	{
+		if (!obj || !obj.HasDamageSystem())
+			return;
+		if (maxHp > 0.0 && ratio > 0.0)
+			obj.SetHealth("", "", maxHp * ratio);
+	}
+
 	protected string FormatNetId(Object obj)
 	{
 		if (!obj)
@@ -1054,13 +1077,13 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				EntityAI ent = EntityAI.Cast(createdObj);
 				if (ent)
 				{
-					float maxHp = ent.GetMaxHealth("", "");
-					if (maxHp > 0.0 && hRatio > 0.0)
-					{
-						ent.SetHealth("", "", maxHp * hRatio);
-					}
+					float maxHp = -1.0;
+					float healthNow = -1.0;
+					ReadHealth(ent, maxHp, healthNow);
+					ApplyHealthRatio(ent, maxHp, hRatio);
+					ReadHealth(ent, maxHp, healthNow);
 					rec.m_MaxHp = maxHp;
-					rec.m_HealthHp = ent.GetHealth("", "");
+					rec.m_HealthHp = healthNow;
 				}
 				if (createdObj.IsAlive())
 					rec.m_AliveB = 1;
@@ -1540,12 +1563,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		EntityAI cEnt = EntityAI.Cast(createdObj);
 		if (cEnt)
 		{
-			maxHp = cEnt.GetMaxHealth("", "");
-			if (maxHp > 0.0 && hRatio > 0.0)
-			{
-				cEnt.SetHealth("", "", maxHp * hRatio);
-			}
-			healthHp = cEnt.GetHealth("", "");
+			ReadHealth(cEnt, maxHp, healthHp);
+			ApplyHealthRatio(cEnt, maxHp, hRatio);
+			ReadHealth(cEnt, maxHp, healthHp);
 		}
 
 		string directorUid = "";
@@ -1646,14 +1666,12 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 		vector pos = obj.GetPosition();
 		vector ori = obj.GetOrientation();
+		// Sin sistema de daño (restos de vehiculo del mapa): max_hp = health_hp = -1. Todos los valores de la fila se
+		// calculan antes de insertarla (AppendRow al final), asi una excepcion no deja una fila a medias.
 		float maxHp = 0.0;
 		float healthHp = 0.0;
-		EntityAI ent = EntityAI.Cast(obj);
-		if (ent)
-		{
-			maxHp = ent.GetMaxHealth("", "");
-			healthHp = ent.GetHealth("", "");
-		}
+		if (EntityAI.Cast(obj))
+			ReadHealth(obj, maxHp, healthHp);
 
 		array<string> svals = new array<string>();
 		svals.Insert(className);

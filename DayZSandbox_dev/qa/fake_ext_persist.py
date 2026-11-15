@@ -146,6 +146,8 @@ CARGO_SIZE = {
 # (net_id, class_name, parent_net_id, slot_name, x, z, ai_agent)
 BARRACKS_NET_ID = "-2147225600:847447385"
 GARAGE_NET_ID = "-2147225344:847447400"
+NO_DAMAGE_SYSTEM_CLASSES = frozenset({"Land_Wreck_Uaz"})
+NO_HEALTH = -1.0  # centinela de max_hp y health_hp sin sistema de daño (el cable no admite NaN)
 MAP_OBJECT_SPECS = (
     (BARRACKS_NET_ID, "Land_Mil_Barracks1", "", "", 6170.0, 7643.0, False),
     ("1:65", "Rag", BARRACKS_NET_ID, "Cargo:2:1:3", 6170.0, 7643.0, False),  # cargo proxy del edificio (PROXYCARGO)
@@ -160,6 +162,9 @@ MAP_OBJECT_SPECS = (
     ("1:57", "Zmbf_PoliceCopBlue", "", "", 6140.0, 7680.0, True),
     ("1:58", "Barrel_Green", "", "", 6288.0, 7643.0, False),
     ("1:59", "Barrel_Red", "", "", 6500.0, 7643.0, False),
+    # Resto de vehiculo del mapa, sin sistema de daño (Object.HasDamageSystem() = false): en el motor GetMaxHealth y
+    # GetHealth tiran una excepcion de la VM ("No DamageSystemData"); la sonda lo lee como max_hp = health_hp = -1.
+    ("1:68", "Land_Wreck_Uaz", "", "", 6200.0, 7650.0, False),
     # Pot lleno de verdad para un Rag (1x3): la manzana ocupa (0,0) y el botiquin 3x3 las columnas 1-3; el botiquin
     # tiene hueco libre, pero no es el objetivo (el padre de la ubicacion encontrada no seria el Pot).
     ("1:66", "Pot", "", "", 6160.0, 7640.0, False),
@@ -454,8 +459,8 @@ class PersistFakeExt(FakeExt):
                 owner_uid="",
                 pos=(x, _surface_y(x, z), z),
                 ori=(0.0, 0.0, 0.0),
-                max_hp=DEFAULT_MAX_HP,
-                health_hp=DEFAULT_MAX_HP,
+                max_hp=NO_HEALTH if cname in NO_DAMAGE_SYSTEM_CLASSES else DEFAULT_MAX_HP,
+                health_hp=NO_HEALTH if cname in NO_DAMAGE_SYSTEM_CLASSES else DEFAULT_MAX_HP,
                 spawn_tick_ms=0.0,
                 persistent=False,
                 ai_agent=ai,

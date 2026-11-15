@@ -287,6 +287,11 @@ class CensusSelectAllE2E(_E2EBase):
             )
             ys.add(round(row["surface_y_m"], 6))
         self.assertGreater(len(ys), 3)
+        # Un resto de vehiculo sin sistema de daño (Land_Wreck_Uaz) no rompe el censo: max_hp = health_hp = -1.
+        uaz = by_class["Land_Wreck_Uaz"][0]
+        self.assertEqual((uaz["max_hp"], uaz["health_hp"]), (-1.0, -1.0))
+        self.assertEqual(uaz["parent_net_id"], "")
+        self.assertEqual(by_class["Barrel_Blue"][0]["max_hp"], 100.0)
         # El director no entra (include_director_b = 0).
         self.assertEqual([r for r in pages["rows"] if r["owner_uid"]], [])
 
@@ -1383,6 +1388,29 @@ class StaticPersistExtensionTests(unittest.TestCase):
         row = _block_after(self.code, r"protected\s+void\s+AppendEntityCensusRow\s*\([^)]*\)\s*\{")
         self.assertRegex(row, r"if\s*\(withSurface\)\s*\{[^}]*g_Game\.SurfaceY\(pos\[0\],\s*pos\[2\]\)")
         self.assertIn("ReadRealLocation(obj,", row)  # parent_net_id, parent_class, slot_name y loc_kind reales
+
+    def test_health_is_only_read_behind_has_damage_system(self):
+        # Object.GetMaxHealth/GetHealth/SetHealth tiran una excepcion de la VM en objetos sin sistema de daño
+        # (Land_Wreck_Uaz): solo pueden aparecer en ReadHealth y ApplyHealthRatio, y detras de HasDamageSystem().
+        code = self.code
+        helpers = {}
+        for name in ("ReadHealth", "ApplyHealthRatio"):
+            body = _block_after(code, r"protected\s+void\s+%s\s*\([^)]*\)\s*\{" % name)
+            self.assertIsNotNone(body, name)
+            self.assertIn("HasDamageSystem()", body)
+            helpers[name] = body
+        for call in ("GetMaxHealth(", "GetHealth(", "SetHealth("):
+            total = code.count(call)
+            inside = sum(b.count(call) for b in helpers.values())
+            self.assertGreater(total, 0, call)
+            self.assertEqual(total, inside, call + " fuera de los ayudantes con guarda")
+            for b in helpers.values():
+                if call in b:
+                    self.assertLess(b.index("HasDamageSystem()"), b.index(call))
+        self.assertIn("maxHp = -1.0;", helpers["ReadHealth"])
+        self.assertIn("healthHp = -1.0;", helpers["ReadHealth"])
+        # y el testigo no lee salud.
+        self.assertNotRegex(_code(WITNESS_C)[1], r"Get(Max)?Health\(")
 
     def test_sample0_row_uses_ids_read_at_the_first_tick(self):
         tick = _block_after(self.code, r"protected\s+void\s+TickWitness\s*\(\s*\)\s*\{")
