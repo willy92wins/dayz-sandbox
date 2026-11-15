@@ -6,9 +6,11 @@ UDP encola los RPC. La clave no se escribe en la salida.
 """
 
 import argparse
+import hashlib
 import importlib
 import json
 import math
+import os
 import queue
 import re
 import secrets
@@ -60,6 +62,35 @@ VERBS = {
 }
 
 CORE_JOB_VERBS = frozenset({"job_read", "job_stop", "job_free"})
+
+
+WIT_PREFIX = "[DSBX_WIT] "
+_WIT_LOCK = threading.Lock()
+
+
+def wit_digest(obj):
+    """sha256 hex del JSON canonico (claves ordenadas, sin espacios). Lo usa tests/e2e_witness.py."""
+    raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+_NO_DIGEST = object()
+
+
+def wit_line(digest_of=_NO_DIGEST, **fields):
+    """Traza para el testigo de los e2e: una linea por stdout, con flush. No cambia el cable ni la conducta.
+
+    Todo (digest, serializacion y escritura) va dentro del ``try``: la traza nunca puede romper al peer.
+    """
+    try:
+        if digest_of is not _NO_DIGEST:
+            fields["digest"] = wit_digest(digest_of)
+        line = WIT_PREFIX + json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        with _WIT_LOCK:
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+    except Exception:
+        pass
 
 
 def _excepthook(exc_type, exc, tb):
@@ -1404,6 +1435,18 @@ class Peer:
             data = json.dumps(body, allow_nan=False, separators=(",", ":")).encode("utf-8")
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        if kind == "result" and isinstance(body, dict):
+            wit_line(
+                ev="wit",
+                phase="sent",
+                pid=os.getpid(),
+                role=self.role,
+                inst=self.inst,
+                op_id=body.get("op_id"),
+                verb=body.get("verb"),
+                status=body.get("status"),
+                digest_of=body,
+            )
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 raw = resp.read()
@@ -1424,6 +1467,20 @@ class Peer:
             payload = json.loads(raw.decode("utf-8"), parse_constant=_reject_nonfinite)
         except (UnicodeError, ValueError):
             return code, None
+        if kind == "poll" and code == 200 and isinstance(payload, dict) and isinstance(payload.get("ops"), list):
+            for op in payload["ops"]:
+                if isinstance(op, dict):
+                    wit_line(
+                        ev="wit",
+                        phase="recv",
+                        pid=os.getpid(),
+                        role=self.role,
+                        inst=self.inst,
+                        op_id=op.get("op_id"),
+                        verb=op.get("verb"),
+                        status=None,
+                        digest_of=op.get("args"),
+                    )
         return code, payload
 
 
@@ -1487,6 +1544,7 @@ def main(argv=None):
     parser.add_argument("--log", default=None)
     parser.add_argument("--build", default=None)
     args = parser.parse_args(argv)
+    wit_line(ev="wit_start", pid=os.getpid(), role=args.peer)
     Peer(
         args.config,
         args.peer,
