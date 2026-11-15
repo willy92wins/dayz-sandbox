@@ -1,5 +1,6 @@
 "use strict";
 const fs = require("fs");
+const http = require("http");
 const path = require("path");
 const readline = require("readline");
 const { chromium } = require("playwright");
@@ -339,6 +340,28 @@ async function waitForSnap(predicate, desc, timeoutMs = 6000) {
     await sleep(100);
   }
   throw new Error("timeout esperando snapshot (" + desc + "): rev=" + (last && last.rev));
+}
+
+// Servidor local que contesta con las cabeceras y un trozo del cuerpo, y nunca lo termina (SEG-03).
+async function startStallServer() {
+  const sockets = new Set();
+  const srv = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.write('{"ok":tr');
+  });
+  srv.on("connection", (s) => {
+    sockets.add(s);
+    s.on("close", () => sockets.delete(s));
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  return {
+    url: "http://127.0.0.1:" + srv.address().port + "/stall",
+    close: () => {
+      for (const s of sockets) s.destroy();
+      srv.close();
+    },
+  };
 }
 
 async function openToolsMenu(page) {
@@ -2378,6 +2401,214 @@ async function runS5(browser) {
         fail503 = false;
         await page.unroute("**/api/scene", sceneFail);
         await page.unroute("**/api/events", sseCut4);
+      }
+    }
+
+    // ---- Regresiones de la pasada de Sol tras el merge (SEG-01, SEG-02, SEG-03) ----
+    const reopenOnEntity = async () => {
+      await page.goto(BASE + "/");
+      await loginIfNeeded(context, page);
+      await page.locator('[data-panel="jerarquia"] [data-entity-id="' + eid + '"]').click();
+      await activatePanel(page, "propiedades");
+    };
+
+    // SEG-03: una respuesta con las cabeceras y sin el cuerpo entero no deja la fila parada
+    await reopenOnEntity();
+    {
+      const stall = await startStallServer();
+      let divertedS3 = false;
+      const divertFirst = async (route) => {
+        if (route.request().method() === "POST" && !divertedS3) {
+          divertedS3 = true;
+          try {
+            await route.continue({ url: stall.url });
+          } catch (e) {
+            if (!/already handled/i.test(String(e && e.message))) throw e;
+          }
+          return;
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", divertFirst);
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7700");
+        await page.keyboard.press("Enter");
+        await page
+          .locator('[data-aviso="sin-respuesta"]')
+          .first()
+          .waitFor({ state: "visible", timeout: 16000 })
+          .catch(() => {
+            throw new Error("S5(-): con las cabeceras y sin el cuerpo no salio el aviso sin-respuesta en 16 s (SEG-03)");
+          });
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7701");
+        await page.keyboard.press("Enter");
+        await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.x === 7701;
+        }, "SEG-03: X=7701 tras el plazo", 10000).catch(async (err) => {
+          const e = await xOf();
+          throw new Error("S5(-): tras un cuerpo que no llega, la fila siguio parada (SEG-03): x=" + (e && e.x) + " · " + err.message);
+        });
+      } finally {
+        await page.unroute("**/api/scene/ops", divertFirst);
+        stall.close();
+        await page.locator("#f-x").evaluate((el) => el.blur());
+        await sleep(200);
+      }
+    }
+
+    // SEG-02: tras un plazo vencido, la tanda en duda se vuelve a mandar con su request_id antes de la
+    // siguiente. Aquí la primera llega tarde al backend (antes de que se procese la siguiente
+    // petición) y la siguiente no puede pisar su X. Esc antes de pasar a Z, para que salir de X no la
+    // reconfirme.
+    await reopenOnEntity();
+    {
+      let releaseNever;
+      const neverGate = new Promise((r) => {
+        releaseNever = r;
+      });
+      let firstBody = null;
+      let firstCsrf = "";
+      let replayed = false;
+      let heldS2 = null;
+      const lateFirst = async (route) => {
+        const req = route.request();
+        if (req.method() !== "POST") {
+          await continueSafe(route);
+          return;
+        }
+        if (firstBody === null) {
+          firstBody = req.postData();
+          const h = await req.allHeaders();
+          firstCsrf = h["x-csrf-token"] || "";
+          heldS2 = route;
+          await neverGate; // por este camino no llega nunca al backend
+          return;
+        }
+        if (!replayed) {
+          replayed = true;
+          const late = await context.request.post(BASE + "/api/scene/ops", {
+            headers: { "Content-Type": "application/json", "X-CSRF-Token": firstCsrf, Origin: BASE },
+            data: firstBody,
+          });
+          assert(late.ok(), "S5(-): SEG-02: la llegada tardia de la primera tanda dio " + late.status());
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", lateFirst);
+      try {
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7811");
+        await page.keyboard.press("Enter");
+        await page
+          .locator('[data-aviso="sin-respuesta"]')
+          .first()
+          .waitFor({ state: "visible", timeout: 16000 })
+          .catch(() => {
+            throw new Error("S5(-): SEG-02: la primera tanda retenida no dio el aviso sin-respuesta en 16 s");
+          });
+        await page.keyboard.press("Escape");
+        await page.keyboard.press("Tab");
+        await waitEditable(page, "#f-z");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7822");
+        await page.keyboard.press("Enter");
+        const finS2 = await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.z === 7822;
+        }, "SEG-02: Z=7822", 10000);
+        const eS2 = finS2.doc.entities.find((x) => x.id === eid);
+        await sleep(500);
+        const eS2b = await xOf();
+        assert(
+          eS2.x === 7811 && eS2b.x === 7811 && eS2b.z === 7822,
+          "S5(-): la tanda en duda llego tarde y la siguiente piso su X (SEG-02): " + JSON.stringify({ x: eS2b.x, z: eS2b.z })
+        );
+      } finally {
+        releaseNever();
+        if (heldS2) {
+          try {
+            await heldS2.abort();
+          } catch (e) {
+            // la página ya canceló esa petición
+          }
+        }
+        await page.unroute("**/api/scene/ops", lateFirst);
+        await page.locator("#f-z").evaluate((el) => el.blur());
+        await sleep(200);
+      }
+    }
+
+    // SEG-01: una tanda que quedó en la fila de una sesión no sale en la siguiente. Rumbo con la
+    // petición retenida, Borrar detrás en la fila, la sesión caduca (401 en un préstamo) y se vuelve a
+    // entrar; al soltar la petición, la entidad sigue ahí.
+    await reopenOnEntity();
+    {
+      let releaseS1;
+      const gateS1 = new Promise((r) => {
+        releaseS1 = r;
+      });
+      let heldS1 = false;
+      const holdFirstS1 = async (route) => {
+        if (route.request().method() === "POST" && !heldS1) {
+          heldS1 = true;
+          await gateS1; // la petición no llega al backend hasta soltarla
+        }
+        await continueSafe(route);
+      };
+      let lease401 = 0;
+      const leaseOnce401 = async (route) => {
+        if (route.request().method() === "POST" && lease401 === 0) {
+          lease401 += 1;
+          await route.fulfill({
+            status: 401,
+            contentType: "application/json; charset=utf-8",
+            body: JSON.stringify({ ok: false, code: "unauthorized", pointer: "", msg: "sesion caducada" }),
+          });
+          return;
+        }
+        await continueSafe(route);
+      };
+      await page.route("**/api/scene/ops", holdFirstS1);
+      try {
+        await page.locator("#f-yaw").focus();
+        await waitEditable(page, "#f-yaw");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("44");
+        await page.keyboard.press("Enter");
+        const dS1 = Date.now() + 3000;
+        while (!heldS1 && Date.now() < dS1) await sleep(50);
+        assert(heldS1, "S5(-): SEG-01: no salio el POST del rumbo");
+        const row = page.locator('[data-panel="jerarquia"] [data-entity-id="' + eid + '"]');
+        await row.click();
+        await page.keyboard.press("Delete");
+        await sleep(300);
+        await page.route("**/api/lease", leaseOnce401);
+        await row.click();
+        await activatePanel(page, "propiedades");
+        await page.locator("#f-name").focus();
+        await page.locator("#human-key").waitFor({ state: "visible", timeout: 8000 }).catch(() => {
+          throw new Error("S5(-): SEG-01: el 401 del prestamo no llevo a volver a entrar");
+        });
+        await page.unroute("**/api/lease", leaseOnce401);
+        await loginIfNeeded(context, page);
+        releaseS1();
+        await sleep(1500);
+        const snapS1 = await cmd({ cmd: "snapshot" });
+        assert(
+          snapS1.doc.entities.some((e) => e.id === eid),
+          "S5(-): un Borrar de la sesion anterior salio en la nueva y borro la entidad (SEG-01)"
+        );
+      } finally {
+        releaseS1();
+        await sleep(200);
+        await page.unroute("**/api/scene/ops", holdFirstS1);
       }
     }
 

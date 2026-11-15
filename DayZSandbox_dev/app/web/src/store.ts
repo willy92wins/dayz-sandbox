@@ -431,6 +431,8 @@ async function flushProfileSave(): Promise<void> {
 }
 
 function handleSessionExpired() {
+  // Nada de lo que quede en la fila sale ya: era de esta sesión (revisión de Sol, SEG-01).
+  resetCommitQueue();
   releaseActiveLeaseOnUnmount();
   setState({
     view: 'login',
@@ -619,14 +621,14 @@ export function applyIncomingSceneDoc(
 // lectura fallida (revisión de Sol, R2-01).
 export async function fetchAuthoritativeScene(markCommit: boolean): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout('/api/scene', { credentials: 'same-origin' });
+    const { res, data } = await fetchJsonWithTimeout('/api/scene', { credentials: 'same-origin' });
     if (res.status === 401) {
       handleSessionExpired();
       return false;
     }
     markBackendAlive();
-    if (!res.ok) return false;
-    const snap = (await res.json()) as {
+    if (!res.ok || !data) return false;
+    const snap = data as {
       doc_id: string;
       rev: number;
       hash: string;
@@ -856,9 +858,37 @@ let commitChain: Promise<unknown> = Promise.resolve();
 // Última revisión que el backend devolvió a una tanda nuestra, por documento: la tanda siguiente no
 // se construye hasta que el documento de la web la alcance.
 let lastAck: { docId: string; rev: number } | null = null;
-// Una tanda sin respuesta en el plazo deja el resultado en duda: antes de la siguiente hay que releer
-// la escena (R2-04).
+// Pide releer la escena antes de la tanda siguiente: hay una tanda cuyo efecto aún no se ha leído
+// (R2-04).
 let resyncNeeded = false;
+// Generación de la sesión: sube con cada sesión nueva. Una tanda encolada en otra sesión no sale
+// nunca, ni toca el estado al volver de una espera (revisión de Sol, SEG-01).
+let sessionGen = 0;
+
+type OpsContext = { targetId?: string; field?: string; rawValue?: string };
+
+// Una tanda que se quedó sin respuesta en el plazo: el backend pudo aplicarla o no, y una lectura de
+// la escena no lo demuestra (puede llegar antes que ella). Antes de la tanda siguiente se vuelve a
+// mandar tal cual, con el mismo request_id: el backend no la aplica dos veces y su respuesta dice qué
+// pasó (revisión de Sol, SEG-02).
+interface UncertainOps {
+  body: string;
+  docId: string;
+  context: OpsContext | undefined;
+  genAtSend: number;
+  sessionAt: number;
+}
+let uncertain: UncertainOps | null = null;
+
+interface OpsResponse {
+  ok?: boolean;
+  rev?: number;
+  code?: string;
+  pointer?: string;
+  msg?: string;
+  created?: string[];
+  errors?: Array<{ code: string; pointer: string; msg: string }>;
+}
 
 const REQUEST_TIMEOUT_MS = 10000;
 const FRESH_ATTEMPTS = 3;
@@ -869,12 +899,28 @@ const FRESH_WAIT_MS = 300;
 export const NO_CHANGE = 'sin-cambios' as const;
 export type SceneOpsBuilder = () => SceneOp[] | null | typeof NO_CHANGE;
 
-// Ninguna petición de la escena se queda colgada para siempre: pasado el plazo se cancela (R2-04).
-async function fetchWithTimeout(input: string, init: RequestInit = {}): Promise<Response> {
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError';
+}
+
+// Ninguna petición de la escena se queda colgada para siempre: pasado el plazo se cancela (R2-04),
+// también si lo que no termina de llegar es el cuerpo de la respuesta (revisión de Sol, SEG-03).
+async function fetchJsonWithTimeout(
+  input: string,
+  init: RequestInit = {}
+): Promise<{ res: Response; data: unknown }> {
   const ctl = new AbortController();
   const timer = window.setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(input, { ...init, signal: ctl.signal });
+    const res = await fetch(input, { ...init, signal: ctl.signal });
+    let data: unknown = null;
+    try {
+      data = await res.json();
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      data = null;
+    }
+    return { res, data };
   } finally {
     window.clearTimeout(timer);
   }
@@ -888,9 +934,9 @@ function isDocFresh(): boolean {
 
 // Antes de construir una tanda, el documento de la web tiene que incluir las anteriores. Si la
 // lectura autoritativa falla se reintenta un poco; si sigue sin llegar, la tanda no sale (R2-01).
-// Una lectura que sí llega, hecha después de las tandas anteriores, es la verdad del backend aunque
-// su revisión no alcance la última confirmada (una escena reiniciada, o la respuesta simulada de
-// una prueba): con ella se sigue.
+// Una lectura que sí llega, hecha después de las tandas anteriores (y de resolver la que estuviera en
+// duda), es la verdad del backend aunque su revisión no alcance la última confirmada (una escena
+// reiniciada, o la respuesta simulada de una prueba): con ella se sigue.
 async function ensureFreshDoc(): Promise<boolean> {
   let fresh = isDocFresh();
   for (let attempt = 0; attempt < FRESH_ATTEMPTS && !fresh; attempt++) {
@@ -908,32 +954,78 @@ async function ensureFreshDoc(): Promise<boolean> {
   return true;
 }
 
-// Con una sesión nueva, la fila empieza de cero: nada de la anterior la retiene.
+// Con una sesión nueva, la fila empieza de cero: nada de la anterior la retiene ni sale ya.
 export function resetCommitQueue(): void {
+  sessionGen += 1;
   commitChain = Promise.resolve();
   lastAck = null;
   resyncNeeded = false;
+  uncertain = null;
+}
+
+function opsPostInit(body: string): RequestInit {
+  return {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': localStorage.getItem('csrf') ?? '',
+    },
+    body,
+  };
 }
 
 export function commitSceneOps(
   label: string,
   ops: SceneOp[] | SceneOpsBuilder,
-  context?: { targetId?: string; field?: string; rawValue?: string }
+  context?: OpsContext
 ): Promise<boolean> {
-  // La generación del borrador se toma al encolar, no al salir de la fila (ver commitSceneOpsNow).
+  // La generación del borrador, la sesión y el documento se toman al encolar (ver commitSceneOpsNow).
   const key = context?.targetId && context?.field ? `${context.targetId}:${context.field}` : null;
   const genAtEnqueue = key ? draftGen[key] ?? 0 : 0;
-  const run = commitChain.then(() => commitSceneOpsNow(label, ops, context, genAtEnqueue));
+  const sessionAt = sessionGen;
+  const docIdAtEnqueue = state.docInfo?.doc_id ?? null;
+  const run = commitChain.then(() =>
+    commitSceneOpsNow(label, ops, context, genAtEnqueue, sessionAt, docIdAtEnqueue)
+  );
   commitChain = run.catch(() => undefined);
   return run;
+}
+
+// Vuelve a mandar la tanda en duda, tal cual. Devuelve si ya se sabe qué pasó con ella.
+async function resolveUncertain(): Promise<boolean> {
+  const u = uncertain;
+  if (!u) return true;
+  try {
+    const { res, data } = await fetchJsonWithTimeout('/api/scene/ops', opsPostInit(u.body));
+    if (u.sessionAt !== sessionGen) return false;
+    markBackendAlive();
+    uncertain = null;
+    // Su efecto tiene que leerse antes de construir la tanda siguiente.
+    resyncNeeded = true;
+    await handleOpsResponse(res, data as OpsResponse | null, u.context, u.genAtSend, u.docId);
+    return true;
+  } catch (err) {
+    if (u.sessionAt !== sessionGen) return false;
+    if (!isAbortError(err)) markBackendDown();
+    return false;
+  }
 }
 
 async function commitSceneOpsNow(
   label: string,
   opsOrBuilder: SceneOp[] | SceneOpsBuilder,
-  context: { targetId?: string; field?: string; rawValue?: string } | undefined,
-  genAtEnqueue: number
+  context: OpsContext | undefined,
+  genAtEnqueue: number,
+  sessionAt: number,
+  docIdAtEnqueue: string | null
 ): Promise<boolean> {
+  // Una tanda de otra sesión o de otro documento no sale, ni toca el estado al volver de una espera:
+  // su intención era para lo que había entonces (revisión de Sol, SEG-01).
+  const stale = () =>
+    sessionAt !== sessionGen ||
+    (docIdAtEnqueue !== null && state.docInfo !== null && state.docInfo.doc_id !== docIdAtEnqueue);
+  if (stale()) return false;
   if (state.sinBackend || !state.docInfo) return false;
   const fieldKey =
     context?.targetId && context?.field ? `${context.targetId}:${context.field}` : null;
@@ -944,7 +1036,20 @@ async function commitSceneOpsNow(
   if (fieldKey && (draftGen[fieldKey] ?? 0) !== genAtEnqueue && state.drafts[fieldKey] === undefined) {
     return true;
   }
+  if (uncertain && !(await resolveUncertain())) {
+    if (stale()) return false;
+    setState({
+      notice: {
+        kind: 'sin-respuesta',
+        message:
+          'El backend sigue sin responder a un cambio anterior: este no se ha mandado y sigue en su campo.',
+      },
+    });
+    return false;
+  }
+  if (stale()) return false;
   if (!(await ensureFreshDoc())) {
+    if (stale()) return false;
     setState({
       notice: {
         kind: 'escena-sin-releer',
@@ -953,6 +1058,7 @@ async function commitSceneOpsNow(
     });
     return false;
   }
+  if (stale()) return false;
   if (state.sinBackend || !state.docInfo) return false;
   const built = typeof opsOrBuilder === 'function' ? opsOrBuilder() : opsOrBuilder;
   if (built === NO_CHANGE) {
@@ -967,127 +1073,30 @@ async function commitSceneOpsNow(
   const reqId = nextRequestId('ops');
   const genAtSend = genAtEnqueue;
   const docIdAtSend = state.docInfo.doc_id;
+  const body = JSON.stringify({
+    doc_id: docIdAtSend,
+    request_id: reqId,
+    base_rev: state.docInfo.rev,
+    label,
+    ops,
+  });
   try {
-    const res = await fetchWithTimeout('/api/scene/ops', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': localStorage.getItem('csrf') ?? '',
-      },
-      body: JSON.stringify({
-        doc_id: state.docInfo.doc_id,
-        request_id: reqId,
-        base_rev: state.docInfo.rev,
-        label,
-        ops,
-      }),
-    });
+    const { res, data } = await fetchJsonWithTimeout('/api/scene/ops', opsPostInit(body));
+    if (stale()) return false;
     markBackendAlive();
-    const data = (await res.json().catch(() => null)) as {
-      ok?: boolean;
-      rev?: number;
-      code?: string;
-      pointer?: string;
-      msg?: string;
-      created?: string[];
-      errors?: Array<{ code: string; pointer: string; msg: string }>;
-    } | null;
-
-    if (res.status === 401 || (res.status === 403 && data?.code === 'csrf_failed')) {
-      handleSessionExpired();
-      return false;
-    }
-
-    if (res.ok && data?.ok) {
-      if (typeof data.rev === 'number') {
-        if (!lastAck || lastAck.docId !== docIdAtSend || data.rev > lastAck.rev) {
-          lastAck = { docId: docIdAtSend, rev: data.rev };
-        }
-      }
-      if (Array.isArray(data.created) && data.created.length > 0) {
-        pendingCreatedEntityId = data.created[0];
-      }
-      // Un borrador posterior al envío (otra tecla, otro valor) no se borra con este éxito.
-      if (context?.targetId && context?.field && fieldKey && (draftGen[fieldKey] ?? 0) === genAtSend) {
-        clearFieldErrorAndDraft(context.targetId, context.field);
-      }
-      await fetchAuthoritativeScene(true);
-      return true;
-    }
-
-    const firstErr =
-      Array.isArray(data?.errors) && data.errors.length > 0
-        ? data.errors[0]
-        : {
-            code: data?.code ?? String(res.status),
-            pointer: data?.pointer ?? '',
-            msg: data?.msg ?? 'Error de validación',
-          };
-
-    if (context?.targetId && context?.field) {
-      const key = `${context.targetId}:${context.field}`;
-      // El borrador cambió o se descartó (Esc) mientras volvía la respuesta: no se resucita.
-      if ((draftGen[key] ?? 0) !== genAtSend) return false;
-      // Su entidad ya no existe (la borró otra edición): tampoco (revisión de Sol, R2-03).
-      if (
-        context.targetId !== 'ambiente' &&
-        !state.doc?.entities.some((e) => e.id === context.targetId)
-      ) {
-        return false;
-      }
-      const rawValue = context.rawValue ?? state.drafts[key] ?? '';
-      const rej: RejectedDraft = {
-        targetId: context.targetId,
-        field: context.field,
-        rawValue,
-        code: firstErr.code,
-        msg: firstErr.msg,
-        pointer: firstErr.pointer,
-      };
-      const valItem: ValidationErrorItem = {
-        id: key,
-        pointer: firstErr.pointer,
-        code: firstErr.code,
-        msg: firstErr.msg,
-        targetId: context.targetId,
-        field: context.field,
-      };
-      setState((prev) => ({
-        drafts: { ...prev.drafts, [key]: rawValue },
-        rejectedDrafts: { ...prev.rejectedDrafts, [key]: rej },
-        validationErrors: [
-          ...prev.validationErrors.filter((e) => e.id !== key),
-          valItem,
-        ],
-      }));
-    } else {
-      const errId = `op-err-${Date.now()}`;
-      setState((prev) => ({
-        validationErrors: [
-          ...prev.validationErrors,
-          {
-            id: errId,
-            pointer: firstErr.pointer,
-            code: firstErr.code,
-            msg: firstErr.msg,
-            targetId: null,
-            field: null,
-          },
-        ],
-      }));
-    }
-    return false;
+    return await handleOpsResponse(res, data as OpsResponse | null, context, genAtSend, docIdAtSend);
   } catch (err) {
-    // Sin respuesta en el plazo: el backend pudo aplicarla o no. El borrador se queda en su campo
-    // y la tanda siguiente relee la escena antes de construirse (R2-04).
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    if (stale()) return false;
+    // Sin respuesta en el plazo: el backend pudo aplicarla o no. El borrador se queda en su campo y,
+    // antes de la tanda siguiente, se vuelve a mandar esta tal cual para saberlo (SEG-02).
+    if (isAbortError(err)) {
+      uncertain = { body, docId: docIdAtSend, context, genAtSend, sessionAt };
       resyncNeeded = true;
       setState({
         notice: {
           kind: 'sin-respuesta',
           message:
-            'El backend no respondió a tiempo: el cambio puede haberse aplicado o no. Se relee la escena antes del siguiente.',
+            'El backend no respondió a tiempo: el cambio puede haberse aplicado o no. Se comprueba antes del siguiente.',
         },
       });
       return false;
@@ -1095,6 +1104,102 @@ async function commitSceneOpsNow(
     markBackendDown();
     return false;
   }
+}
+
+async function handleOpsResponse(
+  res: Response,
+  data: OpsResponse | null,
+  context: OpsContext | undefined,
+  genAtSend: number,
+  docIdAtSend: string
+): Promise<boolean> {
+  const fieldKey =
+    context?.targetId && context?.field ? `${context.targetId}:${context.field}` : null;
+
+  if (res.status === 401 || (res.status === 403 && data?.code === 'csrf_failed')) {
+    handleSessionExpired();
+    return false;
+  }
+
+  if (res.ok && data?.ok) {
+    if (typeof data.rev === 'number') {
+      if (!lastAck || lastAck.docId !== docIdAtSend || data.rev > lastAck.rev) {
+        lastAck = { docId: docIdAtSend, rev: data.rev };
+      }
+    }
+    if (Array.isArray(data.created) && data.created.length > 0) {
+      pendingCreatedEntityId = data.created[0];
+    }
+    // Un borrador posterior al envío (otra tecla, otro valor) no se borra con este éxito.
+    if (context?.targetId && context?.field && fieldKey && (draftGen[fieldKey] ?? 0) === genAtSend) {
+      clearFieldErrorAndDraft(context.targetId, context.field);
+    }
+    await fetchAuthoritativeScene(true);
+    return true;
+  }
+
+  const firstErr =
+    Array.isArray(data?.errors) && data.errors.length > 0
+      ? data.errors[0]
+      : {
+          code: data?.code ?? String(res.status),
+          pointer: data?.pointer ?? '',
+          msg: data?.msg ?? 'Error de validación',
+        };
+
+  if (context?.targetId && context?.field) {
+    const key = `${context.targetId}:${context.field}`;
+    // El borrador cambió o se descartó (Esc) mientras volvía la respuesta: no se resucita.
+    if ((draftGen[key] ?? 0) !== genAtSend) return false;
+    // Su entidad ya no existe (la borró otra edición): tampoco (revisión de Sol, R2-03).
+    if (
+      context.targetId !== 'ambiente' &&
+      !state.doc?.entities.some((e) => e.id === context.targetId)
+    ) {
+      return false;
+    }
+    const rawValue = context.rawValue ?? state.drafts[key] ?? '';
+    const rej: RejectedDraft = {
+      targetId: context.targetId,
+      field: context.field,
+      rawValue,
+      code: firstErr.code,
+      msg: firstErr.msg,
+      pointer: firstErr.pointer,
+    };
+    const valItem: ValidationErrorItem = {
+      id: key,
+      pointer: firstErr.pointer,
+      code: firstErr.code,
+      msg: firstErr.msg,
+      targetId: context.targetId,
+      field: context.field,
+    };
+    setState((prev) => ({
+      drafts: { ...prev.drafts, [key]: rawValue },
+      rejectedDrafts: { ...prev.rejectedDrafts, [key]: rej },
+      validationErrors: [
+        ...prev.validationErrors.filter((e) => e.id !== key),
+        valItem,
+      ],
+    }));
+  } else {
+    const errId = `op-err-${Date.now()}`;
+    setState((prev) => ({
+      validationErrors: [
+        ...prev.validationErrors,
+        {
+          id: errId,
+          pointer: firstErr.pointer,
+          code: firstErr.code,
+          msg: firstErr.msg,
+          targetId: null,
+          field: null,
+        },
+      ],
+    }));
+  }
+  return false;
 }
 
 // Generación de cada borrador: sube cada vez que el borrador cambia o se descarta. La respuesta de
