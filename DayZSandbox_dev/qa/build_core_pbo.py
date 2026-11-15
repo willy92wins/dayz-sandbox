@@ -7,8 +7,8 @@ Uso, desde DayZSandbox_dev/:
 2. Saca DayZSandbox/ de HEAD con `git -c core.autocrlf=false archive` a <out>/stage.
 3. Empaqueta con AddonBuilder, siempre con lista de argumentos y sin shell.
 4. Lee el PBO y lo compara con HEAD por sha256: lleva exactamente los ficheros de
-   DayZSandbox/ en HEAD menos las directivas ($PBOPREFIX$ e include.lst), y el prefijo
-   DayZSandbox.
+   DayZSandbox/ en HEAD, $PBOPREFIX$ e include.lst incluidos (AddonBuilder los mete; medido
+   el 2026-11-15 sobre 5c31a55), y el prefijo DayZSandbox.
 5. Comprueba que el repo sigue limpio.
 
 Escribe <out>/build_core_pbo.json. Sale con 0 si todo cuadra, con 1 si hay diferencias y
@@ -28,7 +28,6 @@ from pathlib import Path
 AB_DEFAULT = r"C:\Program Files (x86)\Steam\steamapps\common\DayZ Tools\Bin\AddonBuilder\AddonBuilder.exe"
 MOD = "DayZSandbox"
 PRODUCT = 0x56657273  # metodo de la entrada de producto ("Vers")
-DIRECTIVES = ("$PBOPREFIX$", "include.lst")  # AddonBuilder las lee y no las mete en el PBO
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -106,8 +105,8 @@ def pbo_checksum_ok(path):
 
 
 def compare(head_files, pbo_files):
-    """Diferencias entre lo que debe llevar el PBO (HEAD sin directivas) y lo que lleva."""
-    want = {p: b for p, b in head_files.items() if p not in DIRECTIVES}
+    """Diferencias entre lo que debe llevar el PBO (los ficheros de HEAD) y lo que lleva."""
+    want = dict(head_files)
     out = [{"path": p, "problem": "missing"} for p in sorted(set(want) - set(pbo_files))]
     out += [{"path": p, "problem": "extra"} for p in sorted(set(pbo_files) - set(want))]
     for p in sorted(set(want) & set(pbo_files)):

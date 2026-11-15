@@ -72,12 +72,12 @@ class Comparar(unittest.TestCase):
     HEAD = {"$PBOPREFIX$": b"DayZSandbox\n", "include.lst": b"*.c\n", "config.cpp": b"cfg",
             "scripts/3_Game/A.c": b"a", "scripts/3_Game/B.c": b"b"}
 
-    def test_iguales_sin_diferencias_y_sin_pedir_las_directivas(self):
-        pbo = {k: v for k, v in self.HEAD.items() if k not in ("$PBOPREFIX$", "include.lst")}
-        self.assertEqual(bcp.compare(self.HEAD, pbo), [])
+    def test_iguales_sin_diferencias(self):
+        self.assertEqual(bcp.compare(self.HEAD, dict(self.HEAD)), [])
 
     def test_falta_sobra_y_distinto(self):
-        pbo = {"config.cpp": b"cfg", "scripts/3_Game/A.c": b"a2", "scripts/3_Game/C.c": b"c"}
+        pbo = {"$PBOPREFIX$": b"DayZSandbox\n", "include.lst": b"*.c\n", "config.cpp": b"cfg",
+               "scripts/3_Game/A.c": b"a2", "scripts/3_Game/C.c": b"c"}
         got = bcp.compare(self.HEAD, pbo)
         self.assertEqual([(d["path"], d["problem"]) for d in got],
                          [("scripts/3_Game/B.c", "missing"), ("scripts/3_Game/C.c", "extra"),
@@ -86,10 +86,10 @@ class Comparar(unittest.TestCase):
         self.assertEqual(diff["head_sha256"], hashlib.sha256(b"a").hexdigest())
         self.assertEqual(diff["pbo_sha256"], hashlib.sha256(b"a2").hexdigest())
 
-    def test_una_directiva_dentro_del_pbo_sobra(self):
+    def test_las_directivas_tambien_van_en_el_pbo(self):
         pbo = {k: v for k, v in self.HEAD.items() if k != "include.lst"}
         self.assertEqual([(d["path"], d["problem"]) for d in bcp.compare(self.HEAD, pbo)],
-                         [("$PBOPREFIX$", "extra")])
+                         [("include.lst", "missing")])
 
 
 class Precondiciones(unittest.TestCase):
