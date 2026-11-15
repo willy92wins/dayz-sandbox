@@ -38,6 +38,7 @@ import m1_gate
 import s_mapa_eval
 import s_mapa_mutants
 import wire
+from tests import e2e_witness
 
 
 FIXTURE_PATH = QA_DIR / "fixtures" / "s_mapa_puntos.json"
@@ -262,6 +263,12 @@ def _recording_part_context_class():
     base = f03_common.PartContext
 
     class _RecordingPartContext(base):  # type: ignore[misc, valid-type]
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        def _spawn_peers(self, *args, **kwargs):
+            return super()._spawn_peers(*args, **kwargs)
+
         def open(self):
             super().open()
             _RECORD.contexts.append(
@@ -2195,6 +2202,9 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             )
             self.assertIn("runner_without_peers", _verify_part_against_record(pdir, empty_record))
             self.assertIn("no_recorded_traffic", _verify_part_against_record(pdir, empty_record))
+            codes = {p.code for p in e2e_witness.Witness().verify(pdir)}
+            self.assertIn("no_peer_process", codes)
+            self.assertIn("unwitnessed_row", codes)
 
             # 2) Extension que solo devuelve decision_id="located".
             minimal = {
@@ -2227,6 +2237,8 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             _write_jsonl(pdir2 / "samples" / "bridge.jsonl", rows2)
             v2 = s_mapa_eval.evaluate(pdir2, repo_root=REPO_ROOT)
             self.assertEqual(v2["exit_code"], 2, v2)
+            codes2 = {p.code for p in e2e_witness.Witness().verify(pdir2)}
+            self.assertIn("unwitnessed_row", codes2)
 
             # 3) DSBX_QA_X_Map.c compuesto solo por un comentario.
             comment_only = "// class DSBX_QA_X_Map SpawnTrackedObject CreateObjectEx( SurfaceY\n"
@@ -2697,17 +2709,18 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             with mock.patch.object(f03_common, "_JsonlWriter", writer_cls), mock.patch.object(
                 f03_common, "PartContext", ctx_cls
             ), mock.patch.object(s_mapa_run, "PartContext", ctx_cls, create=True):
-                rc = m1_gate.main(
-                    [
-                        "spike",
-                        "S-mapa",
-                        "--both",
-                        "--build",
-                        "offline",
-                        "--evidence",
-                        str(ev_dir),
-                    ]
-                )
+                with e2e_witness.Witness() as witness:
+                    rc = m1_gate.main(
+                        [
+                            "spike",
+                            "S-mapa",
+                            "--both",
+                            "--build",
+                            "offline",
+                            "--evidence",
+                            str(ev_dir),
+                        ]
+                    )
             self.assertEqual(rc, 0, "m1_gate.py spike S-mapa offline debe devolver 0 PASA")
             verdict = gate_core.read_json(ev_dir / "verdict.json")
             self.assertEqual(verdict["exit_code"], 0, verdict)
@@ -2716,6 +2729,7 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             for pname in expected_parts:
                 problems = _verify_part_against_record(ev_dir / pname, _RECORD)
                 self.assertEqual(problems, [], f"{pname}: {problems}")
+            self.assertEqual(witness.verify(ev_dir), [], "testigo comun de los e2e")
 
             rc_eval = m1_gate.main(
                 [
