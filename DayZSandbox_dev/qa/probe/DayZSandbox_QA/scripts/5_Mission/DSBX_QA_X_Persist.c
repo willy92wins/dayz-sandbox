@@ -139,7 +139,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	protected ref array<string> m_SentinelClasses;
 	protected ref array<string> m_CensusNcol;
 	protected ref array<string> m_CensusScol;
-	protected string m_PendingFinishJobId;
+	protected ref array<string> m_PendingFinishIds;
+	protected ref array<int> m_PendingFinishTicks;
 
 	void DSBX_QA_X_Persist()
 	{
@@ -151,7 +152,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_SentinelClasses = new array<string>();
 		m_CensusNcol = new array<string>();
 		m_CensusScol = new array<string>();
-		m_PendingFinishJobId = "";
+		m_PendingFinishIds = new array<string>();
+		m_PendingFinishTicks = new array<int>();
 
 		InitSentinelClasses();
 		InitCensusColumns();
@@ -534,6 +536,97 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		return foreignCount;
 	}
 
+	protected int CountForeignDescendantsAnyGen(Object ent, string expectEpoch, string sceneId)
+	{
+		if (!ent)
+			return 0;
+		EntityAI e = EntityAI.Cast(ent);
+		if (!e || !e.GetInventory())
+			return 0;
+		array<EntityAI> items = new array<EntityAI>();
+		e.GetInventory().EnumerateInventory(InventoryTraversalType.PREORDER, items);
+		int foreignCount = 0;
+		for (int i = 0; i < items.Count(); i++)
+		{
+			EntityAI child = items.Get(i);
+			if (!child || child == e)
+				continue;
+			DSBX_QA_PersistRecord childRec = FindRecordByObject(child);
+			bool deletable = childRec && childRec.m_SceneId == sceneId && childRec.m_ServerEpoch == expectEpoch;
+			if (!deletable)
+				foreignCount = foreignCount + 1;
+		}
+		return foreignCount;
+	}
+
+	protected void ReapplyResetWithRetention(string sceneId, string expectEpoch)
+	{
+		for (int i = 0; i < m_Records.Count(); i++)
+		{
+			DSBX_QA_PersistRecord rec = m_Records.Get(i);
+			if (rec && rec.m_SceneId == sceneId && rec.m_ServerEpoch == expectEpoch)
+			{
+				rec.m_RetainOnReset = false;
+				rec.m_ForeignDescendantsN = 0;
+			}
+		}
+		for (int j = 0; j < m_Records.Count(); j++)
+		{
+			DSBX_QA_PersistRecord cand = m_Records.Get(j);
+			if (!cand || cand.m_SceneId != sceneId || cand.m_ServerEpoch != expectEpoch || !cand.m_RefEnt)
+				continue;
+			int fCnt = CountForeignDescendantsAnyGen(cand.m_RefEnt, expectEpoch, sceneId);
+			if (fCnt > 0)
+			{
+				cand.m_RetainOnReset = true;
+				cand.m_ForeignDescendantsN = fCnt;
+				EntityAI curEnt = EntityAI.Cast(cand.m_RefEnt);
+				while (curEnt)
+				{
+					EntityAI anc = curEnt.GetHierarchyParent();
+					if (!anc)
+						break;
+					DSBX_QA_PersistRecord ancRec = FindRecordByObject(anc);
+					if (ancRec && ancRec.m_SceneId == sceneId && ancRec.m_ServerEpoch == expectEpoch)
+					{
+						ancRec.m_RetainOnReset = true;
+						if (ancRec.m_ForeignDescendantsN < fCnt)
+							ancRec.m_ForeignDescendantsN = fCnt;
+					}
+					curEnt = anc;
+				}
+			}
+		}
+		for (int p1 = m_Records.Count() - 1; p1 >= 0; p1--)
+		{
+			DSBX_QA_PersistRecord childRec = m_Records.Get(p1);
+			if (!childRec || childRec.m_SceneId != sceneId || childRec.m_ServerEpoch != expectEpoch)
+				continue;
+			if (childRec.m_ParentId == "" || childRec.m_RetainOnReset)
+				continue;
+			if (!m_Probe.LeaseOk())
+				break;
+			if (IsObjectAlive(childRec.m_RefEnt))
+				g_Game.ObjectDelete(childRec.m_RefEnt);
+			childRec.m_RefEnt = null;
+			m_Records.RemoveOrdered(p1);
+		}
+		for (int p2 = m_Records.Count() - 1; p2 >= 0; p2--)
+		{
+			DSBX_QA_PersistRecord rootRec = m_Records.Get(p2);
+			if (!rootRec || rootRec.m_SceneId != sceneId || rootRec.m_ServerEpoch != expectEpoch)
+				continue;
+			if (rootRec.m_ParentId != "" || rootRec.m_RetainOnReset)
+				continue;
+			if (!m_Probe.LeaseOk())
+				break;
+			if (IsObjectAlive(rootRec.m_RefEnt))
+				g_Game.ObjectDelete(rootRec.m_RefEnt);
+			rootRec.m_RefEnt = null;
+			m_Records.RemoveOrdered(p2);
+		}
+	}
+
 	override void OnStartOp(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
 	{
 		string verb = op.verb;
@@ -667,16 +760,21 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		int rootsN = 0;
 		int childrenN = 0;
 		int rowCount = 0;
+		int okCount = 0;
 		for (int i = 0; i < m_Records.Count(); i++)
 		{
 			DSBX_QA_PersistRecord r = m_Records.Get(i);
 			if (!r || r.m_SceneId != sceneId || r.m_GenN != genN)
 				continue;
 			rowCount = rowCount + 1;
-			if (r.m_ParentId == "")
-				rootsN = rootsN + 1;
-			else
-				childrenN = childrenN + 1;
+			if (r.m_OkB == 1)
+			{
+				okCount = okCount + 1;
+				if (r.m_ParentId == "")
+					rootsN = rootsN + 1;
+				else
+					childrenN = childrenN + 1;
+			}
 
 			read.scell.Insert(r.m_LogicalId);
 			read.scell.Insert(r.m_ClassName);
@@ -705,8 +803,20 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		}
 		read.rows = rowCount;
 
-		PutStr(read, "apply_status", "ok");
-		PutStr(read, "reason", "");
+		string applyStatus = "ok";
+		string applyReason = "";
+		if (okCount == 0)
+		{
+			applyStatus = "failed";
+			applyReason = "creation_failed";
+		}
+		else if (okCount < rowCount)
+		{
+			applyStatus = "partial";
+			applyReason = "creation_failed";
+		}
+		PutStr(read, "apply_status", applyStatus);
+		PutStr(read, "reason", applyReason);
 		PutStr(read, "server_epoch", m_Probe.GetInst());
 		PutStr(read, "scene_id", sceneId);
 		PutStr(read, "scene_op_id", sceneOpId);
@@ -765,22 +875,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			return;
 		}
 
-		for (int d = m_Records.Count() - 1; d >= 0; d--)
-		{
-			DSBX_QA_PersistRecord oldRec = m_Records.Get(d);
-			if (oldRec && oldRec.m_SceneId == sceneId)
-			{
-				if (IsObjectAlive(oldRec.m_RefEnt))
-				{
-					g_Game.ObjectDelete(oldRec.m_RefEnt);
-				}
-				oldRec.m_RefEnt = null;
-				m_Records.RemoveOrdered(d);
-			}
-		}
-
-		UpsertSceneMeta(sceneId, genN, sceneOpId);
-
 		int ncolCount = args.ncol.Count();
 		int scolCount = args.scol.Count();
 
@@ -796,6 +890,19 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		int idxHealthRatio = FindColIdx(args.ncol, "health_mark_ratio");
 		int idxMustVanish = FindColIdx(args.ncol, "must_vanish_b");
 
+		if (
+			idxLogical < 0 || idxParent < 0 || idxCat < 0 || idxClass < 0 || idxSlot < 0
+			|| idxReqX < 0 || idxReqZ < 0 || idxReqYaw < 0 || idxHealthRatio < 0 || idxMustVanish < 0
+		)
+		{
+			res.status = "rejected";
+			res.reason = "bad_args";
+			return;
+		}
+
+		ReapplyResetWithRetention(sceneId, expectEpoch);
+		UpsertSceneMeta(sceneId, genN, sceneOpId);
+
 		string opFault = m_Probe.GetOpFault();
 		bool omitNoPersist = (opFault == "omit_nopersistency_flag");
 
@@ -808,6 +915,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 		for (int r = 0; r < rows; r++)
 		{
+			if (!m_Probe.LeaseOk())
+				break;
 			int sBase = r * scolCount;
 			int nBase = r * ncolCount;
 
@@ -952,6 +1061,14 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				rec.m_ObsParentNetId = parentNetId;
 				rec.m_ObsSlotName = obsSlot;
 			}
+			else
+			{
+				// Datos ausentes distinguibles de valores observados: no hay lectura de salud.
+				rec.m_MaxHp = 0.0;
+				rec.m_HealthHp = 0.0;
+				rec.m_AliveB = 0;
+				rec.m_AiAgentB = 0;
+			}
 			m_Records.Insert(rec);
 		}
 
@@ -1039,6 +1156,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		int deletedN = 0;
 		for (int p1 = m_Records.Count() - 1; p1 >= 0; p1--)
 		{
+			if (!m_Probe.LeaseOk())
+				break;
 			DSBX_QA_PersistRecord childRec = m_Records.Get(p1);
 			if (!childRec || childRec.m_SceneId != sceneId || childRec.m_GenN != targetGenN)
 				continue;
@@ -1055,6 +1174,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 		for (int p2 = m_Records.Count() - 1; p2 >= 0; p2--)
 		{
+			if (!m_Probe.LeaseOk())
+				break;
 			DSBX_QA_PersistRecord rootRec = m_Records.Get(p2);
 			if (!rootRec || rootRec.m_SceneId != sceneId || rootRec.m_GenN != targetGenN)
 				continue;
@@ -1319,7 +1440,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			{
 				createdObj.SetPosition(targetPos);
 				createdObj.SetOrientation(Vector(yawDeg, 0.0, 0.0));
-				if (childCargoClass != "")
+				if (childCargoClass != "" && m_Probe.LeaseOk())
 				{
 					EntityAI ctrlEnt = EntityAI.Cast(createdObj);
 					if (ctrlEnt && ctrlEnt.GetInventory())
@@ -1413,17 +1534,15 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutNum(res.read, "frame", m_Probe.m_Frame);
 	}
 
-	protected void AppendEntityCensusRow(string jobId, Object obj, int inRadiusB, Man director, string directorUid, array<Object> seen)
+	protected bool AppendEntityCensusRow(string jobId, Object obj, int inRadiusB, Man director, string directorUid, array<Object> seen)
 	{
 		if (!IsObjectAlive(obj))
-			return;
+			return true;
 		for (int s = 0; s < seen.Count(); s++)
 		{
 			if (seen.Get(s) == obj)
-				return;
+				return true;
 		}
-		seen.Insert(obj);
-
 		string className = obj.GetType();
 		string locKind = "";
 		string parentClass = "";
@@ -1490,7 +1609,10 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		nvals.Insert(invChildrenN);
 		nvals.Insert(spawnTickMs);
 
-		m_Jobs.AppendRow(jobId, nvals, svals);
+		bool appended = m_Jobs.AppendRow(jobId, nvals, svals);
+		if (appended)
+			seen.Insert(obj);
+		return appended;
 	}
 
 	protected void HandleCensusStart(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
@@ -1501,7 +1623,29 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		float radiusM = GetNumArg(args, "radius_m", 60.0);
 		int includeDirectorB = (int)GetNumArg(args, "include_director_b", 0.0);
 
+		string opFaultEarly = m_Probe.GetOpFault();
+		ref array<ref DSBX_QA_Job> heldJobs = new array<ref DSBX_QA_Job>();
+		if (opFaultEarly == "census_resource_bypass")
+		{
+			for (int hp = 0; hp < m_PendingFinishIds.Count(); hp++)
+			{
+				DSBX_QA_Job held = m_Jobs.GetJob(m_PendingFinishIds.Get(hp));
+				if (held)
+				{
+					// Inyeccion equivalente al fake: libera el recurso solo para el chequeo de StartJob;
+					// el censo A sigue vivo y se libera mas tarde, de modo que el solapamiento es real.
+					held.m_Released = true;
+					heldJobs.Insert(held);
+				}
+			}
+		}
 		string err = m_Jobs.StartJob(this, op.op_id, "per_census", m_CensusNcol, m_CensusScol, 5, 4096, 900000.0, "stop");
+		for (int hr = 0; hr < heldJobs.Count(); hr++)
+		{
+			DSBX_QA_Job heldBack = heldJobs.Get(hr);
+			if (heldBack)
+				heldBack.m_Released = false;
+		}
 		if (err != "")
 		{
 			res.status = "rejected";
@@ -1563,20 +1707,28 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			if (!includeObj)
 				continue;
 
-			AppendEntityCensusRow(op.op_id, obj, 1, director, directorUid, seen);
+			if (!AppendEntityCensusRow(op.op_id, obj, 1, director, directorUid, seen))
+				break;
 			EntityAI ent = EntityAI.Cast(obj);
 			if (ent && ent.GetInventory())
 			{
 				array<EntityAI> subItems = new array<EntityAI>();
 				ent.GetInventory().EnumerateInventory(InventoryTraversalType.PREORDER, subItems);
+				bool subOk = true;
 				for (int sub = 0; sub < subItems.Count(); sub++)
 				{
 					EntityAI subEnt = subItems.Get(sub);
 					if (subEnt && subEnt != ent)
 					{
-						AppendEntityCensusRow(op.op_id, subEnt, 1, director, directorUid, seen);
+						if (!AppendEntityCensusRow(op.op_id, subEnt, 1, director, directorUid, seen))
+						{
+							subOk = false;
+							break;
+						}
 					}
 				}
+				if (!subOk)
+					break;
 			}
 		}
 
@@ -1591,7 +1743,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			float dz = rec.m_ReqZM - centerZ;
 			if ((dx * dx + dz * dz) <= (radiusM * radiusM))
 			{
-				AppendEntityCensusRow(op.op_id, rec.m_RefEnt, 0, director, directorUid, seen);
+				if (!AppendEntityCensusRow(op.op_id, rec.m_RefEnt, 0, director, directorUid, seen))
+					break;
 			}
 		}
 
@@ -1607,13 +1760,15 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 					EntityAI dItem = dirItems.Get(di);
 					if (dItem && dItem != dirEnt)
 					{
-						AppendEntityCensusRow(op.op_id, dItem, 1, director, directorUid, seen);
+						if (!AppendEntityCensusRow(op.op_id, dItem, 1, director, directorUid, seen))
+							break;
 					}
 				}
 			}
 		}
 
-		m_PendingFinishJobId = op.op_id;
+		m_PendingFinishIds.Insert(op.op_id);
+		m_PendingFinishTicks.Insert(10);
 		res.status = "done";
 		m_Jobs.FillStartRead(res.read, op.op_id, "per_census");
 		PutStr(res.read, "area_tag", areaTag);
@@ -1634,30 +1789,111 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 	override void OnTick(float timeslice)
 	{
-		if (m_PendingFinishJobId == "")
-			return;
-		string jid = m_PendingFinishJobId;
-		m_PendingFinishJobId = "";
-		if (m_Jobs.IsDeadmanTripped(jid))
+		int i = m_PendingFinishIds.Count() - 1;
+		while (i >= 0)
 		{
-			m_Jobs.EndJob(jid, "failed", "lease_expired");
-			return;
+			string jid = m_PendingFinishIds.Get(i);
+			int left = m_PendingFinishTicks.Get(i);
+			if (left > 0)
+			{
+				m_PendingFinishTicks.Set(i, left - 1);
+				i = i - 1;
+				continue;
+			}
+			m_PendingFinishIds.RemoveOrdered(i);
+			m_PendingFinishTicks.RemoveOrdered(i);
+			if (m_Jobs.IsDeadmanTripped(jid))
+			{
+				m_Jobs.EndJob(jid, "failed", "lease_expired");
+			}
+			else
+			{
+				m_Jobs.EndJob(jid, "done", "");
+			}
+			i = i - 1;
 		}
-		m_Jobs.EndJob(jid, "done", "");
 	}
 
 	override void OnJobEnd(string job_id, string state, string reason)
 	{
-		if (m_PendingFinishJobId == job_id)
+		int i = 0;
+		while (i < m_PendingFinishIds.Count())
 		{
-			m_PendingFinishJobId = "";
+			if (m_PendingFinishIds.Get(i) == job_id)
+			{
+				m_PendingFinishIds.RemoveOrdered(i);
+				m_PendingFinishTicks.RemoveOrdered(i);
+				return;
+			}
+			i = i + 1;
 		}
+	}
+
+	protected bool IsQaIdentity(string netId, string persId, array<string> netIds, array<string> persIds)
+	{
+		for (int i = 0; i < netIds.Count(); i++)
+		{
+			if (netIds.Get(i) == netId)
+				return true;
+		}
+		for (int j = 0; j < persIds.Count(); j++)
+		{
+			if (persIds.Get(j) == persId)
+				return true;
+		}
+		return false;
+	}
+
+	protected bool IsQaHealthMark(Object obj)
+	{
+		EntityAI ent = EntityAI.Cast(obj);
+		if (!ent)
+			return false;
+		float maxHp = ent.GetMaxHealth("", "");
+		if (maxHp <= 0.0)
+			return false;
+		float hp = ent.GetHealth("", "");
+		float d1 = hp - maxHp * 0.7325;
+		if (d1 < 0.0)
+			d1 = -d1;
+		if (d1 <= 1e-2)
+			return true;
+		float d2 = hp - maxHp * 0.6150;
+		if (d2 < 0.0)
+			d2 = -d2;
+		if (d2 <= 1e-2)
+			return true;
+		float d3 = hp - maxHp * 0.8450;
+		if (d3 < 0.0)
+			d3 = -d3;
+		return d3 <= 1e-2;
 	}
 
 	protected void CleanupAllEntities(DSBX_QA_Args args, out int cleanedOwnN, out int cleanedRawN)
 	{
 		cleanedOwnN = 0;
 		cleanedRawN = 0;
+
+		array<string> qaNetIds = new array<string>();
+		array<string> qaPersIds = new array<string>();
+		for (int q = 0; q < m_Records.Count(); q++)
+		{
+			DSBX_QA_PersistRecord qrec = m_Records.Get(q);
+			if (!qrec)
+				continue;
+			qaNetIds.Insert(qrec.m_NetId);
+			qaPersIds.Insert(qrec.m_PersId);
+		}
+		for (int qr = 0; qr < m_RawRecords.Count(); qr++)
+		{
+			DSBX_QA_PersistRawRecord qraw = m_RawRecords.Get(qr);
+			if (!qraw)
+				continue;
+			qaNetIds.Insert(qraw.m_NetId);
+			qaPersIds.Insert(qraw.m_PersId);
+			if (IsObjectAlive(qraw.m_ChildEnt))
+				qaNetIds.Insert(FormatNetId(qraw.m_ChildEnt));
+		}
 
 		for (int i = m_Records.Count() - 1; i >= 0; i--)
 		{
@@ -1721,7 +1957,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 					EntityAI ent = EntityAI.Cast(cand);
 					if (!ent || ent.IsMan())
 						continue;
-					if (IsSentinelClass(cand.GetType()))
+					bool byIdentity = IsQaIdentity(FormatNetId(cand), FormatPersId(cand), qaNetIds, qaPersIds);
+					bool byMark = IsSentinelClass(cand.GetType()) && IsQaHealthMark(cand);
+					if (byIdentity || byMark)
 					{
 						g_Game.ObjectDelete(cand);
 						cleanedRawN = cleanedRawN + 1;

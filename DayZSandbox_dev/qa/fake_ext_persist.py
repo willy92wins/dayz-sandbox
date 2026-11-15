@@ -334,6 +334,37 @@ class PersistFakeExt(FakeExt):
             if rec in self.records:
                 self.records.remove(rec)
 
+    def _reapply_reset_with_retention(self, scene_id):
+        old_recs = [
+            rec for rec in self.records
+            if rec["scene_id"] == scene_id and rec["server_epoch"] == self.epoch
+        ]
+        if not old_recs:
+            return
+        deletable = {rec["ent"]["net_id"]: rec for rec in old_recs}
+        retain = {}
+        for rec in old_recs:
+            ent = rec["ent"]
+            foreign = False
+            for desc in self._descendants(ent["net_id"]):
+                if desc["net_id"] not in deletable:
+                    foreign = True
+                    break
+            if foreign:
+                retain[ent["net_id"]] = True
+                parent_nid = ent["parent_net_id"]
+                while parent_nid in deletable:
+                    retain[parent_nid] = True
+                    parent_nid = deletable[parent_nid]["ent"]["parent_net_id"]
+        for rec in list(old_recs):
+            ent = rec["ent"]
+            if rec["parent_id"] != "" and not retain.get(ent["net_id"]):
+                self._drop_records([rec])
+        for rec in list(old_recs):
+            ent = rec["ent"]
+            if rec["parent_id"] == "" and not retain.get(ent["net_id"]):
+                self._drop_records([rec])
+
     def _census_row(self, ent, in_radius):
         return {
             "class_name": ent["class_name"],
@@ -454,6 +485,16 @@ class PersistFakeExt(FakeExt):
             )
             return ("done", "", payload)
 
+        ncol_in = list(args_unpacked.get("ncol") or [])
+        scol_in = list(args_unpacked.get("scol") or [])
+        required_s = {"logical_id", "parent_id", "cat", "class_name", "slot_name"}
+        required_n = {"req_x_m", "req_z_m", "req_yaw_deg", "health_mark_ratio", "must_vanish_b"}
+        if not required_s.issubset(set(scol_in)) or not required_n.issubset(set(ncol_in)):
+            return ("rejected", "bad_args", wire.empty_payload())
+        if len(rows_in) < 1 or len(rows_in) > 12:
+            return ("rejected", "bad_args", wire.empty_payload())
+
+        self._reapply_reset_with_retention(scene_id)
         persistent = fault == "omit_nopersistency_flag"
         area_id = SCENE_AREA.get(scene_id, "area_a")
         now_ms = float(self.peer.local_ms())
@@ -464,6 +505,8 @@ class PersistFakeExt(FakeExt):
         local = {}
         root_positions = []
         for row in rows_in:
+            if not self.peer.lease_valid():
+                return ("error", "lease_expired", wire.empty_payload())
             lid = str(row.get("logical_id", ""))
             pid = str(row.get("parent_id", ""))
             cat = str(row.get("cat", ""))
@@ -696,11 +739,15 @@ class PersistFakeExt(FakeExt):
 
         deleted = 0
         for rec in list(scene_recs):
+            if not self.peer.lease_valid():
+                break
             ent = rec["ent"]
             if rec["parent_id"] != "" and not retain.get(ent["net_id"]):
                 self._drop_records([rec])
                 deleted += 1
         for rec in list(scene_recs):
+            if not self.peer.lease_valid():
+                break
             ent = rec["ent"]
             if rec["parent_id"] == "" and not retain.get(ent["net_id"]):
                 self._drop_records([rec])
@@ -990,11 +1037,13 @@ class PersistFakeExt(FakeExt):
             if ent["own_b"] == 1 and ent["cat"] in ("infected", "animal"):
                 if ent["area_id"] == area_id:
                     rows.append(self._census_row(ent, 0))
+        captured = 0
         for row in rows:
             nvals = [row[c] for c in CENSUS_NCOL]
             svals = [row[c] for c in CENSUS_SCOL]
             if not self.jobs.append_row(job_id, nvals, svals):
-                return ("rejected", "bad_args", wire.empty_payload())
+                break
+            captured += 1
         s = {
             "job": job_id,
             "state": "running",
@@ -1006,7 +1055,7 @@ class PersistFakeExt(FakeExt):
         n = {
             "snap_tick_ms": snap_ms,
             "snap_frame": float(snap_frame),
-            "rows_captured_n": float(len(rows)),
+            "rows_captured_n": float(captured),
             "center_x_m": center_x,
             "center_z_m": center_z,
             "radius_m": radius,
@@ -1020,21 +1069,39 @@ class PersistFakeExt(FakeExt):
         return ("done", "", payload)
 
     def _op_cleanup(self, args_unpacked):
+        for jid in list(self.pending_finish):
+            if self.jobs.get_state(jid) == "running":
+                self.jobs.end_job(jid, "done", "")
+        self.pending_finish.clear()
+
+        qa_ids = set(self.raw_net_ids) | set(self.qa_net_ids)
+        for rec in self.records:
+            ent = rec.get("ent")
+            if ent is not None:
+                qa_ids.add(ent["net_id"])
         cleaned_own = len(self.records)
         self._drop_records(list(self.records))
         cleaned_raw = 0
+        for net_id in list(qa_ids):
+            ent = self.world.get(net_id)
+            if ent is not None and ent["owner_uid"] != self.director_uid:
+                cleaned_raw += 1
+                self._delete_entity(ent)
+        # La limpieza identifica por net_id/pers_id o marca de salud, nunca solo por clase en el radio.
         for net_id in list(self.world.keys()):
             ent = self.world[net_id]
-            if ent["owner_uid"] == self.director_uid:
+            if ent["owner_uid"] == self.director_uid or net_id in qa_ids:
                 continue
-            cleaned_raw += 1
-            self._delete_entity(ent)
+            max_hp = float(ent.get("max_hp", 0.0))
+            hp = float(ent.get("health_hp", 0.0))
+            if max_hp > 0.0 and any(abs(hp - max_hp * ratio) <= 1e-2 for ratio in (0.7325, 0.6150, 0.8450)):
+                cleaned_raw += 1
+                self._delete_entity(ent)
         self.records = []
         self.scene_gen = {}
         self.scene_last_op = {}
         self.scene_applied = {}
         self.scene_center = {}
-        self.pending_finish.clear()
         payload = wire.pack_payload(
             scalars_num={
                 "cleaned_own_n": float(cleaned_own),
