@@ -813,16 +813,21 @@ def _eval_base_12(
     budget_logs = [r for r in probe_logs if r.get("tag") == "callback_budget_exhausted"]
     scen_12 = [r for r in scen_rows if r.get("check") == "BASE-12"]
 
-    if budget_logs or any("quiet_start_ms" in r for r in scen_12):
-        q_rows = [r for r in scen_12 if "quiet_start_ms" in r and "quiet_end_ms" in r]
+    if budget_logs or any("exhausted_ms" in r or "quiet_start_ms" in r for r in scen_12):
+        # H6 de Sol (r1 y r2): ventana por peer desde el instante en que se observo SU agotamiento hasta quiet_end_ms.
+        # Sin ese instante por peer (p. ej. la ventana comun antigua) no se acredita: missing.
+        q_rows = [r for r in scen_12 if isinstance(r.get("exhausted_ms"), dict) and "quiet_end_ms" in r]
         if not q_rows:
             return _chk("BASE-12", "missing", "callback_budget_exhausted")
         q = q_rows[-1]
-        q_start = float(q["quiet_start_ms"])
         q_end = float(q["quiet_end_ms"])
-        if q_end - q_start < 20000.0:
-            return _chk("BASE-12", "fail", "quiet_window_shorter_than_20s")
+        exhausted = q["exhausted_ms"]
         for peer in req_peers:
+            if peer not in exhausted:
+                return _chk("BASE-12", "missing", f"no_exhaustion_instant_for_{peer}")
+            q_start = float(exhausted[peer])
+            if not (math.isfinite(q_start) and math.isfinite(q_end)) or q_end - q_start < 20000.0:
+                return _chk("BASE-12", "fail", "quiet_window_shorter_than_20s")
             p_logs = [r for r in budget_logs if r.get("peer") == peer]
             if len(p_logs) != 1:
                 return _chk("BASE-12", "fail", f"expected_single_budget_log_for_{peer}_got_{len(p_logs)}")

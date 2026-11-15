@@ -1014,6 +1014,9 @@ def _write_synthetic_probe_budget_part(
     pbo_sha256: str | None = None,
     leak_request_after: bool = False,
     leak_ev: str = "hello",
+    exhausted_ms: dict | None = None,
+    leak_t_ms: float = 5000.0,
+    quiet_end_ms: float = 22000.0,
 ) -> None:
     pdir = Path(part_dir)
     samples = pdir / "samples"
@@ -1035,9 +1038,13 @@ def _write_synthetic_probe_budget_part(
     if leak_request_after:
         # Una peticion HTTP dentro de la ventana silenciosa; con leak_ev="auth_reject", un 401 (H6 de Sol r1).
         leak_http = 401 if leak_ev == "auth_reject" else 503
-        bridge_rows.append({"ev": leak_ev, "http": leak_http, "inst": "srv-inst-b", "peer": "server", "t_ms": 5000.0})
+        bridge_rows.append({"ev": leak_ev, "http": leak_http, "inst": "srv-inst-b", "peer": "server", "t_ms": leak_t_ms})
     _write_jsonl(samples / "bridge.jsonl", bridge_rows)
-    _write_jsonl(samples / "scenario.jsonl", [{"check": "BASE-12", "quiet_end_ms": 22000.0, "quiet_start_ms": 1000.0, "t_ms": 22001.0}])
+    exh = {"server": 1000.0, "client": 1000.0} if exhausted_ms is None else exhausted_ms
+    _write_jsonl(
+        samples / "scenario.jsonl",
+        [{"check": "BASE-12", "exhausted_ms": exh, "quiet_end_ms": quiet_end_ms, "t_ms": quiet_end_ms + 1.0}],
+    )
     _write_jsonl(
         samples / "probe_log.jsonl",
         [
@@ -2506,6 +2513,42 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             self.assertEqual(verdict["exit_code"], 2)
             c8 = next(c for c in verdict["checks"] if c["id"] == "BASE-08")
             self.assertEqual((c8["status"], c8["detail"]), ("missing", "no_pre_cut_poll"))
+
+    def test_probe_budget_quiet_window_is_per_peer_h6(self):
+        # H6 de Sol r2: servidor agotado en 1000 ms, peticion indebida del servidor en 1050 ms, cliente agotado en 1100.
+        # Con una ventana comun desde el ultimo agotamiento (1100) la peticion quedaba fuera y BASE-12 pasaba.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            head = _init_temp_git_repo(root)
+            stamp = f03_common.compute_probe_stamp_at_commit(head, repo_root=root)
+            part = Path(tmp) / "probe-budget"
+            _write_synthetic_probe_budget_part(
+                part,
+                git_head=head,
+                probe_stamp=stamp,
+                leak_request_after=True,
+                exhausted_ms={"server": 1000.0, "client": 1100.0},
+                leak_t_ms=1050.0,
+                quiet_end_ms=21300.0,
+            )
+            c12 = next(c for c in f03_base_eval.evaluate(part, repo_root=root)["checks"] if c["id"] == "BASE-12")
+            self.assertEqual((c12["status"], c12["detail"]), ("fail", "requests_after_budget_exhausted:1"))
+            # Sin el instante de agotamiento de un peer no se acredita su silencio: missing.
+            part2 = Path(tmp) / "probe-budget-2"
+            _write_synthetic_probe_budget_part(
+                part2, git_head=head, probe_stamp=stamp, exhausted_ms={"server": 1000.0}, quiet_end_ms=21300.0
+            )
+            c12b = next(c for c in f03_base_eval.evaluate(part2, repo_root=root)["checks"] if c["id"] == "BASE-12")
+            self.assertEqual((c12b["status"], c12b["detail"]), ("missing", "no_exhaustion_instant_for_client"))
+            # Y el caso sano por peer sigue pasando.
+            part3 = Path(tmp) / "probe-budget-3"
+            _write_synthetic_probe_budget_part(
+                part3, git_head=head, probe_stamp=stamp, exhausted_ms={"server": 1000.0, "client": 1100.0}, quiet_end_ms=21300.0
+            )
+            c12c = next(c for c in f03_base_eval.evaluate(part3, repo_root=root)["checks"] if c["id"] == "BASE-12")
+            self.assertEqual(c12c["status"], "pass")
 
     def test_check_12_evaluators_are_blind_to_mutants_and_faults(self):
         self._require_f03()

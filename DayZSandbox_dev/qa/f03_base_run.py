@@ -785,25 +785,31 @@ def _run_probe_budget_part(ctx: f03_common.PartContext) -> None:
     for role in ctx.required_peers():
         ctx.bridge.cut(role, 150)
 
+    # H6 de Sol (r1 y r2): la ventana silenciosa es POR PEER y empieza en cuanto se observa SU agotamiento, sin margen.
+    # Una peticion de un peer ya agotado mientras se espera al otro tambien es un fallo.
+    exhausted_ms: dict[str, float] = {}
     deadline = time.monotonic() + 20.0
     while time.monotonic() < deadline:
         rows = ctx.collect_probe_budget_logs()
-        logged_peers = {r["peer"] for r in rows}
-        if all(r in logged_peers for r in ctx.required_peers()):
+        seen_ms = ctx.now_h_ms()
+        for r in rows:
+            exhausted_ms.setdefault(r["peer"], seen_ms)
+        if all(p in exhausted_ms for p in ctx.required_peers()):
             break
         time.sleep(0.1)
 
-    # La ventana silenciosa de 20 s se abre en cuanto se observa el agotamiento, sin margen: una peticion justo
-    # despues del agotamiento tambien es un fallo (H6 de Sol r1).
-    quiet_start_ms = ctx.now_h_ms()
-    time.sleep(20.2)
+    # Se observa hasta 20,2 s despues del ultimo agotamiento visto; el evaluador mira cada peer desde el suyo.
+    if exhausted_ms:
+        until_ms = max(exhausted_ms.values()) + 20200.0
+        while ctx.now_h_ms() < until_ms:
+            time.sleep(min(0.5, max(0.01, (until_ms - ctx.now_h_ms()) / 1000.0)))
     quiet_end_ms = ctx.now_h_ms()
     ctx.collect_probe_budget_logs()
     ctx.record_scenario(
         {
             "check": "BASE-12",
+            "exhausted_ms": exhausted_ms,
             "quiet_end_ms": quiet_end_ms,
-            "quiet_start_ms": quiet_start_ms,
         }
     )
 
