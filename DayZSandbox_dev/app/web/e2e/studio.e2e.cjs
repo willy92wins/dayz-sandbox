@@ -2977,12 +2977,23 @@ async function assignShortcutByKeyboard(page, actionId, keyToPress) {
   }
   assert(found, "S8(+): no se alcanzo con Tab el boton Cambiar de " + actionId);
 
+  // Se espera el POST que lleva esta tecla, no uno cualquiera (un guardado del layout podía colarse),
+  // y la tecla se pulsa cuando el diálogo ya está capturando, no tras una espera fija.
+  const expectCombo = keyToPress.length === 1 ? keyToPress.toUpperCase() : keyToPress;
   const profRespP = page.waitForResponse(
-    (r) => r.url().endsWith("/api/profile") && r.request().method() === "POST",
+    (r) => {
+      if (!r.url().endsWith("/api/profile") || r.request().method() !== "POST") return false;
+      try {
+        const b = JSON.parse(r.request().postData() || "{}");
+        return !!b.keymap && b.keymap[actionId] === expectCombo;
+      } catch (e) {
+        return false;
+      }
+    },
     { timeout: 8000 }
   );
   await page.keyboard.press("Enter");
-  await sleep(80);
+  await page.locator("#kconf").waitFor({ state: "visible", timeout: 3000 });
   await page.keyboard.press(keyToPress);
   const profResp = await profRespP;
   assert(profResp.status() === 200, "S8(+): POST /api/profile al asignar " + actionId + " no dio 200");
