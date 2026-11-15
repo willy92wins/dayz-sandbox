@@ -1956,6 +1956,96 @@ async function runS5(browser) {
       }
     }
 
+    // N2: salir del campo con la respuesta de Intro aún en camino no vuelve a mandar ese valor
+    // después: si la IA movió la entidad entretanto, su cambio se queda. Para que el documento de la
+    // web siga viejo al salir (como con la máquina cargada), sin SSE y con las lecturas retenidas.
+    {
+      let releaseResp3;
+      const respGate3 = new Promise((r) => {
+        releaseResp3 = r;
+      });
+      let releaseScene3;
+      const sceneGate3 = new Promise((r) => {
+        releaseScene3 = r;
+      });
+      let firstOpsSeen = false;
+      const holdResp3 = async (route) => {
+        if (route.request().method() === "POST" && !firstOpsSeen) {
+          firstOpsSeen = true;
+          const resp = await route.fetch(); // llega al backend; solo se retiene la respuesta
+          await respGate3;
+          await route.fulfill({ response: resp });
+          return;
+        }
+        await continueSafe(route);
+      };
+      const sseCut3 = async (route) => {
+        await route.fulfill({ status: 503, contentType: "text/plain; charset=utf-8", body: "sse-cut" });
+      };
+      let holdSceneOn = false;
+      const holdScene3 = async (route) => {
+        if (holdSceneOn && route.request().method() === "GET") await sceneGate3;
+        await continueSafe(route);
+      };
+      await page.route("**/api/events", sseCut3);
+      await page.route("**/api/scene", holdScene3);
+      await page.route("**/api/scene/ops", holdResp3);
+      try {
+        await page.goto(BASE + "/");
+        await page.locator('[data-testid="barra-superior"]').waitFor({ state: "visible", timeout: 10000 });
+        await page.getByText("Reconectando…", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
+        await page.locator('[data-panel="jerarquia"] [data-entity-id="' + eid + '"]').click();
+        await activatePanel(page, "propiedades");
+        holdSceneOn = true;
+        await page.locator("#f-x").focus();
+        await waitEditable(page, "#f-x");
+        await page.keyboard.press("Control+a");
+        await page.keyboard.type("7400");
+        await page.keyboard.press("Enter");
+        const snapA = await waitForSnap((s) => {
+          const e = s.doc.entities.find((x) => x.id === eid);
+          return !!e && e.x === 7400;
+        }, "N2: X=7400 en el backend", 8000);
+        const zNow = snapA.doc.entities.find((x) => x.id === eid).z;
+        await page.locator("#f-x").evaluate((el) => el.blur());
+        const dRel3 = Date.now() + 5000;
+        while (Date.now() < dRel3) {
+          if ((await cmd({ cmd: "leases" })).leases.length === 0) break;
+          await sleep(80);
+        }
+        const rAi3 = await cmd({
+          cmd: "ai_ops",
+          label: "IA mueve mientras vuelve la respuesta",
+          ops: [{ name: "entity.move", target: eid, args: { x: 7450, z: zNow } }],
+        });
+        assert(rAi3.ok, "S5(-): N2: ai_ops entity.move fallo: " + JSON.stringify(rAi3));
+        releaseResp3();
+        await sleep(300);
+        holdSceneOn = false;
+        releaseScene3();
+        await sleep(1500);
+        const snapN2 = await cmd({ cmd: "snapshot" });
+        const xN2 = snapN2.doc.entities.find((x) => x.id === eid).x;
+        assert(
+          xN2 === 7450,
+          "S5(-): salir del campo volvio a mandar X=7400 y piso el cambio de la IA (N2): x=" + xN2
+        );
+      } finally {
+        releaseResp3();
+        holdSceneOn = false;
+        releaseScene3();
+        await sleep(200);
+        await page.unroute("**/api/scene/ops", holdResp3);
+        await page.unroute("**/api/scene", holdScene3);
+        await page.unroute("**/api/events", sseCut3);
+      }
+      // Vuelta al estudio con SSE para lo que sigue
+      await page.goto(BASE + "/");
+      await loginIfNeeded(context, page);
+      await page.locator('[data-panel="jerarquia"] [data-entity-id="' + eid + '"]').click();
+      await activatePanel(page, "propiedades");
+    }
+
     // F01: X y luego Z con las lecturas de /api/scene retenidas; no se pierde X
     {
       let releaseScene;

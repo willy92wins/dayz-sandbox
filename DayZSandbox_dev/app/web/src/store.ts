@@ -848,7 +848,10 @@ export function commitSceneOps(
   ops: SceneOp[] | (() => SceneOp[] | null),
   context?: { targetId?: string; field?: string; rawValue?: string }
 ): Promise<boolean> {
-  const run = commitChain.then(() => commitSceneOpsNow(label, ops, context));
+  // La generación del borrador se toma al encolar, no al salir de la fila (ver commitSceneOpsNow).
+  const key = context?.targetId && context?.field ? `${context.targetId}:${context.field}` : null;
+  const genAtEnqueue = key ? draftGen[key] ?? 0 : 0;
+  const run = commitChain.then(() => commitSceneOpsNow(label, ops, context, genAtEnqueue));
   commitChain = run.catch(() => undefined);
   return run;
 }
@@ -856,15 +859,23 @@ export function commitSceneOps(
 async function commitSceneOpsNow(
   label: string,
   opsOrBuilder: SceneOp[] | (() => SceneOp[] | null),
-  context?: { targetId?: string; field?: string; rawValue?: string }
+  context: { targetId?: string; field?: string; rawValue?: string } | undefined,
+  genAtEnqueue: number
 ): Promise<boolean> {
   if (state.sinBackend || !state.docInfo) return false;
+  const fieldKey =
+    context?.targetId && context?.field ? `${context.targetId}:${context.field}` : null;
+  // El borrador que esta tanda iba a confirmar cambió mientras esperaba en la fila: ya lo mandó una
+  // tanda anterior (salir del campo con la respuesta de Intro aún en camino), se descartó con Esc o
+  // se volvió a escribir. Mandarlo ahora pisaría lo que haya llegado después, como un cambio de la
+  // IA (N2). Cuenta como hecho si ya no queda borrador; si hay uno más nuevo, queda pendiente.
+  if (fieldKey && (draftGen[fieldKey] ?? 0) !== genAtEnqueue) {
+    return state.drafts[fieldKey] === undefined;
+  }
   const ops = typeof opsOrBuilder === 'function' ? opsOrBuilder() : opsOrBuilder;
   if (!ops || ops.length === 0) return false;
   const reqId = nextRequestId('ops');
-  const fieldKey =
-    context?.targetId && context?.field ? `${context.targetId}:${context.field}` : null;
-  const genAtSend = fieldKey ? draftGen[fieldKey] ?? 0 : 0;
+  const genAtSend = genAtEnqueue;
   try {
     const res = await fetch('/api/scene/ops', {
       method: 'POST',
