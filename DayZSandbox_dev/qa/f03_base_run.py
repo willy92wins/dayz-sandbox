@@ -147,8 +147,11 @@ def _run_base_01(ctx: f03_common.PartContext) -> None:
             else:
                 hi = mid - 1
         pad_len, tail_n = lo, 1
-        # Si el salto de un trozo nuevo deja el poll por debajo de WIRE_CAP - 12, se completa con la cola (pocos bytes).
-        while _poll_len(pad_len, tail_n) < wire.WIRE_CAP - 12 and _poll_len(pad_len, tail_n + 1) <= wire.WIRE_CAP:
+        # El salto de un trozo nuevo puede dejar hasta ~15 bytes libres: la cola los llena hasta WIRE_CAP exacto (1 byte por
+        # caracter). Hay que llegar al tope MEDIDO, como antes del reparto: la medida usa now_ms = 99999999.999 (peor caso
+        # de R2-N8) y el poll real sale unos bytes mas corto (en el gate de e3607ee, parar en WIRE_CAP - 12 medido dio
+        # 3486 B reales, fuera de [WIRE_CAP - 12, WIRE_CAP]).
+        while _poll_len(pad_len, tail_n + 1) <= wire.WIRE_CAP:
             tail_n += 1
         sized_args = _make_args(pad_len, tail_n)
 
