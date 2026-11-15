@@ -652,6 +652,23 @@ class TestG1(unittest.TestCase):
             verdict = EVAL.evaluate(_g1(tmp, errors=True))
             self.assertEqual(verdict["rows"]["G1"]["verdict"], "FALLA")
 
+    def test_fail_script_error_formato_real(self):
+        # Formato real del motor (humo G1 en diag, 15-nov): "SCRIPT" y "(E)" van separados por varios espacios.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _g1(tmp)
+            _append(Path(root) / "logs" / "server_script.log",
+                    ["12:25:27.801   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (2x)!"])
+            verdict = EVAL.evaluate(root)
+            self.assertEqual(verdict["rows"]["G1"]["verdict"], "FALLA")
+
+    def test_pass_error_ajeno_formato_real(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _g1(tmp)
+            _append(Path(root) / "logs" / "client.RPT",
+                    ["12:25:23.789   SCRIPT    (E): Leaked 'BunkerBroadcastManager' script instance (1x)!"])
+            verdict = EVAL.evaluate(root)
+            self.assertEqual(verdict["rows"]["G1"]["verdict"], "PASA")
+
     def test_inconclusive_missing_rpt(self):
         with tempfile.TemporaryDirectory() as tmp:
             verdict = EVAL.evaluate(_g1(tmp, drop_rpt=True))

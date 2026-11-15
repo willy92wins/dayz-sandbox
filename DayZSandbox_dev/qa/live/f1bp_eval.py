@@ -15,6 +15,8 @@ from pathlib import Path
 ROW_IDS = tuple(f"G{n}" for n in range(1, 10))
 SCRIPT_LOGS = ("server_script.log", "client_script.log")
 RPT_LOGS = ("server.RPT", "client.RPT")
+# El motor rellena con espacios: "SCRIPT    (E): Leaked 'DSBX_Callback' ..." (RPT y script_*.log).
+_SCRIPT_ERROR = re.compile(r"SCRIPT\s+\(E\)")
 PEER_LOG = {"server": "server_script.log", "client": "client_script.log"}
 EXIT = {"PASA": 0, "FALLA": 1, "INCONCLUSO": 2}
 RECOVERY_LIMIT_MS = 60000.0
@@ -951,7 +953,7 @@ def parse_script_log(path):
             if event is not None:
                 events.append(event)
             continue
-        if ("SCRIPT (E)" in line or "Can't compile" in line) and "DSBX_" in line:
+        if (_SCRIPT_ERROR.search(line) or "Can't compile" in line) and "DSBX_" in line:
             events.append({"kind": "script_error", "text": line})
     return events
 

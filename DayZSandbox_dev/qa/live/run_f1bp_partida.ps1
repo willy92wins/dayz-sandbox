@@ -11,21 +11,22 @@ param(
   [Parameter(Mandatory = $true)][ValidateSet('diag', 'retail')][string]$Build,
   [Parameter(Mandatory = $true)][string]$Mod,          # carpeta @DayZSandbox con Addons\DayZSandbox.pbo
   [Parameter(Mandatory = $true)][string]$Scenarios,    # p. ej. 'G1,G2,G3'
-  [string]$Root = 'C:\tmp\dsbx-f1bpeers-work\partida',
+  [string]$WorkRoot = 'C:\tmp\dsbx-f1bpeers-work\partida',
   [string]$WS = 'C:\tmp\dsbx-f1bpeers\DayZSandbox_dev',
   [int]$RunTimeoutMin = 120,
   [string]$Orchestrator = 'qa/live/f1bp_live.py'   # otro orquestador con el mismo protocolo (p. ej. una prueba de humo)
 )
 $ErrorActionPreference = 'Continue'
+# probe-lib.ps1 fija $script:Root a su propia carpeta: por eso aqui la raiz de trabajo se llama $WorkRoot.
 . 'C:\Users\guill\MCPTest_autotest\harness\probe-lib.ps1'
 $ErrorActionPreference = 'Continue'
-$S = "$Root\profiles_$Build\server"; $C = "$Root\profiles_$Build\client"
-$B1 = "$Root\b1"
+$S = "$WorkRoot\profiles_$Build\server"; $C = "$WorkRoot\profiles_$Build\client"
+$B1 = "$WorkRoot\b1"
 $Port = 2502
 $Py = 'C:\Python314\python.exe'
 $Lease = 'C:\Users\guill\.claude\tools\gpu_lease.py'
 $LeaseSesion = 'f1b-peers-partida'
-$Log = "$Root\run_$Build.log"
+$Log = "$WorkRoot\run_$Build.log"
 function L([string]$m) { $line = "$(Get-Date -Format 'HH:mm:ss.fff') $m"; Add-Content -Path $Log -Value $line -Encoding UTF8; Write-Host $line }
 function Utc { (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ') }
 function Start-ExeViaWmi([string]$Exe, [string]$Cwd, [string]$ArgLine) {
@@ -59,7 +60,7 @@ function WriteJson([string]$Path, $Obj) {
 }
 
 # --- comprobaciones previas
-New-Item -ItemType Directory -Force $Root | Out-Null
+New-Item -ItemType Directory -Force $WorkRoot | Out-Null
 $pbo = Join-Path $Mod 'Addons\DayZSandbox.pbo'
 if (-not (Test-Path $pbo)) { L "no existe $pbo : no lanzo"; exit 3 }
 $dirty = (& git -C $WS status --porcelain -- . ':(exclude)evidence') -join "`n"
@@ -81,14 +82,14 @@ try {
   if (-not (Test-Path $B1)) { Copy-Item -Recurse 'C:\tmp\dsbx-f030-work\partida\b1' $B1 }
   New-Item -ItemType Directory -Force $S, $C | Out-Null
   Remove-Item "$S\dsbx_peer.json", "$C\dsbx_peer.json" -ErrorAction SilentlyContinue
-  $arch = "$Root\old_logs_${Build}_$(Utc)"
+  $arch = "$WorkRoot\old_logs_${Build}_$(Utc)"
   foreach ($pair in @(@('server', $S), @('client', $C))) {
     $old = @(Get-ChildItem $pair[1] -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.log', '.RPT', '.ADM', '.mdmp' })
     if ($old.Count) { New-Item -ItemType Directory -Force "$arch\$($pair[0])" | Out-Null; $old | Move-Item -Destination "$arch\$($pair[0])" -Force; L "$($pair[0]): $($old.Count) logs viejos archivados" }
   }
-  $pidsFile = "$Root\pids_$Build.json"
+  $pidsFile = "$WorkRoot\pids_$Build.json"
   Remove-Item $pidsFile -ErrorAction SilentlyContinue
-  $out = "$Root\orq_$Build.out"; $err = "$Root\orq_$Build.err"
+  $out = "$WorkRoot\orq_$Build.out"; $err = "$WorkRoot\orq_$Build.err"
   $orqArgs = @($Orchestrator, 'run', '--build', $Build, '--evidence', $ev, '--server-profile', $S, '--client-profile', $C, '--pids-file', $pidsFile, '--scenarios', $Scenarios, '--pbo', $pbo)
   $h = Start-Process -FilePath $Py -ArgumentList $orqArgs -WorkingDirectory $WS -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -NoNewWindow
   $null = $h.Handle
@@ -151,7 +152,7 @@ finally {
     WriteJson "$evAbs\logs_ready.json" @{ all_closed = $allClosed }
     if ($h -and -not $h.HasExited) { $h.WaitForExit(15 * 60000) | Out-Null }
     if ($h) { L "orquestador exit $($h.ExitCode)" }
-    & $Py qa/live/f1bp_eval.py $ev 2>&1 | ForEach-Object { L "eval: $_" }
+    & $Py (Join-Path $WS 'qa\live\f1bp_eval.py') $evAbs 2>&1 | ForEach-Object { L "eval: $_" }
     L "evaluador exit $LASTEXITCODE ($ev)"
   }
   if ($allClosed) {
