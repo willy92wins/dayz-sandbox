@@ -173,7 +173,7 @@ def _job_free(ctx, job_id):
     )
 
 
-def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy_fault=None, qa_fault=None, defer_free=False, center_override=None):
+def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy_fault=None, qa_fault=None, defer_free=False, center_override=None, radius_override=None):
     if center_override is None:
         area = fixture["areas"][area_id]
         tag = f"{stage}:{area_id}"
@@ -184,7 +184,7 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy
         tag = area_id
         cx = float(center_override[0])
         cz = float(center_override[1])
-        rad = 60.0
+        rad = float(radius_override) if radius_override is not None else 60.0
     payload = wire.pack_payload(
         scalars_str={"area_tag": tag},
         scalars_num={
@@ -291,7 +291,7 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy
     return rec
 
 
-def _collect_creature_tracks(rec, lids, tracks):
+def _collect_creature_tracks(rec, lids, tracks, obs_req_t):
     for row in rec.get("rows") or []:
         lid = str(row.get("own_logical_id") or "")
         if lid not in lids:
@@ -301,6 +301,7 @@ def _collect_creature_tracks(rec, lids, tracks):
             "stage": rec.get("stage"),
             "x_m": float(row.get("pos_x_m", 0.0)),
             "z_m": float(row.get("pos_z_m", 0.0)),
+            "obs_req_t": float(obs_req_t),
         })
 
 
@@ -639,14 +640,16 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
         creature_lids = {f"{cfg['pfx']}_inf_1", f"{cfg['pfx']}_ani_1", "b_inf_1", "b_ani_1"}
         creature_tracks = []
         for area_id in cfg["creature_areas"]:
+            obs_req_t = time.time()
             rec_t2 = _census(ctx, fixture, "t2_census_10min", area_id, 0)
-            _collect_creature_tracks(rec_t2, creature_lids, creature_tracks)
+            _collect_creature_tracks(rec_t2, creature_lids, creature_tracks, obs_req_t)
         ctx.record_scenario({"ev": "storage_snapshot_t2", "files": _snapshot_dir(sim_storage)})
 
         t3_director_areas = {cfg["retained_area"], "area_a", "area_b"}
         for area_id in cfg["base_areas"]:
+            obs_req_t = time.time()
             rec_t3p = _census(ctx, fixture, "t3_pre_reset_census", area_id, 1 if area_id in t3_director_areas else 0)
-            _collect_creature_tracks(rec_t3p, creature_lids, creature_tracks)
+            _collect_creature_tracks(rec_t3p, creature_lids, creature_tracks, obs_req_t)
 
         for attempt in (1, 2):
             rc_op = ctx.peek_next_op_id()
@@ -670,8 +673,9 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
         })
 
         for area_id in cfg["base_areas"]:
+            obs_req_t = time.time()
             rec_t3q = _census(ctx, fixture, "t3_post_reset_census", area_id, 1 if area_id in t3_director_areas else 0)
-            _collect_creature_tracks(rec_t3q, creature_lids, creature_tracks)
+            _collect_creature_tracks(rec_t3q, creature_lids, creature_tracks, obs_req_t)
 
         if drop_control_pre_restart:
             _census(ctx, fixture, "t3_post_reset_census", "area_c", 0, qa_fault="drop_ctrl_pre_restart")
@@ -699,28 +703,84 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
         for area_id in cfg["base_areas"]:
             _census(ctx, fixture, "t5_post_restart_census", area_id, 1 if area_id in t5_director_areas else 0)
             ainfo = fixture["areas"][area_id]
-            base_discs.append((float(ainfo["center_x_m"]), float(ainfo["center_z_m"])))
+            base_discs.append((
+                float(ainfo["center_x_m"]),
+                float(ainfo["center_z_m"]),
+                float(ainfo["radius_m"]),
+            ))
 
-        # N39/N49: discos de seguimiento t5 para toda posicion alcanzada por una criatura que quede a mas
-        # de 15 m del centro de todos los discos ya censados; asi la ausencia post-reinicio queda cubierta
-        # con el margen que exige la cota de 6 m/s.
+        def _track_reach(v_m_s, elapsed_s):
+            return v_m_s * (elapsed_s * 1.25 + 20.0) + 15.0
+
+        def _observed_speed(obs_list):
+            v_m_s = 6.0
+            for i in range(1, len(obs_list)):
+                dt_s = obs_list[i]["obs_req_t"] - obs_list[i - 1]["obs_req_t"]
+                if dt_s > 1e-3:
+                    dist_m = math.hypot(
+                        obs_list[i]["x_m"] - obs_list[i - 1]["x_m"],
+                        obs_list[i]["z_m"] - obs_list[i - 1]["z_m"],
+                    )
+                    v_m_s = max(v_m_s, dist_m / dt_s)
+            return v_m_s
+
+        # N39/N49: discos de seguimiento t5 por criatura. El radio sale del tiempo medido desde su
+        # ultima observacion y de la velocidad observada; la cobertura de un area base solo se acepta
+        # si esa area ya cubre la posicion con el reach calculado (distancia + reach <= radio del area).
+        tracks_by_lid = {}
         for trk in creature_tracks:
-            near = any(
-                math.hypot(trk["x_m"] - cx, trk["z_m"] - cz) <= 15.0
-                for cx, cz in base_discs
-            )
-            if near:
+            tracks_by_lid.setdefault(trk["logical_id"], []).append(trk)
+
+        for lid, obs_list in tracks_by_lid.items():
+            obs_list = sorted(obs_list, key=lambda o: o["obs_req_t"])
+            last_obs_t = obs_list[-1]["obs_req_t"]
+            v_m_s = _observed_speed(obs_list)
+            elapsed_s = max(0.0, time.time() - last_obs_t)
+            reach_m = _track_reach(v_m_s, elapsed_s)
+            pending = []
+            for trk in obs_list:
+                covered = any(
+                    math.hypot(trk["x_m"] - cx, trk["z_m"] - cz) + reach_m <= rad
+                    for cx, cz, rad in base_discs
+                )
+                if not covered:
+                    pending.append(trk)
+            if not pending:
                 continue
-            track_tag = f"t5_track_{trk['logical_id']}_{trk['stage']}"
-            _census(ctx, fixture, "t5_post_restart_census", track_tag, 0, center_override=(trk["x_m"], trk["z_m"]))
-            ctx.record_scenario({
-                "ev": "t5_track_disc",
-                "area_tag": track_tag,
-                "logical_id": trk["logical_id"],
-                "stage": trk["stage"],
-                "center_x_m": trk["x_m"],
-                "center_z_m": trk["z_m"],
-            })
+            radius_m = max(60.0, reach_m)
+            attempt = 0
+            while True:
+                for idx, trk in enumerate(pending):
+                    # El tag no debe contener nombres de etapas conocidas (t2_/t3_/...): el evaluador
+                    # infiere la etapa del texto del tag y, si no, usa el prefijo t5_track_.
+                    track_tag = f"t5_track_{trk['logical_id']}_p{idx}_r{attempt}"
+                    _census(
+                        ctx, fixture, "t5_post_restart_census", track_tag, 0,
+                        center_override=(trk["x_m"], trk["z_m"]),
+                        radius_override=radius_m,
+                    )
+                    ctx.record_scenario({
+                        "ev": "t5_track_disc",
+                        "area_tag": track_tag,
+                        "logical_id": trk["logical_id"],
+                        "stage": trk["stage"],
+                        "center_x_m": trk["x_m"],
+                        "center_z_m": trk["z_m"],
+                        "radius_m": radius_m,
+                        "v_m_s": v_m_s,
+                        "elapsed_s": elapsed_s,
+                        "attempt": attempt,
+                    })
+                fin_t = time.time()
+                need_m = v_m_s * (fin_t - last_obs_t) * 1.1 + 15.0
+                if need_m <= radius_m + 1e-6:
+                    break
+                if attempt >= 2:
+                    break
+                attempt += 1
+                elapsed_s = max(0.0, time.time() - last_obs_t)
+                reach_m = _track_reach(v_m_s, elapsed_s)
+                radius_m = max(60.0, reach_m)
 
         witness_rows, _ = _build_scene_rows(fixture, "scene_b")
         w_op_id = ctx.peek_next_op_id()
