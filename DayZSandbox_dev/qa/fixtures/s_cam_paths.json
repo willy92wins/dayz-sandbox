@@ -1,0 +1,191 @@
+{
+  "anchor_pose": {
+    "anchor_x_m": 4500.0,
+    "anchor_z_m": 9800.0,
+    "anchor_eye_h_m": 1.6,
+    "yaw_deg": 0.0,
+    "pitch_deg": 0.0,
+    "roll_deg": 0.0,
+    "fov_rad": 0.7
+  },
+  "fixture_entities": {
+    "subject": {
+      "classname": "Barrel_Red",
+      "dist_m": 2.0,
+      "pos_x_m": 4500.28,
+      "pos_z_m": 9802.0
+    },
+    "background": {
+      "classname": "Land_Mil_Barracks1",
+      "dist_m": 50.0,
+      "pos_x_m": 4494.0,
+      "pos_z_m": 9850.0
+    }
+  },
+  "paths": {
+    "short_arc_6s": {
+      "pos_mode": "catmull_rom",
+      "keys": [
+        {
+          "t_s": 0.0,
+          "pos_x_m": 4500.0,
+          "pos_y_rel_m": 0.0,
+          "pos_z_m": 9800.0,
+          "yaw_deg": 179.0,
+          "pitch_deg": -4.0,
+          "roll_deg": 0.0,
+          "fov_rad": 0.65,
+          "focus_dist_m": 2.0,
+          "focus_blur": 1.0
+        },
+        {
+          "t_s": 3.0,
+          "pos_x_m": 4506.0,
+          "pos_y_rel_m": 0.8,
+          "pos_z_m": 9804.0,
+          "yaw_deg": -179.0,
+          "pitch_deg": 0.0,
+          "roll_deg": 6.0,
+          "fov_rad": 1.1,
+          "focus_dist_m": 50.0,
+          "focus_blur": 1.0
+        },
+        {
+          "t_s": 6.0,
+          "pos_x_m": 4512.0,
+          "pos_y_rel_m": 1.2,
+          "pos_z_m": 9808.0,
+          "yaw_deg": -19.0,
+          "pitch_deg": 3.0,
+          "roll_deg": 0.0,
+          "fov_rad": 0.9,
+          "focus_dist_m": 2.0,
+          "focus_blur": 1.0
+        }
+      ]
+    },
+    "linear_hud_6s": {
+      "pos_mode": "linear",
+      "keys": [
+        {
+          "t_s": 0.0,
+          "pos_x_m": 4500.0,
+          "pos_y_rel_m": 0.0,
+          "pos_z_m": 9800.0,
+          "yaw_deg": 0.0,
+          "pitch_deg": 0.0,
+          "roll_deg": 0.0,
+          "fov_rad": 0.75,
+          "focus_dist_m": 0.0,
+          "focus_blur": 0.0
+        },
+        {
+          "t_s": 3.0,
+          "pos_x_m": 4504.5,
+          "pos_y_rel_m": 0.45,
+          "pos_z_m": 9803.0,
+          "yaw_deg": 15.0,
+          "pitch_deg": -2.0,
+          "roll_deg": 0.0,
+          "fov_rad": 0.85,
+          "focus_dist_m": 0.0,
+          "focus_blur": 0.0
+        },
+        {
+          "t_s": 6.0,
+          "pos_x_m": 4509.0,
+          "pos_y_rel_m": 0.9,
+          "pos_z_m": 9806.0,
+          "yaw_deg": 30.0,
+          "pitch_deg": 0.0,
+          "roll_deg": 0.0,
+          "fov_rad": 0.75,
+          "focus_dist_m": 0.0,
+          "focus_blur": 0.0
+        }
+      ]
+    },
+    "dof_var_6s": {
+      "pos_mode": "linear",
+      "keys": [
+        {
+          "t_s": 0.0,
+          "pos_x_m": 4500.0,
+          "pos_y_rel_m": 0.0,
+          "pos_z_m": 9800.0,
+          "yaw_deg": 0.0,
+          "pitch_deg": 0.0,
+          "roll_deg": 0.0,
+          "fov_rad": 0.7,
+          "focus_dist_m": 2.0,
+          "focus_blur": 1.0
+        },
+        {
+          "t_s": 3.0,
+          "pos_x_m": 4500.0,
+          "pos_y_rel_m": 0.0,
+          "pos_z_m": 9800.0,
+          "yaw_deg": 0.0,
+          "pitch_deg": 0.0,
+          "roll_deg": 0.0,
+          "fov_rad": 0.7,
+          "focus_dist_m": 50.0,
+          "focus_blur": 1.0
+        },
+        {
+          "t_s": 6.0,
+          "pos_x_m": 4500.0,
+          "pos_y_rel_m": 0.0,
+          "pos_z_m": 9800.0,
+          "yaw_deg": 0.0,
+          "pitch_deg": 0.0,
+          "roll_deg": 0.0,
+          "fov_rad": 0.7,
+          "focus_dist_m": 2.0,
+          "focus_blur": 1.0
+        }
+      ]
+    },
+    "dof_fixed_6s": {
+      "pos_mode": "linear",
+      "keys": [
+        {
+          "t_s": 0.0,
+          "pos_x_m": 4500.0,
+          "pos_y_rel_m": 0.0,
+          "pos_z_m": 9800.0,
+          "yaw_deg": 0.0,
+          "pitch_deg": 0.0,
+          "roll_deg": 0.0,
+          "fov_rad": 0.7,
+          "focus_dist_m": 50.0,
+          "focus_blur": 0.0
+        },
+        {
+          "t_s": 3.0,
+          "pos_x_m": 4500.0,
+          "pos_y_rel_m": 0.0,
+          "pos_z_m": 9800.0,
+          "yaw_deg": 0.0,
+          "pitch_deg": 0.0,
+          "roll_deg": 0.0,
+          "fov_rad": 0.7,
+          "focus_dist_m": 50.0,
+          "focus_blur": 0.0
+        },
+        {
+          "t_s": 6.0,
+          "pos_x_m": 4500.0,
+          "pos_y_rel_m": 0.0,
+          "pos_z_m": 9800.0,
+          "yaw_deg": 0.0,
+          "pitch_deg": 0.0,
+          "roll_deg": 0.0,
+          "fov_rad": 0.7,
+          "focus_dist_m": 50.0,
+          "focus_blur": 0.0
+        }
+      ]
+    }
+  }
+}
