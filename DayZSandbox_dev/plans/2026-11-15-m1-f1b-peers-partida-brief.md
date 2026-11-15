@@ -1,6 +1,6 @@
 # F1b-peers en partida: arnés G1-G9 y partidas
 
-2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.2, `48452b7`). **v1.4, congelada: ronda 1 de Sol aplicada, ronda 2 arbitrada por el orquestador con el tope cumplido, y arbitrajes tras los humos de G1 en partida y sobre el reloj de las líneas del log (§10).**
+2026-11-15 · tarea **F1b-peers**, parte en partida. Rama `claude/f1b-peers` (la parte sin juego está cerrada en `c2b7203`). Spec de implementación (R25) del arnés que acredita §6 del [brief de F1b-peers](2026-11-15-m1-f1b-peers-brief.md) (v1.2, `48452b7`). **v1.5, congelada: ronda 1 de Sol aplicada, ronda 2 arbitrada por el orquestador con el tope cumplido, arbitrajes tras los humos de G1 en partida y sobre el reloj de las líneas del log, y la ronda 1 de Sol sobre el código del arnés (§10).**
 
 **Por qué ahora.** F0.3-0 pasó su gate en partida en diag y en retail (`origin/main` `4f18c62`): `WIRE_CAP = 3500` está validado (G10 cumplido). La sesión principal ordenó arrancar las partidas el 2026-11-15. El PR de F1b-peers no se mergea hasta que G1-G9 pasen, porque toca el PBO.
 
@@ -244,3 +244,23 @@ Cada tanda trabaja en una copia del commit congelado. El orquestador revisa, cor
 | H-04 · Ni el brief ni EVIDENCIA decían cómo comparar el `tick_ms` de una línea con una ventana del arnés, y el evaluador comparaba los dos relojes directamente. En partida, `tick_ms` va por unos 2·10⁵ (`GetTickTime` desde que arranca el proceso) y el arnés por unos 8·10⁷. Con eso, G5 a4500 y G7 `invalid_*` fallaban siempre; G5 a2500, G4 (a) y G7 «sin efecto en la ventana» pasaban en vacío; `late_cb` quedaba INCONCLUSO siempre. La pendiente de G6 mezclaba el reloj del servidor con el del cliente | **Cada línea se sitúa por su hora de pared**: el motor la escribe al hacer `Print` (`12:49:39.023 …`), y el arnés anota la pareja (`t_ms`, hora de pared) en el `start` de cada escenario (`wall`) y en el manifest (`t0_ms`, `t0_wall`). Un error de mapeo de ±250 ms se tolera en las ventanas; entre casos seguidos de G7, la cota alta no se ensancha. Sin ancla, G4, G5 y G7 son INCONCLUSO. En el ensayo en seco, el arnés escribe `tick_ms` con su propio reloj y se usa tal cual. `tick_ms` solo se usa para la pendiente y el salto de G6, sobre las líneas `clock` del servidor |
 | H-05 · el evaluador de G3 pedía recuperación tras a y b, y ningún `effect` en c; el contrato no pide ninguna de las dos cosas. Con el mod falso, el ensayo en seco de L2b1 no podía pasar | La recuperación va tras el caso c, que es la inyección (P-08). En c, el peer anota la revisión reescrita y el backend la rechaza (D-P2): sus `effect` son esperables y solo se anotan. El criterio de c sigue siendo `fallido/lectura_no_cumple` y nunca `observado` |
 | H-06 · G7 mezclaba las medidas con las invariantes | `ok:1` y `args:{}`, que el validador puede aceptar, van como `measure_*`, no como `invalid_*` (que exige un `rest invalid` por respuesta reescrita) |
+
+**v1.5: ronda 1 de Sol sobre el código del arnés** (`gpt-6.1-sol`, solo lectura, sobre `6e11c61`; UNSOUND con 4 bloqueantes y 11 importantes). Está de acuerdo con H-01..H-06. Se aplican todos sus hallazgos; las reglas exactas están en EVIDENCIA, «v1.5», R1-R15:
+
+| Hallazgo | Regla |
+|---|---|
+| Q-01 · bloqueante · el lanzador podía adoptar o cerrar un cliente ajeno y soltar el lease con el propio abierto | R14 |
+| Q-02 · bloqueante · `rules_active` se publicaba antes de la barrera de corte | R13 |
+| Q-03 · bloqueante · cobertura incompleta dada por buena | R7 |
+| Q-04 · bloqueante · la deduplicación por tick escondía ejecuciones dobles | R8 |
+| Q-05 · importante · una regla confirmada no prueba que se inyectara | R9 |
+| Q-06 · importante · el proxy no veía el peer de los hellos reales | `189c365` y R15 |
+| Q-07 · importante · ops de sesiones distintas mezcladas | R5 |
+| Q-08 · importante · cadencias con huecos sin medir | R11 |
+| Q-09 · importante · G7 atribuía a la inyección los efectos de su recuperación | R10 |
+| Q-10 · importante · G6 aceptaba pausas no válidas | R12 |
+| Q-11 · importante · G9 fechaba el `apply` tras el HTTP | R6 |
+| Q-12 · importante · inventario y escaneo con nombres incompatibles | R3, R4 |
+| Q-13 · importante · una clave filtrada no tumbaba la corrida | R4 |
+| Q-14 · importante · procedencia sin comprobar | R1 |
+| Q-15 · importante · `logs_ready` no acreditaba el cierre | R2 |

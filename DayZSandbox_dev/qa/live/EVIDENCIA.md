@@ -1,6 +1,6 @@
 # Evidencia de F1b-peers en partida
 
-Contrato entre `f1bp_live.py` (la escribe) y `f1bp_eval.py` (la juzga, sin efectos). Lo exige el brief `plans/2026-11-15-m1-f1b-peers-partida-brief.md` (v1.4), §5 y §6.
+Contrato entre `f1bp_live.py` (la escribe) y `f1bp_eval.py` (la juzga, sin efectos). Lo exige el brief `plans/2026-11-15-m1-f1b-peers-partida-brief.md` (v1.5), §5 y §6.
 
 ## Carpeta
 `DayZSandbox_dev/evidence/m1/F1b-peers/<build>-<UTC>/`, nueva y vacía en cada corrida:
@@ -127,3 +127,64 @@ Son los del brief, §5. «Recuperación» quiere decir un `recovery` cuya op lle
   - b: una sola pareja de `effect` y un `result_seen` con `dup: true` después de la reentrega;
   - c: la op de la sesión nueva con su propia pareja de `effect`.
 - **G9:** cien `mix_op`. Latencia de cada una = `t_ms` del `op_state` `observado` − `t_ms` de su `apply`; `inf` si no llega. p95 sobre las cien, con los fallos en el denominador (como `qa/s_puente_eval.py`, `_m2`), < 1000 ms. Una pareja de `effect` por op.
+
+## v1.5: reglas tras la ronda 1 de Sol (brief §10, Q-01..Q-15)
+Mandan sobre lo anterior cuando choquen. Quién lo hace: **L** = lanzador (`run_f1bp_partida.ps1`), **O** = orquestador (`f1bp_live.py`), **E** = evaluador (`f1bp_eval.py`), **P** = proxy (`fault_proxy.py`).
+
+- **R1, procedencia (Q-14; O, L).**
+  - `manifest.git_head` es el SHA completo de `HEAD` de la raíz del worktree.
+  - `git_dirty` es `true` si `git status --porcelain -- . ":(exclude)DayZSandbox_dev/evidence"`, corrido en esa raíz, da algo. Cubre también `DayZSandbox/`.
+  - El lanzador usa la misma comprobación antes de lanzar.
+- **R2, logs finales (Q-15; L, O, E).**
+  - `logs_ready.json` (en la carpeta de evidencia) es `{"all_closed": <bool>}`.
+  - Sin `fake`, si falta o `all_closed` no es `true`, **todas las filas son INCONCLUSO** («logs no finales») y el orquestador sale con 2.
+- **R3, inventario (Q-12; L).** `logs/inventory.json` es:
+  ```json
+  {"server": {"dir": "<ruta absoluta del perfil>", "files": ["<nombre>", "..."]},
+   "client": {"dir": "...", "files": ["..."]},
+   "copies": [{"peer": "server", "src": "<nombre>", "dest": "server_script.log"}, "..."]}
+  ```
+  `files` son todos los `.log`, `.RPT`, `.ADM` y `.mdmp` del perfil al cerrar.
+- **R4, claves (Q-13; O, E).**
+  - `key_scan` busca todas las claves en cada fichero del inventario (`dir` + nombre, en el perfil) y en las copias de `logs/`. `files` son rutas absolutas.
+  - Cualquier `hits > 0` en cualquier escenario hace **FALLA el agregado**, con el motivo «clave en los logs», sean cuales sean las filas. El orquestador sale con 1.
+  - G4 exige además que `files` cubra todo el inventario (comparación de rutas sin distinguir mayúsculas).
+- **R5, sesión (Q-07; O, E).**
+  - `apply`, `case` (cuando lleva `op_id`) y `op_state` llevan `session`: la sesión del bridge a la que pertenece la op.
+  - Los efectos se casan por `(session, op)`, nunca solo por `op` (el backend reiniciado vuelve a `op-1`).
+- **R6, tiempo del apply (Q-11; O, E).**
+  - `apply.t_ms` es el instante **antes** de enviar el POST, y `apply.t_end_ms` el de su respuesta.
+  - `op_state.t_ms` es el instante del suceso según el backend, si su evento lo trae; si no, el de lectura, con `t_src: "lectura"`.
+  - Una latencia negativa en G9 hace la fila INCONCLUSO («evidencia inválida»).
+- **R7, cobertura (Q-03; E).** Sin el conjunto obligatorio de casos, cada uno una sola vez, la fila es **INCONCLUSO** («cobertura incompleta: …»):
+  - G3: a, b, c.
+  - G4: a, b, c.
+  - G5: a2500 y a4500 de `server` y de `client`, b2500, b4000 y `gap_reset`.
+  - G6: `clock_run` y `pause_order`.
+  - G7: `status{400,401,409,413,500}_{P,R}`, `timeout_P`, `r_held`, `invalid_no_ok_P`, `invalid_ok_false_P`, `invalid_now_decimal_P`, `invalid_now_text_P`, `invalid_no_args_P`, `invalid_all_P`, `measure_ok1_P`, `measure_args_empty_P` y `late_cb`.
+  - G8: a, b, c.
+  - G9: cien `mix_op` con cien `op_id` distintos.
+- **R8, efectos (Q-04; E).** Cada línea `effect` del script log cuenta una vez, identificada por fichero y número de línea; no se deduplica por tick.
+- **R9, inyección observada (Q-05; O, E).**
+  - Todo `case` con inyección lleva `rule_id` (o `rule_ids`).
+  - El caso solo cuenta si `proxy.jsonl` trae al menos una línea con ese `rule_id` y un `rules_version` igual o mayor que el confirmado para el caso, después de su `rules_active`. Si no, la fila es **INCONCLUSO** («inyección no observada»).
+  - Aplica a G3 c, G4 a/b/c, G5, G6 (`g6_deliver`), G7 y G8 a/b.
+  - Las medidas (`status*`, `measure_*`) anotan lo observado en su ventana: la línea `rest …` o ninguna, y el estado de la op si la hay.
+- **R10, fin de una inyección (Q-09; O, E).**
+  - Al quitar las reglas de un caso, el orquestador escribe `rules` con `rule_ids: []` y su `rules_active`.
+  - La ventana de prohibición de un caso va de su primer disparo en el proxy a ese `rules_active` vacío; la recuperación posterior queda fuera.
+- **R11, cadencia (Q-08; E).**
+  - G5 a solo cuenta respuestas 200 de las rutas de P (`hello`, `poll`) a ese peer.
+  - G7 `r_held` mide los huecos entre polls de mantenimiento en toda la ventana: del disparo del acuse retenido a su liberación (`t_done_ms` de esa línea del proxy), extremos incluidos.
+- **R12, validez de G6 (Q-10; E).** Si algo de esto falla, la fila es INCONCLUSO («preparación inválida»):
+  - `T_d ≤ T_s < T_e`;
+  - `T_e − T_s ≥ 1900`;
+  - `T_s − T_d ≤ 300`;
+  - `T_s < D < T_e`;
+  - el `apply` de la op con `ttl_ms` 1500.
+- **R13, barrera (Q-02; P).** Al activar una versión, el proxy **primero** aborta las peticiones en vuelo que casan con sus reglas `abort_inflight`, y **después** publica `rules_active.json`.
+- **R14, identidad de procesos (Q-01; L).**
+  - El cliente retail propio es el único `DayZ_x64` cuyo comando lleva el perfil de cliente de la corrida (`-profiles=<C>`).
+  - Con cero o varios candidatos no se adopta ninguno, no se cierra ninguno y **no se suelta el lease**.
+  - Una identidad sin instante de creación nunca se cierra y bloquea la suelta del lease mientras su PID exista.
+- **R15, ensayo en seco (Q-06; O).** El seco no añade `peer` a la URL del hello: el proxy lo saca del cuerpo, como con el mod real.
