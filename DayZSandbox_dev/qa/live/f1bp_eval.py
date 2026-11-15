@@ -31,6 +31,7 @@ _WALL = re.compile(r"\s*(\d{1,2}):(\d{2}):(\d{2})\.(\d{3})")
 PEER_LOG = {"server": "server_script.log", "client": "client_script.log"}
 EXIT = {"PASA": 0, "FALLA": 1, "INCONCLUSO": 2}
 RECOVERY_LIMIT_MS = 60000.0
+KEY_LEAK_REASON = "clave en los logs"
 
 
 class EvidenceError(Exception):
@@ -39,29 +40,69 @@ class EvidenceError(Exception):
 
 def evaluate(evidence_dir):
     directory = Path(evidence_dir)
+    leak = _key_leak(directory)  # R4: una clave en cualquier escenario tumba el agregado
     manifest_path = directory / "manifest.json"
     if not manifest_path.is_file():
         rows = {gid: _row("INCONCLUSO", "manifest.json ausente", {}) for gid in ROW_IDS}
-        return _aggregate(rows)
+        return _aggregate(rows, leak)
     try:
         manifest = _read_json(manifest_path)
     except EvidenceError as exc:
         rows = {gid: _row("INCONCLUSO", str(exc), {}) for gid in ROW_IDS}
-        return _aggregate(rows)
+        return _aggregate(rows, leak)
     scenarios = manifest.get("scenarios")
     if not isinstance(scenarios, list):
         scenarios = []
     dirty = manifest.get("git_dirty") is True
+    # R2: sin fake, los logs son finales solo si logs_ready.json dice que todo se cerro.
+    final = manifest.get("fake") is True or _logs_final(directory)
     rows = {}
     for gid in scenarios:
         if gid not in ROW_IDS:
             continue
-        rows[gid] = _eval_row(directory, manifest, gid, dirty)
-    return _aggregate(rows)
+        rows[gid] = _eval_row(directory, manifest, gid, dirty, final)
+    return _aggregate(rows, leak)
 
 
-def _aggregate(rows):
+def _logs_final(directory):
+    path = directory / "logs_ready.json"
+    if not path.is_file():
+        return False
+    try:
+        return _read_json(path).get("all_closed") is True
+    except EvidenceError:
+        return False
+
+
+def _key_leak(directory):
+    """True si algun `key_scan` de samples/G*.jsonl trae hits > 0 (R4), sean cuales sean las filas."""
+    samples = directory / "samples"
+    if not samples.is_dir():
+        return False
+    for path in sorted(samples.glob("G*.jsonl")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if (
+                isinstance(obj, dict)
+                and obj.get("ev") == "key_scan"
+                and _num(obj.get("hits"))
+                and obj["hits"] > 0
+            ):
+                return True
+    return False
+
+
+def _aggregate(rows, leak=False):
     verdicts = [row["verdict"] for row in rows.values()]
+    if leak:
+        return {"aggregate": "FALLA", "reason": KEY_LEAK_REASON, "rows": rows}
     if "FALLA" in verdicts:
         aggregate = "FALLA"
     elif "INCONCLUSO" in verdicts:
@@ -75,9 +116,11 @@ def _row(verdict, reason, metrics):
     return {"verdict": verdict, "reason": reason, "metrics": metrics}
 
 
-def _eval_row(directory, manifest, gid, dirty):
+def _eval_row(directory, manifest, gid, dirty, final=True):
     if dirty:
         return _row("INCONCLUSO", "git_dirty: true", {})
+    if not final:
+        return _row("INCONCLUSO", "logs no finales", {})
     sample = directory / "samples" / f"{gid}.jsonl"
     if not sample.is_file():
         return _row("INCONCLUSO", f"sin samples/{gid}.jsonl", {})
@@ -219,17 +262,12 @@ def _in_window(ctx, ev, start, end, tol_lo=WINDOW_TOL_MS, tol_hi=WINDOW_TOL_MS):
 
 
 def _effects(ctx):
-    seen = set()
+    """Cada linea `effect` cuenta una vez, por fichero y numero de linea (R8): sin deduplicar por tick."""
     effects = []
     for name in SCRIPT_LOGS:
         for ev in _log(ctx, name) or []:
-            if ev.get("kind") != "effect":
-                continue
-            key = (ev.get("step"), ev.get("session"), ev.get("op"), ev.get("tick_ms"))
-            if key in seen:
-                continue
-            seen.add(key)
-            effects.append(ev)
+            if ev.get("kind") == "effect":
+                effects.append(ev)
     return effects
 
 
@@ -283,30 +321,204 @@ def _script_errors(ctx, tolerated=None):
     return errors
 
 
-def _pair_map(effects, op):
-    pairs = {}
+def _pair(effects, session, op):
+    """Efectos de la op `op` de la sesion `session` por paso (R5: nunca solo por op)."""
+    counts = {"retirar": 0, "anotar": 0}
     for ev in effects:
-        if ev.get("op") != op:
-            continue
-        group = pairs.setdefault(ev.get("session"), {"retirar": 0, "anotar": 0})
-        if ev.get("step") in group:
-            group[ev["step"]] += 1
-    return pairs
+        if ev.get("session") == session and ev.get("op") == op and ev.get("step") in counts:
+            counts[ev["step"]] += 1
+    return counts
 
 
-def _exact_pair(pairs):
-    if not pairs:
-        return False, "sin effects"
-    if len(pairs) != 1:
-        return False, f"effects en {len(pairs)} sesiones"
-    group = next(iter(pairs.values()))
-    if group["retirar"] != 1 or group["anotar"] != 1:
-        return False, f"retirar={group['retirar']} anotar={group['anotar']}"
+def _exact_pair(pair):
+    if pair["retirar"] != 1 or pair["anotar"] != 1:
+        return False, f"retirar={pair['retirar']} anotar={pair['anotar']}"
     return True, ""
 
 
-def _op_effects(effects, op):
-    return [ev for ev in effects if ev.get("op") == op]
+def _op_effects(effects, sessions, op):
+    return [ev for ev in effects if ev.get("op") == op and ev.get("session") in sessions]
+
+
+def _case_key(case):
+    """(session, op) de un caso con op_id (R5), o None si no lleva op_id."""
+    op = case.get("op_id")
+    if op is None:
+        return None
+    session = case.get("session")
+    if session is None:
+        raise EvidenceError(f"evidencia invalida: case {case.get('name')} sin session")
+    return session, op
+
+
+def _states(ctx, session, op):
+    return [
+        ev
+        for ev in _events(ctx, "op_state")
+        if ev.get("op_id") == op and ev.get("session") == session
+    ]
+
+
+def _coverage(found, required):
+    """Texto de lo que falta o sobra (R7): cada obligatorio una sola vez. "" si esta completo."""
+
+    def label(key):
+        return "/".join(str(part) for part in key) if isinstance(key, tuple) else str(key)
+
+    absent = [label(key) for key in required if found.count(key) == 0]
+    repeated = [label(key) for key in required if found.count(key) > 1]
+    parts = []
+    if absent:
+        parts.append("falta " + ", ".join(absent))
+    if repeated:
+        parts.append("repetido " + ", ".join(repeated))
+    return "; ".join(parts)
+
+
+def _case_rule_ids(case):
+    ids = []
+    rule = case.get("rule_id")
+    if isinstance(rule, str) and rule:
+        ids.append(rule)
+    many = case.get("rule_ids")
+    if isinstance(many, list):
+        ids.extend(item for item in many if isinstance(item, str) and item)
+    return ids
+
+
+def _fire_line(ctx, case, rule_id, proxy):
+    """Primera linea del proxy que acredita la inyeccion `rule_id` de un caso (R9), o None.
+
+    La version confirmada del caso es la de la ultima `rules` con ese rule_id no posterior al caso
+    (o la primera posterior) que tiene su `rules_active`. Cuenta una linea con ese rule_id y
+    rules_version igual o mayor (el proxy etiqueta cada linea con la version activa al recibirla),
+    servida despues de escribirse esa version (`t_done_ms`, o `t_ms` si no lo hay). No se compara con
+    el t_ms del `rules_active`: el orquestador lo anota al detectar el fichero, con su retraso de
+    sondeo, y un long-poll recibido antes del caso actua al servir la respuesta (brief v1.5, H-09).
+    """
+    actives = _events(ctx, "rules_active")
+    candidates = []
+    for ev in _events(ctx, "rules"):
+        ids = ev.get("rule_ids")
+        if not isinstance(ids, list) or rule_id not in ids:
+            continue
+        active = next(
+            (
+                other
+                for other in actives
+                if other.get("version") == ev.get("version")
+                and _num(other.get("t_ms"))
+                and other["t_ms"] >= ev["t_ms"]
+            ),
+            None,
+        )
+        if active is not None and _num(ev.get("version")):
+            candidates.append((ev["t_ms"], ev["version"], active["t_ms"]))
+    if not candidates:
+        return None
+    moment = case.get("t_ms")
+    before = [item for item in candidates if _num(moment) and item[0] <= moment]
+    t_written, version, _ = max(before) if before else min(candidates)
+
+    def served(ev):
+        return ev["t_done_ms"] if _num(ev.get("t_done_ms")) else ev.get("t_ms")
+
+    lines = [
+        ev
+        for ev in proxy
+        if ev.get("rule_id") == rule_id
+        and _num(ev.get("rules_version"))
+        and ev["rules_version"] >= version
+        and _num(served(ev))
+        and served(ev) >= t_written
+    ]
+    return min(lines, key=lambda ev: ev["t_ms"]) if lines else None
+
+
+def _injection(ctx, cases):
+    """R9: cada caso con inyeccion trae rule_id y el proxy lo vio disparar.
+
+    Devuelve (motivo, disparos): motivo "" si todo se observo; disparos mapea id(caso) a su
+    primera linea del proxy.
+    """
+    fires = {}
+    proxy = _proxy(ctx)
+    if proxy is None:
+        return "sin samples/proxy.jsonl", fires
+    for case in cases:
+        label = str(case.get("name", case.get("ev")))
+        ids = _case_rule_ids(case)
+        if not ids:
+            return f"inyección no observada: {label} sin rule_id", fires
+        first = None
+        for rule_id in ids:
+            line = _fire_line(ctx, case, rule_id, proxy)
+            if line is None:
+                return f"inyección no observada: {label} ({rule_id})", fires
+            if first is None or line["t_ms"] < first["t_ms"]:
+                first = line
+        fires[id(case)] = first
+    return "", fires
+
+
+def _prohibition_end(ctx, fire_t):
+    """R10: fin de la ventana de prohibicion = rules_active del primer `rules` vacio tras el disparo.
+
+    Si antes de ese `rules` vacio se escribe otro con reglas, la inyeccion del caso no se cerro
+    (el vacio es de un caso posterior): no hay fin y devuelve None.
+    """
+    actives = _events(ctx, "rules_active")
+    best = None
+    for ev in _events(ctx, "rules"):
+        if ev.get("rule_ids") != []:
+            continue
+        for other in actives:
+            if (
+                other.get("version") == ev.get("version")
+                and _num(other.get("t_ms"))
+                and other["t_ms"] >= ev["t_ms"]
+                and other["t_ms"] >= fire_t
+            ):
+                if best is None or other["t_ms"] < best[0]:
+                    best = (other["t_ms"], ev["t_ms"])
+                break
+    if best is None:
+        return None
+    for ev in _events(ctx, "rules"):
+        if ev.get("rule_ids") and fire_t < ev["t_ms"] < best[1]:
+            return None
+    return best[0]
+
+
+def _recovery_ops(ctx):
+    """{(session, op)} de las ordenes de recuperacion: sus efectos quedan fuera de las ventanas."""
+    ops = set()
+    for rec in _events(ctx, "recovery"):
+        op = rec.get("op_id")
+        session = rec.get("session")
+        if session is None:
+            for ev in _events(ctx, "op_state"):
+                if (
+                    ev.get("op_id") == op
+                    and ev.get("session") is not None
+                    and _num(ev.get("t_ms"))
+                    and ev["t_ms"] >= rec["t_ms"]
+                ):
+                    session = ev["session"]
+                    break
+        ops.add((session, op))
+    return ops
+
+
+def _window_effects(ctx, effects, start, end, tol_hi=WINDOW_TOL_MS):
+    """Efectos en la ventana, sin los de las ordenes de recuperacion (que quedan fuera, R10)."""
+    recovery = _recovery_ops(ctx)
+    return [
+        ev
+        for ev in effects
+        if _in_window(ctx, ev, start, end, tol_hi=tol_hi)
+        and (ev.get("session"), ev.get("op")) not in recovery
+    ]
 
 
 def _recovery(ctx, anchor, anchors):
@@ -326,10 +538,12 @@ def _recovery(ctx, anchor, anchors):
         return False, None, "sin recovery"
     rec = candidates[0]
     op = rec.get("op_id")
+    session = rec.get("session")
     observed = [
         ev
         for ev in _events(ctx, "op_state")
         if ev.get("op_id") == op
+        and (session is None or ev.get("session") == session)
         and ev.get("state") == "observado"
         and _num(ev.get("t_ms"))
         and ev["t_ms"] >= rec["t_ms"]
@@ -427,6 +641,7 @@ def _g2(ctx):
     return "PASA", "", metrics
 
 
+
 def _g3(ctx):
     missing = _missing_logs(ctx, SCRIPT_LOGS)
     if missing:
@@ -435,32 +650,34 @@ def _g3(ctx):
     cases = _events(ctx, "case")
     if not cases:
         return "INCONCLUSO", "sin casos G3", {}
+    why = _coverage([case.get("name") for case in cases], ["a", "b", "c"])
+    if why:
+        return "INCONCLUSO", "cobertura incompleta: " + why, {}
+    why, _ = _injection(ctx, [case for case in cases if case.get("name") == "c"])
+    if why:
+        return "INCONCLUSO", why, {}
     anchors = [case.get("t_ms") for case in cases if _num(case.get("t_ms"))]
     problems = []
     metrics = {"cases": {}}
     for case in cases:
         name = case.get("name")
-        op = case.get("op_id")
-        entry = {"pairs": {}}
+        entry = {"pair": None}
         metrics["cases"][str(name)] = entry
-        if op is None:
+        key = _case_key(case)
+        if key is None:
             problems.append(f"{name}: sin op_id")
             continue
-        pairs = _pair_map(effects, op)
-        entry["pairs"] = pairs
+        session, op = key
+        pair = _pair(effects, session, op)
+        entry["pair"] = pair
+        states = _states(ctx, session, op)
         if name in ("a", "b"):
-            ok, detail = _exact_pair(pairs)
+            ok, detail = _exact_pair(pair)
             if not ok:
                 problems.append(f"{name}: {detail}")
-            observed = [
-                ev
-                for ev in _events(ctx, "op_state")
-                if ev.get("op_id") == op and ev.get("state") == "observado"
-            ]
-            if not observed:
+            if not any(ev.get("state") == "observado" for ev in states):
                 problems.append(f"{name}: sin observado")
         elif name == "c":
-            states = [ev for ev in _events(ctx, "op_state") if ev.get("op_id") == op]
             if any(ev.get("state") == "observado" for ev in states):
                 problems.append("c: llego a observado")
             if not any(
@@ -469,7 +686,7 @@ def _g3(ctx):
             ):
                 problems.append("c: sin fallido/lectura_no_cumple")
             # D-P2: el peer anota lo que recibe (la revision reescrita) y es el backend quien lo
-            # rechaza; sus efectos son esperables y solo se anotan (pairs).
+            # rechaza; sus efectos son esperables y solo se anotan (pair).
         else:
             problems.append(f"caso desconocido {name}")
         if name == "c":
@@ -483,17 +700,77 @@ def _g3(ctx):
     return "PASA", "", metrics
 
 
+def _norm_path(path):
+    return path.replace("\\", "/").lower()
+
+
+def _inventory(ctx):
+    """(rutas del perfil, destinos de copia) del inventario R3, o None si no es legible."""
+    path = ctx["dir"] / "logs" / "inventory.json"
+    if not path.is_file():
+        return None
+    try:
+        data = _read_json(path)
+    except EvidenceError:
+        return None
+    profile = []
+    for peer in ("server", "client"):
+        section = data.get(peer)
+        if (
+            not isinstance(section, dict)
+            or not isinstance(section.get("dir"), str)
+            or not isinstance(section.get("files"), list)
+        ):
+            return None
+        base = section["dir"].replace("\\", "/").rstrip("/")
+        for name in section["files"]:
+            if not isinstance(name, str):
+                return None
+            profile.append(base + "/" + name)
+    copies = []
+    raw = data.get("copies", [])
+    if not isinstance(raw, list):
+        return None
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("dest"), str):
+            return None
+        copies.append(item["dest"])
+    return profile, copies
+
+
+def _uncovered(inventory, files):
+    """Elementos del inventario que `key_scan.files` no cubre (R3/R4, sin distinguir mayusculas).
+
+    Un fichero del perfil se cubre con su ruta completa. Una copia de logs/ se cubre con una ruta que
+    acabe en logs/<dest>: la carpeta de evidencia puede haberse movido despues del escaneo.
+    """
+    profile, copies = inventory
+    scanned = {_norm_path(item) for item in files if isinstance(item, str)}
+    missing = [item for item in profile if _norm_path(item) not in scanned]
+    for dest in copies:
+        suffix = "/logs/" + _norm_path(dest)
+        if not any(item.endswith(suffix) for item in scanned):
+            missing.append("logs/" + dest)
+    return missing
+
+
 def _g4(ctx):
     missing = _missing_logs(ctx, SCRIPT_LOGS + ("inventory.json",))
     if missing:
         return "INCONCLUSO", "log ausente: " + ", ".join(missing), {}
-    proxy = _proxy(ctx) or []
-    effects = _effects(ctx)
     cases = _events(ctx, "case")
     if not cases:
         return "INCONCLUSO", "sin casos G4", {}
     if not _clock_ok(ctx):
         return "INCONCLUSO", "sin ancla de hora de pared (manifest.t0_wall o start.wall)", {}
+    why = _coverage([case.get("name") for case in cases], ["a", "b", "c"])
+    if why:
+        return "INCONCLUSO", "cobertura incompleta: " + why, {}
+    why, _ = _injection(ctx, cases)
+    if why:
+        return "INCONCLUSO", why, {}
+    proxy = _proxy(ctx) or []
+    effects = _effects(ctx)
     bad = _events(ctx, "bad_key_window")
     stale = _events(ctx, "stale_order")
     anchors = [case.get("t_ms") for case in cases if _num(case.get("t_ms"))]
@@ -501,11 +778,12 @@ def _g4(ctx):
     metrics = {"cases": {}}
     for case in cases:
         name = case.get("name")
-        op = case.get("op_id")
         metrics["cases"][str(name)] = {}
-        if op is None:
+        key = _case_key(case)
+        if key is None:
             problems.append(f"{name}: sin op_id")
             continue
+        session, op = key
         if name == "a":
             if not bad:
                 return "INCONCLUSO", "sin bad_key_window", metrics
@@ -514,32 +792,23 @@ def _g4(ctx):
             end = window.get("t_end_ms")
             if not (_num(start) and _num(end)):
                 return "INCONCLUSO", "bad_key_window sin ventana", metrics
-            hellos = [
+            in_window = [
                 ev
                 for ev in proxy
                 if ev.get("route") == "hello"
                 and ev.get("peer") == "server"
-                and ev.get("upstream_status") == 401
                 and _num(ev.get("t_ms"))
                 and start <= ev["t_ms"] <= end
             ]
+            hellos = [ev for ev in in_window if ev.get("upstream_status") == 401]
             if not hellos:
                 problems.append("a: sin hello 401 del servidor en la ventana")
-            bad_ok = [
-                ev
-                for ev in proxy
-                if ev.get("route") == "hello"
-                and ev.get("peer") == "server"
-                and ev.get("upstream_status") == 200
-                and _num(ev.get("t_ms"))
-                and start <= ev["t_ms"] <= end
-            ]
-            if bad_ok:
+            if any(ev.get("upstream_status") == 200 for ev in in_window):
                 problems.append("a: hello 200 del servidor con clave mala")
-            window_effects = [ev for ev in effects if _in_window(ctx, ev, start, end)]
+            window_effects = _window_effects(ctx, effects, start, end)
             if window_effects:
                 problems.append("a: effect en la ventana")
-            if _op_effects(effects, op):
+            if _op_effects(effects, (session,), op):
                 problems.append("a: effect para la op")
             metrics["cases"]["a"] = {
                 "hellos_401": len(hellos),
@@ -548,7 +817,11 @@ def _g4(ctx):
         elif name == "b":
             if not stale:
                 return "INCONCLUSO", "sin stale_order", metrics
-            if _op_effects(effects, op):
+            sessions = {session}
+            for ev in stale:
+                if ev.get("op_id") == op and ev.get("old_session") is not None:
+                    sessions.add(ev["old_session"])
+            if _op_effects(effects, sessions, op):
                 problems.append("b: effect para la op stale")
             results = [ev for ev in _events(ctx, "result_seen") if ev.get("op_id") == op]
             if results:
@@ -557,13 +830,13 @@ def _g4(ctx):
                     problems.append("b: resultado no rejected/stale_session")
             metrics["cases"]["b"] = {"results": len(results)}
         elif name == "c":
-            states = [ev for ev in _events(ctx, "op_state") if ev.get("op_id") == op]
+            states = _states(ctx, session, op)
             if not any(
                 ev.get("state") == "fallido" and ev.get("reason") == "conexion_perdida"
                 for ev in states
             ):
                 problems.append("c: sin fallido/conexion_perdida")
-            if _op_effects(effects, op):
+            if _op_effects(effects, (session,), op):
                 problems.append("c: effect para la op")
         else:
             problems.append(f"caso desconocido {name}")
@@ -579,22 +852,45 @@ def _g4(ctx):
     metrics["key_scan_hits"] = hits
     if hits != 0:
         problems.append(f"key_scan.hits={hits}")
-    inventory = _inventory_paths(ctx)
+    inventory = _inventory(ctx)
     if inventory is None:
         return "INCONCLUSO", "inventory.json ilegible", metrics
-    if not inventory:
+    if not inventory[0] and not inventory[1]:
         return "INCONCLUSO", "inventario vacio", metrics
     files = scan.get("files")
     if not isinstance(files, list):
         return "INCONCLUSO", "key_scan.files no es lista", metrics
     uncovered = _uncovered(inventory, files)
-    metrics["inventory_paths"] = len(inventory)
+    metrics["inventory_paths"] = len(inventory[0]) + len(inventory[1])
     metrics["key_scan_files"] = len(files)
     if uncovered:
         problems.append("key_scan.files no cubre: " + ", ".join(uncovered[:3]))
     if problems:
         return "FALLA", "; ".join(problems), metrics
     return "PASA", "", metrics
+
+
+P_ROUTES = ("hello", "poll")  # R11: solo las rutas de P renuevan el lease
+
+
+def _assign_windows(cases, windows):
+    """Una ventana distinta para cada caso: la mas cercana sin usar (prefiere las que empiezan despues)."""
+    used = set()
+    assigned = {}
+    for case in cases:
+        moment = case.get("t_ms")
+        best = None
+        for index, window in enumerate(windows):
+            start = window.get("t_start_ms")
+            if index in used or not _num(start) or not _num(moment):
+                continue
+            key = (start < moment, abs(start - moment))
+            if best is None or key < best[0]:
+                best = (key, index)
+        if best is not None:
+            used.add(best[1])
+            assigned[id(case)] = windows[best[1]]
+    return assigned
 
 
 def _g5(ctx):
@@ -607,7 +903,32 @@ def _g5(ctx):
     cases = _events(ctx, "case")
     if not cases:
         return "INCONCLUSO", "sin casos G5", {}
-    windows = _events(ctx, "window")
+    gap = _events(ctx, "gap_reset")
+    found = []
+    for case in cases:
+        name = case.get("name")
+        found.append((name, case.get("peer")) if name in ("a2500", "a4500") else (name,))
+    found.extend([("gap_reset",)] * len(gap))
+    required = [
+        ("a2500", "server"),
+        ("a2500", "client"),
+        ("a4500", "server"),
+        ("a4500", "client"),
+        ("b2500",),
+        ("b4000",),
+        ("gap_reset",),
+    ]
+    why = _coverage(found, required)
+    if why:
+        return "INCONCLUSO", "cobertura incompleta: " + why, {}
+    why, _ = _injection(ctx, cases)
+    if why:
+        return "INCONCLUSO", why, {}
+    proxy = _proxy(ctx) or []
+    windows = _assign_windows(
+        [case for case in cases if case.get("name") in ("a2500", "a4500")],
+        _events(ctx, "window"),
+    )
     anchors = [case.get("t_ms") for case in cases if _num(case.get("t_ms"))]
     effects = _effects(ctx)
     problems = []
@@ -615,87 +936,75 @@ def _g5(ctx):
     for case in cases:
         name = case.get("name")
         peer = case.get("peer")
-        op = case.get("op_id")
         entry = {}
-        metrics["cases"][str(name)] = entry
-        if op is None:
-            problems.append(f"{name}: sin op_id")
+        label = f"{name}/{peer}" if name in ("a2500", "a4500") else str(name)
+        metrics["cases"][label] = entry
+        key = _case_key(case)
+        if key is None:
+            problems.append(f"{label}: sin op_id")
             continue
-        if name == "a2500":
-            window = _window_for(case, windows)
-            if window is None:
-                return "INCONCLUSO", "sin window para a2500", metrics
-            start = window.get("t_start_ms")
-            end = window.get("t_end_ms")
-            if not (_num(start) and _num(end)):
-                return "INCONCLUSO", "window sin ventana", metrics
-            responses = [
-                ev
-                for ev in _proxy(ctx) or []
-                if ev.get("peer") == peer
-                and ev.get("upstream_status") == 200
-                and _num(ev.get("t_done_ms"))
-            ]
-            inside = [ev for ev in responses if start <= ev["t_done_ms"] <= end]
-            after = [ev for ev in responses if ev["t_done_ms"] > end]
-            if after:
-                inside.append(min(after, key=lambda ev: ev["t_done_ms"]))
-            times = sorted(ev["t_done_ms"] for ev in inside)
-            if len(times) < 2:
-                return "INCONCLUSO", "sin dos respuestas 200 en la ventana", metrics
-            gaps = [b - a for a, b in zip(times, times[1:])]
-            entry["responses"] = len(times)
-            entry["max_gap_ms"] = max(gaps)
-            if max(gaps) >= lease:
-                problems.append(f"a2500: hueco {max(gaps)} >= lease_ms")
-            lost = [
-                ev
-                for ev in _log(ctx, PEER_LOG.get(peer, "")) or []
-                if ev.get("kind") == "lease_lost" and _in_window(ctx, ev, start, end)
-            ]
-            if lost:
-                problems.append("a2500: lease lost en la ventana")
-        elif name == "a4500":
+        session, op = key
+        if name in ("a2500", "a4500"):
+            window = windows.get(id(case))
+            if window is None or not (_num(window.get("t_start_ms")) and _num(window.get("t_end_ms"))):
+                return "INCONCLUSO", f"sin window para {label}", metrics
+            start = window["t_start_ms"]
+            end = window["t_end_ms"]
             log_name = PEER_LOG.get(peer)
             if log_name is None:
-                return "INCONCLUSO", "a4500 sin peer valido", metrics
-            window = _window_for(case, windows)
-            if window is None or not (_num(window.get("t_start_ms")) and _num(window.get("t_end_ms"))):
-                return "INCONCLUSO", "sin window para a4500", metrics
-            lost = [
-                ev
-                for ev in _log(ctx, log_name) or []
-                if ev.get("kind") == "lease_lost"
-                and _num(ev.get("age_ms"))
-                and lease <= ev["age_ms"] < lease + 200
-                and _in_window(ctx, ev, window["t_start_ms"], window["t_end_ms"])
-            ]
-            entry["lease_lost"] = len(lost)
-            if not lost:
-                problems.append("a4500: sin lease lost en [lease, lease+200)")
+                return "INCONCLUSO", f"{name} sin peer valido", metrics
+            if name == "a2500":
+                # R11: solo cuentan las respuestas 200 de las rutas de P a ese peer.
+                responses = [
+                    ev
+                    for ev in proxy
+                    if ev.get("peer") == peer
+                    and ev.get("route") in P_ROUTES
+                    and ev.get("upstream_status") == 200
+                    and _num(ev.get("t_done_ms"))
+                ]
+                inside = [ev for ev in responses if start <= ev["t_done_ms"] <= end]
+                after = [ev for ev in responses if ev["t_done_ms"] > end]
+                if after:
+                    inside.append(min(after, key=lambda ev: ev["t_done_ms"]))
+                times = sorted(ev["t_done_ms"] for ev in inside)
+                if len(times) < 2:
+                    return "INCONCLUSO", "sin dos respuestas 200 de P en la ventana", metrics
+                gaps = [b - a for a, b in zip(times, times[1:])]
+                entry["responses"] = len(times)
+                entry["max_gap_ms"] = max(gaps)
+                if max(gaps) >= lease:
+                    problems.append(f"{label}: hueco {max(gaps)} >= lease_ms")
+                lost = [
+                    ev
+                    for ev in _log(ctx, log_name) or []
+                    if ev.get("kind") == "lease_lost" and _in_window(ctx, ev, start, end)
+                ]
+                if lost:
+                    problems.append(f"{label}: lease lost en la ventana")
+            else:
+                lost = [
+                    ev
+                    for ev in _log(ctx, log_name) or []
+                    if ev.get("kind") == "lease_lost"
+                    and _num(ev.get("age_ms"))
+                    and lease <= ev["age_ms"] < lease + 200
+                    and _in_window(ctx, ev, start, end)
+                ]
+                entry["lease_lost"] = len(lost)
+                if not lost:
+                    problems.append(f"{label}: sin lease lost en [lease, lease+200)")
         elif name == "b2500":
-            pairs = _pair_map(effects, op)
-            ok, detail = _exact_pair(pairs)
+            ok, detail = _exact_pair(_pair(effects, session, op))
             if not ok:
                 problems.append(f"b2500: {detail}")
-            observed = [
-                ev
-                for ev in _events(ctx, "op_state")
-                if ev.get("op_id") == op and ev.get("state") == "observado"
-            ]
-            if not observed:
+            if not any(ev.get("state") == "observado" for ev in _states(ctx, session, op)):
                 problems.append("b2500: sin observado")
         elif name == "b4000":
-            pairs = _pair_map(effects, op)
-            if len(pairs) != 1:
-                problems.append(f"b4000: effects en {len(pairs)} sesiones")
-            else:
-                group = next(iter(pairs.values()))
-                if group["retirar"] != 1 or group["anotar"] != 0:
-                    problems.append(
-                        f"b4000: retirar={group['retirar']} anotar={group['anotar']}"
-                    )
-            states = [ev for ev in _events(ctx, "op_state") if ev.get("op_id") == op]
+            pair = _pair(effects, session, op)
+            if pair["retirar"] != 1 or pair["anotar"] != 0:
+                problems.append(f"b4000: retirar={pair['retirar']} anotar={pair['anotar']}")
+            states = _states(ctx, session, op)
             if not any(
                 ev.get("state") == "parcial" and ev.get("reason") == "lease_expired"
                 for ev in states
@@ -708,12 +1017,9 @@ def _g5(ctx):
         ok, latency, why = _recovery(ctx, case, anchors)
         entry["recovery_ms"] = latency
         if not ok:
-            problems.append(f"{name}: {why}")
+            problems.append(f"{label}: {why}")
     if problems:
         return "FALLA", "; ".join(problems), metrics
-    gap = _events(ctx, "gap_reset")
-    if not gap:
-        return "INCONCLUSO", "sin gap_reset", metrics
     if gap[-1].get("confirmed") is not True:
         return "FALLA", "gap_reset no confirmado", metrics
     config_lines = [
@@ -731,15 +1037,43 @@ def _g6(ctx):
     if missing:
         return "INCONCLUSO", "log ausente: " + ", ".join(missing), {}
     orders = _events(ctx, "pause_order")
-    if not orders:
-        return "INCONCLUSO", "sin pause_order", {}
-    order = orders[-1]
+    runs = _events(ctx, "clock_run")
+    why = _coverage(
+        ["pause_order"] * len(orders) + ["clock_run"] * len(runs), ["pause_order", "clock_run"]
+    )
+    if why:
+        return "INCONCLUSO", "cobertura incompleta: " + why, {}
+    order = orders[0]
+    why, _ = _injection(ctx, [order])
+    if why:
+        return "INCONCLUSO", why, {}
     op = order.get("op_id")
-    deadline = order.get("D_ms")
+    t_d = order.get("T_d_ms")
     start = order.get("T_s_ms")
     end = order.get("T_e_ms")
-    if not (_num(deadline) and _num(start) and _num(end)):
-        return "INCONCLUSO", "pause_order sin tiempos", {}
+    deadline = order.get("D_ms")
+    if not (_num(t_d) and _num(start) and _num(end) and _num(deadline)):
+        return "INCONCLUSO", "preparación inválida: pause_order sin tiempos", {}
+    # R12: la pausa tiene que estar bien preparada para que el veredicto valga.
+    invalid = []
+    if not t_d <= start < end:
+        invalid.append("T_d <= T_s < T_e")
+    if end - start < 1900:
+        invalid.append("T_e - T_s >= 1900")
+    if start - t_d > 300:
+        invalid.append("T_s - T_d <= 300")
+    if not start < deadline < end:
+        invalid.append("T_s < D < T_e")
+    applies = [
+        ev
+        for ev in _events(ctx, "apply")
+        if ev.get("op_id") == op
+        and (order.get("session") is None or ev.get("session") == order["session"])
+    ]
+    if not applies or any(ev.get("ttl_ms") != 1500 for ev in applies):
+        invalid.append("apply con ttl_ms 1500")
+    if invalid:
+        return "INCONCLUSO", "preparación inválida: " + ", ".join(invalid), {}
     metrics = _clock_metrics(ctx, start, end)
     results = [ev for ev in _events(ctx, "result_seen") if ev.get("op_id") == op]
     if not results:
@@ -769,6 +1103,31 @@ def _g6(ctx):
     return "PASA", "", metrics
 
 
+G7_INVALID = (
+    "invalid_no_ok_P",
+    "invalid_ok_false_P",
+    "invalid_now_decimal_P",
+    "invalid_now_text_P",
+    "invalid_all_P",
+)
+# Brief v1.5, H-08: una orden sin args (o con args:{}) es valida como respuesta y el verbo la rechaza
+# (rejected/bad_args): son medidas, y las ops que las llevan no pueden tener effect.
+G7_MEASURE_OPS = ("measure_no_args_P", "measure_args_empty_P")
+G7_REQUIRED = (
+    [f"status{code}_{ch}" for code in (400, 401, 409, 413, 500) for ch in ("P", "R")]
+    + ["timeout_P", "r_held"]
+    + list(G7_INVALID)
+    + ["measure_ok1_P"]
+    + list(G7_MEASURE_OPS)
+    + ["late_cb"]
+)
+
+
+def _is_measure(case):
+    name = str(case.get("name"))
+    return name.startswith("status") or name.startswith("measure_")
+
+
 def _g7(ctx):
     missing = _missing_logs(ctx, SCRIPT_LOGS)
     if missing:
@@ -781,30 +1140,50 @@ def _g7(ctx):
         return "INCONCLUSO", "sin casos G7", {}
     if not _clock_ok(ctx):
         return "INCONCLUSO", "sin ancla de hora de pared (manifest.t0_wall o start.wall)", {}
+    why = _coverage([case.get("name") for case in cases], G7_REQUIRED)
+    if why:
+        return "INCONCLUSO", "cobertura incompleta: " + why, {}
     lease = _manifest_int(ctx, "lease_ms")
+    why, _ = _injection(ctx, [case for case in cases if not _is_measure(case)])
+    if why:
+        return "INCONCLUSO", why, {}
     effects = _effects(ctx)
     lines = _all_lines(ctx)
+    anchors = [case.get("t_ms") for case in cases if _num(case.get("t_ms"))]
     problems = []
     metrics = {"cases": {}}
-    measure_lines = [
-        ev for ev in lines if ev.get("kind") in ("rest_error", "rest_invalid")
-    ]
+    measure_lines = [ev for ev in lines if ev.get("kind") in ("rest_error", "rest_invalid")]
     for index, case in enumerate(cases):
-        name = case.get("name")
-        rule = case.get("rule_id")
-        start = case.get("t_ms")
-        if not _num(start):
+        name = str(case.get("name"))
+        ids = _case_rule_ids(case)
+        rule = ids[0] if ids else None
+        moment = case.get("t_ms")
+        entry = {}
+        metrics["cases"][name] = entry
+        if not _num(moment):
             problems.append(f"{name}: sin t_ms")
             continue
         next_start = math.inf
         for later in cases[index + 1 :]:
-            if _num(later.get("t_ms")) and later["t_ms"] > start:
+            if _num(later.get("t_ms")) and later["t_ms"] > moment:
                 next_start = later["t_ms"]
                 break
-        window_end = next_start
-        entry = {}
-        metrics["cases"][str(name)] = entry
+        measure = _is_measure(case)
+        fire_line = _fire_line(ctx, case, rule, proxy) if rule is not None else None
+        # R10: de su primer disparo en el proxy al rules_active vacio; la recuperacion queda fuera.
+        start = fire_line["t_ms"] if fire_line is not None else moment
+        end = _prohibition_end(ctx, start)
+        tol_hi = WINDOW_TOL_MS
+        if end is None:
+            if not measure:
+                raise EvidenceError(f"{name}: sin rules_active vacio que cierre la inyeccion")
+            end, tol_hi = next_start, 0
         if name == "r_held":
+            # R11: huecos entre polls de mantenimiento del disparo del acuse retenido a su
+            # liberacion (t_done_ms de esa linea), extremos incluidos.
+            release = fire_line.get("t_done_ms")
+            if not _num(release):
+                return "INCONCLUSO", "r_held: la linea del proxy sin t_done_ms", metrics
             polls = [
                 ev
                 for ev in proxy
@@ -812,13 +1191,11 @@ def _g7(ctx):
                 and ev.get("deliver") == 0
                 and ev.get("route") == "poll"
                 and _num(ev.get("t_ms"))
-                and start <= ev["t_ms"] <= window_end
+                and start <= ev["t_ms"] <= release
             ]
-            times = sorted(ev["t_ms"] for ev in polls)
-            if len(times) < 2:
-                return "INCONCLUSO", "r_held: menos de dos polls", metrics
+            times = [start] + sorted(ev["t_ms"] for ev in polls) + [release]
             gaps = [b - a for a, b in zip(times, times[1:])]
-            entry["polls"] = len(times)
+            entry["polls"] = len(polls)
             entry["max_gap_ms"] = max(gaps)
             if max(gaps) > 750:
                 problems.append("r_held: hueco > 750 ms")
@@ -833,7 +1210,7 @@ def _g7(ctx):
                 for ev in lines
                 if ev.get("kind") == "rest_invalid"
                 and (channel is None or ev.get("ch") == channel)
-                and _in_window(ctx, ev, start, window_end, tol_hi=0)
+                and _in_window(ctx, ev, start, end, tol_hi=tol_hi)
             ]
             rewritten = [
                 ev
@@ -847,81 +1224,98 @@ def _g7(ctx):
             entry["invalid"] = len(invalid)
             entry["rewritten"] = len(rewritten)
             if len(invalid) != len(rewritten):
-                problems.append(
-                    f"{name}: {len(invalid)} rest invalid != {len(rewritten)} reescritas"
-                )
-            window_effects = [
-                ev for ev in effects if _in_window(ctx, ev, start, window_end, tol_hi=0)
-            ]
+                problems.append(f"{name}: {len(invalid)} rest invalid != {len(rewritten)} reescritas")
+            window_effects = _window_effects(ctx, effects, start, end, tol_hi=tol_hi)
             if window_effects:
                 problems.append(f"{name}: effect en la ventana")
             if channel == "P":
                 p_lines = [ev for ev in invalid if ev.get("ch") == "P"]
                 if len(p_lines) == len(rewritten) and len(p_lines) >= 2:
-                    span = max(ev["tick_ms"] for ev in p_lines) - min(
-                        ev["tick_ms"] for ev in p_lines
-                    )
+                    stamps = [_line_t(ctx, ev) for ev in p_lines]
+                    span = max(stamps) - min(stamps)
                     entry["invalid_span_ms"] = span
-                    if span > lease and not _any_lease_lost(ctx, start, window_end):
+                    if span > lease and not _any_lease_lost(ctx, start, end):
                         problems.append(f"{name}: sin lease lost pese a > lease_ms")
         elif name == "late_cb":
             late_lines = [
                 ev
                 for ev in lines
                 if ev.get("kind") in ("rest_late", "rest_repeat")
-                and _in_window(ctx, ev, start, window_end, tol_hi=0)
+                and _in_window(ctx, ev, start, end, tol_hi=tol_hi)
             ]
             if not late_lines:
                 entry["late_cb"] = "inconcluso (sin rest late/repeat)"
             else:
-                stop = min(window_end, _first_recovery_after(ctx, start))
+                stop = min(end, _first_recovery_after(ctx, start))
+                recovery = _recovery_ops(ctx)
                 changes = [
                     ev
                     for ev in _events(ctx, "op_state")
-                    if _num(ev.get("t_ms")) and start <= ev["t_ms"] < stop
+                    if _num(ev.get("t_ms"))
+                    and start <= ev["t_ms"] < stop
+                    and (ev.get("session"), ev.get("op_id")) not in recovery
                 ]
                 entry["changes"] = len(changes)
                 if changes:
                     problems.append("late_cb: cambio de estado en la ventana")
+        elif name == "timeout_P":
+            # Plazo efectivo: desde que el proxy recibe la peticion retenida hasta la linea
+            # rest timeout de P dentro del caso (las dos en el reloj del arnes).
+            timeout = next(
+                (
+                    ev
+                    for ev in lines
+                    if ev.get("kind") == "rest_timeout"
+                    and ev.get("ch") == "P"
+                    and _in_window(ctx, ev, start, end, tol_hi=tol_hi)
+                ),
+                None,
+            )
+            t_timeout = _line_t(ctx, timeout) if timeout is not None else None
+            entry["timeout_ms"] = t_timeout - start if t_timeout is not None else None
         else:
-            if name.startswith("status"):
-                channel = name.rsplit("_", 1)[-1]
-                line = next(
-                    (
-                        ev
-                        for ev in measure_lines
-                        if ev.get("ch") == channel
-                        and _in_window(ctx, ev, start, window_end, tol_hi=0)
-                    ),
-                    None,
-                )
-                if line is None:
-                    entry["state"] = None
-                elif line.get("kind") == "rest_invalid":
-                    entry["state"] = "invalid"
-                else:
-                    entry["state"] = line.get("state")
-            elif name == "timeout_P":
-                # Plazo efectivo: desde que el proxy recibe la peticion retenida hasta la linea
-                # rest timeout de P dentro del caso (las dos en el reloj del arnes).
-                timeout = next(
-                    (
-                        ev
-                        for ev in lines
-                        if ev.get("kind") == "rest_timeout"
-                        and ev.get("ch") == "P"
-                        and _in_window(ctx, ev, start, window_end, tol_hi=0)
-                    ),
-                    None,
-                )
-                held = next(
-                    (ev for ev in proxy if ev.get("rule_id") == rule and _num(ev.get("t_ms"))),
-                    None,
-                )
-                ref = held["t_ms"] if held is not None else start
-                t_timeout = _line_t(ctx, timeout) if timeout is not None else None
-                entry["timeout_ms"] = t_timeout - ref if t_timeout is not None else None
-        ok, latency, why = _recovery(ctx, case, [])
+            # Medidas (status*, measure_*): se anota lo observado, sin tumbar la fila (R9).
+            entry["injection_observed"] = fire_line is not None
+            channel = name.rsplit("_", 1)[-1]
+            line = next(
+                (
+                    ev
+                    for ev in measure_lines
+                    if ev.get("ch") == channel and _in_window(ctx, ev, start, end, tol_hi=tol_hi)
+                ),
+                None,
+            )
+            if line is None:
+                entry["state"] = None
+            elif line.get("kind") == "rest_invalid":
+                entry["state"] = "invalid"
+            else:
+                entry["state"] = line.get("state")
+            key = _case_key(case)
+            if key is not None:
+                states = _states(ctx, *key)
+                entry["op_state"] = states[-1].get("state") if states else None
+            if name in G7_MEASURE_OPS:
+                # H-08: la orden con args ausentes o vacios se rechaza; nunca puede tener effect.
+                # Su op es la del apply del caso (el case se escribe antes del apply).
+                applies = [
+                    ev
+                    for ev in _events(ctx, "apply")
+                    if _num(ev.get("t_ms")) and moment <= ev["t_ms"] < min(end, next_start)
+                    and ev.get("op_id")
+                ]
+                if not applies:
+                    problems.append(f"{name}: sin apply en el caso")
+                for ev in applies:
+                    bad = [
+                        eff
+                        for eff in effects
+                        if eff.get("op") == ev.get("op_id") and eff.get("session") == ev.get("session")
+                    ]
+                    entry.setdefault("op_effects", {})[str(ev.get("op_id"))] = len(bad)
+                    if bad:
+                        problems.append(f"{name}: effect para una orden rechazada ({ev.get('op_id')})")
+        ok, latency, why = _recovery(ctx, case, anchors)
         entry["recovery_ms"] = latency
         if not ok:
             problems.append(f"{name}: {why}")
@@ -938,48 +1332,46 @@ def _g8(ctx):
     cases = _events(ctx, "case")
     if not cases:
         return "INCONCLUSO", "sin casos G8", {}
+    why = _coverage([case.get("name") for case in cases], ["a", "b", "c"])
+    if why:
+        return "INCONCLUSO", "cobertura incompleta: " + why, {}
+    why, _ = _injection(ctx, [case for case in cases if case.get("name") in ("a", "b")])
+    if why:
+        return "INCONCLUSO", why, {}
     results = _events(ctx, "result_seen")
-    states = _events(ctx, "op_state")
     problems = []
     metrics = {"cases": {}}
     for case in cases:
         name = case.get("name")
-        op = case.get("op_id")
         entry = {}
         metrics["cases"][str(name)] = entry
-        if op is None:
+        key = _case_key(case)
+        if key is None:
             problems.append(f"{name}: sin op_id")
             continue
-        pairs = _pair_map(effects, op)
-        entry["pairs"] = pairs
+        session, op = key
+        pair = _pair(effects, session, op)
+        entry["pair"] = pair
         if name in ("a", "b", "c"):
-            ok, detail = _exact_pair(pairs)
+            ok, detail = _exact_pair(pair)
             if not ok:
                 problems.append(f"{name}: {detail}")
         else:
             problems.append(f"caso desconocido {name}")
         if name == "a":
-            observed = [
-                ev
-                for ev in states
-                if ev.get("op_id") == op and ev.get("state") == "observado"
-            ]
+            observed = [ev for ev in _states(ctx, session, op) if ev.get("state") == "observado"]
             entry["observed"] = len(observed)
             if len(observed) > 1:
                 problems.append("a: cambio extra por resultado repetido")
         elif name == "b":
-            duplicates = [
-                ev for ev in results if ev.get("op_id") == op and ev.get("dup") is True
-            ]
+            duplicates = [ev for ev in results if ev.get("op_id") == op and ev.get("dup") is True]
             entry["dups"] = len(duplicates)
             if not duplicates:
                 problems.append("b: sin result_seen dup true")
             else:
                 op_results = [ev for ev in results if ev.get("op_id") == op]
                 if len(op_results) > 1:
-                    first = min(
-                        ev["t_ms"] for ev in op_results if _num(ev.get("t_ms"))
-                    )
+                    first = min(ev["t_ms"] for ev in op_results if _num(ev.get("t_ms")))
                     if not _num(duplicates[0].get("t_ms")) or duplicates[0]["t_ms"] <= first:
                         problems.append("b: dup no posterior a la reentrega")
     if problems:
@@ -992,8 +1384,13 @@ def _g9(ctx):
     if missing:
         return "INCONCLUSO", "log ausente: " + ", ".join(missing), {}
     ops = _events(ctx, "mix_op")
-    if len(ops) != 100:
-        return "FALLA", f"{len(ops)} mix_op (se esperan 100)", {"n_ops": len(ops)}
+    distinct = {ev.get("op_id") for ev in ops if ev.get("op_id") is not None}
+    if len(ops) != 100 or len(distinct) != 100:
+        return (
+            "INCONCLUSO",
+            f"cobertura incompleta: {len(ops)} mix_op con {len(distinct)} op_id distintos (se esperan 100)",
+            {"n_ops": len(ops)},
+        )
     gap = _events(ctx, "gap_reset") or _gap_reset_from_g5(ctx)
     if not gap:
         return "INCONCLUSO", "sin gap_reset", {}
@@ -1003,27 +1400,39 @@ def _g9(ctx):
     applies = {}
     for ev in _events(ctx, "apply"):
         if ev.get("op_id") is not None:
-            applies.setdefault(ev["op_id"], ev)
+            applies.setdefault((ev.get("session"), ev["op_id"]), ev)
     observed = {}
     for ev in _events(ctx, "op_state"):
         if ev.get("state") == "observado" and ev.get("op_id") is not None:
-            observed.setdefault(ev["op_id"], ev)
+            observed.setdefault((ev.get("session"), ev["op_id"]), ev)
     latencies = []
     missing_pairs = 0
+    read_time = 0
     for ev in ops:
         op = ev.get("op_id")
-        apply = applies.get(op)
-        done = observed.get(op)
+        session = ev.get("session")
+        if session is None:
+            owners = {key[0] for key in applies if key[1] == op}
+            if len(owners) > 1:
+                raise EvidenceError(f"evidencia invalida: mix_op {op} en varias sesiones")
+            session = next(iter(owners), None)
+        apply = applies.get((session, op))
+        done = observed.get((session, op))
         if (
             apply is not None
             and done is not None
             and _num(apply.get("t_ms"))
             and _num(done.get("t_ms"))
         ):
-            latencies.append(done["t_ms"] - apply["t_ms"])
+            latency = done["t_ms"] - apply["t_ms"]
+            if latency < 0:
+                raise EvidenceError(f"evidencia inválida: latencia negativa en {op} ({latency} ms)")
+            if done.get("t_src") == "lectura":
+                read_time += 1
+            latencies.append(latency)
         else:
             latencies.append(math.inf)
-        if not _exact_pair(_pair_map(effects, op))[0]:
+        if not _exact_pair(_pair(effects, session, op))[0]:
             missing_pairs += 1
     ordered = sorted(
         latencies, key=lambda value: (math.isinf(value), value if not math.isinf(value) else 0)
@@ -1033,6 +1442,7 @@ def _g9(ctx):
     metrics = {
         "n_ops": 100,
         "ops_sin_pareja": missing_pairs,
+        "op_state_t_lectura": read_time,
         "p50_ms": _metric(p50),
         "p95_ms": _metric(p95),
         "max_ms": _metric(ordered[-1]),
@@ -1063,13 +1473,15 @@ def parse_script_log(path):
         raise EvidenceError(f"missing {path.name}")
     text = path.read_text(encoding="utf-8", errors="replace")
     events = []
-    for raw in text.splitlines():
+    for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         marker = line.find("[DSBX] ")
         if marker >= 0:
             event = _parse_line(line[marker + 7 :].strip())
             if event is not None:
                 event["wall_ms"] = _wall_ms(line)
+                event["file"] = path.name
+                event["lineno"] = lineno
                 events.append(event)
             continue
         leak = _EXIT_LEAK.search(line) if _SCRIPT_ERROR.search(line) else None
@@ -1213,21 +1625,6 @@ def _clock_metrics(ctx, start, end):
     return metrics
 
 
-def _window_for(case, windows):
-    moment = case.get("t_ms")
-    best = None
-    best_key = None
-    for window in windows:
-        start = window.get("t_start_ms")
-        if not _num(start) or not _num(moment):
-            continue
-        key = (start < moment, abs(start - moment))
-        if best_key is None or key < best_key:
-            best_key = key
-            best = window
-    return best
-
-
 def _first_recovery_after(ctx, moment):
     times = [
         ev["t_ms"]
@@ -1254,43 +1651,6 @@ def _gap_reset_from_g5(ctx):
     except EvidenceError:
         return []
     return [ev for ev in events if ev.get("ev") == "gap_reset"]
-
-
-def _inventory_paths(ctx):
-    path = ctx["dir"] / "logs" / "inventory.json"
-    if not path.is_file():
-        return None
-    try:
-        data = _read_json(path)
-    except EvidenceError:
-        return None
-    paths = []
-    if isinstance(data, dict):
-        for value in data.values():
-            if isinstance(value, list):
-                paths.extend(item for item in value if isinstance(item, str))
-            elif isinstance(value, str):
-                paths.append(value)
-    elif isinstance(data, list):
-        paths.extend(item for item in data if isinstance(item, str))
-    else:
-        return None
-    return paths
-
-
-def _uncovered(inventory, files):
-    scanned = [item for item in files if isinstance(item, str)]
-    normalized = {item.replace("\\", "/") for item in scanned}
-    basenames = {Path(item.replace("\\", "/")).name for item in scanned}
-    missing = []
-    for item in inventory:
-        candidate = item.replace("\\", "/")
-        if candidate in normalized:
-            continue
-        if Path(candidate).name in basenames:
-            continue
-        missing.append(item)
-    return missing
 
 
 def _manifest_int(ctx, key):
@@ -1383,6 +1743,8 @@ def main(argv=None):
     for gid in sorted(verdict["rows"]):
         row = verdict["rows"][gid]
         print(f"{gid} {row['verdict']} {row['reason']}".rstrip())
+    if verdict.get("reason"):
+        print(f"REASON {verdict['reason']}")
     print(f"AGGREGATE {verdict['aggregate']}")
     return EXIT[verdict["aggregate"]]
 

@@ -264,3 +264,18 @@ Cada tanda trabaja en una copia del commit congelado. El orquestador revisa, cor
 | Q-13 · importante · una clave filtrada no tumbaba la corrida | R4 |
 | Q-14 · importante · procedencia sin comprobar | R1 |
 | Q-15 · importante · `logs_ready` no acreditaba el cierre | R2 |
+
+**H-07, el estado del motor para un 4xx (ensayo diag del 15-nov, `b95a8b2`), arbitraje del orquestador:**
+- **Lo medido:** un 409 llega a `OnError` como 5 (`EREST_ERROR`) y un 500 como 6. El enum es secuencial (`restapi.c:16-17`): `EREST_ERROR_CLIENTERROR` vale 6, aunque el comentario diga que es igual a `EREST_ERROR`.
+- **El mod cumple su brief.** La fila `CLIENTERROR` de P (brief de F1b-peers §3.4) salta con un 500. Un 4xx cae en «cualquier otro fallo», y el peer se vuelve a presentar por la regla de `lease_ms`, que es justo lo que §3.4 preveía «si el motor no entrega `CLIENTERROR` para un 4xx». El mod no se toca.
+- **El arnés sí cambia.** Para forzar un hello (G4 a y G5 b), el proxy inyecta un **500** a un poll, no un 409; con un 409 G5 b no llegaba a releer la configuración.
+- **Pregunta de producto, para el experto de Enforce y Guillermo:** que la fila 1 compare con `EREST_ERROR` para presentarse antes tras un 4xx.
+
+**H-08, una orden sin `args` (mismo ensayo):**
+- **Lo medido:** el poll sigue siendo válido y el verbo rechaza la orden (`rejected/bad_args`, `fallido/bad_args`), sin efectos y sin `rest invalid` (`DSBX_Peer.c:1123-1126`). Lo mismo con `args:{}`.
+- **El mod cumple su brief:** la validación de §3.5 es de la respuesta, y la orden se rechaza en el verbo. La expectativa de G7 («sin args → `rest invalid`») era errónea.
+- **El caso pasa a ser medida** (`measure_no_args_P`). Las dos medidas con orden exigen que su op no tenga `effect`.
+
+**H-09, la inyección observada (R9):**
+- **El problema:** el `rules_active` lo anota el orquestador al ver el fichero, con su retraso de sondeo. Un long-poll recibido antes del caso actúa al servir la respuesta (G3 c en el seco). Comparar la línea del proxy con ese `t_ms` daba «no observada» en falso.
+- **El arbitraje:** cuenta la versión con que el proxy etiqueta la línea, servida después de escribirse esa versión.

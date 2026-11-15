@@ -23,6 +23,7 @@ import json
 import os
 import secrets
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -35,7 +36,6 @@ if str(ROOT) not in sys.path:
 
 from app.backend.server import Backend  # noqa: E402
 from app.backend.store import Store  # noqa: E402
-from app.tests import fake_mod as fake_mod_module  # noqa: E402
 from app.tests.fake_mod import FakeMod  # noqa: E402
 from app.tools import peer_config  # noqa: E402
 
@@ -147,13 +147,99 @@ def _parse_scenarios(value):
     return out
 
 
+def _rule_fields(rule_ids):
+    """Campos de inyeccion de un `case` (R9): `rule_id` si hay una, `rule_ids` si hay varias."""
+    ids = [r for r in (rule_ids or []) if r]
+    if len(ids) == 1:
+        return {"rule_id": ids[0]}
+    if ids:
+        return {"rule_ids": ids}
+    return {}
+
+
+def _git_provenance(root, runner=subprocess.run):
+    """(git_head, git_dirty) de la raiz del worktree `root` (R1).
+
+    git_head es el SHA completo de HEAD; git_dirty es true si `git status --porcelain` fuera de
+    DayZSandbox_dev/evidence da algo. Sin git, fuera de un repo, o si el repo que ve git no tiene
+    `root` como raiz: (None, True). Solo lectura: GIT_OPTIONAL_LOCKS=0 evita que status toque el indice.
+    """
+    env = dict(os.environ)
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+
+    def run_git(args):
+        try:
+            done = runner(
+                ["git", "-C", str(root)] + list(args),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                env=env,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if done.returncode != 0:
+            return None
+        return done.stdout
+
+    top = run_git(["rev-parse", "--show-toplevel"])
+    head = run_git(["rev-parse", "HEAD"])
+    status = run_git(["status", "--porcelain", "--", ".", ":(exclude)DayZSandbox_dev/evidence"])
+    if top is None or head is None or status is None:
+        return None, True
+    top = top.strip()
+    try:
+        same = os.path.samefile(top, str(root))
+    except OSError:
+        same = os.path.normcase(os.path.realpath(top)) == os.path.normcase(os.path.realpath(str(root)))
+    head = head.strip().lower()
+    if not same or len(head) != 40 or any(c not in "0123456789abcdef" for c in head):
+        return None, True
+    return head, bool(status.strip())
+
+
+def _count_in_file(path, needles, chunk=4 * 1024 * 1024):
+    """Apariciones literales de cada `needle` (bytes) en el fichero, por trozos. None si no se lee."""
+    needles = [n for n in needles if n]
+    keep = max((len(n) for n in needles), default=1) - 1
+    total = 0
+    tail = b""
+    try:
+        with open(path, "rb") as fh:
+            while True:
+                data = fh.read(chunk)
+                if not data:
+                    break
+                buf = tail + data
+                for needle in needles:
+                    total += buf.count(needle)
+                # La cola (menos que una clave entera) no puede contener una aparicion completa:
+                # no se cuenta dos veces.
+                tail = buf[-keep:] if keep > 0 else b""
+    except OSError:
+        return None
+    return total
+
+
 class EvidenceWriter:
-    """Escribe samples/<G>.jsonl con una linea por evento, UTF-8 y LF."""
+    """Escribe samples/<G>.jsonl con una linea por evento, UTF-8 y LF, ordenadas por t_ms.
+
+    Un evento puede llevar un t_ms anterior al de su escritura (apply.t_ms es el de antes del POST,
+    op_state.t_ms el del suceso del backend): se retiene HOLDBACK_MS y se escribe en orden de t_ms, y
+    `end()` vuelca lo que quede. El evaluador exige que t_ms no retroceda en el fichero.
+    """
+
+    HOLDBACK_MS = 1500.0
 
     def __init__(self, samples_dir):
         self.samples_dir = samples_dir
         self._lock = threading.RLock()
         self._fh = None
+        self._pending = []
+        self._seq = 0
         self.scenario = None
 
     def begin(self, scenario):
@@ -163,6 +249,19 @@ class EvidenceWriter:
             path = os.path.join(self.samples_dir, scenario + ".jsonl")
             self._fh = open(path, "w", encoding="utf-8", newline="\n")
 
+    def _write_pending(self, upto_ms):
+        if self._fh is None:
+            self._pending = []
+            return
+        ready = sorted((p for p in self._pending if upto_ms is None or p[0] <= upto_ms),
+                       key=lambda p: (p[0], p[1]))
+        if not ready:
+            return
+        self._pending = [p for p in self._pending if not (upto_ms is None or p[0] <= upto_ms)]
+        for _t, _n, line in ready:
+            self._fh.write(line + "\n")
+        self._fh.flush()
+
     def emit(self, ev, t_ms=None, **fields):
         with self._lock:
             if self._fh is None:
@@ -170,17 +269,20 @@ class EvidenceWriter:
             obj = {"t_ms": float(t_ms) if t_ms is not None else _now_ms(), "ev": ev}
             obj.update(fields)
             line = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-            self._fh.write(line + "\n")
-            self._fh.flush()
+            self._seq += 1
+            self._pending.append((obj["t_ms"], self._seq, line))
+            self._write_pending(_now_ms() - self.HOLDBACK_MS)
 
     def end(self):
         with self._lock:
             if self._fh is not None:
                 try:
+                    self._write_pending(None)
                     self._fh.flush()
                 finally:
                     self._fh.close()
                 self._fh = None
+            self._pending = []
             self.scenario = None
 
     def append(self, scenario, ev, **fields):
@@ -202,6 +304,8 @@ class RingPoller(threading.Thread):
         self.stop_event = stop_event
         with backend.store.lock:
             self.baseline = backend.seq
+        # R5: la sesion del bridge a la que pertenece cada op de este backend.
+        self.session = getattr(getattr(backend, "bridge", None), "session", None)
         self.seen = set()
         self._lock = threading.Lock()
 
@@ -224,11 +328,24 @@ class RingPoller(threading.Thread):
                 continue
             if not isinstance(item, dict):
                 continue
+            # R6: el instante del suceso es el `at_ms` (hora de pared, ms) que el backend pone al
+            # evento, llevado al reloj del arnes con el desfase de este instante; sin `at_ms`, el de
+            # lectura, con t_src "lectura".
+            at_ms = item.get("at_ms")
+            extra = {}
+            if isinstance(at_ms, (int, float)) and not isinstance(at_ms, bool):
+                t_ms = float(at_ms) + (_now_ms() - time.time() * 1000.0)
+            else:
+                t_ms = _now_ms()
+                extra["t_src"] = "lectura"
             self.writer.emit(
                 "op_state",
+                t_ms=t_ms,
                 op_id=item.get("op_id"),
                 state=item.get("state"),
                 reason=item.get("reason"),
+                session=self.session,
+                **extra
             )
 
     def drain(self):
@@ -250,6 +367,10 @@ class WebClient:
         self.human_key = human_key
         self.cookie = None
         self.csrf = None
+        # R5/R6: sesion del bridge y instantes (reloj del arnes) del ultimo apply.
+        self.last_session = None
+        self.last_t_ms = None
+        self.last_t_end_ms = None
 
     def _post(self, path, body, headers=None):
         data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -295,7 +416,12 @@ class WebClient:
             "Origin": "http://127.0.0.1:%d" % self.backend.port,
             "X-CSRF-Token": self.csrf,
         }
-        status, obj, _cookie = self._post("/api/apply", body, headers)
+        self.last_session = getattr(getattr(self.backend, "bridge", None), "session", None)
+        self.last_t_ms = _now_ms()
+        try:
+            status, obj, _cookie = self._post("/api/apply", body, headers)
+        finally:
+            self.last_t_end_ms = _now_ms()
         op_id = None
         if status == 200 and isinstance(obj, dict) and obj.get("ok") is True:
             op_id = obj.get("op_id")
@@ -326,8 +452,7 @@ class LiveRun:
         self.pending_setup_events = []
         self.first_scenario_done = False
         self.effects_log = []
-        self._peer_http_patched = False
-        self._original_peer_http = None
+        self.logs_final = True
         self.samples_dir = os.path.join(self.evidence, "samples")
         self.logs_dir = os.path.join(self.evidence, "logs")
         self.proxy_log = os.path.join(self.samples_dir, "proxy.jsonl")
@@ -422,11 +547,13 @@ class LiveRun:
                 for chunk in iter(lambda: fh.read(1024 * 1024), b""):
                     h.update(chunk)
             pbo_sha = h.hexdigest()
+        # R1: procedencia real, desde la raiz del worktree (el padre de DayZSandbox_dev).
+        git_head, git_dirty = _git_provenance(ROOT.parent)
         manifest = {
             "build": "fake" if self.fake_mode else self.build,
             "fake": self.fake_mode,
-            "git_head": None,
-            "git_dirty": False,
+            "git_head": git_head,
+            "git_dirty": git_dirty,
             "pbo_sha256": pbo_sha,
             "dayz_version": None,
             "ports": {
@@ -445,21 +572,7 @@ class LiveRun:
 
     def start_fake(self):
         try:
-            # El hello lleva el peer en el cuerpo, no en la query; el proxy solo
-            # puede registrar el peer si va en la query. El parche va en la clase
-            # antes de construir el falso, porque sus peers saludan al arrancar.
-            if not self._peer_http_patched:
-                self._original_peer_http = fake_mod_module._Peer._http
-
-                def http_with_peer(peer_self, method, path, body=None, route=None):
-                    if route == "hello":
-                        sep = "&" if "?" in path else "?"
-                        path = path + sep + "peer=" + peer_self.role
-                    return self._original_peer_http(peer_self, method, path, body, route=route)
-
-                fake_mod_module._Peer._http = http_with_peer
-                self._peer_http_patched = True
-
+            # R15: el hello lleva el peer en el cuerpo, como con el mod real; el proxy lo saca de ahi.
             self.fake = FakeMod(
                 "http://127.0.0.1:%d" % self.proxy.port,
                 self.secrets[0],
@@ -622,26 +735,31 @@ class LiveRun:
             time.sleep(0.02)
         return last
 
-    def apply_case(self, web, name):
+    def apply_emit(self, web, ttl_ms=None):
+        """POST /api/apply y su evento `apply` (R5, R6): sesion del bridge, t_ms justo antes del
+        POST y t_end_ms al volver. Devuelve (status, op_id)."""
         status, op_id = web.apply()
         self.writer.emit(
             "apply",
+            t_ms=web.last_t_ms,
+            t_end_ms=web.last_t_end_ms,
             op_id=op_id,
             http_status=int(status),
-            ttl_ms=int(self.bridge.ttl_ms),
+            ttl_ms=int(self.bridge.ttl_ms if ttl_ms is None else ttl_ms),
+            session=web.last_session,
         )
-        self.writer.emit("case", name=name, op_id=op_id)
+        return status, op_id
+
+    def apply_case(self, web, name, rule_ids=None):
+        status, op_id = self.apply_emit(web)
+        self.writer.emit(
+            "case", name=name, op_id=op_id, session=web.last_session, **_rule_fields(rule_ids)
+        )
         return op_id
 
     def recovery(self, web):
-        status, op_id = web.apply()
-        self.writer.emit(
-            "apply",
-            op_id=op_id,
-            http_status=int(status),
-            ttl_ms=int(self.bridge.ttl_ms),
-        )
-        self.writer.emit("recovery", op_id=op_id)
+        status, op_id = self.apply_emit(web)
+        self.writer.emit("recovery", op_id=op_id, session=web.last_session)
         if op_id:
             self.wait_op(op_id, {"observado"}, OBSERVED_WAIT_S)
         return op_id
@@ -790,10 +908,13 @@ class LiveRun:
         if not self.set_rules(version, [rule], ["g3c-rewrite"]):
             return True, "rules_not_active"
 
-        op_c = self.apply_case(web, "c")
+        op_c = self.apply_case(web, "c", ["g3c-rewrite"])
         if op_c:
             self.wait_op(op_c, {"fallido", "observado", "parcial"}, OBSERVED_WAIT_S)
 
+        # R10: la inyeccion acaba con un `rules` vacio y su `rules_active`; la recuperacion va despues.
+        if not self.set_rules(self.next_rules_version(), [], []):
+            return True, "rules_not_active"
         self.recovery(web)
         return False, None
 
@@ -887,7 +1008,7 @@ class LiveRun:
                 return
             time.sleep(min(0.25, left / 1000.0))
 
-    def _l2b2_apply_ttl(self, web, name, ttl_ms, emit_case=True):
+    def _l2b2_apply_ttl(self, web, name, ttl_ms, emit_case=True, rule_ids=None):
         """apply con un TTL propio: se cambia bajo bridge.cond justo antes y se restaura justo
         despues. El evento apply (apply_case) lleva ese ttl_ms."""
         bridge = self.bridge
@@ -896,11 +1017,8 @@ class LiveRun:
             bridge.ttl_ms = int(ttl_ms)
         try:
             if emit_case:
-                return self.apply_case(web, name)
-            status, op_id = web.apply()
-            self.writer.emit(
-                "apply", op_id=op_id, http_status=int(status), ttl_ms=int(bridge.ttl_ms)
-            )
+                return self.apply_case(web, name, rule_ids)
+            status, op_id = self.apply_emit(web)
             return op_id
         finally:
             with bridge.cond:
@@ -1037,21 +1155,26 @@ class LiveRun:
         try:
             if not self._l2b2_write_peer_key(profile, bad):
                 return "peer_config fallo con la clave mala"
+            # Brief v1.5, H-07: un 4xx llega al mod como EREST_ERROR (5) y no lo devuelve al hello; un
+            # 500 llega como 6 (EREST_ERROR_CLIENTERROR) y si. El hello relee la clave del dsbx_peer.json.
             rule = {
-                "id": "g4a_409",
+                "id": "g4a_500",
                 "match": {"route": "poll", "peer": "server", "count": 1},
-                "action": {"type": "status", "code": 409, "error": "session_mismatch"},
+                "action": {"type": "status", "code": 500, "error": "forced_hello"},
             }
-            if not self.set_rules(self.next_rules_version(), [rule], ["g4a_409"]):
+            if not self.set_rules(self.next_rules_version(), [rule], ["g4a_500"]):
                 return "rules_not_active"
             t_start = _now_ms()
             op_a = self._l2b2_apply_ttl(web, "a", 2000, emit_case=False)
+            session_a = web.last_session
             self._l2b2_sleep_until(t_start + 60000.0)
             t_end = _now_ms()
             self.writer.emit("bad_key_window", t_start_ms=t_start, t_end_ms=t_end)
             # El case va al cierre de la ventana: el evaluador mide la recuperacion desde el
             # evento case y la ventana ya dura 60 s.
-            self.writer.emit("case", name="a", op_id=op_a)
+            self.writer.emit(
+                "case", name="a", op_id=op_a, session=session_a, **_rule_fields(["g4a_500"])
+            )
             if not self._l2b2_clear_rules():
                 return "rules_not_active"
             if not self._l2b2_write_peer_key(profile, self.secrets[0]):
@@ -1080,7 +1203,7 @@ class LiveRun:
         }
         if not self.set_rules(self.next_rules_version(), [hold], ["g4b_hold"]):
             return "rules_not_active"
-        op_b = self.apply_case(web, "b")
+        op_b = self.apply_case(web, "b", ["g4b_hold", "g4b_stale"])
         if not op_b:
             self._l2b2_clear_rules()
             return "apply fallo en el caso b"
@@ -1137,7 +1260,7 @@ class LiveRun:
         if not self.set_rules(self.next_rules_version(), [cut], ["g4c_cut"]):
             return "rules_not_active"
         t_active = _now_ms()
-        op_c = self._l2b2_apply_ttl(web, "c", 30000)
+        op_c = self._l2b2_apply_ttl(web, "c", 30000, rule_ids=["g4c_cut"])
         self._l2b2_sleep_until(t_active + 4500.0)
         if not self._l2b2_clear_rules():
             return "rules_not_active"
@@ -1187,7 +1310,7 @@ class LiveRun:
             if not self.set_rules(self.next_rules_version(), [rule], ["g8a_drop"]):
                 return True, "rules_not_active"
             t0 = _now_ms()
-            op_a = self.apply_case(web, "a")
+            op_a = self.apply_case(web, "a", ["g8a_drop"])
             if op_a:
                 self.wait_op(op_a, {"observado"}, OBSERVED_WAIT_S)
                 self._g8_wait_second_result(op_a, t0, 10.0)
@@ -1204,7 +1327,7 @@ class LiveRun:
             if not self.set_rules(self.next_rules_version(), [rule], ["g8b_503"]):
                 return True, "rules_not_active"
             t0 = _now_ms()
-            op_b = self.apply_case(web, "b")
+            op_b = self.apply_case(web, "b", ["g8b_503"])
             if op_b:
                 deadline = time.monotonic() + OBSERVED_WAIT_S
                 while time.monotonic() < deadline:
@@ -1250,14 +1373,8 @@ class LiveRun:
         self.writer.emit("gap_reset", confirmed=bool(confirmed))
 
         for _ in range(G9_OPS):
-            status, op_id = web.apply()
-            self.writer.emit(
-                "apply",
-                op_id=op_id,
-                http_status=int(status),
-                ttl_ms=int(self.bridge.ttl_ms),
-            )
-            self.writer.emit("mix_op", op_id=op_id)
+            status, op_id = self.apply_emit(web)
+            self.writer.emit("mix_op", op_id=op_id, session=web.last_session)
             if op_id:
                 self.wait_op(op_id, {"observado"}, G9_WAIT_S)
         return False, None
@@ -1355,12 +1472,11 @@ class LiveRun:
         if not self.set_rules(self.next_rules_version(), [], []):
             raise RuntimeError("rules_not_cleared")
 
-    def _g56_apply_case(self, web, name, peer):
-        status, op_id = web.apply()
+    def _g56_apply_case(self, web, name, peer, rule_ids=None):
+        status, op_id = self.apply_emit(web)
         self.writer.emit(
-            "apply", op_id=op_id, http_status=int(status), ttl_ms=int(self.bridge.ttl_ms)
+            "case", name=name, peer=peer, op_id=op_id, session=web.last_session, **_rule_fields(rule_ids)
         )
-        self.writer.emit("case", name=name, peer=peer, op_id=op_id)
         return op_id
 
     def _g56_set_gap(self, gap):
@@ -1394,12 +1510,14 @@ class LiveRun:
         self.writer.emit(
             "config", peer="server", qa_step_gap_ms=int(gap), key_sha256=_sha256(cfg["key"])
         )
-        # Un hello fuerza que el peer relea la configuracion: un 409 al siguiente poll.
+        # Un hello fuerza que el peer relea la configuracion. Brief v1.5, H-07: con un 500, que el
+        # motor entrega como 6 (EREST_ERROR_CLIENTERROR) y devuelve el peer al hello; un 409 llega
+        # como 5 y no lo hace (ensayo diag del 15-nov: G5 b no releia la configuracion).
         rule_id = "g56_gap_%d_%d" % (int(gap), self.rules_version + 1)
         rule = {
             "id": rule_id,
             "match": {"route": "poll", "peer": "server", "count": 1},
-            "action": {"type": "status", "code": 409, "error": "session_mismatch"},
+            "action": {"type": "status", "code": 500, "error": "forced_hello"},
         }
         mark = self._g56_mark()
         if not self.set_rules(self.next_rules_version(), [rule], [rule_id]):
@@ -1428,7 +1546,7 @@ class LiveRun:
         try:
             if not self.set_rules(self.next_rules_version(), [rule], [rule_id]):
                 raise RuntimeError("rules_not_active")
-            self._g56_apply_case(web, name, peer)
+            self._g56_apply_case(web, name, peer, [rule_id])
             fired = self._g56_wait_fire(rule_id, mark, 30.0)
             if fired is None:
                 problem = "%s_%s: regla sin disparar" % (name, peer)
@@ -1456,7 +1574,7 @@ class LiveRun:
         try:
             if not self.set_rules(self.next_rules_version(), [rule], [rule_id]):
                 raise RuntimeError("rules_not_active")
-            op_id = self._g56_apply_case(web, name, "server")
+            op_id = self._g56_apply_case(web, name, "server", [rule_id])
             fired = self._g56_wait_fire(rule_id, mark, 30.0)
             if fired is None:
                 problem = "%s: regla sin disparar" % name
@@ -1676,13 +1794,15 @@ class LiveRun:
                 self.bridge.ttl_ms = 1500
             try:
                 t_apply = _now_ms()
-                status, op_id = web.apply()
+                status, op_id = self.apply_emit(web, ttl_ms=1500)
                 t_after = _now_ms()
             finally:
                 with self.bridge.cond:
                     self.bridge.ttl_ms = original_ttl
-            self.writer.emit("apply", op_id=op_id, http_status=int(status), ttl_ms=1500)
-            self.writer.emit("case", name="pause", peer="server", op_id=op_id)
+            self.writer.emit(
+                "case", name="pause", peer="server", op_id=op_id, session=web.last_session,
+                **_rule_fields([rule_id])
+            )
             fired = self._g56_wait_fire(rule_id, mark, 20.0)
             if fired is None or not op_id:
                 problems.append("g6: orden sin entregar (regla sin disparar)")
@@ -1702,6 +1822,8 @@ class LiveRun:
                         T_s_ms=float(t_s),
                         T_e_ms=float(t_e),
                         D_ms=float(deadline_ms),
+                        rule_id=rule_id,
+                        session=web.last_session,
                     )
                     self.wait_op(op_id, {"observado", "fallido", "parcial"}, 30.0)
                     self._g56_wait_result_seen(op_id, 30.0)
@@ -1772,13 +1894,7 @@ class LiveRun:
             time.sleep(0.005)
 
     def _g7_apply(self, web):
-        status, op_id = web.apply()
-        self.writer.emit(
-            "apply",
-            op_id=op_id,
-            http_status=int(status),
-            ttl_ms=int(self.bridge.ttl_ms),
-        )
+        status, op_id = self.apply_emit(web)
         return op_id
 
     def _g7_case(self, web, name, rule, after_fire=3.0, apply=False, op_states=None, hold_s=None):
@@ -1798,7 +1914,9 @@ class LiveRun:
         else:
             self._g7_wait_fired(rule_id, fire_timeout)
             time.sleep(self._g7_scale(after_fire))
-        self.set_rules(self.next_rules_version(), [], [])
+        # R10: fin de la inyeccion (rules vacio + rules_active) antes de la recuperacion.
+        if not self.set_rules(self.next_rules_version(), [], []):
+            return False
         self.recovery(web)
         return True
 
@@ -1830,13 +1948,15 @@ class LiveRun:
         ):
             return True, "rules_not_active"
 
+        # Brief v1.5, H-08: una orden sin args no es una respuesta no valida. El poll sigue siendo
+        # valido y el verbo la rechaza (rejected/bad_args, sin effect); por eso es una medida.
         invalid = (
             ("invalid_no_ok_P", {"ok": {"$delete": True}}, {}, False),
             ("invalid_ok_false_P", {"ok": False}, {}, False),
             ("invalid_now_decimal_P", {"now_ms": 1234.5}, {}, False),
             ("invalid_now_text_P", {"now_ms": "1234"}, {}, False),
             (
-                "invalid_no_args_P",
+                "measure_no_args_P",
                 {"ops.0.args": {"$delete": True}},
                 {"resp_has_op": True},
                 True,
@@ -1893,7 +2013,8 @@ class LiveRun:
         self._g7_apply(web)
         self._g7_wait_fired(rule_id, self._g7_scale(30.0))
         time.sleep(self._g7_scale(3.0))
-        self.set_rules(self.next_rules_version(), [], [])
+        if not self.set_rules(self.next_rules_version(), [], []):
+            return False
         self.recovery(web)
         return True
     # === fin L2b3b ===
@@ -1911,10 +2032,12 @@ class LiveRun:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if os.path.isfile(path):
-                return True
+                doc = _read_json(path)
+                if doc is not None:
+                    return doc
             time.sleep(0.5)
         print("f1bp_live: no llego logs_ready.json en %d s" % timeout, file=sys.stderr)
-        return False
+        return None
 
     def stop_fake(self):
         if self.fake is not None:
@@ -1939,38 +2062,88 @@ class LiveRun:
         client_log = os.path.join(self.logs_dir, "client_script.log")
         with open(client_log, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("")
+        # R3: con --fake el orquestador escribe el inventario; el "perfil" es la propia carpeta logs/.
         inventory = {
-            "server": ["server_script.log"],
-            "client": ["client_script.log"],
+            "server": {"dir": os.path.abspath(self.logs_dir), "files": ["server_script.log"]},
+            "client": {"dir": os.path.abspath(self.logs_dir), "files": ["client_script.log"]},
+            "copies": [
+                {"peer": "server", "src": "server_script.log", "dest": "server_script.log"},
+                {"peer": "client", "src": "client_script.log", "dest": "client_script.log"},
+            ],
         }
         _atomic_write_json(os.path.join(self.logs_dir, "inventory.json"), inventory)
 
+    def _inventory_paths(self):
+        """Rutas absolutas de cada fichero del inventario de R3 (`dir` + nombre)."""
+        inv = _read_json(os.path.join(self.logs_dir, "inventory.json"))
+        paths = []
+        if not isinstance(inv, dict):
+            return paths
+        for role, fallback in (
+            ("server", getattr(self.args, "server_profile", None)),
+            ("client", getattr(self.args, "client_profile", None)),
+        ):
+            entry = inv.get(role)
+            if isinstance(entry, dict):
+                base, names = entry.get("dir"), entry.get("files")
+            else:
+                # Formato antiguo (lista de nombres): el perfil de los argumentos.
+                base, names = fallback, entry
+            if not isinstance(base, str) or not isinstance(names, list):
+                continue
+            for name in names:
+                if isinstance(name, str) and name:
+                    paths.append(os.path.abspath(os.path.join(base, name)))
+        return paths
+
     def key_scan(self):
+        """Busca todas las claves en cada fichero del inventario y en las copias de logs/ (R4).
+
+        Devuelve el numero de apariciones. `files` son los ficheros leidos (rutas absolutas); los que
+        no se pudieron leer van aparte en `unreadable` y NO cuentan como cubiertos.
+        """
         if not self.scenarios:
             return 0
-        files = []
-        hits = 0
+        candidates = self._inventory_paths()
         try:
             names = sorted(os.listdir(self.logs_dir))
         except OSError:
             names = []
         for name in names:
             path = os.path.join(self.logs_dir, name)
-            if not os.path.isfile(path):
+            if os.path.isfile(path):
+                candidates.append(os.path.abspath(path))
+        needles = [secret.encode("utf-8") for secret in self.secrets if secret]
+        files = []
+        unreadable = []
+        seen = set()
+        hits = 0
+        for path in candidates:
+            key = os.path.normcase(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            count = _count_in_file(path, needles)
+            if count is None:
+                unreadable.append(path)
                 continue
             files.append(path)
-            try:
-                with open(path, "rb") as fh:
-                    data = fh.read()
-            except OSError:
-                continue
-            for secret in self.secrets:
-                hits += data.count(secret.encode("utf-8"))
+            hits += count
         target = "G4" if "G4" in self.scenarios else self.scenarios[-1]
-        self.writer.append(target, "key_scan", files=files, hits=hits)
+        self.writer.append(target, "key_scan", files=files, hits=hits, unreadable=unreadable)
         if hits:
-            print("f1bp_live: AVISO: %d apariciones de clave en los logs copiados" % hits, file=sys.stderr)
+            print("f1bp_live: %d apariciones de clave en los logs: clave en los logs" % hits, file=sys.stderr)
+        if unreadable:
+            print("f1bp_live: AVISO: %d ficheros sin poder leer en key_scan" % len(unreadable), file=sys.stderr)
         return hits
+
+    def final_code(self, hits):
+        """Codigo de salida: claves en los logs -> 1 (R4); escenarios abortados o logs no finales -> 2 (R2)."""
+        if hits:
+            return 1
+        if self.aborted or not self.logs_final:
+            return 2
+        return 0
 
     def cleanup(self):
         self.stop_fake()
@@ -1996,9 +2169,6 @@ class LiveRun:
             self.tempdir = None
         if self.writer is not None:
             self.writer.end()
-        if self._peer_http_patched:
-            fake_mod_module._Peer._http = self._original_peer_http
-            self._peer_http_patched = False
 
     def execute(self):
         try:
@@ -2032,10 +2202,15 @@ class LiveRun:
                 self.stop_fake()
                 self.write_fake_logs()
             else:
-                self.wait_logs_ready(LOGS_READY_TIMEOUT_S)
+                # R2: sin logs_ready.json con all_closed true, los logs no son finales: se sigue
+                # escribiendo lo demas, pero el orquestador sale con 2.
+                doc = self.wait_logs_ready(LOGS_READY_TIMEOUT_S)
+                self.logs_final = isinstance(doc, dict) and doc.get("all_closed") is True
+                if not self.logs_final:
+                    print("f1bp_live: logs no finales (all_closed no es true)", file=sys.stderr)
 
-            self.key_scan()
-            return 2 if self.aborted else 0
+            hits = self.key_scan()
+            return self.final_code(hits)
         finally:
             self.cleanup()
 

@@ -161,13 +161,13 @@ Mandan sobre lo anterior cuando choquen. Quién lo hace: **L** = lanzador (`run_
   - G4: a, b, c.
   - G5: a2500 y a4500 de `server` y de `client`, b2500, b4000 y `gap_reset`.
   - G6: `clock_run` y `pause_order`.
-  - G7: `status{400,401,409,413,500}_{P,R}`, `timeout_P`, `r_held`, `invalid_no_ok_P`, `invalid_ok_false_P`, `invalid_now_decimal_P`, `invalid_now_text_P`, `invalid_no_args_P`, `invalid_all_P`, `measure_ok1_P`, `measure_args_empty_P` y `late_cb`.
+  - G7: `status{400,401,409,413,500}_{P,R}`, `timeout_P`, `r_held`, `invalid_no_ok_P`, `invalid_ok_false_P`, `invalid_now_decimal_P`, `invalid_now_text_P`, `invalid_all_P`, `measure_ok1_P`, `measure_no_args_P`, `measure_args_empty_P` y `late_cb` (H-08: una orden sin `args` es medida, no `invalid_*`; las dos medidas con orden exigen que su op no tenga `effect`).
   - G8: a, b, c.
   - G9: cien `mix_op` con cien `op_id` distintos.
 - **R8, efectos (Q-04; E).** Cada línea `effect` del script log cuenta una vez, identificada por fichero y número de línea; no se deduplica por tick.
 - **R9, inyección observada (Q-05; O, E).**
   - Todo `case` con inyección lleva `rule_id` (o `rule_ids`).
-  - El caso solo cuenta si `proxy.jsonl` trae al menos una línea con ese `rule_id` y un `rules_version` igual o mayor que el confirmado para el caso, después de su `rules_active`. Si no, la fila es **INCONCLUSO** («inyección no observada»).
+  - El caso solo cuenta si `proxy.jsonl` trae al menos una línea con ese `rule_id` y un `rules_version` igual o mayor que el confirmado para el caso, servida (`t_done_ms`) después de escribirse esa versión. El proxy etiqueta cada línea con la versión activa al recibirla; el `t_ms` del `rules_active` no se usa, porque lleva el retraso de sondeo del orquestador (H-09). Si no, la fila es **INCONCLUSO** («inyección no observada»).
   - Aplica a G3 c, G4 a/b/c, G5, G6 (`g6_deliver`), G7 y G8 a/b.
   - Las medidas (`status*`, `measure_*`) anotan lo observado en su ventana: la línea `rest …` o ninguna, y el estado de la op si la hay.
 - **R10, fin de una inyección (Q-09; O, E).**

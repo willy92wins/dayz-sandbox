@@ -28,7 +28,7 @@ EXPECTED = (
         "invalid_ok_false_P",
         "invalid_now_decimal_P",
         "invalid_now_text_P",
-        "invalid_no_args_P",
+        "measure_no_args_P",
         "invalid_all_P",
         "measure_ok1_P",
         "measure_args_empty_P",
@@ -95,6 +95,37 @@ class F1bPeersG7(unittest.TestCase):
                     e for e in events[idx:limit] if e.get("ev") == "recovery"
                 ]
                 self.assertEqual(len(recoveries), 1, "%s sin recovery" % name)
+
+            # R10: cada caso acaba con `rules` de rule_ids [] y su rules_active, antes de la recuperacion.
+            for pos, (idx, case) in enumerate(cases):
+                limit = cases[pos + 1][0] if pos + 1 < len(cases) else len(events)
+                window = events[idx:limit]
+                rec = [i for i, e in enumerate(window) if e.get("ev") == "recovery"][0]
+                empties = [
+                    i for i, e in enumerate(window[:rec])
+                    if e.get("ev") == "rules" and e.get("rule_ids") == []
+                ]
+                self.assertTrue(empties, "%s sin rules vacio antes de su recuperacion" % case["name"])
+                version = window[empties[0]].get("version")
+                self.assertTrue(
+                    any(
+                        e.get("ev") == "rules_active" and e.get("version") == version
+                        for e in window[empties[0] + 1:rec]
+                    ),
+                    "%s: el rules vacio sin rules_active antes de la recuperacion" % case["name"],
+                )
+
+            # R5/R6: todo apply lleva sesion y sus dos instantes; op_state lleva sesion y t_ms
+            sessions = {
+                e.get("session") for e in events if e.get("ev") in ("apply", "op_state", "recovery")
+            }
+            self.assertEqual(len(sessions), 1, sessions)
+            self.assertTrue(next(iter(sessions)))
+            for e in events:
+                if e.get("ev") == "apply":
+                    self.assertLessEqual(e["t_ms"], e["t_end_ms"])
+                if e.get("ev") == "op_state":
+                    self.assertIsInstance(e.get("t_ms"), float)
 
             secrets_used = tuple(getattr(live, "LAST_SECRETS", ()))
             self.assertEqual(len(secrets_used), 3)

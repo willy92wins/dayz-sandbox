@@ -89,6 +89,49 @@ class G56Fake(unittest.TestCase):
         self.assertEqual(parser.parse_args(base + ["--g6-clock-s", "5"]).g6_clock_s, 5.0)
 
 
+class G56CaseEvents(unittest.TestCase):
+    """R5, R6 y R9 en los casos de G5 (que con el falso no corren): `case` con rule_id y sesion."""
+
+    def test_g56_apply_case_lleva_rule_id_y_sesion(self):
+        live = _load_module("f1bp_live_g56_case", LIVE_PATH)
+        events = []
+
+        class Writer:
+            def emit(self, ev, t_ms=None, **fields):
+                events.append(dict(fields, ev=ev, t_ms=t_ms))
+
+        class Web:
+            last_session = "sesion-9"
+            last_t_ms = 10.0
+            last_t_end_ms = 25.5
+
+            def apply(self):
+                return 200, "op-3"
+
+        class Bridge:
+            ttl_ms = 10000
+
+        run = live.LiveRun.__new__(live.LiveRun)
+        run.writer = Writer()
+        run.bridge = Bridge()
+        self.assertEqual(run._g56_apply_case(Web(), "a2500", "client", ["g5a_client_2500"]), "op-3")
+        apply_ev, case_ev = events
+        self.assertEqual(apply_ev["ev"], "apply")
+        self.assertEqual((apply_ev["t_ms"], apply_ev["t_end_ms"]), (10.0, 25.5))
+        self.assertEqual(apply_ev["session"], "sesion-9")
+        self.assertEqual(case_ev["name"], "a2500")
+        self.assertEqual(case_ev["peer"], "client")
+        self.assertEqual(case_ev["rule_id"], "g5a_client_2500")
+        self.assertEqual(case_ev["session"], "sesion-9")
+
+    def test_g5_g6_citan_su_regla_en_el_codigo(self):
+        with open(LIVE_PATH, "r", encoding="utf-8") as fh:
+            source = fh.read()
+        self.assertIn('self._g56_apply_case(web, name, peer, [rule_id])', source)
+        self.assertIn('self._g56_apply_case(web, name, "server", [rule_id])', source)
+        self.assertIn('**_rule_fields([rule_id])', source)
+
+
 class ConfirmGapZero(unittest.TestCase):
     def setUp(self):
         self.live = _load_module("f1bp_live_g56_gap", LIVE_PATH)
