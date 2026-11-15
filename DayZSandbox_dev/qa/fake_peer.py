@@ -856,6 +856,16 @@ class Peer:
             clean_args["sk"].pop(idx)
             clean_args["sv"].pop(idx)
 
+        # D10 (brief v4.5.5, §15): la sonda real corta en 1023 las cadenas que lee; el peer falso rechaza la orden para
+        # que offline falle tambien (en vez de aceptar una cadena que en partida llegaria truncada).
+        try:
+            wire.check_arg_strings(clean_args)
+        except ValueError:
+            body = self._rejected(op, "bad_args", stamp, is_new=True)
+            body = self._cap_new_result(body, is_new=True)
+            self._keep(body, bucket)
+            return
+
         args_unpacked = wire.unpack_payload(clean_args)
         op_ctx = dict(op)
         op_ctx["qa_fault"] = op_fault

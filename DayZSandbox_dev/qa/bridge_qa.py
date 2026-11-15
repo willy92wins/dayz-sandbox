@@ -60,6 +60,9 @@ def full_args(args):
             continue
         base[key] = list(value) if isinstance(value, list) else value
     wire.validate_payload(base)
+    # D10 (§15): toda orden pasa por aqui (enqueue y las medidas de BASE-01); una cadena de args de mas de 1000
+    # caracteres se rechaza antes de salir, porque la sonda la leeria cortada en 1023.
+    wire.check_arg_strings(base)
     return base
 
 

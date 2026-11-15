@@ -103,11 +103,20 @@ def _run_base_01(ctx: f03_common.PartContext) -> None:
         probe_now = max(float(issued_fixed), 99999999.999)
         ttl_int = int(ctx.ttl_ms)
 
-        def _make_args(pad_len: int) -> dict:
-            # El relleno no puede ser el ultimo sv: qa_echo devuelve last_sv (§3.2) y el eco pasaria de WIRE_CAP
-            # con result_too_large. Se cierra con un escalar corto (R2-3).
+        def _make_args(pad_len: int, tail_n: int = 1) -> dict:
+            # D10 (brief v4.5.5, §15): ninguna cadena de args pasa de 1000 caracteres (la sonda corta en 1023 lo que
+            # lee), asi que el relleno se reparte en trozos de 1000 como maximo. El relleno no puede ser el ultimo sv:
+            # qa_echo devuelve last_sv (§3.2) y el eco pasaria de WIRE_CAP con result_too_large. Se cierra con un
+            # escalar corto (R2-3), que solo crece unos bytes si hace falta para no quedar por debajo de WIRE_CAP - 12.
+            pad_s = {}
+            left, i = pad_len, 0
+            while left > 0:
+                n = min(wire.MAX_ARG_STR_CHARS, left)
+                pad_s[f"pad_in_{i}"] = "x" * n
+                left -= n
+                i += 1
             p = wire.pack_payload(
-                scalars_str={"pad_in": "x" * pad_len, "tail_s": "z", "qa_fault": wire.QA_FAULT_NONE},
+                scalars_str={**pad_s, "tail_s": "z" * tail_n, "qa_fault": wire.QA_FAULT_NONE},
                 scalars_num={"v1_n": 12.5, "v2_n": -2.5},
                 num_cols=["c_n"],
                 str_cols=["c_s"],
@@ -115,33 +124,33 @@ def _run_base_01(ctx: f03_common.PartContext) -> None:
             )
             return p
 
-        base_args = _make_args(0)
         # Se mide la orden tal como la serializa enqueue(): con full_args(), que anade los campos F0.2 (R2-2).
         base_order = {
-            "args": bridge_qa.full_args(base_args),
+            "args": bridge_qa.full_args(_make_args(0)),
             "inst": inst,
             "issued_ms": issued_fixed,
             "op_id": cand_id,
             "ttl_ms": ttl_int,
             "verb": "qa_echo",
         }
-        base_len = len(wire.poll_wire_bytes(base_order, now_ms=probe_now))
-        pad_len = max(0, wire.WIRE_CAP - base_len)
-        sized_args = _make_args(pad_len)
-        sized_order = dict(base_order, args=bridge_qa.full_args(sized_args))
-        while len(wire.poll_wire_bytes(sized_order, now_ms=probe_now)) > wire.WIRE_CAP and pad_len > 0:
-            pad_len -= 1
-            sized_args = _make_args(pad_len)
-            sized_order = dict(base_order, args=bridge_qa.full_args(sized_args))
-        while len(wire.poll_wire_bytes(sized_order, now_ms=probe_now)) < wire.WIRE_CAP:
-            pad_len += 1
-            cand_args = _make_args(pad_len)
-            cand_order = dict(base_order, args=bridge_qa.full_args(cand_args))
-            if len(wire.poll_wire_bytes(cand_order, now_ms=probe_now)) > wire.WIRE_CAP:
-                pad_len -= 1
-                break
-            sized_args = cand_args
-            sized_order = cand_order
+
+        def _poll_len(pad_len: int, tail_n: int = 1) -> int:
+            order = dict(base_order, args=bridge_qa.full_args(_make_args(pad_len, tail_n)))
+            return len(wire.poll_wire_bytes(order, now_ms=probe_now))
+
+        # Mayor relleno que cabe en WIRE_CAP: el tamano crece con pad_len (cada trozo nuevo suma ademas su clave).
+        lo, hi = 0, wire.WIRE_CAP
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if _poll_len(mid) <= wire.WIRE_CAP:
+                lo = mid
+            else:
+                hi = mid - 1
+        pad_len, tail_n = lo, 1
+        # Si el salto de un trozo nuevo deja el poll por debajo de WIRE_CAP - 12, se completa con la cola (pocos bytes).
+        while _poll_len(pad_len, tail_n) < wire.WIRE_CAP - 12 and _poll_len(pad_len, tail_n + 1) <= wire.WIRE_CAP:
+            tail_n += 1
+        sized_args = _make_args(pad_len, tail_n)
 
         out = f03_common.issue_one(
             ctx,
@@ -163,9 +172,11 @@ def _run_base_02(ctx: f03_common.PartContext) -> None:
         )
         cal_ev = _result_event_for(ctx, cal.op_id)
         base_body_len = int(cal_ev["body_len"]) if cal_ev is not None else 350
-        # Aumentar pad_bytes_n de 1 a pad_ok suma (pad_ok - 1) bytes en pad y ~3 bytes en sv_chars_n;
-        # apuntamos a WIRE_CAP - 5 dentro de [WIRE_CAP - 16, WIRE_CAP].
-        pad_ok = max(1, 1 + (wire.WIRE_CAP - 5 - base_body_len) - 3)
+        # Aumentar pad_bytes_n de 1 a pad_ok suma (pad_ok - 1) bytes en pad y ~3 bytes en sv_chars_n.
+        # D11 (c) (brief v4.5.5, §15): en partida el resultado varia unos +-20 bytes respecto a la calibracion (floats
+        # con decimales variables en el eco y en el sobre), asi que se apunta a WIRE_CAP - 25 y el evaluador acepta
+        # [WIRE_CAP - 50, WIRE_CAP].
+        pad_ok = max(1, 1 + (wire.WIRE_CAP - 25 - base_body_len) - 3)
         ok_out = f03_common.issue_one(
             ctx,
             peer,

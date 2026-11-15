@@ -156,6 +156,7 @@ def _write_synthetic_base_part(
     cb_created_after: int | None = None,
     cb_pooled_after: int = 2,
     cb_pooled_before: int | None = None,
+    base02_ok_body_len: int | None = None,
 ) -> dict:
     """Construye una parte sintetica completa de F0.3-0 (13/13 checks en pass por defecto)."""
     pdir = Path(part_dir)
@@ -294,7 +295,7 @@ def _write_synthetic_base_part(
             "done",
             "",
             wire.pack_payload(scalars_str={"pad": "y" * 20}),
-            res_body_len=wire_cap - 6,
+            res_body_len=wire_cap - 6 if base02_ok_body_len is None else base02_ok_body_len,
         )
         over_id = _emit_op(peer, "qa_echo", wire.empty_payload(), "error", "result_too_large", None)
         scen_rows.append({"check": "BASE-02", "ok_op_id": ok_id, "over_op_id": over_id, "peer": peer, "t_ms": _t()})
@@ -1201,10 +1202,18 @@ class BridgeF03Tests(unittest.TestCase):
                 "k-srv",
                 {"build": "offline", "inst": "S1", "peer": "server", "probe_ver": "t", "proto": "qa0"},
             )
-            huge = wire.pack_payload(scalars_str={"big": "z" * (wire.WIRE_CAP + 50)})
+            # Mayor que WIRE_CAP con cadenas de 1000 como maximo (D10): la rechaza el tope de la orden, no la regla D10.
+            huge = wire.pack_payload(scalars_str={f"big{i}": "z" * 900 for i in range(4)})
             with self.assertRaises(ValueError):
                 b.enqueue("server", "qa_echo", huge, "S1", 5000)
             self.assertFalse(any(r.get("ev") == "enq" for r in rows))
+            # D10 (brief v4.5.5, §15): 1001 caracteres en una cadena de args se rechazan antes de encolar; 1000 pasan.
+            with self.assertRaises(ValueError):
+                b.enqueue("server", "qa_echo", wire.pack_payload(scalars_str={"s": "z" * 1001}), "S1", 5000)
+            self.assertFalse(any(r.get("ev") == "enq" for r in rows))
+            with self.assertRaises(ValueError):
+                bridge_qa.full_args(wire.pack_payload(str_cols=["c"], row_dicts=[{"c": "y" * 1001}]))
+            bridge_qa.full_args(wire.pack_payload(scalars_str={"s": "z" * 1000}))
 
             # Igualdad exacta de poll.body_len entre sano (24 "_") y mutante ("freeze_on_wait" rellenado a 24)
             # ExitStack dentro del mismo with: cierra los contextos ANTES de borrar el directorio (Windows, R2-4).
@@ -1272,8 +1281,14 @@ class BridgeF03Tests(unittest.TestCase):
             pad_len = 0
             cand_id = "0123456789abcdef-99"
             issued_f = 500.0
+            def _args_n8(n):
+                # D10: el relleno va en 4 cadenas fijas de 1000 como maximo; con 4 claves siempre presentes el tamano
+                # crece de 1 en 1 con n y la busqueda de WIRE_CAP exacto sigue convergiendo.
+                q, r = divmod(n, 4)
+                return wire.pack_payload(scalars_str={f"p{i}": "a" * (q + (1 if i < r else 0)) for i in range(4)})
+
             while True:
-                args_c = wire.pack_payload(scalars_str={"p": "a" * pad_len})
+                args_c = _args_n8(pad_len)
                 # Medida como la hace enqueue(): con full_args() (R2-2, el mismo defecto en la prueba).
                 w_ord = {"args": bridge_qa.full_args(args_c), "inst": "S1", "issued_ms": issued_f, "op_id": cand_id, "ttl_ms": 500000000, "verb": "qa_echo"}
                 ln = len(wire.poll_wire_bytes(w_ord, now_ms=99999999.999))
@@ -1898,6 +1913,30 @@ class FakePeerF03Tests(unittest.TestCase):
             finally:
                 srv.shutdown()
 
+    def test_fake_peer_rejects_arg_strings_over_1000_chars_d10(self):
+        # D10 (brief v4.5.5, §15): la sonda real corta en 1023 las cadenas que lee; el peer falso rechaza la orden
+        # (bad_args) para que offline falle tambien. 1000 caracteres siguen pasando.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "dsbx_qa.json"
+            cfg.write_bytes(b'{"key":"k","retry_ms":200,"url":"http://127.0.0.1:9/"}\n')
+            srv = fake_peer.Peer(str(cfg), "server", _free_udp_port(), 60.0, None)
+            try:
+                def _op(op_id, args):
+                    return {"args": args, "inst": srv.inst, "issued_ms": 0.0, "op_id": op_id, "ttl_ms": 5000, "verb": "qa_echo"}
+
+                long_sv = {"sk": ["s"], "sv": ["z" * 1001], "nk": [], "nv": [], "ncol": [], "ncell": [], "scol": [], "scell": [], "rows": 0}
+                bucket = []
+                srv._start_op(_op("longA", long_sv), 10.0, time.monotonic(), bucket)
+                self.assertTrue(bucket, "el peer falso no respondio a la orden")
+                self.assertEqual((bucket[-1]["op_id"], bucket[-1]["status"], bucket[-1]["reason"]), ("longA", "rejected", "bad_args"))
+                ok_args = wire.pack_payload(scalars_str={"s": "z" * 1000})
+                bucket_ok = []
+                srv._start_op(_op("longB", ok_args), 10.0, time.monotonic(), bucket_ok)
+                self.assertTrue(bucket_ok, "el peer falso no respondio a la orden de 1000")
+                self.assertEqual((bucket_ok[-1]["op_id"], bucket_ok[-1]["status"]), ("longB", "done"))
+            finally:
+                srv.shutdown()
+
 
 # ============================================================================
 # GRUPO 4: wire.py, stamp_probe.py y sello historico en git_head
@@ -2513,6 +2552,25 @@ class CommonAndEvalF03Tests(unittest.TestCase):
             self.assertEqual(verdict["exit_code"], 2)
             c8 = next(c for c in verdict["checks"] if c["id"] == "BASE-08")
             self.assertEqual((c8["status"], c8["detail"]), ("missing", "no_pre_cut_poll"))
+
+    def test_base02_window_is_wire_cap_minus_50_d11(self):
+        # D11 (c) (brief v4.5.5, §15): el resultado de tope vale con body_len en [WIRE_CAP - 50, WIRE_CAP] (en partida
+        # varia unos +-20 bytes respecto a la calibracion). 40 por debajo pasa; 51 por debajo falla.
+        self._require_f03()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            head = _init_temp_git_repo(root)
+            stamp = f03_common.compute_probe_stamp_at_commit(head, repo_root=root)
+            results = {}
+            for name, blen in (("in", 3500 - 40), ("out", 3500 - 51), ("edge", 3500 - 50)):
+                part = Path(tmp) / f"b02_{name}"
+                _write_synthetic_base_part(part, git_head=head, probe_stamp=stamp, base02_ok_body_len=blen)
+                v = f03_base_eval.evaluate(part, repo_root=root)
+                results[name] = next(c for c in v["checks"] if c["id"] == "BASE-02")
+            self.assertEqual(results["in"]["status"], "pass")
+            self.assertEqual(results["edge"]["status"], "pass")
+            self.assertEqual((results["out"]["status"], results["out"]["detail"]), ("fail", "result_body_len_out_of_range:3449"))
 
     def test_probe_budget_quiet_window_is_per_peer_h6(self):
         # H6 de Sol r2: servidor agotado en 1000 ms, peticion indebida del servidor en 1050 ms, cliente agotado en 1100.

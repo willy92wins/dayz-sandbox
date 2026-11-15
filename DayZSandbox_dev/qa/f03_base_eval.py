@@ -217,7 +217,8 @@ def _eval_base_02(scen_rows: list[dict], idx: dict, req_peers: tuple[str, ...], 
         ok_body = ok_ev.get("result") or {}
         if ok_body.get("status") != "done" or bool(ok_body.get("dup", False)):
             return _chk("BASE-02", "fail", "at_cap_not_done")
-        if not (wire_cap - 16 <= ok_len <= wire_cap):
+        # D11 (c) (brief v4.5.5, §15): ventana [WIRE_CAP - 50, WIRE_CAP], medida en el bridge (body_len).
+        if not (wire_cap - 50 <= ok_len <= wire_cap):
             return _chk("BASE-02", "fail", f"result_body_len_out_of_range:{ok_len}")
 
         over_body = over_ev.get("result") or {}

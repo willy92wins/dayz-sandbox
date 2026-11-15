@@ -7,6 +7,11 @@ import re
 from pathlib import Path
 
 WIRE_CAP = 3500
+# D10 (brief F0.3-0 v4.5.5, §15): la sonda corta en 1023 caracteres las cadenas que LEE (medido en la partida diag;
+# causa en hipotesis: JsonSerializer.ReadFromString). Ninguna cadena de los args de una orden (sk, sv, scol, scell)
+# pasa de MAX_ARG_STR_CHARS. Los resultados que escribe la sonda no estan afectados, asi que la regla no vive en
+# validate_payload (que tambien valida resultados) sino en check_arg_strings, que aplican el bridge y el peer falso.
+MAX_ARG_STR_CHARS = 1000
 QA_FAULT_LEN = 24
 QA_FAULT_NONE = "_" * QA_FAULT_LEN
 STAMP_REL_PATH = "scripts/5_Mission/DSBX_QA_Stamp.c"
@@ -86,6 +91,14 @@ def _check_num_list(arr, field_name):
     for item in arr:
         if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item):
             raise ValueError(f"{field_name} values must be finite int or float")
+
+
+def check_arg_strings(args):
+    """D10: ValueError si alguna cadena de sk, sv, scol o scell de unos args de orden pasa de MAX_ARG_STR_CHARS."""
+    for field in ("sk", "sv", "scol", "scell"):
+        for s in (args or {}).get(field) or []:
+            if isinstance(s, str) and len(s) > MAX_ARG_STR_CHARS:
+                raise ValueError(f"arg string longer than {MAX_ARG_STR_CHARS} chars in {field} ({len(s)})")
 
 
 def validate_payload(obj):
