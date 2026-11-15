@@ -1033,7 +1033,8 @@ async function runS2(browser) {
     });
     await sleep(120);
 
-    // Corrida 3 (revisión de Sol, F09): reparar un choque no puede dejar otro nuevo
+    // Corrida 3 (revisión de Sol, F09): reparar un choque no puede dejar otro nuevo, y una tecla
+    // propia que no está en ningún choque (Duplicar en Ctrl+K) sobrevive a la reparación
     await quietPageForProfileWrite(page);
     await cmd({
       cmd: "profile_write",
@@ -1041,7 +1042,7 @@ async function runS2(browser) {
         JSON.stringify({
           v: 1,
           layouts: { escena: null, rodaje: null },
-          keymap: { colocar: "Ctrl+Z", deshacer: "G", rehacer: "G" },
+          keymap: { colocar: "Ctrl+Z", deshacer: "G", rehacer: "G", duplicar: "Ctrl+K" },
         }) + "\n",
     });
     await page.goto(BASE + "/");
@@ -1055,6 +1056,11 @@ async function runS2(browser) {
     assert(
       !(/Ctrl\s*\+\s*Z/i.test(kColocar) && /Ctrl\s*\+\s*Z/i.test(kDeshacer)),
       "S2(-): tras reparar el perfil, Colocar y Deshacer comparten Ctrl+Z (F09): " + kColocar + " | " + kDeshacer
+    );
+    const kDuplicar = await keyRowTxt("duplicar");
+    assert(
+      /Ctrl\s*\+\s*K/i.test(kDuplicar),
+      "S2(-): la reparación de choques se llevó la tecla propia de Duplicar, que no chocaba (F09): " + kDuplicar
     );
     await page.keyboard.press("Escape");
     await page.locator('[role="dialog"]').waitFor({ state: "hidden", timeout: 5000 });

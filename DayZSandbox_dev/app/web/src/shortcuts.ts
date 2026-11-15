@@ -154,24 +154,36 @@ export function sanitizeKeymap(raw: unknown): {
     out[action.id] = val;
   }
 
-  // Check pairwise conflicts across overlapping contexts
-  for (let i = 0; i < ACTIONS.length; i++) {
-    for (let j = i + 1; j < ACTIONS.length; j++) {
-      const a = ACTIONS[i];
-      const b = ACTIONS[j];
-      const ka = out[a.id];
-      const kb = out[b.id];
-      if (ka !== null && ka === kb && contextsOverlap(a.ctx, b.ctx)) {
-        corrected = true;
-        out[a.id] = a.def;
-        out[b.id] = b.def;
+  // Choques entre contextos que se solapan: las acciones del choque que no tienen su tecla de serie
+  // vuelven a ella. Reparar un choque puede crear otro (esa tecla de serie puede estar ocupada), así
+  // que se repite hasta que no cambie nada (revisión de Sol, F09). Cada vuelta que cambia algo deja
+  // una acción más en su tecla de serie, así que acaba; y solo toca las acciones de algún choque.
+  for (let pass = 0; pass <= ACTIONS.length; pass++) {
+    let changed = false;
+    for (let i = 0; i < ACTIONS.length; i++) {
+      for (let j = i + 1; j < ACTIONS.length; j++) {
+        const a = ACTIONS[i];
+        const b = ACTIONS[j];
+        const ka = out[a.id];
+        const kb = out[b.id];
+        if (ka !== null && ka === kb && contextsOverlap(a.ctx, b.ctx)) {
+          corrected = true;
+          if (out[a.id] !== a.def) {
+            out[a.id] = a.def;
+            changed = true;
+          }
+          if (out[b.id] !== b.def) {
+            out[b.id] = b.def;
+            changed = true;
+          }
+        }
       }
     }
+    if (!changed) break;
   }
 
-  // Reparar un choque puede crear otro: las dos acciones vuelven a su tecla de serie y esa tecla
-  // puede estar ya ocupada. Si queda alguno, se vuelve al mapa de serie entero, que no tiene
-  // choques (revisión de Sol, F09).
+  // Red de seguridad: el mapa de serie no tiene choques, así que esto no debería pasar nunca; si
+  // pasara, se vuelve al mapa de serie entero.
   if (hasKeymapConflicts(out)) {
     return { keymap: { ...defaults }, corrected: true };
   }
