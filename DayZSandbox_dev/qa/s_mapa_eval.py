@@ -698,6 +698,33 @@ def _inconclusive(reason: str, metrics: dict[str, object] | None = None) -> dict
     )
 
 
+# BLOQ 4: una atribucion incompatible o un duplicado ambiguo es FALLA; solo una
+# operacion que falta de verdad (sin enq/poll/result) queda como missing.
+_ATTRIBUTION_ERROR_PREFIXES = (
+    "op_not_from_server_instance:",
+    "ambiguous_operation:",
+    "poll_not_from_server_instance:",
+    "result_not_from_server_instance:",
+    "result_op_id_mismatch:",
+    "missing_op_clock:",
+    "missing_poll_clock:",
+    "poll_before_enq:",
+    "poll_after_result:",
+    "result_before_enq:",
+)
+
+
+def _attribution_failure(reason: str, metrics: dict[str, object] | None = None) -> dict:
+    checks = [{"id": cid, "status": "fail", "detail": reason} for cid in CHECK_IDS]
+    return gate_core.make_verdict(
+        SPIKE_ID,
+        1,
+        checks=checks,
+        metrics=metrics or {},
+        reasons=[reason],
+    )
+
+
 def _extract_complete_ops(
     bridge_rows: list[dict],
 ) -> tuple[dict[str, dict], str | None]:
@@ -1376,6 +1403,8 @@ def evaluate(part_dir: Path | str, *, repo_root: Path | None = None) -> dict:
 
     ops, ops_err = _extract_complete_ops(bridge_rows)
     if ops_err is not None:
+        if ops_err.startswith(_ATTRIBUTION_ERROR_PREFIXES):
+            return _attribution_failure(ops_err)
         return _inconclusive(ops_err)
 
     # Indexar pasos de scenario.jsonl

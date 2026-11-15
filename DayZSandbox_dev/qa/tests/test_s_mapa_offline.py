@@ -1982,7 +1982,7 @@ class SMapaOracleOfflineTests(unittest.TestCase):
                     row["inst"] = "cli-map-1"
             _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
             v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
-            self.assertEqual(v["exit_code"], 2, v)
+            self.assertEqual(v["exit_code"], 1, v)
 
             # Duplicado ambiguo: mismo op_id con otra orden.
             pdir2 = Path(tmp) / "neg_ambiguous_dup"
@@ -1990,11 +1990,11 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             rows2 = f03_common.read_jsonl(pdir2 / "samples" / "bridge.jsonl")
             enq = next(r for r in rows2 if r.get("ev") == "enq")
             dup = copy.deepcopy(enq)
-            dup["verb"] = "map_world_read"
+            dup["verb"] = "map_place_ground"
             rows2.append(dup)
             _write_jsonl(pdir2 / "samples" / "bridge.jsonl", rows2)
             v2 = s_mapa_eval.evaluate(pdir2, repo_root=REPO_ROOT)
-            self.assertEqual(v2["exit_code"], 2, v2)
+            self.assertEqual(v2["exit_code"], 1, v2)
 
     def test_neg_sol05_fabricated_placement_heights_and_copied_request(self) -> None:
         """BLOQ 5: alturas y contacto se contrastan con las muestras del mundo y terrain_y_m."""
@@ -2015,9 +2015,11 @@ class SMapaOracleOfflineTests(unittest.TestCase):
                 u["num"]["bbox_min_y_m"] = -0.5625
                 u["num"]["bbox_max_y_m"] = 0.5625
                 u["num"]["obs_surf_y_m"] = 0.0
-                res["read"] = wire.pack_payload(
+                packed = wire.pack_payload(
                     scalars_str=u["str"], scalars_num=u["num"], num_cols=u["ncol"], row_dicts=u["rows"]
                 )
+                packed["has"] = ["payload"]
+                res["read"] = packed
             _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
             v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
             self.assertEqual(v["exit_code"], 1, v)
@@ -2039,9 +2041,11 @@ class SMapaOracleOfflineTests(unittest.TestCase):
                 if u["str"].get("reject_reason_id") in ("out_of_map", "elevated_surface"):
                     u["num"]["seq_pre_n"] = 0.0
                     u["num"]["seq_post_n"] = 0.0
-                    res["read"] = wire.pack_payload(
+                    packed = wire.pack_payload(
                         scalars_str=u["str"], scalars_num=u["num"], num_cols=u["ncol"], row_dicts=u["rows"]
                     )
+                    packed["has"] = ["payload"]
+                    res["read"] = packed
             _write_jsonl(pdir / "samples" / "bridge.jsonl", rows)
             v = s_mapa_eval.evaluate(pdir, repo_root=REPO_ROOT)
             self.assertEqual(v["exit_code"], 1, v)
@@ -2061,9 +2065,11 @@ class SMapaOracleOfflineTests(unittest.TestCase):
                 if u["str"].get("reject_reason_id") == "out_of_map":
                     u["num"]["pre_count_n"] = 0.0
                     u["num"]["post_count_n"] = 0.49
-                    res["read"] = wire.pack_payload(
+                    packed = wire.pack_payload(
                         scalars_str=u["str"], scalars_num=u["num"], num_cols=u["ncol"], row_dicts=u["rows"]
                     )
+                    packed["has"] = ["payload"]
+                    res["read"] = packed
             _write_jsonl(pdir2 / "samples" / "bridge.jsonl", rows2)
             v2 = s_mapa_eval.evaluate(pdir2, repo_root=REPO_ROOT)
             self.assertEqual(v2["exit_code"], 1, v2)
@@ -2124,6 +2130,9 @@ class SMapaOracleOfflineTests(unittest.TestCase):
             man["execution_identity"]["fake_peer_pids"] = {"client": None, "server": None}
             gate_core.write_json(pdir / "manifest.json", man)
             empty_record = _TrafficRecord()
+            empty_record.contexts.append(
+                {"part_dir": str(pdir), "pids": {"client": None, "server": None}, "spawned": []}
+            )
             self.assertIn("runner_without_peers", _verify_part_against_record(pdir, empty_record))
             self.assertIn("no_recorded_traffic", _verify_part_against_record(pdir, empty_record))
 
@@ -2144,7 +2153,7 @@ class SMapaOracleOfflineTests(unittest.TestCase):
                     res = row["result"]
                     u = wire.unpack_payload(res["read"]) if res.get("status") == "done" else None
                     if u is not None and u["str"].get("mode_id") == "calibrate":
-                        res["read"] = wire.pack_payload(
+                        packed = wire.pack_payload(
                             scalars_str={
                                 "point_id": u["str"]["point_id"],
                                 "mode_id": "calibrate",
@@ -2153,6 +2162,8 @@ class SMapaOracleOfflineTests(unittest.TestCase):
                             },
                             scalars_num={"req_x_m": 0.0, "req_z_m": 0.0},
                         )
+                        packed["has"] = ["payload"]
+                        res["read"] = packed
             _write_jsonl(pdir2 / "samples" / "bridge.jsonl", rows2)
             v2 = s_mapa_eval.evaluate(pdir2, repo_root=REPO_ROOT)
             self.assertEqual(v2["exit_code"], 2, v2)
@@ -2180,9 +2191,11 @@ class SMapaOracleOfflineTests(unittest.TestCase):
                 avg_z = 0.5 * (float(rows_loc[0]["sz_m"]) + float(rows_loc[1]["sz_m"]))
                 u["num"]["srv_x_m"] = avg_x
                 u["num"]["srv_z_m"] = avg_z
-                res["read"] = wire.pack_payload(
+                packed = wire.pack_payload(
                     scalars_str=u["str"], scalars_num=u["num"], num_cols=u["ncol"], row_dicts=u["rows"]
                 )
+                packed["has"] = ["payload"]
+                res["read"] = packed
             _write_jsonl(pdir3 / "samples" / "bridge.jsonl", rows3)
             v3 = s_mapa_eval.evaluate(pdir3, repo_root=REPO_ROOT)
             self.assertEqual(v3["exit_code"], 1, v3)
