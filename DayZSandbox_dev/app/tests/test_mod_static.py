@@ -969,8 +969,13 @@ def check_m15_cuarentena(mod_dir: Path) -> list[str]:
     m_w = re.search(r"\bconst\s+int\s+WATCHDOG_MS\s*=\s*(\d+)\s*;", const_code)
     if not m_q or not m_w or int(m_q.group(1)) < 10 * int(m_w.group(1)):
         violations.append("M15: CALLBACK_QUARANTINE_MS debe existir y valer al menos 10 veces WATCHDOG_MS")
-    if not re.search(r"\bconst\s+int\s+CALLBACK_QUARANTINE_MAX\s*=\s*\d+\s*;", const_code):
-        violations.append("M15: falta CALLBACK_QUARANTINE_MAX")
+    # El tope dobla lo que acumula un periodo de cuarentena con el backend caido: P falla una vez por
+    # DEFAULT_RETRY_MS, asi que caben 2 * CALLBACK_QUARANTINE_MS / DEFAULT_RETRY_MS.
+    m_max = re.search(r"\bconst\s+int\s+CALLBACK_QUARANTINE_MAX\s*=\s*(\d+)\s*;", const_code)
+    m_r = re.search(r"\bconst\s+int\s+DEFAULT_RETRY_MS\s*=\s*(\d+)\s*;", const_code)
+    if not m_max or not m_q or not m_r \
+            or int(m_max.group(1)) * int(m_r.group(1)) < 2 * int(m_q.group(1)):
+        violations.append("M15: CALLBACK_QUARANTINE_MAX * DEFAULT_RETRY_MS debe ser >= 2 * CALLBACK_QUARANTINE_MS")
 
     def flat(name):
         return re.sub(r"\s+", " ", _find_method_body(peer_code, name))
@@ -985,15 +990,25 @@ def check_m15_cuarentena(mod_dir: Path) -> list[str]:
     if pop < 0 or take < 0 or create < 0 or not (pop < take < create):
         violations.append("M15: AcquireCallback debe probar el pool, luego la cuarentena y solo despues crear")
 
-    taker = flat("TakeFromQuarantine")
-    if "(NowMs() - oldest.m_RetiredMs) < DSBX_Const.CALLBACK_QUARANTINE_MS" not in taker \
-            or "quarantine.Get(0)" not in taker or "quarantine.RemoveOrdered(0);" not in taker:
+    # Sol, E-01: cada operacion en su sitio (insertar, devolver el extraido, desligar), no solo los nombres
+    pick = "array<ref DSBX_Callback> quarantine = m_QuarantineR; if (canal == DSBX_Const.CH_P) { quarantine = m_QuarantineP; }"
+    taker = flat("TakeFromQuarantine").strip()
+    if pick not in taker or "DSBX_Callback oldest = quarantine.Get(0);" not in taker \
+            or "(NowMs() - oldest.m_RetiredMs) < DSBX_Const.CALLBACK_QUARANTINE_MS" not in taker \
+            or not taker.endswith("quarantine.RemoveOrdered(0); return oldest;") \
+            or len(re.findall(r"\breturn\s+(?!null\s*;)", taker)) != 1:
         violations.append("M15: TakeFromQuarantine solo devuelve el mas antiguo, y solo pasado CALLBACK_QUARANTINE_MS")
 
     quar = flat("Quarantine")
-    if "cb.Retire();" not in quar or "cb.m_RetiredMs = NowMs();" not in quar \
-            or "quarantine.Count() < DSBX_Const.CALLBACK_QUARANTINE_MAX" not in quar:
-        violations.append("M15: Quarantine debe retirar el callback, sellar m_RetiredMs y respetar CALLBACK_QUARANTINE_MAX")
+    if pick not in quar or "cb.Retire();" not in quar or "cb.m_RetiredMs = NowMs();" not in quar \
+            or "if (quarantine.Count() < DSBX_Const.CALLBACK_QUARANTINE_MAX) { quarantine.Insert(cb); }" not in quar:
+        violations.append("M15: Quarantine debe retirar el callback, sellar m_RetiredMs e insertarlo dentro de CALLBACK_QUARANTINE_MAX")
+
+    detach = flat("DetachAll").strip()
+    if "while (k < callbacks.Count())" not in detach or "k = k + 1;" not in detach \
+            or "DSBX_Callback item = callbacks.Get(k); if (item) { item.Detach(); }" not in detach \
+            or not detach.endswith("callbacks.Clear();"):
+        violations.append("M15: DetachAll debe desligar cada callback (Detach) y vaciar la lista")
 
     for wd, ch in (("WatchdogP", "CH_P"), ("WatchdogR", "CH_R")):
         body = flat(wd)
@@ -1486,6 +1501,34 @@ class TestModStatic(unittest.TestCase):
                 "scripts/3_Game/DSBX_Peer.c",
                 "\t\tDetachAll(m_QuarantineP);\n",
                 "",
+                "M15",
+            ),
+            # Sol E-01: la cuarentena no guarda el callback
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "\t\t\tquarantine.Insert(cb);\n",
+                "",
+                "M15",
+            ),
+            # Sol E-01: se extrae de la cuarentena pero no se devuelve
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "\t\treturn oldest;\n",
+                "\t\treturn null;\n",
+                "M15",
+            ),
+            # Sol E-01: DetachAll no desliga el peer
+            (
+                "scripts/3_Game/DSBX_Peer.c",
+                "\t\t\t\titem.Detach();\n",
+                "",
+                "M15",
+            ),
+            # Tope de la cuarentena por debajo de lo que acumula un periodo con el backend caido
+            (
+                "scripts/3_Game/DSBX_Const.c",
+                "const int CALLBACK_QUARANTINE_MAX = 64;",
+                "const int CALLBACK_QUARANTINE_MAX = 32;",
                 "M15",
             ),
         ]

@@ -36,7 +36,9 @@ class DSBX_Const
 	// OnError for the same request only while it is being processed). Without reuse, a backend that is
 	// down would spend the budget in about 67 minutes (Enforce review, 15-nov).
 	const int CALLBACK_QUARANTINE_MS = 60000;
-	const int CALLBACK_QUARANTINE_MAX = 32;
+	// With the backend down, P fails about once per DEFAULT_RETRY_MS, so one quarantine period holds about
+	// 30 callbacks; the cap leaves twice that (Enforce review, 15-nov).
+	const int CALLBACK_QUARANTINE_MAX = 64;
 	// Engine state measured in game for an HTTP 4xx (a 409 arrives as 5, a 500 as 6). The script enum
 	// is sequential, so EREST_ERROR_CLIENTERROR is 6 and does not match a 4xx (partida brief, H-07).
 	const int REST_STATE_4XX = 5;
