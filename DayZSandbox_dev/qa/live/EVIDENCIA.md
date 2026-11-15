@@ -14,12 +14,12 @@ Todos los JSON van con claves ordenadas, en UTF-8 y con LF. **Ningún fichero ll
 
 ## `manifest.json`
 ```json
-{"build": "diag|retail", "git_head": "<sha>", "git_dirty": false, "pbo_sha256": "<hex>",
+{"build": "diag|retail|fake", "fake": false, "git_head": "<sha>", "git_dirty": false, "pbo_sha256": "<hex>",
  "dayz_version": "<texto o null>", "ports": {"web": 0, "bridge": 0, "proxy": 0},
  "key_sha256": ["<hex>", "..."], "lease_ms": 3000, "hold_ms": 2000,
  "scenarios": ["G1", "G2"], "t0_ms": 0.0}
 ```
-`t0_ms` es el monotónico del arnés al empezar. **Todos los `t_ms` de la carpeta (`samples/*.jsonl` y `proxy.jsonl`) están en ese mismo reloj**, en ms. El backend corre en el mismo proceso, así que su monotónico es ese.
+`fake: true` (con `build: "fake"`) marca el ensayo en seco con el mod falso (brief §7). Ahí los logs de `logs/` los escribe el orquestador a partir del registro de efectos del falso, y no hay RPT. `t0_ms` es el monotónico del arnés al empezar. **Todos los `t_ms` de la carpeta (`samples/*.jsonl` y `proxy.jsonl`) están en ese mismo reloj**, en ms. El backend corre en el mismo proceso, así que su monotónico es ese.
 
 ## `samples/G<n>.jsonl`
 Una línea por evento: `{"t_ms": <float>, "ev": "<tipo>", ...}`.
@@ -76,8 +76,8 @@ Las líneas `SCRIPT (E)` o `Can't compile` que mencionan `DSBX_` cuentan como er
 
 ## Criterios por fila
 Son los del brief, §5. «Recuperación» quiere decir un `recovery` cuya op llega a `observado` en 60 s desde el evento anterior del caso.
-- **G1:** `connected` de los dos peers; ningún error de script de `DSBX_` en los logs ni en el RPT; en retail, `client_alive.connected`.
-- **G2:** foto `bridge` con el epoch del cliente igual al del servidor y `catalog.complete` con `n_classes > 0`; la mayor `req_bytes` de `route: catalog` en el proxy, con `upstream_status` 200, está entre 3000 y 3499; el `req_bytes` del hello del servidor es < 3500.
+- **G1:** `connected` de los dos peers; ningún error de script de `DSBX_` en los logs ni en el RPT; en retail, `client_alive.connected`. Con `fake: true`, G1 no se evalúa (INCONCLUSO).
+- **G2:** foto `bridge` con el epoch del cliente igual al del servidor y `catalog.complete` con `n_classes > 0`; la mayor `req_bytes` de `route: catalog` en el proxy, con `upstream_status` 200, está entre 3000 y 3499 (con `fake: true` este criterio no aplica y se anota); el `req_bytes` del hello del servidor es < 3500.
 - **G3:**
   - a y b: `observado`, con exactamente una `effect retirar` y una `effect anotar` cada una (por `session` y `op`).
   - c: `fallido` con `reason` `lectura_no_cumple`, y nunca `observado`.

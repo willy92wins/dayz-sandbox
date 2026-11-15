@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# F1b-peers en partida (brief plans/2026-11-15-m1-f1b-peers-partida-brief.md, v1.2, §1 y §8).
+# F1b-peers en partida (brief plans/2026-11-15-m1-f1b-peers-partida-brief.md, v1.2, sec. 1 y 8).
 # Esqueleto del lanzador de F0.3-0 (C:\tmp\dsbx-f030-work\partida\run_f030_partida.ps1), con lo de L-12:
 # cada proceso propio se identifica por PID e instante de creacion, y el lease solo se suelta cuando
 # ninguno sigue vivo. Nunca mata procesos: solo WM_CLOSE a los PID propios.
