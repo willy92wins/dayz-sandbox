@@ -213,8 +213,16 @@ class _SyntheticPartBuilder:
         include_t5_track_disks: bool = True,
         drop_control_post_restart: bool = False,
         t2_hold_ms: float = 605000.0,
+        restart_gap_ms: float = 800.0,
+        new_epoch_tick0_ms: float = 200.0,
+        old_keepalive_after_stop: bool = True,
     ) -> None:
         self.t2_hold_ms = t2_hold_ms
+        # N49: hueco del bridge entre el keepalive viejo y el hello nuevo, tick_ms del peer nuevo en su hello
+        # (tiempo desde el arranque del proceso) y keepalive del peer viejo tras su ultima lectura.
+        self.restart_gap_ms = restart_gap_ms
+        self.new_epoch_tick0_ms = new_epoch_tick0_ms
+        self.old_keepalive_after_stop = old_keepalive_after_stop
         self.part_name = part_name
         self.nonce = nonce
         self.fault_code = fault_code
@@ -1411,7 +1419,7 @@ class _SyntheticPartBuilder:
             )
 
         # t4: ultima lectura del epoch viejo (per_status del peer, posterior a t3_post_reset_census)
-        self._advance(5000.0, 100)
+        self._advance(1000.0, 30)
         self._emit_op(
             "server",
             self.server_epoch_old,
@@ -1434,11 +1442,27 @@ class _SyntheticPartBuilder:
                 rows=[{"scene_id": ret_scene_id, "last_op_id": f"rst-{ret_scene_id}-1", "gen_n": 1.0, "own_alive_n": 11.0}],
             ),
         )
-        # Parada y arranque: el proceso nuevo tiene su propio reloj (tick_ms pequeno); el bridge sigue.
-        self.h_ms += 40000.0
+        # Keepalive del peer viejo despues de su ultima lectura (formato del nucleo: poll con deliver=0, con su
+        # tick): su silencio posterior es observable (N49, Sol delta BLOQ 3).
+        if self.old_keepalive_after_stop:
+            self._advance(200.0, 6)
+            self.bridge_events.append({
+                "ev": "keepalive",
+                "peer": "server",
+                "inst": self.server_epoch_old,
+                "http": 200,
+                "n_ops": 0,
+                "body_len": 24,
+                "frame": self.frame,
+                "tick_s": self.tick_ms / 1000.0,
+                "now_ms": self.h_ms,
+                "t_ms": self.h_ms,
+            })
+        # Parada y arranque: el proceso nuevo tiene su propio reloj (tick_ms desde su arranque); el bridge sigue.
+        self.h_ms += self.restart_gap_ms
         if self.server_epoch_new != self.server_epoch_old:
-            self.tick_ms = 30000.0
-            self.frame = 500
+            self.tick_ms = self.new_epoch_tick0_ms
+            self.frame = 12
         self.bridge_events.append({
             "ev": "hello",
             "peer": "server",
@@ -1836,6 +1860,10 @@ class _SyntheticPartBuilder:
 # ---------------------------------------------------------------------------------------------------------
 
 
+def _is_finite_t(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
+
+
 def _read_events(part_dir: Path) -> list[dict[str, Any]]:
     path = Path(part_dir) / "samples" / "bridge.jsonl"
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -2025,12 +2053,19 @@ class _CoreTap:
             for role in require_roles:
                 if role not in hello_roles:
                     found.append(f"{pname}:no_registered_hello:{role}")
+            # Sol delta BLOQ 1: los resultados reales del nucleo (fake_peer.py `_done`) NO llevan `verb`: el verbo
+            # se resuelve por el op_id con el `enq` que registro el propio bridge (bridge_qa.py `enqueue`).
+            verb_by_op: dict[str, str] = {}
+            for r in registered:
+                if r.get("ev") == "enq" and r.get("op_id") and r.get("verb"):
+                    verb_by_op.setdefault(str(r["op_id"]), str(r["verb"]))
             applied = [
                 1
                 for r in registered
                 if r.get("ev") == "result"
                 for res in (r.get("results") or ([r["result"]] if isinstance(r.get("result"), dict) else []))
-                if res.get("verb") == "per_apply_scene" and res.get("status") == "done"
+                if res.get("status") == "done"
+                and (res.get("verb") or verb_by_op.get(str(res.get("op_id") or r.get("op_id") or ""))) == "per_apply_scene"
             ]
             if not applied:
                 found.append(f"{pname}:no_real_per_apply_scene_done")
@@ -4213,49 +4248,33 @@ class TestSPersistOracleOffline(unittest.TestCase):
             self._n49_expect_unaccredited(part_dir, "start_tick_huge")
 
     def test_men4_silent_gap_before_restart_or_after_load_not_pasa_short_gap_passes(self) -> None:
-        """MEN-4 / Sol r2 Nuevo 2: el hueco silencioso de 60 s (peer vivo sin lecturas) -> INCONCLUSO; 2 s -> PASA."""
+        """MEN-4 / Sol r2 Nuevo 2: hueco silencioso de 60 s (parada o carga) -> INCONCLUSO; hueco corto -> PASA.
+
+        Sol delta BLOQ 3: la ventana sin observacion se cuenta entera con el reloj del bridge, de modo que el hueco
+        entre la ultima lectura/keepalive del peer viejo y el hello nuevo es el de la parada, y el de la carga
+        arranca en el hello nuevo; el hueco corto (2 s) sigue pasando.
+        """
         with tempfile.TemporaryDirectory() as tmp:
-            builder = _SyntheticPartBuilder("run")
+            builder = _SyntheticPartBuilder("run", restart_gap_ms=2000.0)
             part_dir = builder.build_into(Path(tmp) / "short_gap")
-            events = _read_events(part_dir)
-            final_old = _status_op_ids(events, builder.server_epoch_old)[-1]
-            t_final = _result_t_ms(events, final_old)
-            events.append({"ev": "keepalive", "peer": "server", "inst": builder.server_epoch_old, "http": 200, "t_ms": t_final + 2000.0})
-            _write_events(part_dir, events)
             verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
             self.assertEqual(verdict["exit_code"], 0, msg=json.dumps(verdict["checks"]))
-        # 60 s en los que el peer viejo sigue vivo (keepalive) despues de su ultima lectura
+        # 60 s entre el keepalive del peer viejo y el hello del nuevo (el mundo pudo seguir)
         with tempfile.TemporaryDirectory() as tmp:
-            builder = _SyntheticPartBuilder("run")
+            builder = _SyntheticPartBuilder("run", restart_gap_ms=60000.0)
             part_dir = builder.build_into(Path(tmp) / "gap_before_restart")
-            events = _read_events(part_dir)
-            final_old = _status_op_ids(events, builder.server_epoch_old)[-1]
-            t_final = _result_t_ms(events, final_old)
-            events.append({"ev": "keepalive", "peer": "server", "inst": builder.server_epoch_old, "http": 200, "t_ms": t_final + 60000.0})
-            _write_events(part_dir, events)
-            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
-            self.assertEqual(verdict["exit_code"], 2)
-            c_map = _checks_by_id(verdict)
-            for cid in ("PER-07", "PER-08"):
-                self.assertEqual(c_map[cid]["status"], "missing", msg=cid)
-                self.assertEqual(c_map[cid]["detail"], "post_restart_creature_coverage_missing", msg=cid)
-            self.assertEqual(_only_non_pass(verdict), {"PER-07": "missing", "PER-08": "missing"})
-        # 60 s entre el hello del epoch nuevo y su primera lectura (el mundo ya corria)
+            self._n49_expect_unaccredited_or_unreachable(part_dir, "gap_before_restart")
+        # 60 s entre el hello del epoch nuevo y su primera lectura (el mundo ya corria): los relojes del
+        # epoch nuevo, y los del bridge desde alli, van 60 s por delante del peer viejo
         with tempfile.TemporaryDirectory() as tmp:
             builder = _SyntheticPartBuilder("run")
             part_dir = builder.build_into(Path(tmp) / "gap_after_load")
             events = _read_events(part_dir)
-            for ev in events:
-                if ev.get("ev") == "hello" and ev.get("inst") == builder.server_epoch_new:
-                    ev["t_ms"] = float(ev["t_ms"]) - 60000.0
+            for ev in events[self._new_hello_index(events, builder):]:
+                if _is_finite_t(ev.get("t_ms")):
+                    ev["t_ms"] = float(ev["t_ms"]) + 60000.0
             _write_events(part_dir, events)
-            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
-            self.assertEqual(verdict["exit_code"], 2)
-            c_map = _checks_by_id(verdict)
-            for cid in ("PER-07", "PER-08"):
-                self.assertEqual(c_map[cid]["status"], "missing", msg=cid)
-                self.assertEqual(c_map[cid]["detail"], "post_restart_creature_coverage_missing", msg=cid)
-            self.assertEqual(_only_non_pass(verdict), {"PER-07": "missing", "PER-08": "missing"})
+            self._n49_expect_unaccredited_or_unreachable(part_dir, "gap_after_load")
 
     def test_men_post_t3_pure_reads_are_not_mutating_but_writes_are(self) -> None:
         """MENOR: una lectura pura del epoch viejo tras t3 no cuenta como mutadora; una escritura si."""
@@ -4412,6 +4431,228 @@ class TestSPersistOracleOffline(unittest.TestCase):
                 verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
                 self.assertEqual(verdict["exit_code"], 2, msg=variant)
                 self.assertIn("t0_director_inventory_not_censused", verdict["reasons"], msg=variant)
+
+    # =========================================================================
+    # Ronda 4 (Sol sobre el delta): BLOQ 1..3, regresiones test_sol3_NN_*
+    # =========================================================================
+
+    @staticmethod
+    def _new_hello_index(events: list[dict[str, Any]], builder: "_SyntheticPartBuilder") -> int:
+        return next(
+            i for i, ev in enumerate(events)
+            if ev.get("ev") == "hello" and ev.get("peer") == "server" and ev.get("inst") == builder.server_epoch_new
+        )
+
+    def _n49_expect_unaccredited_or_unreachable(self, part_dir: Path, tag: str) -> None:
+        """Ninguna variante da PASA: INCONCLUSO (exit 2) y solo PER-07/08 `missing` (sin `fail`)."""
+        verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+        self.assertEqual(verdict["exit_code"], 2, msg=f"{tag}:{json.dumps(verdict['checks'])}")
+        c_map = _checks_by_id(verdict)
+        for cid in ("PER-07", "PER-08"):
+            self.assertEqual(c_map[cid]["status"], "missing", msg=f"{tag}:{cid}")
+            self.assertTrue(
+                c_map[cid]["detail"].startswith("post_restart_creature_coverage_missing"),
+                msg=f"{tag}:{cid}:{c_map[cid]['detail']}",
+            )
+        self.assertEqual(_only_non_pass(verdict), {"PER-07": "missing", "PER-08": "missing"}, msg=tag)
+
+    @staticmethod
+    def _to_real_core_result_rows(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Formato REAL del nucleo (bridge_qa.py `result`): un evento por resultado, bajo `result`, sin `verb`
+        (fake_peer.py `_done`/`_rejected` no lo llevan)."""
+        out: list[dict[str, Any]] = []
+        for ev in events:
+            if ev.get("ev") == "result" and isinstance(ev.get("results"), list):
+                for res in ev["results"]:
+                    body = {k: v for k, v in res.items() if k != "verb"}
+                    out.append({
+                        "ev": "result", "http": 200, "peer": ev.get("peer"), "inst": ev.get("inst"),
+                        "op_id": res.get("op_id"), "result": body, "t_ms": ev.get("t_ms"), "body_len": 0,
+                    })
+            else:
+                out.append(ev)
+        return out
+
+    def test_sol3_01_core_tap_resolves_verb_from_enq_with_real_core_result_format(self) -> None:
+        """Sol delta BLOQ 1 (HONESTA): resultados reales del nucleo (sin `verb`) -> el tap resuelve el verbo por el
+        `op_id` y su `enq` registrado: no da `no_real_per_apply_scene_done` y el evaluador da PASA."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "run")
+            rows = self._to_real_core_result_rows(_read_events(part_dir))
+            self.assertTrue(all("verb" not in (r.get("result") or {}) for r in rows if r.get("ev") == "result"))
+            _write_events(part_dir, rows)
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 0, msg=json.dumps(verdict["checks"]))
+            tap = _CoreTap()
+            tap.parts.append({"part_dir": part_dir, "bridge_id": 1, "pids": {"server": 4242, "client": 4343}})
+            tap.rows_by_bridge[1] = copy.deepcopy(_read_events(part_dir))
+            self.assertEqual(tap.problems(Path(tmp), ["run"]), [])
+            # no es vacuo: si el registro no trae el `enq` del per_apply_scene, el verbo no se resuelve
+            apply_ids = {r["op_id"] for r in rows if r.get("ev") == "enq" and r.get("verb") == "per_apply_scene"}
+            self.assertTrue(apply_ids)
+            tap.rows_by_bridge[1] = [
+                copy.deepcopy(r) for r in _read_events(part_dir)
+                if not (r.get("ev") == "enq" and r.get("op_id") in apply_ids)
+            ]
+            _write_events(part_dir, tap.rows_by_bridge[1])
+            self.assertIn("run:no_real_per_apply_scene_done", tap.problems(Path(tmp), ["run"]))
+
+    def _first_census_by_tag(self, events: list[dict[str, Any]], tag: str) -> dict[str, Any]:
+        return self._census_start_results(events, tag)[0]
+
+    def test_sol3_02_census_new_start_while_first_retained_after_release_is_valid(self) -> None:
+        """Sol delta BLOQ 2 (HONESTA): A termina y libera el recurso; B arranca antes del `job_free` de A (el trabajo
+        sigue retenido). El nucleo libera al terminar (fake_peer.py:316): no es solape ni FALLA en PER-09."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "retained")
+            events = _read_events(part_dir)
+            a_start = self._first_census_by_tag(events, "t0_baseline_census:area_a")
+            b_start = self._first_census_by_tag(events, "t0_baseline_census:area_b")
+            a_free_ids = {
+                ev["op_id"] for ev in events
+                if ev.get("ev") == "enq" and ev.get("verb") == "job_free"
+                and _unpack(ev["args"])[0].get("job") == a_start["op_id"]
+            }
+            self.assertEqual(len(a_free_ids), 1)
+            moved = [
+                ev for ev in events
+                if (ev.get("ev") == "enq" and ev.get("op_id") in a_free_ids)
+                or (ev.get("ev") == "poll" and any(o.get("op_id") in a_free_ids for o in ev.get("ops") or []))
+                or (ev.get("ev") == "result" and any(r.get("op_id") in a_free_ids for r in ev.get("results") or []))
+            ]
+            rest = [ev for ev in events if not any(ev is m for m in moved)]
+            # el `job_free` de A pasa a ir DESPUES del arranque de B (sus tres eventos juntos)
+            b_pos = max(
+                i for i, ev in enumerate(rest)
+                if ev.get("ev") == "result" and any(r.get("op_id") == b_start["op_id"] for r in ev.get("results") or [])
+            )
+            events2 = rest[: b_pos + 1] + moved + rest[b_pos + 1:]
+            # cambia el orden de los eventos; el reloj del bridge debe seguir siendo monotono
+            last_t = 0.0
+            for ev in events2:
+                if _is_finite_t(ev.get("t_ms")):
+                    last_t = max(last_t, float(ev["t_ms"]))
+                    ev["t_ms"] = last_t
+            _write_events(part_dir, events2)
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 0, msg=json.dumps(verdict["checks"]))
+            self.assertEqual(_checks_by_id(verdict)["PER-09"]["status"], "pass")
+
+    def test_sol3_03_census_busy_after_declared_release_is_not_contention_proof(self) -> None:
+        """Sol delta BLOQ 2 (FABRICACION): A declara la liberacion a 1030 ms y el supuesto `busy` llega a 1040 ms: el
+        recurso ya estaba libre, el `busy` no lo explica ningun censo activo -> no PASA (PER-09 `missing`)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "late_busy")
+            events = _read_events(part_dir)
+            a_start = self._first_census_by_tag(events, "t0_baseline_census:area_a")
+            u_s, u_n, u_r = _unpack(a_start["read"])
+            released = float(u_n["snap_tick_ms"]) + 10.0
+            for ev in events:
+                for res in ev.get("results") or []:
+                    if res.get("verb") != "job_read":
+                        continue
+                    j_s, j_n, j_r = _unpack(res["read"])
+                    if j_s.get("job") == a_start["op_id"]:
+                        for k in ("end_tick_ms", "onjobend_tick_ms", "released_tick_ms"):
+                            j_n[k] = released
+                        res["read"] = _repack_read(j_s, j_n, j_r, res["read"])
+            busy = next(
+                res
+                for ev in events
+                if ev.get("ev") == "result"
+                for res in ev.get("results") or []
+                if res.get("verb") == "per_census_start" and res.get("status") == "rejected"
+            )
+            busy["recv_ms"] = released + 5.0
+            busy["done_ms"] = released + 10.0  # despues de la liberacion declarada
+            _write_events(part_dir, events)
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertNotEqual(verdict["exit_code"], 0, msg=json.dumps(verdict["checks"]))
+            self.assertNotEqual(_checks_by_id(verdict)["PER-09"]["status"], "pass")
+            self.assertEqual(_checks_by_id(verdict)["PER-09"]["detail"], "census_busy_without_active_holder")
+
+    def test_sol3_04_n49_clocks_of_new_epoch_and_bridge_shifted_60s_not_pasa(self) -> None:
+        """Sol delta BLOQ 3: relojes del epoch nuevo y del bridge desplazados 60 s (primera lectura a ~90300 ms): se
+        cuenta toda la ventana sin observacion, no solo `hello -> primera lectura` -> INCONCLUSO, nunca PASA."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "shift60")
+            events = _read_events(part_dir)
+            for ev in events[self._new_hello_index(events, builder):]:
+                if _is_finite_t(ev.get("t_ms")):
+                    ev["t_ms"] = float(ev["t_ms"]) + 60000.0
+            _write_events(part_dir, events)
+            self._n49_expect_unaccredited_or_unreachable(part_dir, "shift60")
+
+    def test_sol3_05_n49_complete_silence_before_restart_not_pasa(self) -> None:
+        """Sol delta BLOQ 3: silencio completo del peer viejo tras su ultima lectura (ni un keepalive) -> la parada
+        no se acredita -> `N49_extremes_unaccredited`, nunca PASA."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run", old_keepalive_after_stop=False)
+            part_dir = builder.build_into(Path(tmp) / "silence")
+            self._n49_expect_unaccredited(part_dir, "sol3_05")
+
+    def test_sol3_06_n49_event_of_new_epoch_before_its_hello_not_pasa(self) -> None:
+        """Sol delta BLOQ 3 (negativa anterior al `hello`): un evento del epoch nuevo con reloj anterior a su hello
+        -> la carga no se acredita -> INCONCLUSO."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "pre_hello")
+            events = _read_events(part_dir)
+            i = self._new_hello_index(events, builder)
+            hello_t = float(events[i]["t_ms"])
+            events.insert(i, {
+                "ev": "keepalive", "peer": "server", "inst": builder.server_epoch_new, "http": 200, "n_ops": 0,
+                "body_len": 24, "t_ms": hello_t - 5.0,
+            })
+            _write_events(part_dir, events)
+            self._n49_expect_unaccredited(part_dir, "sol3_06")
+        # variante: el resultado del primer per_status nuevo lleva un reloj anterior al hello
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "first_read_before_hello")
+            events = _read_events(part_dir)
+            first_new = _status_op_ids(events, builder.server_epoch_new)[0]
+            hello_t = float(events[self._new_hello_index(events, builder)]["t_ms"])
+            for ev in events:
+                if ev.get("ev") == "result" and any(r.get("op_id") == first_new for r in ev.get("results") or []):
+                    ev["t_ms"] = hello_t - 1.0
+            _write_events(part_dir, events)
+            self._n49_expect_unaccredited(part_dir, "sol3_06b")
+
+    def test_sol3_07_n49_old_peer_without_keepalive_after_last_reading_not_pasa(self) -> None:
+        """Sol delta BLOQ 3 (negativa sin `keepalive`): el peer viejo solo deja eventos que no son un keepalive/poll 200
+        tras su ultima lectura (aqui un keepalive caido, http 503) -> no se acredita su vida -> INCONCLUSO."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "no_keepalive")
+            events = _read_events(part_dir)
+            n = 0
+            for ev in events:
+                if ev.get("ev") == "keepalive" and ev.get("inst") == builder.server_epoch_old:
+                    ev["http"] = 503
+                    n += 1
+            self.assertEqual(n, 1)
+            _write_events(part_dir, events)
+            self._n49_expect_unaccredited(part_dir, "sol3_07")
+
+    def test_sol3_08_n49_old_peer_alive_after_new_hello_not_pasa(self) -> None:
+        """Sol delta BLOQ 3: un evento del peer viejo en o despues del hello nuevo (dos mundos a la vez) -> INCONCLUSO."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "two_worlds")
+            events = _read_events(part_dir)
+            i = self._new_hello_index(events, builder)
+            hello_t = float(events[i]["t_ms"])
+            events.insert(i + 1, {
+                "ev": "keepalive", "peer": "server", "inst": builder.server_epoch_old, "http": 200, "n_ops": 0,
+                "body_len": 24, "t_ms": hello_t + 10.0,
+            })
+            _write_events(part_dir, events)
+            self._n49_expect_unaccredited(part_dir, "sol3_08")
 
 
 if __name__ == "__main__":

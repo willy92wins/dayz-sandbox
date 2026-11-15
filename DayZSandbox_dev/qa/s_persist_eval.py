@@ -111,8 +111,10 @@ Expectations come from the frozen fixture, never from the runner (BLOQ-1): the l
 ``req_x_m`` / ``req_z_m`` but they must equal the fixture to 1e-6. The director baseline comes only from the
 t0 census of ``area_a`` (``include_director_b == 1``, MEN-8). N49 (creature coverage after restart) is accredited
 with the peers' own reads and the bridge clock (MEN-4), see the comment above ``n49_extremes_accredited``. The
-census resource is checked for real contention (MEN-6): a second ``per_census_start`` while a census is alive
-must answer ``rejected/busy``, the first census must stay intact and the next one is accepted after the free.
+census resource is checked for real contention (MEN-6): a second ``per_census_start`` while a census is active
+(between its ``snap_tick_ms`` and its ``released_tick_ms``, read by the peer itself) must answer ``rejected/busy``,
+the first census must stay intact and the next one is accepted after the release (the finished job may still be
+retained until its ``job_free``: the core releases the resource when the job ends, not on ``job_free``).
 """
 
 from __future__ import annotations
@@ -541,6 +543,9 @@ class _BridgeOperation:
         self.frame_done: int = 0
         self.result_seq_idx: int = seq_idx
         self.result_t_ms: float | None = None
+        # Reloj del bridge del primer evento visto de la orden (normalmente su enq): la lectura del peer es
+        # posterior, asi que es una cota inferior conservadora del instante de la lectura (N49).
+        self.first_t_ms: float | None = None
 
 
 def _parse_bridge_timeline(
@@ -560,6 +565,8 @@ def _parse_bridge_timeline(
     for idx, ev in enumerate(bridge_events):
         ev_type = ev.get("ev")
         peer = str(ev.get("peer") or "")
+        _ev_t_raw = ev.get("t_ms")
+        ev_t = float(_ev_t_raw) if _is_finite_num(_ev_t_raw) else None
         if ev_type == "hello" and ev.get("http") == 200 and ev.get("ok") is not False:
             proto, h_build, pv = f03_common._hello_proto_and_build(ev)
             ev_args = ev.get("args") if isinstance(ev.get("args"), dict) else {}
@@ -587,6 +594,7 @@ def _parse_bridge_timeline(
             args = ev.get("args") if isinstance(ev.get("args"), dict) else {}
             if op_id and op_id not in ops_by_id:
                 bop = _BridgeOperation(idx, op_id, verb, peer, enq_inst, args)
+                bop.first_t_ms = ev_t
                 ops_by_id[op_id] = bop
                 ordered_ops.append(bop)
         elif ev_type == "deliver":
@@ -597,6 +605,7 @@ def _parse_bridge_timeline(
             if op_id:
                 if op_id not in ops_by_id:
                     bop = _BridgeOperation(idx, op_id, verb, peer, deliv_inst, args)
+                    bop.first_t_ms = ev_t
                     ops_by_id[op_id] = bop
                     ordered_ops.append(bop)
                 else:
@@ -624,6 +633,7 @@ def _parse_bridge_timeline(
                     continue
                 if op_id not in ops_by_id:
                     bop = _BridgeOperation(idx, op_id, verb, peer, poll_inst, args)
+                    bop.first_t_ms = ev_t
                     ops_by_id[op_id] = bop
                     ordered_ops.append(bop)
                 else:
@@ -649,6 +659,7 @@ def _parse_bridge_timeline(
                     continue
                 if op_id not in ops_by_id:
                     bop = _BridgeOperation(idx, op_id, str(res.get("verb") or ""), peer, res_inst, {})
+                    bop.first_t_ms = ev_t
                     ops_by_id[op_id] = bop
                     ordered_ops.append(bop)
                 bop = ops_by_id[op_id]
@@ -732,13 +743,50 @@ def _parse_bridge_timeline(
         if len(s_ops) > 1:
             any_reused_census_job_id = True
 
-    # MEN-6: contencion real del recurso `per_census` (F0.3-0 brief :147). Se deduce solo del orden
-    # de las ordenes en el bridge: mientras un censo A esta vivo (desde su start hasta su job_free)
-    # otro per_census_start en el mismo epoch debe responder rejected/busy; uno aceptado es un
-    # solape (el recurso no protege), y un rechazo con otro motivo no prueba la contencion.
+    # MEN-6 + Sol delta BLOQ 2: contencion real del recurso `per_census` (F0.3-0 brief :147). El nucleo
+    # libera el recurso al TERMINAR el trabajo (EndJob -> _finalize_cleanup: on_job_end, released_tick_ms) y
+    # despues lo RETIENE hasta job_free (fake_peer.py:316). Por eso la ventana en la que el recurso esta
+    # ocupado no es [start, job_free] sino [snap_tick_ms, released_tick_ms] del propio peer, acreditada con
+    # las paginas job_read `done` del censo A (estado y released_tick_ms coherentes):
+    #  - un segundo per_census_start aceptado cuyo arranque (snap_tick_ms) es anterior a la liberacion de A
+    #    es un solape (el recurso no protege); uno aceptado despues de liberar, aunque A siga retenido y sin
+    #    job_free, es conducta valida del nucleo;
+    #  - un rejected/busy solo prueba la contencion si ocurrio mientras A estaba activo de verdad:
+    #    A.snap_tick_ms <= done_ms(busy) y recv_ms(busy) <= done_ms(busy) <= A.released_tick_ms;
+    #  - un busy que ningun censo activo explica (p. ej. A declara liberar a 1030 ms y el busy llega a
+    #    1040 ms) contradice al propio peer: `census_busy_without_active_holder`;
+    #  - si A no acredita su liberacion, se vuelve a la ventana por orden del bridge hasta su job_free
+    #    (conservador: cualquier aceptado dentro es solape, y un busy dentro no se acredita).
+    def _census_released_window(a_op: _BridgeOperation, a_jid: str, a_free_seq: int) -> tuple[float, float] | None:
+        a_out_u = _unpack_any_payload(a_op.read)
+        a_snap = float(a_out_u[1].get("snap_tick_ms", 0.0)) if a_out_u else 0.0
+        if a_snap <= 0.0:
+            return None
+        released_vals: set[float] = set()
+        for jr in job_read_ops_by_job.get(a_jid, []):
+            if not (a_op.seq_idx < jr.seq_idx < a_free_seq) or jr.peer != "server" or jr.inst != a_op.inst:
+                continue
+            jr_u = _unpack_any_payload(jr.read)
+            if not jr_u:
+                continue
+            jr_s, jr_n, _jr_r = jr_u
+            if jr_s.get("state") != "done" or jr_s.get("resource") != "per_census":
+                continue
+            st = float(jr_n.get("start_tick_ms", 0.0))
+            en = float(jr_n.get("end_tick_ms", 0.0))
+            oj = float(jr_n.get("onjobend_tick_ms", 0.0))
+            rel = float(jr_n.get("released_tick_ms", 0.0))
+            if not (st > 0.0 and en >= st and oj >= en and rel >= oj and abs(st - a_snap) <= 50.0):
+                return None
+            released_vals.add(rel)
+        if len(released_vals) != 1:
+            return None
+        return (a_snap, next(iter(released_vals)))
+
     census_busy_probes: list[dict[str, Any]] = []
     census_overlap_offenders: set[str] = set()
     any_census_contention_wrong_reason = False
+    busy_explained_ids: set[str] = set()
     for a_op in ordered_ops:
         if a_op.verb != "per_census_start" or a_op.status != "done" or a_op.peer != "server":
             continue
@@ -752,6 +800,7 @@ def _parse_bridge_timeline(
             ),
             default=10**9,
         )
+        a_window = _census_released_window(a_op, a_jid, a_free_seq)
         for r_op in ordered_ops:
             if (
                 r_op is a_op
@@ -762,18 +811,47 @@ def _parse_bridge_timeline(
             ):
                 continue
             if r_op.status == "done":
+                r_out = _unpack_any_payload(r_op.read)
+                r_snap = float(r_out[1].get("snap_tick_ms", 0.0)) if r_out else 0.0
+                if a_window is not None and r_snap > 0.0 and r_snap >= a_window[1] - 1e-6:
+                    # aceptado tras la liberacion de A (A sigue retenido hasta su job_free): valido
+                    continue
                 census_overlap_offenders.add(r_op.op_id)
                 any_census_overlap = True
             elif r_op.status == "rejected":
+                during_hold = (
+                    a_window is not None
+                    and r_op.done_ms > 0.0
+                    and a_window[0] - 1e-6 <= r_op.done_ms <= a_window[1] + 1e-6
+                    and r_op.recv_ms <= r_op.done_ms + 1e-6
+                )
+                if a_window is None:
+                    # liberacion de A sin acreditar: el rechazo no se explica ni se acredita como contencion
+                    busy_explained_ids.add(r_op.op_id)
+                    if r_op.reason != "busy":
+                        any_census_contention_wrong_reason = True
+                    continue
+                if not during_hold:
+                    continue
+                busy_explained_ids.add(r_op.op_id)
                 if r_op.reason == "busy":
                     census_busy_probes.append({
                         "first_op_id": a_op.op_id,
                         "rejected_op_id": r_op.op_id,
                         "free_seq": a_free_seq,
                         "inst": a_op.inst,
+                        "released_tick_ms": a_window[1],
                     })
                 else:
                     any_census_contention_wrong_reason = True
+    any_census_busy_without_holder = any(
+        op.verb == "per_census_start"
+        and op.peer == "server"
+        and op.status == "rejected"
+        and op.reason == "busy"
+        and op.op_id not in busy_explained_ids
+        for op in ordered_ops
+    )
 
     server_epoch_old = server_epochs[0] if server_epochs else ""
     server_epoch_new = ""
@@ -960,11 +1038,13 @@ def _parse_bridge_timeline(
                         and abs(jmeta["start_tick_ms"] - snap_tick_ms) <= 50.0
                     ):
                         released_tick_ms = jmeta["released_tick_ms"]
-                        # Check E9 resource contention: no other per_census_start in c_epoch may overlap,
-                        # ni por orden del bridge ni por ticks (sin umbral: cualquier solape cuenta).
+                        # Check E9 resource contention: no other per_census_start in c_epoch may start before
+                        # the previous census released the resource (released_tick_ms del propio peer, sin
+                        # umbral). Sol delta BLOQ 2: el orden del bridge respecto de las lecturas/job_free del
+                        # anterior no cuenta, porque el nucleo libera al terminar y retiene hasta job_free.
                         prev_windows = active_census_windows_by_inst.setdefault(c_epoch, [])
-                        for p_start_seq, p_done_seq, _p_start_t, p_rel_t in prev_windows:
-                            if bop.seq_idx < p_done_seq or snap_tick_ms < p_rel_t - 1e-6:
+                        for _p_start_seq, _p_done_seq, _p_start_t, p_rel_t in prev_windows:
+                            if snap_tick_ms < p_rel_t - 1e-6:
                                 any_census_overlap = True
                                 break
                         prev_windows.append((bop.seq_idx, first_done_jr_seq, snap_tick_ms, released_tick_ms))
@@ -1009,6 +1089,10 @@ def _parse_bridge_timeline(
             "director_inv_count_n": int(round(out_n.get("director_inv_count_n", 0.0))),
             "job_complete": job_complete,
             "rows": reconstructed_rows,
+            # N49: reloj del bridge de la orden de arranque (cotas de la instantanea: posterior al primer
+            # evento de la orden y anterior a la llegada de su resultado)
+            "start_first_t_ms": bop.first_t_ms,
+            "start_result_t_ms": bop.result_t_ms,
         }
         censuses.append(c_entry)
 
@@ -1059,6 +1143,7 @@ def _parse_bridge_timeline(
         "any_census_overlap": any_census_overlap,
         "census_busy_probes": census_busy_probes,
         "any_census_contention_wrong_reason": any_census_contention_wrong_reason,
+        "any_census_busy_without_holder": any_census_busy_without_holder,
     }
 
 
@@ -2373,17 +2458,26 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     old_epoch_ticks.append(float(c_item[tk]))
     max_old_srv_tick_ms = max(old_epoch_ticks, default=0.0)
 
-    # MEN-4 / N49: los extremos temporales se acreditan con LECTURAS DEL PROPIO PEER y con el reloj del
-    # bridge (t_ms, lo escribe el nucleo), sin etiquetas del runner:
-    #  - parada: hay un per_status del epoch viejo posterior a t3_post_reset_census (su tick_ms del peer
-    #    >= los ticks de ese censo), sin ordenes mutadoras viejas despues; el tiempo que el peer viejo siguio
-    #    vivo tras esa lectura (ultimo evento del bridge con su inst - t_ms del resultado) cuenta como
-    #    ventana sin muestrear;
-    #  - carga: la primera orden del epoch nuevo es un per_status cuyo tick_ms (del peer) es pequeno
-    #    (<= N49_MAX_FIRST_NEW_TICK_MS) y posterior al hello nuevo; el intervalo hello->lectura cuenta como
-    #    ventana sin muestrear.
-    # Si algo falta (incl. t_ms), N49 queda sin acreditar y PER-07/08 dan INCONCLUSO. Limite: la parada
-    # real del servidor y la carga real solo se acotan por esos testigos; no hay marca del peer en ellas.
+    # MEN-4 / N49 (cierre «Nuevo 2» del arbitraje r2 y Sol delta BLOQ 3): los extremos temporales se acreditan
+    # con LECTURAS DEL PROPIO PEER y con el reloj del bridge (t_ms, lo escribe el nucleo, monotono entre epochs),
+    # sin etiquetas del runner, y TODA la ventana sin observacion cuenta, con cotas conservadoras:
+    #  - parada (cota tardia): el mundo viejo pudo seguir simulando hasta que aparece el proceso nuevo, asi que
+    #    la parada se acota por el hello del epoch nuevo. Se exige:
+    #      * un per_status del epoch viejo posterior a t3_post_reset_census (tick_ms del peer >= los ticks de
+    #        ese censo), sin ordenes mutadoras viejas despues;
+    #      * keepalive: el peer viejo sigue sondeando (keepalive/poll 200 del nucleo) despues de esa lectura,
+    #        de modo que su silencio posterior es observable;
+    #      * ningun evento del peer viejo en o despues del hello nuevo (no hay dos mundos a la vez).
+    #    La ventana vieja sin muestrear = ticks del peer viejo desde la ultima observacion hasta su ultima
+    #    lectura + reloj del bridge desde el primer evento de esa lectura (antes de leer) hasta el hello nuevo;
+    #    y nunca menos que el reloj del bridge desde la orden de la ultima observacion hasta el hello nuevo.
+    #  - carga (cota temprana): el mundo nuevo pudo empezar a simular desde el arranque del proceso, que es el
+    #    origen del tick_ms del peer. Se exige que la primera orden del epoch nuevo sea un per_status con
+    #    0 < tick_ms <= N49_MAX_FIRST_NEW_TICK_MS, posterior al hello nuevo (su primer evento y su resultado),
+    #    y que no haya ningun evento del epoch nuevo anterior a su hello. La ventana nueva sin muestrear hasta
+    #    un censo t5 = su snap_tick_ms completo (desde el arranque del proceso), y nunca menos que el reloj del
+    #    bridge desde el hello nuevo hasta el resultado de ese censo.
+    # Si algo falta (incl. t_ms), N49 queda sin acreditar y PER-07/08 dan INCONCLUSO.
     def _ev_t_ms(ev: dict[str, Any]) -> float | None:
         v = ev.get("t_ms")
         return float(v) if _is_finite_num(v) else None
@@ -2407,43 +2501,81 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             and (stop_status is None or s_bop.seq_idx > stop_status[0].seq_idx)
         ):
             stop_status = (s_bop, float(s_tk))
-    stop_gap_ms: float | None = None
-    if stop_status is not None and not post_t3_mutating_old_ops and stop_status[0].result_t_ms is not None:
-        old_alive_ts = []
-        for ev in bridge_events:
-            if ev.get("peer") == "server" and str(ev.get("inst") or "") == server_epoch_old:
-                tv = _ev_t_ms(ev)
-                if tv is not None:
-                    old_alive_ts.append(tv)
-        if old_alive_ts:
-            stop_gap_ms = max(0.0, max(old_alive_ts) - float(stop_status[0].result_t_ms))
 
+    hello_new_ts: list[float] = []
+    for h in hellos:
+        if h.get("peer") == "server" and server_epoch_new and h.get("inst") == server_epoch_new and isinstance(h.get("raw"), dict):
+            tv = _ev_t_ms(h["raw"])
+            if tv is not None:
+                hello_new_ts.append(tv)
+    hello_new_t: float | None = min(hello_new_ts) if hello_new_ts else None
+
+    # parada: cota tardia = hello nuevo
+    stop_window_bridge_ms: float | None = None
+    if (
+        stop_status is not None
+        and not post_t3_mutating_old_ops
+        and stop_status[0].result_t_ms is not None
+        and hello_new_t is not None
+    ):
+        stop_res_t = float(stop_status[0].result_t_ms)
+        stop_first_t = stop_status[0].first_t_ms if stop_status[0].first_t_ms is not None else stop_res_t
+        stop_first_t = min(float(stop_first_t), stop_res_t)
+        old_srv_ts: list[float] = []
+        old_keepalive_after_stop = False
+        old_untimed = False
+        for ev in bridge_events:
+            if ev.get("peer") != "server" or str(ev.get("inst") or "") != server_epoch_old:
+                continue
+            tv = _ev_t_ms(ev)
+            if tv is None:
+                old_untimed = True
+                continue
+            old_srv_ts.append(tv)
+            if ev.get("ev") in ("keepalive", "poll") and ev.get("http", 200) == 200 and tv > stop_res_t:
+                old_keepalive_after_stop = True
+        if (
+            not old_untimed
+            and old_keepalive_after_stop
+            and all(tv < hello_new_t for tv in old_srv_ts)
+            and stop_first_t <= hello_new_t
+        ):
+            stop_window_bridge_ms = hello_new_t - stop_first_t
+
+    # carga: cota temprana = arranque del proceso nuevo (origen del tick_ms del peer)
     first_new_epoch_tick_ms = 0.0
-    start_gap_ms: float | None = None
+    load_accredited = False
     new_server_ops = [
         op for op in ordered_ops if server_epoch_new and op.inst == server_epoch_new and op.peer == "server"
     ]
     first_new_op = min(new_server_ops, key=lambda o: o.seq_idx) if new_server_ops else None
-    if first_new_op is not None and first_new_op.verb == "per_status" and first_new_op.status == "done":
+    if (
+        hello_new_t is not None
+        and first_new_op is not None
+        and first_new_op.verb == "per_status"
+        and first_new_op.status == "done"
+    ):
         fn_u = _unpack_any_payload(first_new_op.read)
         fn_tk = fn_u[1].get("tick_ms") if fn_u else None
-        hello_new_ts = []
-        for h in hellos:
-            if h.get("peer") == "server" and h.get("inst") == server_epoch_new and isinstance(h.get("raw"), dict):
-                tv = _ev_t_ms(h["raw"])
-                if tv is not None:
-                    hello_new_ts.append(tv)
+        new_before_hello = False
+        for ev in bridge_events:
+            if server_epoch_new and str(ev.get("inst") or "") == server_epoch_new:
+                tv = _ev_t_ms(ev)
+                if tv is None or tv < hello_new_t:
+                    new_before_hello = True
+                    break
         if (
-            _is_finite_num(fn_tk)
+            not new_before_hello
+            and _is_finite_num(fn_tk)
             and 0.0 < float(fn_tk) <= N49_MAX_FIRST_NEW_TICK_MS
             and first_new_op.result_t_ms is not None
-            and hello_new_ts
-            and float(first_new_op.result_t_ms) >= min(hello_new_ts)
+            and float(first_new_op.result_t_ms) >= hello_new_t
+            and (first_new_op.first_t_ms is None or float(first_new_op.first_t_ms) >= hello_new_t)
         ):
             first_new_epoch_tick_ms = float(fn_tk)
-            start_gap_ms = float(first_new_op.result_t_ms) - min(hello_new_ts)
+            load_accredited = True
 
-    n49_extremes_accredited = stop_gap_ms is not None and start_gap_ms is not None
+    n49_extremes_accredited = stop_window_bridge_ms is not None and load_accredited
 
     def _creature_covered_in_t5(
         creature_lid: str,
@@ -2459,6 +2591,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             return False
         cnid = sp_info["net_id"]
         stage_obs: list[tuple[float, float, float]] = []
+        stage_obs_first_t: list[float | None] = []
         for stg in stages_to_check:
             found_in_stage = False
             for c_item in censuses_by_stage.get(stg, []):
@@ -2472,6 +2605,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         if snap_t <= 0.0:
                             return False
                         stage_obs.append((snap_t, float(r.get("pos_x_m", 0.0)), float(r.get("pos_z_m", 0.0))))
+                        stage_obs_first_t.append(c_item.get("start_first_t_ms"))
                         found_in_stage = True
             if not found_in_stage:
                 return False
@@ -2492,11 +2626,20 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 for r in c_t3_post_ret["rows"]
             ):
                 return False
-            dt_pre_ms = max(0.0, reset_tick_ms - last_obs_tick_ms) + max(0.0, max_old_srv_tick_ms - post_ret_snap_ms) + float(stop_gap_ms or 0.0)
+            dt_pre_ms = (
+                max(0.0, reset_tick_ms - last_obs_tick_ms)
+                + max(0.0, max_old_srv_tick_ms - post_ret_snap_ms)
+                + float(stop_window_bridge_ms or 0.0)
+            )
         else:
             if max_old_srv_tick_ms < last_obs_tick_ms:
                 return False
-            dt_pre_ms = max(0.0, max_old_srv_tick_ms - last_obs_tick_ms) + float(stop_gap_ms or 0.0)
+            dt_pre_ms = max(0.0, max_old_srv_tick_ms - last_obs_tick_ms) + float(stop_window_bridge_ms or 0.0)
+            # nunca menos que el reloj del bridge desde la orden de la ultima observacion hasta el hello nuevo
+            last_obs_first_t = stage_obs_first_t[-1]
+            if last_obs_first_t is None or hello_new_t is None:
+                return False
+            dt_pre_ms = max(dt_pre_ms, float(hello_new_t) - float(last_obs_first_t))
 
         v_bound_m_s = 6.0
         for i in range(1, len(stage_obs)):
@@ -2511,7 +2654,12 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 tc_snap_ms = float(tc.get("snap_tick_ms", 0.0))
                 if tc_snap_ms < first_new_epoch_tick_ms:
                     continue
-                dt_post_ms = max(0.0, tc_snap_ms - first_new_epoch_tick_ms) + float(start_gap_ms or 0.0)
+                tc_res_t = tc.get("start_result_t_ms")
+                if tc_res_t is None or hello_new_t is None:
+                    continue
+                # desde el arranque del proceso nuevo (origen de su tick_ms), no desde su primera lectura;
+                # y nunca menos que el reloj del bridge desde el hello nuevo hasta el resultado del censo
+                dt_post_ms = max(tc_snap_ms, float(tc_res_t) - float(hello_new_t), 0.0)
                 dt_unsampled_s = (dt_pre_ms + dt_post_ms) / 1000.0
                 reach_r_m = max(15.0, v_bound_m_s * dt_unsampled_s)
                 if math.hypot(lx - float(tc["center_x_m"]), lz - float(tc["center_z_m"])) + reach_r_m <= float(tc["radius_m"]) + 1e-6:
@@ -2805,7 +2953,12 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     # MEN-6: prueba de contencion del recurso `per_census` (rechazo busy, primer censo integro,
     # tercer censo aceptado tras liberar). Sin ella PER-09 no puede pasar.
     busy_probe_ok = False
-    busy_probe_detail = "census_busy_contention_unobserved"
+    # Sol delta BLOQ 2: un busy que ningun censo activo explica no acredita la contencion
+    busy_probe_detail = (
+        "census_busy_without_active_holder"
+        if timeline["any_census_busy_without_holder"]
+        else "census_busy_contention_unobserved"
+    )
     for _pr in timeline["census_busy_probes"]:
         _first = next((c for c in censuses if c["op_id"] == _pr["first_op_id"]), None)
         if _first is None or not _first["job_complete"]:
