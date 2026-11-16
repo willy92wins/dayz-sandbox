@@ -147,15 +147,14 @@ def _snapshot_dir(root):
 
 
 def _storage_env():
-    """Configuracion de storage del brief §2.3, sobreescribible por DSBX_S_PERSIST_STORAGE_CONFIG."""
+    """Configuracion de storage del brief §2.3: solo de DSBX_S_PERSIST_STORAGE_CONFIG."""
     override = os.environ.get("DSBX_S_PERSIST_STORAGE_CONFIG")
+    if not override:
+        return None
     try:
-        if override:
-            data = json.loads(Path(override).read_text(encoding="utf-8"))
-            if isinstance(data.get("storage_env"), dict):
-                data = data["storage_env"]
-        else:
-            data = _fixture().get("storage_env")
+        data = json.loads(Path(override).read_text(encoding="utf-8"))
+        if isinstance(data.get("storage_env"), dict):
+            data = data["storage_env"]
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict):
@@ -266,14 +265,11 @@ def _server_query_error():
 def _classify_server_processes(rows, storage_env, *, own_pid=None):
     """Clasifica filas (name,pid,cmdline): 'running'|'stopped'|'unknown'.
 
-    Solo cuenta el servidor de la corrida: ejecutable de servidor (nunca un
-    cliente DayZDiag_x64.exe) y, si hay linea de comandos, -mission/-profiles
-    de esta mision; o el PID propio registrado al lanzarlo.
+    Un servidor ajeno en marcha tambien bloquea, y eso cuadra con la precondicion de nuestras partidas (ningun otro DayZ abierto).
     """
     if rows is None:
         return _server_query_error()
-    mission = str(storage_env.get("mission_dir") or "") if storage_env else ""
-    found = False
+    saw_unknown = False
     for row in rows or []:
         try:
             name = str(row.get("name") or "")
@@ -281,24 +277,21 @@ def _classify_server_processes(rows, storage_env, *, own_pid=None):
             cmd = str(row.get("command_line") or "")
         except AttributeError:
             continue
-        if own_pid is not None and pid is not None and int(pid) == int(own_pid):
-            found = True
-            continue
-        if name.lower() not in _SERVER_EXE_NAMES:
-            continue
-        if not cmd:
-            continue
-        low = cmd.lower()
-        # Un cliente DayZDiag_x64.exe no es el servidor: el servidor Diag
-        # acredita con -server en su linea de comandos.
-        if name.lower() == "dayzdiag_x64.exe" and "-server" not in low:
-            continue
-        if mission and mission.lower() not in low:
-            continue
-        if "-mission" not in low and "-profiles" not in low and not mission:
-            continue
-        found = True
-    return "running" if found else "stopped"
+        if own_pid is not None and pid is not None:
+            try:
+                if int(pid) == int(own_pid):
+                    return "running"
+            except (TypeError, ValueError):
+                pass
+        name_low = name.lower()
+        if name_low in ("dayzserver_x64.exe", "dayzserver.exe"):
+            return "running"
+        if name_low == "dayzdiag_x64.exe":
+            if not cmd.strip():
+                saw_unknown = True
+            elif "-server" in cmd.lower():
+                return "running"
+    return "unknown" if saw_unknown else "stopped"
 
 
 def _list_server_processes(storage_env):
@@ -436,23 +429,7 @@ def _backup_storage(storage_env, backup_dir, label):
     # BLOQ 4: un backup previo es evidencia de recuperacion; no se borra.
     target = _unique_backup_path(backup_dir)
     _copy_tree_verified(src, target, snapshot)
-    return snapshot
-
-
-def _resolve_backup_dir(backup_dir):
-    """El slot de backup vigente: el de mayor numero, sin borrar ninguno."""
-    backup_dir = Path(backup_dir)
-    best = None
-    best_n = 0
-    if backup_dir.is_dir():
-        best, best_n = backup_dir, 1
-    parent = backup_dir.parent
-    if parent.is_dir():
-        for cand in parent.glob(backup_dir.name + ".bak*"):
-            suffix = cand.name[len(backup_dir.name) + 4:]
-            if cand.is_dir() and suffix.isdigit() and int(suffix) > best_n:
-                best, best_n = cand, int(suffix)
-    return best
+    return snapshot, target
 
 
 def _sha_map(snapshot):
@@ -479,8 +456,8 @@ def _restore_storage(storage_env, backup_dir, storage_t0):
     if not ok:
         return 0, _snapshot_dir(Path(checked["storage_dir"])) or {}, err
     dest = Path(checked["storage_dir"])
-    actual_backup = _resolve_backup_dir(backup_dir)
-    if actual_backup is None:
+    actual_backup = Path(backup_dir) if backup_dir is not None else None
+    if actual_backup is None or not actual_backup.is_dir():
         return 0, _snapshot_dir(dest) or {}, "storage_backup_missing"
     expected = _snapshot_dir(actual_backup) or {}
     if storage_t0 is not None and _sha_map(expected) != _sha_map(storage_t0):
@@ -512,8 +489,7 @@ def _restore_storage(storage_env, backup_dir, storage_t0):
                 os.rename(rollback, dest)
             restored = _snapshot_dir(dest) or {}
             return 0, restored, "storage_restore_verify_failed"
-        if rollback.exists():
-            shutil.rmtree(rollback, ignore_errors=True)
+        # Es el storage de despues de la prueba y se guarda como evidencia.
         # Brief §10.2/N33: la restauracion en frio se acredita por sha256 (+size).
         return (1 if _sha_map(restored) == _sha_map(storage_t0) else 0), restored, ""
     except Exception as exc:  # fallo de copia/sustitucion: destino intacto o restaurado
@@ -1124,13 +1100,18 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
         if is_live and storage_env is not None:
             # BLOQ 3: rutas delimitadas antes de cualquier operacion.
             storage_env = _validate_storage_env(storage_env, backup_dir=None)
+            if storage_env is not None and not Path(storage_env["mission_dir"]).is_dir():
+                storage_env = None
         if is_live and storage_env is None:
             ctx.record_scenario({"ev": "storage_config_invalid"})
         sim_storage = ctx.part_dir / "_sim_storage"
         backup_dir = ctx.part_dir / "_storage_backup"
         storage_t0 = None
+        backup_slot = None
 
         try:
+            if is_live and storage_env is None:
+                raise RuntimeError("storage_config_invalid")
             if is_live and storage_env is not None:
                 if _server_state(storage_env) != "stopped":
                     f03_common.await_operator(
@@ -1144,7 +1125,7 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 # BLOQ 2: parada comprobada inmediatamente antes de copiar;
                 # si no se acredita, _backup_storage falla sin copiar.
                 try:
-                    storage_t0 = _backup_storage(storage_env, backup_dir, "t0")
+                    storage_t0, backup_slot = _backup_storage(storage_env, backup_dir, "t0")
                 except Exception as exc:
                     ctx.record_scenario({
                         "ev": "storage_restore_result",
@@ -1180,7 +1161,8 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 (sim_storage / "objects.bin").write_bytes(b"DSBX_STORAGE_T0_CLEAN\n")
                 storage_t0 = _snapshot_dir(sim_storage)
                 # BLOQ 4: slot nuevo; un backup previo nunca se borra.
-                shutil.copytree(sim_storage, _unique_backup_path(backup_dir))
+                backup_slot = _unique_backup_path(backup_dir)
+                shutil.copytree(sim_storage, backup_slot)
                 ctx.record_scenario({"ev": "storage_snapshot_t0", "files": storage_t0})
 
             st_t0 = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
@@ -1647,7 +1629,7 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 # fallo queda como restauracion incompleta en el recibo.
                 try:
                     restore_ok, restored_snapshot, restore_err = _restore_storage(
-                        storage_env, backup_dir, storage_t0
+                        storage_env, backup_slot, storage_t0
                     )
                 except Exception as exc:
                     restore_ok, restored_snapshot = 0, _snapshot_stage(True, storage_env, sim_storage)
@@ -1659,10 +1641,10 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                     "error": restore_err,
                     "files": restored_snapshot,
                 })
-            elif not is_live and storage_t0 is not None and _resolve_backup_dir(backup_dir) is not None:
+            elif not is_live and storage_t0 is not None and backup_slot is not None:
                 if sim_storage.exists():
                     shutil.rmtree(sim_storage, ignore_errors=True)
-                shutil.copytree(_resolve_backup_dir(backup_dir), sim_storage)
+                shutil.copytree(backup_slot, sim_storage)
                 restored_snapshot = _snapshot_dir(sim_storage)
                 restore_ok = 1 if restored_snapshot == storage_t0 else 0
                 ctx.record_scenario({

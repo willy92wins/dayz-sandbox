@@ -2242,8 +2242,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 	override void OnShutdown()
 	{
-		int cleanedOwnN = 0;
-		int cleanedRawN = 0;
-		CleanupAllEntities(null, cleanedOwnN, cleanedRawN);
+		// La base tiene que sobrevivir al reinicio de t4, y la limpieza la hacen t6 y la restauracion en frio.
 	}
 }

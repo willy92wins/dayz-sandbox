@@ -260,7 +260,7 @@ class TestServerStoppedGate(_GuardedTestCase):
                 "name": "DayZServer_x64.exe", "pid": 12,
                 "command_line": "DayZServer_x64.exe -mission=C:/otra/mision -profiles=C:/otra",
             }]
-            self.assertEqual(s_persist_run._classify_server_processes(other_server, env), "stopped")
+            self.assertEqual(s_persist_run._classify_server_processes(other_server, env), "running")
             this_server = [{
                 "name": "DayZServer_x64.exe", "pid": 13,
                 "command_line": f"DayZServer_x64.exe -mission={mission_s} -profiles={mission_s}",
@@ -275,6 +275,36 @@ class TestServerStoppedGate(_GuardedTestCase):
             }]
             self.assertEqual(s_persist_run._classify_server_processes(diag_server, env), "running")
 
+    def test_server_empty_or_relative_mission_is_running(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, backup = _make_env(tmp)
+            empty_cmd = [{"name": "DayZServer_x64.exe", "pid": 21, "command_line": ""}]
+            self.assertEqual(s_persist_run._classify_server_processes(empty_cmd, env), "running")
+            relative = [{
+                "name": "DayZServer_x64.exe", "pid": 22,
+                "command_line": "DayZServer_x64.exe -mission=./mpmissions/dayzOffline.chernarusplus",
+            }]
+            self.assertEqual(s_persist_run._classify_server_processes(relative, env), "running")
+
+    def test_diag_empty_cmdline_is_unknown(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, backup = _make_env(tmp)
+            rows = [{"name": "DayZDiag_x64.exe", "pid": 31, "command_line": ""}]
+            self.assertEqual(s_persist_run._classify_server_processes(rows, env), "unknown")
+
+    def test_tasklist_rows_without_cmdline_with_diag_is_unknown(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, backup = _make_env(tmp)
+            rows = [
+                {"name": "explorer.exe", "pid": 40, "command_line": ""},
+                {"name": "DayZDiag_x64.exe", "pid": 41, "command_line": ""},
+                {"name": "notepad.exe", "pid": 42, "command_line": ""},
+            ]
+            self.assertEqual(s_persist_run._classify_server_processes(rows, env), "unknown")
+
 
 class TestRestoreRecoverable(_GuardedTestCase):
     def test_mid_copy_failure_keeps_destination_and_backup(self):
@@ -282,8 +312,8 @@ class TestRestoreRecoverable(_GuardedTestCase):
             tmp = Path(td)
             env, mission, storage, backup = _make_env(tmp)
             with mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]):
-                t0 = s_persist_run._backup_storage(env, backup, "t0")
-                self.assertTrue(backup.is_dir())
+                t0, slot = s_persist_run._backup_storage(env, backup, "t0")
+                self.assertTrue(slot.is_dir())
                 # La corrida muta el storage.
                 (storage / "players.db").write_bytes(b"players-mutados")
                 (storage / "nuevo.bin").write_bytes(b"de-la-corrida")
@@ -292,33 +322,84 @@ class TestRestoreRecoverable(_GuardedTestCase):
                 with mock.patch.object(
                     s_persist_run.shutil, "copytree", side_effect=OSError("copia rota")
                 ):
-                    ok, snap, err = s_persist_run._restore_storage(env, backup, t0)
+                    ok, snap, err = s_persist_run._restore_storage(env, slot, t0)
                 self.assertEqual(ok, 0)
                 self.assertIn("storage_restore_incomplete", err)
                 self.assertEqual(_tree_bytes(storage), mutated)
-                self.assertTrue(backup.is_dir())
+                self.assertTrue(slot.is_dir())
                 # Sin el fallo, la restauracion verifica por sha256.
-                ok, snap, err = s_persist_run._restore_storage(env, backup, t0)
+                ok, snap, err = s_persist_run._restore_storage(env, slot, t0)
                 self.assertEqual((ok, err), (1, ""))
                 self.assertEqual(
                     s_persist_run._sha_map(snap), s_persist_run._sha_map(t0)
                 )
                 self.assertFalse((storage / "nuevo.bin").exists())
-                self.assertTrue(backup.is_dir())
+                self.assertTrue(slot.is_dir())
 
     def test_previous_backup_is_never_deleted_on_reuse(self):
         with self._inside_tmp() as td:
             tmp = Path(td)
             env, mission, storage, backup = _make_env(tmp)
             with mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]):
-                s_persist_run._backup_storage(env, backup, "t0")
-                first_bytes = _tree_bytes(backup)
+                _t0a, slot_a = s_persist_run._backup_storage(env, backup, "t0")
+                first_bytes = _tree_bytes(slot_a)
                 (storage / "players.db").write_bytes(b"otra-generacion")
-                s_persist_run._backup_storage(env, backup, "t0")
+                _t0b, slot_b = s_persist_run._backup_storage(env, backup, "t0")
                 # El backup previo se conserva byte a byte en su slot.
-                self.assertEqual(_tree_bytes(backup), first_bytes)
-                self.assertIsNotNone(s_persist_run._resolve_backup_dir(backup))
-                self.assertNotEqual(s_persist_run._resolve_backup_dir(backup), backup)
+                self.assertEqual(_tree_bytes(slot_a), first_bytes)
+                self.assertTrue(slot_a.is_dir())
+                self.assertNotEqual(slot_b, slot_a)
+
+    def test_restore_blocked_when_running_or_unknown_keeps_destination(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, backup = _make_env(tmp)
+            with mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]):
+                t0, slot = s_persist_run._backup_storage(env, backup, "t0")
+                (storage / "players.db").write_bytes(b"players-mutados")
+                (storage / "nuevo.bin").write_bytes(b"de-la-corrida")
+                before = _tree_bytes(storage)
+                cases = [
+                    ([{"name": "DayZServer_x64.exe", "pid": 51, "command_line": ""}], "server_still_running"),
+                    ([{"name": "DayZDiag_x64.exe", "pid": 52, "command_line": ""}], "server_state_unknown"),
+                ]
+                for rows, expected_err in cases:
+                    with self.subTest(error=expected_err):
+                        with mock.patch.object(s_persist_run, "_list_server_processes", return_value=rows):
+                            ok, _snap, err = s_persist_run._restore_storage(env, slot, t0)
+                        self.assertEqual(ok, 0)
+                        self.assertEqual(err, expected_err)
+                        self.assertEqual(_tree_bytes(storage), before)
+
+    def test_restore_uses_exact_slot_returned_by_backup(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, backup = _make_env(tmp)
+            with mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]):
+                t0, slot = s_persist_run._backup_storage(env, backup, "t0")
+                higher = backup.with_name(backup.name + ".bak99")
+                shutil.copytree(storage, higher)
+                (higher / "players.db").write_bytes(b"slot-viejo-distinto")
+                (storage / "players.db").write_bytes(b"players-mutados")
+                ok, snap, err = s_persist_run._restore_storage(env, slot, t0)
+                self.assertEqual((ok, err), (1, ""))
+                self.assertEqual(s_persist_run._sha_map(snap), s_persist_run._sha_map(t0))
+                self.assertEqual((storage / "players.db").read_bytes(), b"players-baseline")
+
+    def test_verified_restore_keeps_rollback_copy(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, backup = _make_env(tmp)
+            with mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]):
+                t0, slot = s_persist_run._backup_storage(env, backup, "t0")
+                (storage / "players.db").write_bytes(b"players-mutados")
+                (storage / "nuevo.bin").write_bytes(b"de-la-corrida")
+                mutated = _tree_bytes(storage)
+                ok, _snap, err = s_persist_run._restore_storage(env, slot, t0)
+                self.assertEqual((ok, err), (1, ""))
+                rollbacks = sorted(mission.glob(".storage_1.r7rollback-*"))
+                self.assertTrue(rollbacks)
+                self.assertEqual(_tree_bytes(rollbacks[0]), mutated)
 
 
 class _StubPeer:
