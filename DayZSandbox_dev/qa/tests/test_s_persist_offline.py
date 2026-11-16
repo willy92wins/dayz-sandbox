@@ -226,6 +226,8 @@ class _SyntheticPartBuilder:
         self.old_keepalive_after_stop = old_keepalive_after_stop
         # radio de los discos del censo t5 (Sol delta r2 MEN: el alcance de la cobertura N49 depende de el)
         self.t5_radius_m = t5_radius_m
+        # discos de seguimiento t5 emitidos (etiqueta, x, z): cada uno lleva su censo de limpieza en t6, como el runner
+        self.t5_track_discs: list[tuple[str, float, float]] = []
         self.part_name = part_name
         self.nonce = nonce
         self.fault_code = fault_code
@@ -403,7 +405,7 @@ class _SyntheticPartBuilder:
         area_tag = area_id if stage == "t5_post_restart_census" and area_id.startswith("t5_track_") else f"{stage}:{area_id}"
         if stage == "contention_probe":
             area_tag = f"contention_probe:{area_id}"
-        radius_m = self.t5_radius_m if stage == "t5_post_restart_census" else 60.0
+        radius_m = self.t5_radius_m if stage == "t5_post_restart_census" or area_id.startswith("t5_track_") else 60.0
         in_args = self._pack_ext_args(
             strings={"area_tag": area_tag},
             numbers={
@@ -1543,6 +1545,7 @@ class _SyntheticPartBuilder:
         if self.creature_far_move_m != 0.0 and self.include_t5_track_disks:
             b_inf_x = 4688.0 + self.creature_far_move_m
             b_inf_z = 10202.0
+            self.t5_track_discs.append(("t5_track_b_inf_1_t2", b_inf_x, b_inf_z))
             self._emit_census(
                 self.server_epoch_new,
                 "t5_post_restart_census",
@@ -1785,6 +1788,10 @@ class _SyntheticPartBuilder:
                 float(ainfo["center_z_m"]),
                 copy.deepcopy(baseline_dir_rows) if inc_d else [],
                 include_director_b=inc_d,
+            )
+        for disc, disc_x, disc_z in self.t5_track_discs:
+            self._emit_census(
+                self.server_epoch_new, "t6_post_cleanup_census", disc, disc_x, disc_z, [], include_director_b=0
             )
 
         self.scenario_events.append({
@@ -2542,11 +2549,12 @@ class TestSPersistOracleOffline(unittest.TestCase):
     def _add_t6_rows(
         self, part_dir: Path, builder: "_SyntheticPartBuilder", area_id: str, extra: list[dict[str, Any]]
     ) -> None:
-        """Anade ``extra`` al censo t6 (vacio en la sintetica) de ``area_id`` con sus contadores coherentes."""
+        """Anade ``extra`` al censo t6 de ``area_id`` (area base, con el director si lo lleva, o disco ``t5_track_*``)
+        en su ultima pagina, con sus contadores coherentes."""
         events = _read_events(part_dir)
         tag = f"t6_post_cleanup_census:{area_id}"
         jobs: set[str] = set()
-        pages = 0
+        appended = 0
         for ev in events:
             if ev.get("ev") != "result":
                 continue
@@ -2554,21 +2562,22 @@ class TestSPersistOracleOffline(unittest.TestCase):
                 if res.get("verb") == "per_census_start":
                     u_s, u_n, u_r = _unpack(res["read"])
                     if u_s.get("area_tag") == tag:
-                        self.assertEqual(int(u_n["rows_captured_n"]), 0, msg=tag)
                         jobs.add(u_s["job"])
-                        u_n["rows_captured_n"] = float(len(extra))
+                        u_n["rows_captured_n"] = float(u_n["rows_captured_n"]) + len(extra)
                         res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
                 elif res.get("verb") == "job_read":
                     u_s, u_n, u_r = _unpack(res["read"])
                     if u_s.get("job") in jobs:
-                        u_n["pages_n"] = 1.0
-                        u_n["rows_total_n"] = float(len(extra))
-                        u_r.extend(copy.deepcopy(extra))
-                        pages += 1
+                        pages_n = max(1, int(round(u_n["pages_n"])))
+                        u_n["pages_n"] = float(pages_n)
+                        u_n["rows_total_n"] = float(u_n["rows_total_n"]) + len(extra)
+                        if int(round(u_n["page_n"])) == pages_n - 1:
+                            u_r.extend(copy.deepcopy(extra))
+                            appended += 1
                         res["read"] = builder._pack_ext_read(
                             strings=u_s, numbers=u_n, ncol=res["read"]["ncol"], scol=res["read"]["scol"], rows=u_r
                         )
-        self.assertEqual(pages, 1, msg=tag)
+        self.assertEqual(appended, 1, msg=tag)
         _write_events(part_dir, events)
 
     def _census_row(self, part_dir: Path, area_tag: str, lid: str) -> dict[str, Any]:
@@ -2652,6 +2661,95 @@ class TestSPersistOracleOffline(unittest.TestCase):
                     self.assertIn("PilotkaCap:1:8002", detail, msg=name)
                 if name == "qa_raw_child_in_foreign_crate":
                     self.assertNotIn("WoodenCrate", detail, msg=name)
+
+    def _t6_census_op_ids(self, events: list[dict[str, Any]], area_tag: str) -> set[str]:
+        """``op_id`` del censo ``area_tag`` (``per_census_start``) y de sus ``job_read`` / ``job_free``."""
+        starts: set[str] = set()
+        for ev in events:
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                if res.get("verb") == "per_census_start" and _unpack(res["read"])[0].get("area_tag") == area_tag:
+                    starts.add(res["op_id"])
+        ids = set(starts)
+        for ev in events:
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                if res.get("verb") in ("job_read", "job_free") and _unpack(res["read"])[0].get("job") in starts:
+                    ids.add(res["op_id"])
+        return ids
+
+    def _shift_census_center(
+        self, part_dir: Path, builder: "_SyntheticPartBuilder", area_tag: str, dx_m: float
+    ) -> None:
+        """Desplaza ``dx_m`` en x el centro que publica el censo ``area_tag``."""
+        events = _read_events(part_dir)
+        moved = 0
+        for ev in events:
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                if res.get("verb") == "per_census_start":
+                    u_s, u_n, u_r = _unpack(res["read"])
+                    if u_s.get("area_tag") == area_tag:
+                        u_n["center_x_m"] = float(u_n["center_x_m"]) + dx_m
+                        res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
+                        moved += 1
+        self.assertEqual(moved, 1, msg=area_tag)
+        _write_events(part_dir, events)
+
+    def test_v2_1_t6_director_and_track_discs(self) -> None:
+        """Oraculo v2.1 (Sol, confirmacion de t6): la limpieza se verifica tambien en el director y en los discos
+        ``t5_track_*``.
+
+        a) Una prenda QA (``own_b=1``) dentro del director tras la limpieza -> FALLA/PER-09; una prenda de inicio del
+        director sin identidad QA (``BandageDressing`` centinela, vida completa) -> PASA. b) Con el disco t5
+        ``t5_track_b_inf_1_t2``: el ``Fireplace`` del control superviviente en su censo t6 -> FALLA/PER-09; un
+        ``Barrel_Yellow`` del mundo ahi -> PASA; sin su censo t6, o con el censo t6 en otro centro -> INCONCLUSO/PER-09.
+        """
+        disc = "t5_track_b_inf_1_t2"
+        for name in ("qa_garment_in_director", "director_start_item", "qa_survivor_in_track_disc",
+                     "ce_barrel_in_track_disc", "track_disc_without_t6", "track_disc_t6_elsewhere"):
+            with tempfile.TemporaryDirectory() as tmp:
+                builder = _SyntheticPartBuilder("run", creature_far_move_m=75.0, include_t5_track_disks=True)
+                part_dir = builder.build_into(Path(tmp) / name)
+                needle = ""
+                if name == "qa_garment_in_director":
+                    gloves = dict(builder.entities_by_lid["b_act_1_gloves_dir"], alive_b=1.0)
+                    self.assertEqual(gloves["owner_uid"], builder.director_uid)
+                    self._add_t6_rows(part_dir, builder, "area_a", [gloves])
+                    expected = {"PER-09": "fail"}
+                    needle = f"t6_cleanup_survivors:WorkingGloves_Yellow:{gloves['net_id']}"
+                elif name == "director_start_item":
+                    self._add_t6_rows(part_dir, builder, "area_a", [self._t6_row(
+                        class_name="BandageDressing", loc_kind="cargo", parent_class="Jeans_Blue", parent_net_id="1:10",
+                        slot_name="Cargo:0:2:0", owner_uid=builder.director_uid, net_id="1:8020", ai_agent_b=0.0,
+                        pers_id="1357924680:-1357924680:24681357:-97531", max_hp=50.0, health_hp=50.0,
+                    )])
+                    expected = {}
+                elif name == "qa_survivor_in_track_disc":
+                    fp = dict(builder.entities_by_lid["c_persistent_control_child"], alive_b=1.0, loc_kind="ground",
+                              parent_class="", parent_net_id="", slot_name="")
+                    self._add_t6_rows(part_dir, builder, disc, [fp])
+                    expected = {"PER-09": "fail"}
+                    needle = f"t6_cleanup_survivors:Fireplace:{fp['net_id']}"
+                elif name == "ce_barrel_in_track_disc":
+                    self._add_t6_rows(part_dir, builder, disc, [self._t6_row(
+                        class_name="Barrel_Yellow", net_id="1:8030", ai_agent_b=0.0, max_hp=1300.0, health_hp=384.9,
+                        pers_id="1780910942:-1857628348:2126480516:1419094472",
+                    )])
+                    expected = {}
+                elif name == "track_disc_without_t6":
+                    events = _read_events(part_dir)
+                    ops = self._t6_census_op_ids(events, f"t6_post_cleanup_census:{disc}")
+                    self.assertEqual(len(ops), 3, msg=name)
+                    _write_events(part_dir, _drop_ops(events, ops))
+                    expected = {"PER-09": "missing"}
+                    needle = f"t6_cleanup_census_absent:{disc}"
+                else:
+                    self._shift_census_center(part_dir, builder, f"t6_post_cleanup_census:{disc}", 5.0)
+                    expected = {"PER-09": "missing"}
+                    needle = f"t6_cleanup_census_absent:{disc}"
+                verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                self.assertEqual(_only_non_pass(verdict), expected, msg=name)
+                self.assertEqual(verdict["exit_code"], {"fail": 1, "missing": 2}.get(expected.get("PER-09", ""), 0), msg=name)
+                if needle:
+                    self.assertIn(needle, _checks_by_id(verdict)["PER-09"]["detail"], msg=name)
 
     def test_neg_foreign_pose_without_before_and_after_or_altered_pose(self) -> None:
         # Case A: missing t3_pre_reset_census

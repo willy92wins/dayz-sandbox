@@ -92,7 +92,9 @@ Evidence contract consumed by ``evaluate(part_dir)``
        - In ``t6_post_cleanup_census`` only entities of the test count as survivors (oracle v2.1, brief :284,
          :189): own rows, ``net_id`` (same epoch) or ``pers_id`` of a ``per_apply_scene`` / ``per_spawn_raw``
          entity or of anything seen hanging from one in a complete t1..t5 census (kept even if it changes
-         parent), sentinel classes with a QA health mark, and their descendants; CE entities do not.
+         parent), sentinel classes with a QA health mark, and their descendants; CE entities do not. It covers
+         the base areas, the director's inventory and every ``t5_track_*`` disc: each t5 disc needs its complete
+         ``t6_post_cleanup_census:<disc>`` (same center, radius not smaller) or PER-09 is missing.
 3. ``part_dir / "samples" / "scenario.jsonl"`` — structured runner observations:
    - ``probe_sources_at_commit``: ``git_head``, ``probe_stamp``, ``persist_files``
      (map ``rel_path -> content_str`` from ``git show <git_head>:<rel_path>``).
@@ -656,6 +658,13 @@ def _infer_area_id(area_tag: str, cx: float | None, cz: float | None, fixture: d
             if math.hypot(cx - float(ainfo["center_x_m"]), cz - float(ainfo["center_z_m"])) <= 1.0:
                 return aid
     return area_tag
+
+
+def _track_disc_key(area_tag: Any) -> str:
+    """Disco de seguimiento de una etiqueta de censo (``t5_track_x`` o ``<etapa>:t5_track_x``); ``""`` si no lo es."""
+    tag = str(area_tag or "")
+    i = tag.lower().find("t5_track_")
+    return tag[i:] if i >= 0 else ""
 
 
 def _extract_stage_from_tag(area_tag: str, strings: dict[str, str]) -> str | None:
@@ -3442,16 +3451,40 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     } | {float(rs.get("health_mark_ratio", 0.0)) for rs in fixture.get("raw_spawns", {}).values()}
                     qa_mark_ratios = {ratio for ratio in qa_mark_ratios if ratio > 0.0}
                     t6_rows_by_nid = {str(r.get("net_id") or ""): r for c in t6_censuses for r in c["rows"]}
+                    t6_checked: list[dict[str, Any]] = []
                     for aid in required_t6_areas:
                         c_t6 = census_by_stage_area.get(("t6_post_cleanup_census", aid))
                         if c_t6 is None or not c_t6["job_complete"]:
                             t6_missing_areas.append(aid)
                             continue
-                        # Check for non-director survivors of the test
+                        t6_checked.append(c_t6)
+                    # Oraculo v2.1 (Sol, confirmacion de t6, BLOQ b): tambien los discos de seguimiento t5_track_*. Cada
+                    # disco t5 necesita su censo t6 completo del mismo disco (mismo centro, radio no menor), como lo
+                    # registra el runner con center_override; si falta, INCONCLUSO. Todo disco t6 completo se revisa.
+                    t6_disc_censuses = [c for c in t6_censuses if _track_disc_key(c.get("raw_area_tag"))]
+                    for c5 in censuses_by_stage.get("t5_post_restart_census", []):
+                        disc = _track_disc_key(c5.get("raw_area_tag"))
+                        if not disc or c5.get("inst") != server_epoch_new:
+                            continue
+                        if not any(
+                            _track_disc_key(c6.get("raw_area_tag")) == disc
+                            and c6["job_complete"]
+                            and math.hypot(
+                                float(c6["center_x_m"]) - float(c5["center_x_m"]),
+                                float(c6["center_z_m"]) - float(c5["center_z_m"]),
+                            )
+                            <= 1e-3
+                            and float(c6["radius_m"]) >= float(c5["radius_m"]) - 1e-6
+                            for c6 in t6_disc_censuses
+                        ):
+                            t6_missing_areas.append(disc)
+                    t6_checked.extend(c for c in t6_disc_censuses if c["job_complete"])
+                    for c_t6 in t6_checked:
+                        # Oraculo v2.1 (BLOQ a): tambien dentro del director (brief :189, «en mundo y director»); sus
+                        # prendas de inicio no tienen identidad QA y no cuentan.
                         for r in c_t6["rows"]:
                             if (
-                                r.get("owner_uid") != director_uid_t0
-                                and int(round(float(r.get("alive_b", 0.0)))) == 1
+                                int(round(float(r.get("alive_b", 0.0)))) == 1
                                 and _is_qa_row(
                                     r,
                                     qa_net_by_inst.get(str(c_t6.get("inst") or ""), set()),
