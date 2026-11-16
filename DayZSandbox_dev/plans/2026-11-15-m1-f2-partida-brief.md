@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3.4, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
+- **Versión:** v1.3.5, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -270,6 +270,7 @@ Todas van por el bridge de la sonda (`qa0`), así que quedan en la evidencia.
     - son filas con `sample_idx`: el 0 es `EEInit` y del 1 a `K` son los `K` ticks siguientes;
     - `witness_follow_ticks` = `K`, en [1, 5] y 3 por defecto;
     - `ncol` añade `sample_idx` y `alive_b`, y las filas cuentan para el tope de 4096;
+    - **`surface_y_m`, la última columna del `ncol`** (F0.3 en el #22, confirmado el 16-nov): `g_Game.SurfaceY` en la x y la z de cada muestra. En la muestra 0 son las de `EEInit`; se calcula al emitir la fila, y como el terreno no cambia, el valor es el mismo;
     - un salto de más de `JUMP_MAX_M` = 0,3 m entre `EEInit` y el tick 1 delata un desplazamiento del mod antes del checkpoint. La IA no recorre eso en un tick de unos 33 ms.
   - **La muestra 0, tras la diag de F0.3** (PR #22, `DSBX_QA_X_Persist.c:1987-2036`):
     - lleva la posición, la orientación, `tick_ms`, `frame` y `ai_agent_b` de `EEInit`;
@@ -431,7 +432,7 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
 - **F2P-01:** el testigo de P2 ve nacer las 33 raíces que casan con el documento, con su multiconjunto de clases, y las 33 están en el censo posterior por el `net_id` del primer tick. La diferencia con P1 no tiene que ser exactamente 33 (punto 9).
 - **F2P-02 (O-04):**
   - Cada nacimiento está a menos de 0,5 m, en 3D, de `(x_doc, suelo, z_doc)`.
-    - `suelo` es una altura del terreno **independiente** en `(x_doc, z_doc)`. Sale de la `surface_y_m` de la muestra 0 del testigo: `g_Game.SurfaceY` en la x y la z de `EEInit`, como la del censo (`DSBX_QA_X_Persist.c:1704-1705`). Se la pedí a F0.3 para el #22 el 16-nov. Si la fila no la trae, la parte vertical da INCONCLUSO `surface_unbacked`.
+    - `suelo` es una altura del terreno **independiente** en `(x_doc, z_doc)`. Sale de la `surface_y_m` de la muestra 0 del testigo: `g_Game.SurfaceY` en la x y la z de `EEInit`, como la del censo (`DSBX_QA_X_Persist.c:1704-1705`). F0.3 la añade en el #22 como última columna del `ncol` del testigo (confirmado el 16-nov, §5.3). Si la fila no la trae, la parte vertical da INCONCLUSO `surface_unbacked`.
     - La `pos_y_m` del propio testigo nunca hace de suelo.
   - **Criaturas:**
     - el salto en 3D de la muestra 0 a la 1 no pasa de `JUMP_MAX_M`;
@@ -671,3 +672,4 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
   - §6.1 los fija, con la fixture positiva plausible y el encaje con el gate (O-15, H-7).
   - En §5.3, la medida informativa de `ai_agent_b` (H-4).
   - Nada de §3 (T1) ni de §4 (T3) cambia.
+- v1.3.5 (2026-11-16): F0.3 confirma `surface_y_m` en el testigo (#22), como última columna del `ncol`. Va en §5.3 y en F2P-02 de §6.1. Ninguna otra regla cambia.
