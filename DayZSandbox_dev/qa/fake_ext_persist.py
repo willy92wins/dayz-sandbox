@@ -1168,6 +1168,7 @@ class PersistFakeExt(FakeExt):
         }
         n = {
             "snap_tick_ms": snap_ms,
+            "capture_wall_ms": 0.0,
             "snap_frame": float(snap_frame),
             "rows_captured_n": float(captured),
             "center_x_m": center_x,

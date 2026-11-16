@@ -1459,22 +1459,29 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			return;
 		}
 
+		// LocationSyncMoveEntity directo: la juncture de PlayerBase en SERVER no mueve en servidor (inventory.c:567,1057-1066; dayzplayerinventory.c:3728-3807).
 		bool moveOk = false;
 		if (action == "drop_to_ground")
 		{
 			EntityAI curOwner = itemEnt.GetHierarchyParent();
-			if (curOwner && curOwner.GetInventory())
-			{
-				moveOk = curOwner.GetInventory().DropEntity(InventoryMode.SERVER, curOwner, itemEnt);
-			}
+			InventoryLocation dropSrc = new InventoryLocation();
+			InventoryLocation dropDst = new InventoryLocation();
+			bool dropSrcOk = false;
+			bool dropDstOk = false;
+			if (itemEnt.GetInventory()) dropSrcOk = itemEnt.GetInventory().GetCurrentInventoryLocation(dropSrc);
+			if (curOwner && dropSrcOk) dropDstOk = GameInventory.SetGroundPosByOwner(curOwner, itemEnt, dropDst);
+			if (dropDstOk) moveOk = GameInventory.LocationSyncMoveEntity(dropSrc, dropDst);
 		}
 		else if (action == "move_to_director")
 		{
 			EntityAI dirEnt = EntityAI.Cast(director);
-			if (dirEnt && dirEnt.GetInventory())
-			{
-				moveOk = dirEnt.GetInventory().TakeEntityToInventory(InventoryMode.SERVER, FindInventoryLocationType.ANY, itemEnt);
-			}
+			InventoryLocation dirSrc = new InventoryLocation();
+			InventoryLocation dirDst = new InventoryLocation();
+			bool dirSrcOk = false;
+			bool dirDstOk = false;
+			if (itemEnt.GetInventory()) dirSrcOk = itemEnt.GetInventory().GetCurrentInventoryLocation(dirSrc);
+			if (dirEnt && dirEnt.GetInventory() && dirSrcOk) dirDstOk = dirEnt.GetInventory().FindFreeLocationFor(itemEnt, FindInventoryLocationType.ANY, dirDst);
+			if (dirDstOk) moveOk = GameInventory.LocationSyncMoveEntity(dirSrc, dirDst);
 		}
 		else if (action == "move_to_container")
 		{
@@ -1512,6 +1519,17 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		string postOwnerUid = "";
 		int postChildrenN = 0;
 		ReadRealLocation(rec.m_RefEnt, director, directorUid, postLocKind, postParentClass, postParentNetId, postSlotName, postOwnerUid, postChildrenN);
+
+		bool finalLocOk = false;
+		if (action == "drop_to_ground" && postLocKind == "ground") finalLocOk = true;
+		if (action == "move_to_director" && directorUid != "" && postOwnerUid == directorUid) finalLocOk = true;
+		if (action == "move_to_container") finalLocOk = true;
+		if (!finalLocOk)
+		{
+			res.status = "error";
+			res.reason = "transition_failed";
+			return;
+		}
 
 		rec.m_ObsLocKind = postLocKind;
 		rec.m_ObsParentNetId = postParentNetId;
@@ -1569,6 +1587,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		Object createdObj = null;
 		Object childObj = null;
 		int childCountN = 0;
+		bool foreignStateOk = true;
 		float ym = g_Game.SurfaceY(xm, zm);
 		vector targetPos = Vector(xm, ym, zm);
 
@@ -1594,6 +1613,27 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 					{
 						createdObj = GameInventory.LocationCreateEntity(invLoc, className, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
 					}
+					if (!createdObj)
+					{
+						// El kit en cargo no acepta cargo (container_base.c:19-29; entityai.c:1685-1698): se llena en el suelo y se devuelve a su padre.
+						EntityAI kitParentEnt = parEnt.GetHierarchyParent();
+						InventoryLocation kitSrcLoc = new InventoryLocation();
+						InventoryLocation kitGroundLoc = new InventoryLocation();
+						InventoryLocation kitInvLoc = new InventoryLocation();
+						InventoryLocation kitBackSrcLoc = new InventoryLocation();
+						InventoryLocation kitBackLoc = new InventoryLocation();
+						bool kitSrcOk = parEnt.GetInventory().GetCurrentInventoryLocation(kitSrcLoc);
+						bool kitGroundOk = false;
+						bool kitOutOk = false;
+						bool kitBackFound = false;
+						bool kitBackOk = false;
+						if (kitParentEnt && kitSrcOk) kitGroundOk = GameInventory.SetGroundPosByOwner(kitParentEnt, parEnt, kitGroundLoc);
+						if (kitGroundOk) kitOutOk = GameInventory.LocationSyncMoveEntity(kitSrcLoc, kitGroundLoc);
+						if (kitOutOk && parEnt.GetInventory().FindFirstFreeLocationForNewEntity(className, FindInventoryLocationType.CARGO, kitInvLoc)) createdObj = GameInventory.LocationCreateEntity(kitInvLoc, className, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
+						if (kitOutOk && parEnt.GetInventory().GetCurrentInventoryLocation(kitBackSrcLoc) && kitParentEnt && kitParentEnt.GetInventory()) kitBackFound = kitParentEnt.GetInventory().FindFirstFreeLocationForNewEntity(parEnt.GetType(), FindInventoryLocationType.CARGO, kitBackLoc);
+						if (kitBackFound) kitBackOk = GameInventory.LocationSyncMoveEntity(kitBackSrcLoc, kitBackLoc);
+						foreignStateOk = kitOutOk && kitBackOk && createdObj != null;
+					}
 				}
 			}
 		}
@@ -1613,6 +1653,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				if (childCargoClass != "")
 				{
 					EntityAI ctrlEnt = EntityAI.Cast(createdObj);
+					// El barril nace cerrado y cerrado no recibe cargo (barrel_colorbase.c:15,512-518); abrir en servidor como actionopenbarrel.c:29-33.
+					Barrel_ColorBase barrelEnt = Barrel_ColorBase.Cast(createdObj);
+					if (barrelEnt && !barrelEnt.IsOpen()) barrelEnt.Open();
 					if (ctrlEnt && ctrlEnt.GetInventory())
 					{
 						InventoryLocation chLoc = new InventoryLocation();
@@ -1661,6 +1704,19 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		string obsOwnerUid = "";
 		int invChildren = 0;
 		ReadRealLocation(createdObj, director, directorUid, obsLocKind, obsParentClass, obsParentNetId, obsSlotName, obsOwnerUid, invChildren);
+
+		if (mode == "persistent_control" && childCargoClass != "" && invChildren != 1)
+		{
+			res.status = "error";
+			res.reason = "child_spawn_failed";
+			return;
+		}
+		if (mode == "foreign_in_container" && (!foreignStateOk || obsLocKind != "cargo"))
+		{
+			res.status = "error";
+			res.reason = "spawn_failed";
+			return;
+		}
 
 		string netId = FormatNetId(createdObj);
 		string persId = FormatPersId(createdObj);
@@ -1982,7 +2038,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutStr(res.read, "server_epoch", m_Probe.GetInst());
 		PutStr(res.read, "director_uid", directorUid);
 
-		PutNum(res.read, "snap_tick_ms", m_Probe.NowMs());
+		float captureWallMs = m_Probe.NowMs() - m_CensusCaptureStartMs;
+		PutNum(res.read, "snap_tick_ms", m_CensusCaptureStartMs);
+		PutNum(res.read, "capture_wall_ms", captureWallMs);
 		PutNum(res.read, "snap_frame", m_Probe.m_Frame);
 		PutNum(res.read, "rows_captured_n", seen.Count());
 		PutNum(res.read, "center_x_m", centerX);
