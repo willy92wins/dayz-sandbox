@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3.5, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
+- **Versión:** v1.3.6, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -488,8 +488,11 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
   - `legitimate_fresh_P3_generation`;
   - `normal_opstate_transitions_before_terminal`;
   - `good_creature_tracked_by_extra_disk`;
-  - `33_correct_roots_plus_background_Apple`;
-  - `H4_control_creature_AI_initializes_at_tick1`.
+  - `33_correct_roots_plus_background_Apple`.
+- **`H4_control_creature_AI_initializes_at_tick1` no es una partida buena** (errata de la v1.3.4, corregida en la v1.3.6).
+  - Lleva una criatura de más en P3, con la IA inicializada en el tick 1, y una criatura en la ventana de control.
+  - Por F2P-13 (§6) tiene que dar **INCONCLUSO**, con F2P-13 en `missing`: ni FALLA, que es lo que daba con el `ai_agent_b` de la muestra 0, ni PASA.
+  - Lo mismo vale para cualquier criatura de más cuando la ventana de control tuvo criaturas.
 - **O-16:** la negativa de procedencia copia como filas de la sonda las lecturas del backend (`/api/observation`) y tiene que dar `unbacked_rows`. Va aparte del mutante geométrico de F2P-12.
 - **La fixture positiva tiene que ser una partida plausible:**
   - las referencias reales de F2P-11;
@@ -673,3 +676,7 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
   - En §5.3, la medida informativa de `ai_agent_b` (H-4).
   - Nada de §3 (T1) ni de §4 (T3) cambia.
 - v1.3.5 (2026-11-16): F0.3 confirma `surface_y_m` en el testigo (#22), como última columna del `ncol`. Va en §5.3 y en F2P-02 de §6.1. Ninguna otra regla cambia.
+- v1.3.6 (2026-11-16): **errata de la v1.3.4.**
+  - El orquestador puso `H4_control_creature_AI_initializes_at_tick1` entre las variantes positivas que tenían que dar PASA. No es una partida buena: lleva una criatura de más.
+  - Por F2P-13, con criaturas en la ventana de control, da INCONCLUSO (§6.1).
+  - La regla de F2P-13 no cambia: era la errata la que la contradecía.
