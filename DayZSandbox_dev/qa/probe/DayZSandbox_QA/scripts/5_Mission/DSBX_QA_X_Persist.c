@@ -1632,7 +1632,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 						if (kitParentEnt && kitSrcOk) kitGroundOk = GameInventory.SetGroundPosByOwner(kitParentEnt, parEnt, kitGroundLoc);
 						if (kitGroundOk) kitOutOk = GameInventory.LocationSyncMoveEntity(kitSrcLoc, kitGroundLoc);
 						if (kitOutOk && parEnt.GetInventory().FindFirstFreeLocationForNewEntity(className, FindInventoryLocationType.CARGO, kitInvLoc)) createdObj = GameInventory.LocationCreateEntity(kitInvLoc, className, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
-						if (kitOutOk && parEnt.GetInventory().GetCurrentInventoryLocation(kitBackSrcLoc) && kitParentEnt && kitParentEnt.GetInventory()) kitBackFound = kitParentEnt.GetInventory().FindFirstFreeLocationForNewEntity(parEnt.GetType(), FindInventoryLocationType.CARGO, kitBackLoc);
+						// El kit ya existe: su destino sale de FindFreeLocationFor (inventory.c:276), que lleva el objeto; ForNewEntity no lo lleva y LocationSyncMoveEntity tumbaba el servidor (partida 2, 16-nov).
+						if (kitOutOk && parEnt.GetInventory().GetCurrentInventoryLocation(kitBackSrcLoc) && kitParentEnt && kitParentEnt.GetInventory()) kitBackFound = kitParentEnt.GetInventory().FindFreeLocationFor(parEnt, FindInventoryLocationType.CARGO, kitBackLoc);
 						if (kitBackFound) kitBackOk = GameInventory.LocationSyncMoveEntity(kitBackSrcLoc, kitBackLoc);
 						foreignStateOk = kitOutOk && kitBackOk && createdObj != null;
 					}
