@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3.9, **congelada.** La v1.3.9 corrige lo que pasa al reiniciar el backend: sesión nueva, ids que se repiten y la op cortada de P5 sin terminal (§6.1, puntos 2, 5 y 6, y F2P-09; §12). Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
+- **Versión:** v1.3.10, **congelada.** La v1.3.9 corrige lo que pasa al reiniciar el backend: sesión nueva, ids que se repiten y la op cortada de P5 sin terminal (§6.1, puntos 2, 5 y 6, y F2P-09). La v1.3.10 recoge el contrato de salud del censo de F0.3 (§5.3). Ver §12. Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -265,6 +265,12 @@ Todas van por el bridge de la sonda (`qa0`), así que quedan en la evidencia.
   - `radius_m = 120`, centrado en (6170, 7643), más un disco de 60 m por cada entidad seguida cuya última posición quede a menos de 15 m del borde de lo cubierto (P-05);
   - el resultado se deduplica por `net_id`;
   - medido en la diag de F0.3: `max_hp = health_hp = -1` significa «sin sistema de daño», y los edificios del mapa **sí** tienen `net_id` real, con la parte alta negativa (`-2147225600:847447385`). El `net_id` se lee como `high:low` con signo.
+  - **La salud en el censo (v1.3.10; contrato de F0.3 del 16-nov, para #22 rebasado sobre #21):**
+    - `-1/-1` quiere decir «sin sistema de daño **inicializado**». `HasDamageSystem()` dice si ya está inicializado, no si lo tiene (vanilla `object.c:974-976`). Un objeto recién creado devuelve false;
+    - **lo que crea el QA** (`per_apply_scene`, `per_spawn_raw` y los spawns del testigo) lleva salud real, `> 0`. Con marca, `health_hp` es `max_hp × ratio`: la sonda la pone al crear y la comprueba releyendo. Si no puede, la op da error; nunca `ok` con `-1`. **`health_mark_pending` no existe.** Por ejemplo, el control de S-persist quedó en 1098,5 = 1300 × 0,845;
+    - **los objetos del mundo** se leen con la guarda. Medido en las diags 1 y 2 de F0.3 (copias en `C:\tmp\dsbx-f2p-t2d\_ref\diag_bridge.jsonl` y `diag2_bridge.jsonl`): los 34 `Land_*` dan `-1/-1`, y los objetos del botín de la CE (47 y 46) dan salud real, gastada (`Barrel_Yellow` 1300/1214,6, `BarbedWire` 300/131,5);
+    - **lo que crea el producto** es, para la sonda, un objeto del mundo. Sin medir: puede dar salud real o `-1/-1` según si su sistema de daño ya está inicializado. Ninguna comprobación depende de la salud de lo que crea el producto, y las dos formas tienen que dar PASA;
+    - **el testigo no lleva salud** (§5.3, su `ncol`).
 
   **La cobertura es parte de la evidencia:** si una entidad seguida falta de todos los discos y podía haber salido de lo cubierto (criatura, o a menos de 15 m del borde), la comprobación da **INCONCLUSO**, nunca «borrada».
 - **Testigo de creación (P-03):** `per_witness_start`, que añade F0.3 (pendiente del OK de la principal, §11).
@@ -700,7 +706,7 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
       - `rows_captured_n` igual a las filas;
       - ticks que vuelven a empezar en cada epoch;
       - `spawn_tick_ms` a 0 en lo que crea el producto;
-      - `health_hp = −1` donde la sonda lo da;
+      - la salud de §5.3 (v1.3.10): `-1/-1` en los `Land_*`; real y gastada en el botín de la CE; real en lo que crea el QA, con la marca exacta en el control (`Barrel_Yellow` 1300/1098,5); en lo que crea el producto, una variante con salud real y otra con `-1/-1`, las dos PASA; nunca `health_mark_pending`;
     - **contra el backend real:**
       - `state.read` sin `obs`;
       - la op cortada **sin** terminal (v1.3.9);
@@ -975,4 +981,16 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
     - punto 6: la lectura de reconciliación es interna (`rd-N`) y del backend nuevo; la ruta del validador;
     - F2P-09: sin terminal de la op cortada;
     - la fixture y las pruebas: sesiones nuevas, ids repetidos, lecturas `rd-N` sin `op.state`, el `origin` inicial y el epoch de las observaciones.
+  - Nada de §3 (T1) ni de §4 (T3) cambia.
+- v1.3.10 (2026-11-16): **la salud en el censo,** con el contrato que mandó F0.3, dueño de la sonda, para #22 rebasado sobre #21.
+  - **El contrato:**
+    - `-1/-1` es «sin sistema de daño inicializado» (vanilla `object.c:974-976`);
+    - lo que crea el QA lleva salud real, con la marca puesta y comprobada al crear, o la op da error;
+    - `health_mark_pending` no existe;
+    - el testigo no lleva salud.
+  - **Medido por mí en las diags:** `Land_*` dan `-1/-1`; el botín de la CE da salud real y gastada.
+  - **Cambios:**
+    - §5.3, el censo: el contrato, y que ninguna comprobación depende de la salud de lo que crea el producto, que está sin medir;
+    - §6.1, la fixture: la salud por tipo de entidad, con las dos variantes en lo que crea el producto.
+  - **Pendiente en el motor (F0.3, en la diag de después del rebase):** que `WoodenCrate`, `Barrel_Green`, `SeaChest` y la gallina acepten la marca al crear.
   - Nada de §3 (T1) ni de §4 (T3) cambia.
