@@ -1102,22 +1102,51 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 					EntityAI parentEnt = EntityAI.Cast(parentRec.m_RefEnt);
 					if (parentEnt && parentEnt.GetInventory())
 					{
-						InventoryLocation invLoc = new InventoryLocation();
-						if (slotName == "Cargo")
+						// Partidas 5 y 6: los hijos creados con LocationCreateEntity y FLAGS_INV_OWN volvian tras el
+						// reinicio cuando salian del padre (el brazalete al suelo, los guantes al director). Ahora se
+						// crean como las raices, con CreateObjectEx (game.c:703) junto al padre, y se mueven a su sitio
+						// con LocationCanMoveEntity + LocationSyncMoveEntity, como vanilla (dayzplayerinventory.c:1377-1395).
+						// El destino lleva el objeto: FindFreeLocationFor (inventory.c:276) o SetAttachment con la
+						// entidad (inventorylocation.c:131). Si no entra, se borra y la fila sale fallida.
+						int childFlags = FLAGS_STATIC;
+						if (omitNoPersist)
 						{
-							if (parentEnt.GetInventory().FindFirstFreeLocationForNewEntity(className, FindInventoryLocationType.CARGO, invLoc))
+							childFlags = childFlags & (~FLAG_ECE_NOPERSISTENCY_WORLD);
+						}
+						Object stagedObj = g_Game.CreateObjectEx(className, parentEnt.GetPosition(), childFlags, FLAG_RF_DEFAULT);
+						EntityAI stagedEnt = EntityAI.Cast(stagedObj);
+						bool stagedPlaced = false;
+						if (stagedEnt && stagedEnt.GetInventory())
+						{
+							InventoryLocation stagedSrc = new InventoryLocation();
+							InventoryLocation stagedDst = new InventoryLocation();
+							bool stagedSrcOk = stagedEnt.GetInventory().GetCurrentInventoryLocation(stagedSrc);
+							bool stagedDstOk = false;
+							if (slotName == "Cargo")
 							{
-								createdObj = GameInventory.LocationCreateEntity(invLoc, className, FLAGS_INV_OWN, FLAG_RF_DEFAULT);
+								stagedDstOk = parentEnt.GetInventory().FindFreeLocationFor(stagedEnt, FindInventoryLocationType.CARGO, stagedDst);
+							}
+							else
+							{
+								int childSlotId = InventorySlots.GetSlotIdFromString(slotName);
+								if (InventorySlots.IsSlotIdValid(childSlotId) && parentEnt.GetInventory().HasAttachmentSlot(childSlotId) && parentEnt.GetInventory().FindAttachment(childSlotId) == null)
+								{
+									stagedDst.SetAttachment(parentEnt, stagedEnt, childSlotId);
+									stagedDstOk = true;
+								}
+							}
+							if (stagedSrcOk && stagedDstOk && GameInventory.LocationCanMoveEntity(stagedSrc, stagedDst))
+							{
+								stagedPlaced = GameInventory.LocationSyncMoveEntity(stagedSrc, stagedDst);
 							}
 						}
-						else
+						if (stagedPlaced)
 						{
-							int slotId = InventorySlots.GetSlotIdFromString(slotName);
-							if (InventorySlots.IsSlotIdValid(slotId) && parentEnt.GetInventory().HasAttachmentSlot(slotId) && parentEnt.GetInventory().FindAttachment(slotId) == null)
-							{
-								invLoc.SetAttachment(parentEnt, null, slotId);
-								createdObj = GameInventory.LocationCreateEntity(invLoc, className, FLAGS_INV_OWN, FLAG_RF_DEFAULT);
-							}
+							createdObj = stagedObj;
+						}
+						else if (stagedObj)
+						{
+							g_Game.ObjectDelete(stagedObj);
 						}
 					}
 				}
