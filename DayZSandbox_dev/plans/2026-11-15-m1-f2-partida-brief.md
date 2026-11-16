@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3.1, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda (§12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito. 2026-11-15, por el orquestador de F2.
+- **Versión:** v1.3.2, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda, más la medida de la envolvente v1.3 (§12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito. 2026-11-15, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -127,6 +127,24 @@ El mod las escribe a mano. Python las lee sin problema aunque mezclen tipos.
 ### 3.7 Envolvente
 T1 la recalcula con un script, como `sizes5.py`, con los rangos v1.3 y 33-34 raíces. Hay que ajustar `compute_envelope`, `WIRE_CAP` 3500 y la tabla de F2b §3.6.
 - **Criterio:** caben 33 raíces. Si 34 ya no caben, el tope baja a lo que quepa, y el backend da `plan_too_large`.
+- **Medida v1.3** (U-01): sustituye para v1.3 a la tabla de F2b §3.6, que es la de v1.2.2. Es la escena máxima de M1 (20/10/3), con `lid` de 10 caracteres y las clases más largas.
+
+  | Cuerpo | v1.2.2 (F2b §3.6) | **v1.3** |
+  |---|---|---|
+  | `/poll` con un `scene.apply` | 2722 B | **1985 B** |
+  | resultado de `scene.apply` con su checkpoint | 2968 B | **2934 B** |
+  | resultado de `scene.observe` `now` | 3362 B | **3198 B** |
+  | resultado de `scene.reset` o `state.read` | 925 B | **926 B** |
+
+  El máximo es 3198 B, por debajo de `WIRE_CAP` 3500. Las pruebas de la envolvente acreditan que caben 34 raíces y que 40 dan `plan_too_large`.
+
+  Se reproduce desde `DayZSandbox_dev` con:
+
+  ```
+  C:\Python314\python.exe -B -c "from app.tests.test_scene_plan import _max_doc, TestEnvelope; print(TestEnvelope()._env(*_max_doc(20,10,3,3)))"
+  ```
+
+  Medido el 2026-11-15 sobre `6a9b29a`.
 
 ### 3.8 El backend y la API
 - **La API HTTP no cambia.** `/api/observation` y `op.state` devuelven metros, como en v1.2.2: el backend convierte al recibir.
@@ -488,3 +506,4 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
   - **El ruido de la CE:** `globals` a 0 y ventana de control en P1 (§5.2, §5.3). F2P-13 la usa para decidir entre FALLA e INCONCLUSO en las criaturas.
 
   Nada de §3 (el contrato v1.3, T1) cambia.
+- v1.3.2 (2026-11-15): **solo documentación**, por U-01 (MEN) de Sol r2 sobre el código de T1. §3.7 trae la envolvente v1.3 medida con su comando reproducible (1985, 2934, 3198 y 926 B) en lugar de remitir a la tabla v1.2.2 de F2b §3.6. Ninguna regla cambia.

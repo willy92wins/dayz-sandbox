@@ -37,12 +37,25 @@ from app.tests.fake_world import (
     build_plan,
     compute_plan_sha256,
     hash_doc,
+    plan_from_rows,
+    plan_sha256_of,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "fixtures"
 SESS_A = "a1b2c3d4e5f60718"
 SESS_B = "1122334455667788"
+PLAN_COLUMNS = ("lid", "ci", "x_mm", "z_mm", "yaw_mdeg")
+
+
+def _m(val):
+    """mm (o milesimas) del cable v1.3 -> metros (o unidades); `None` se queda."""
+    return None if val is None else val / 1000.0
+
+
+def _plan_rows(plan: dict) -> list[list]:
+    """Filas `[lid, ci, x_mm, z_mm, yaw_mdeg]` de las columnas v1.3."""
+    return [list(r) for r in zip(*(plan[k] for k in PLAN_COLUMNS))]
 
 
 def _load_json(path: Path) -> dict:
@@ -261,12 +274,14 @@ class TestCase1Apply(TestFakeWorldBaseMixin, unittest.TestCase):
             cp_row = obs["rows"][idx]
             self.assertEqual(cp_row[0], lid)
             self.assertEqual(cp_row[1], classes.index(ent_doc["cls"]))
+            # v1.3 §3.6: la fila del cable va en enteros (mm y milesimas de grado)
+            self.assertTrue(all(type(v) is int for v in cp_row[1:]), cp_row)
             self.assertLess(
-                _dist3((cp_row[2], cp_row[3], cp_row[4]), (ex, egy, ez)),
+                _dist3((_m(cp_row[2]), _m(cp_row[3]), _m(cp_row[4])), (ex, egy, ez)),
                 0.002,
             )
-            self.assertAlmostEqual(cp_row[5], round(eyaw, 3) % 360.0, places=3)
-            self.assertAlmostEqual(cp_row[6], round(egy, 3), places=3)
+            self.assertEqual(cp_row[5], round(eyaw * 1000) % 360000)
+            self.assertEqual(cp_row[6], round(egy * 1000))
 
             if ent_doc["cls"].startswith(("Zmb", "Animal_")):
                 continue
@@ -341,8 +356,8 @@ class TestCase1Apply(TestFakeWorldBaseMixin, unittest.TestCase):
             edoc = by_lid_doc[lid]
             target = (float(edoc["x"]), _custom_ground(edoc["x"], edoc["z"]), float(edoc["z"]))
             # Checkpoint tomado antes de soltar la IA: < 0,5 m incluso en zmb y ani (mata X4-i)
-            self.assertLess(_dist3((x, y, z), target), POS_TOL_M)
-            self.assertAlmostEqual(gy, round(target[1], 3), places=3)
+            self.assertLess(_dist3((_m(x), _m(y), _m(z)), target), POS_TOL_M)
+            self.assertEqual(gy, round(target[1] * 1000))
 
         # Un par de ticks adicionales tras el apply
         world.tick()
@@ -363,7 +378,7 @@ class TestCase1Apply(TestFakeWorldBaseMixin, unittest.TestCase):
         for lid, edoc in by_lid_doc.items():
             r = now_by_lid[lid]
             target = (float(edoc["x"]), _custom_ground(edoc["x"], edoc["z"]), float(edoc["z"]))
-            dist = _dist3((r[1], r[2], r[3]), target)
+            dist = _dist3((_m(r[1]), _m(r[2]), _m(r[3])), target)
             if lid.startswith(("zmb-", "ani-")):
                 self.assertGreaterEqual(dist, POS_TOL_M, f"{lid} no derivo tras soltar IA")
             else:
@@ -398,7 +413,7 @@ class TestCase1Apply(TestFakeWorldBaseMixin, unittest.TestCase):
         self.assertIsNone(rsn)
         self.assertEqual(len(world.census()), 32)
         cp_by_lid = {r[0]: r for r in rd["obs"]["rows"]}
-        gy_05 = round(_custom_ground(6224.0, 7668.0), 3)
+        gy_05 = round(_custom_ground(6224.0, 7668.0) * 1000)
         self.assertEqual(cp_by_lid["obj-05"], ["obj-05", -1, None, None, None, None, gy_05])
 
         # 2) displace_on_create: desplazada 0,6 m (> POS_TOL_M = 0,5 m y < 0,7 m)
@@ -412,7 +427,7 @@ class TestCase1Apply(TestFakeWorldBaseMixin, unittest.TestCase):
         self.assertEqual(st2, "done")
         cp2 = {r[0]: r for r in rd2["obs"]["rows"]}["obj-05"]
         target_05 = (6224.0, _custom_ground(6224.0, 7668.0), 7668.0)
-        d3 = _dist3((cp2[2], cp2[3], cp2[4]), target_05)
+        d3 = _dist3((_m(cp2[2]), _m(cp2[3]), _m(cp2[4])), target_05)
         self.assertAlmostEqual(d3, 0.6, places=3)
         self.assertGreater(d3, POS_TOL_M)
         self.assertLess(d3, 0.7)
@@ -472,39 +487,47 @@ class TestCase2EtapasSinEfecto(TestFakeWorldBaseMixin, unittest.TestCase):
 
         # lid duplicado
         dup = copy.deepcopy(base)
-        dup["rows"][1][0] = dup["rows"][0][0]
+        dup["lid"][1] = dup["lid"][0]
         self._assert_rejected_no_effect(world, dup, "bad_plan", "op-bad-dup")
 
         # patron lid invalido (actor o numeracion 00)
         act_plan = copy.deepcopy(base)
-        act_plan["rows"][0][0] = "act-01"
+        act_plan["lid"][0] = "act-01"
         self._assert_rejected_no_effect(world, act_plan, "bad_plan", "op-bad-act")
 
         zero_id = copy.deepcopy(base)
-        zero_id["rows"][0][0] = "obj-00"
+        zero_id["lid"][0] = "obj-00"
         self._assert_rejected_no_effect(world, zero_id, "bad_plan", "op-bad-zero")
 
         # ci fuera de rango
         bad_ci = copy.deepcopy(base)
-        bad_ci["rows"][0][1] = len(bad_ci["classes"])
+        bad_ci["ci"][0] = len(bad_ci["classes"])
         self._assert_rejected_no_effect(world, bad_ci, "bad_plan", "op-bad-ci")
 
-        # numero no finito (NaN / Inf)
+        # v1.3: solo enteros (un NaN, un Inf, un float o un bool no valen)
         nan_plan = copy.deepcopy(base)
-        nan_plan["rows"][0][2] = float("nan")
+        nan_plan["x_mm"][0] = float("nan")
         self._assert_rejected_no_effect(world, nan_plan, "bad_plan", "op-bad-nan")
 
         inf_plan = copy.deepcopy(base)
-        inf_plan["rows"][0][3] = float("inf")
+        inf_plan["z_mm"][0] = float("inf")
         self._assert_rejected_no_effect(world, inf_plan, "bad_plan", "op-bad-inf")
 
-        # yaw fuera de [0, 360)
+        float_plan = copy.deepcopy(base)
+        float_plan["x_mm"][0] = float(float_plan["x_mm"][0])
+        self._assert_rejected_no_effect(world, float_plan, "bad_plan", "op-bad-float")
+
+        bool_plan = copy.deepcopy(base)
+        bool_plan["ci"][0] = False
+        self._assert_rejected_no_effect(world, bool_plan, "bad_plan", "op-bad-bool")
+
+        # yaw_mdeg fuera de [0, 360000)
         yaw_neg = copy.deepcopy(base)
-        yaw_neg["rows"][0][4] = -0.1
+        yaw_neg["yaw_mdeg"][0] = -100
         self._assert_rejected_no_effect(world, yaw_neg, "bad_plan", "op-bad-yaw1")
 
         yaw_360 = copy.deepcopy(base)
-        yaw_360["rows"][0][4] = 360.0
+        yaw_360["yaw_mdeg"][0] = 360000
         self._assert_rejected_no_effect(world, yaw_360, "bad_plan", "op-bad-yaw2")
 
         # plan_sha256 malformado
@@ -518,27 +541,26 @@ class TestCase2EtapasSinEfecto(TestFakeWorldBaseMixin, unittest.TestCase):
 
         # unknown_class (mata X4-l)
         unk_classes = ["ItemInexistenteMod_X"]
-        unk_rows = [["obj-01", 0, 6188.0, 7626.0, 0.0]]
-        unk = {
-            "doc_id": self.doc["doc_id"],
-            "rev": 2,
-            "hash": base["hash"],
-            "plan_sha256": compute_plan_sha256(
-                self.doc["doc_id"], 2, base["hash"], unk_classes, unk_rows
+        unk_rows = [["obj-01", 0, 6188000, 7626000, 0]]
+        unk = plan_from_rows(
+            self.doc["doc_id"], 2, base["hash"], unk_classes, unk_rows, base["caps"]
+        )
+        self.assertEqual(
+            unk["plan_sha256"],
+            compute_plan_sha256(
+                self.doc["doc_id"], 2, base["hash"], unk_classes,
+                ["obj-01"], [0], [6188000], [7626000], [0],
             ),
-            "caps": copy.deepcopy(base["caps"]),
-            "classes": unk_classes,
-            "rows": unk_rows,
-        }
+        )
         self._assert_rejected_no_effect(world, unk, "unknown_class", "op-unk")
 
-        # out_of_map: x < 0 y z > world_size
+        # out_of_map: x < 0 y z > world_size (en mm)
         oom_low = copy.deepcopy(base)
-        oom_low["rows"][0][2] = -0.001
+        oom_low["x_mm"][0] = -1
         self._assert_rejected_no_effect(world, oom_low, "out_of_map", "op-oom-1")
 
         oom_high = copy.deepcopy(base)
-        oom_high["rows"][0][3] = 15360.001
+        oom_high["z_mm"][0] = 15360001
         self._assert_rejected_no_effect(world, oom_high, "out_of_map", "op-oom-2")
 
         # budget_exceeded por cada tipo (20/10/3) y por caps.total (mata X4-m)
@@ -557,6 +579,71 @@ class TestCase2EtapasSinEfecto(TestFakeWorldBaseMixin, unittest.TestCase):
         cap_tot = copy.deepcopy(base)
         cap_tot["caps"] = {"objeto": 20, "infectado": 10, "animal": 3, "total": 32}
         self._assert_rejected_no_effect(world, cap_tot, "budget_exceeded", "op-cap-tot")
+
+    def test_d_plan_v122_con_rows_y_columnas_desalineadas_bad_plan(self) -> None:
+        # §3.9 (d) del brief de F2-partida: v1.2.2 se rechaza con bad_plan, sin efecto
+        world = self._prepare_world_with_scene_and_bystanders()
+        base = build_plan(self.doc, rev=2, catalog=self.catalog)
+        legacy = {
+            "doc_id": base["doc_id"],
+            "rev": base["rev"],
+            "hash": base["hash"],
+            "plan_sha256": base["plan_sha256"],
+            "caps": {"objeto": 20, "infectado": 10, "animal": 3},
+            "classes": base["classes"],
+            "rows": [[lid, ci, _m(x), _m(z), _m(yaw)] for lid, ci, x, z, yaw in _plan_rows(base)],
+        }
+        self._assert_rejected_no_effect(world, legacy, "bad_plan", "op-v122")
+        # aun con f2 y caps v1.3: sin columnas no hay plan
+        legacy_f2 = dict(legacy, f2=1, caps=copy.deepcopy(base["caps"]))
+        self._assert_rejected_no_effect(world, legacy_f2, "bad_plan", "op-v122-f2")
+        # columnas de longitudes distintas
+        for key in PLAN_COLUMNS:
+            short = copy.deepcopy(base)
+            short[key] = short[key][:-1]
+            self._assert_rejected_no_effect(world, short, "bad_plan", "op-short-%s" % key)
+        # una columna que no es lista
+        not_list = copy.deepcopy(base)
+        not_list["x_mm"] = {"0": 1}
+        self._assert_rejected_no_effect(world, not_list, "bad_plan", "op-not-list")
+        # positivo: el mismo plan en columnas se aplica
+        st, rsn, _ = world.apply(
+            _make_order(world, "scene.apply", base, op_id="op-v13-ok"),
+            check=lambda: None,
+            tick=lambda: None,
+        )
+        self.assertEqual((st, rsn), ("done", None))
+
+    def test_caps_total_menos_uno_sin_total_y_ausente_falla_cerrado(self) -> None:
+        world = self._prepare_world_with_scene_and_bystanders()
+        base = build_plan(self.doc, rev=2, catalog=self.catalog)
+        self.assertEqual(base["caps"]["total"], -1)
+        # total ausente: el mod real lo leeria como 0 (DP-2) -> budget_exceeded sin efecto
+        no_total = copy.deepcopy(base)
+        del no_total["caps"]["total"]
+        self._assert_rejected_no_effect(world, no_total, "budget_exceeded", "op-no-total")
+        zero_total = copy.deepcopy(base)
+        zero_total["caps"]["total"] = 0
+        self._assert_rejected_no_effect(world, zero_total, "budget_exceeded", "op-zero-total")
+        bad_total = copy.deepcopy(base)
+        bad_total["caps"]["total"] = -2
+        self._assert_rejected_no_effect(world, bad_total, "budget_exceeded", "op-bad-total")
+        # total = -1: sin tope total, el plan se aplica
+        st, rsn, rd = world.apply(
+            _make_order(world, "scene.apply", base, op_id="op-total-none"),
+            check=lambda: None,
+            tick=lambda: None,
+        )
+        self.assertEqual((st, rsn), ("done", None))
+        self.assertEqual(rd["scene"]["n"], 33)
+        exact = copy.deepcopy(base)
+        exact["caps"]["total"] = 33
+        st, rsn, _ = world.apply(
+            _make_order(world, "scene.apply", exact, op_id="op-total-33"),
+            check=lambda: None,
+            tick=lambda: None,
+        )
+        self.assertEqual((st, rsn), ("done", None))
 
     def test_foreign_content_retained_previo_y_toctou_en_etapa4(self) -> None:
         # 1) Etapa 3 previa: algo ajeno ya dentro de obj-17 -> rejected/foreign_content_retained sin efecto (mata X4-s)
@@ -1394,7 +1481,7 @@ class TestCase6Observe(TestFakeWorldBaseMixin, unittest.TestCase):
         self.assertEqual(len(rd_cp["obs"]["rows"]), 33)
         cp_obj01 = {r[0]: r for r in rd_cp["obs"]["rows"]}["obj-01"]
         self.assertEqual(len(cp_obj01), 7)
-        self.assertAlmostEqual(cp_obj01[2], 6188.0, places=3)
+        self.assertEqual(cp_obj01[2], 6188000)
 
         # Observe now: 8 elementos [lid, x, y, z, yaw, hp, n_own, n_foreign], solo raices (33)
         st_nw, _, rd_nw = world.observe(
@@ -1412,11 +1499,13 @@ class TestCase6Observe(TestFakeWorldBaseMixin, unittest.TestCase):
 
         nw_obj01 = nw_by_lid["obj-01"]
         self.assertEqual(len(nw_obj01), 8)
-        self.assertAlmostEqual(nw_obj01[1], 6190.0, places=3)  # 6188 + 2 m
+        # v1.3 §3.6: [lid, x_mm, y_mm, z_mm, yaw_mdeg, hp_milli, n_own, n_foreign], enteros
+        self.assertTrue(all(type(v) is int for v in nw_obj01[1:]), nw_obj01)
+        self.assertEqual(nw_obj01[1], 6190000)  # 6188 + 2 m
         self.assertAlmostEqual(
-            nw_obj01[2], round(_custom_ground(6190.0, 7626.0), 3), places=3
+            nw_obj01[2], round(_custom_ground(6190.0, 7626.0) * 1000), delta=1
         )
-        self.assertEqual(nw_obj01[5], 1.0)
+        self.assertEqual(nw_obj01[5], 1000)
         self.assertEqual(nw_obj01[6], 0)
         self.assertEqual(nw_obj01[7], 0)
 
@@ -1428,20 +1517,15 @@ class TestCase6Observe(TestFakeWorldBaseMixin, unittest.TestCase):
         world = FakeWorld(ground=_custom_ground)
         # 65 raices superan comodamente los 3500 B tanto en now como en checkpoint
         rows = [
-            [f"obj-{i:02d}", 0, round(6000.123 + i, 3), round(7000.456 + i, 3), 123.456]
+            [f"obj-{i:02d}", 0, 6000123 + 1000 * i, 7000456 + 1000 * i, 123456]
             for i in range(1, 66)
         ]
         classes = ["Land_Wreck_Volha_Police"]
         h = "a" * 64
-        plan_big = {
-            "doc_id": "d-7c19e2a5",
-            "rev": 1,
-            "hash": h,
-            "plan_sha256": compute_plan_sha256("d-7c19e2a5", 1, h, classes, rows),
-            "caps": {"objeto": 100, "infectado": 0, "animal": 0},
-            "classes": classes,
-            "rows": rows,
-        }
+        plan_big = plan_from_rows(
+            "d-7c19e2a5", 1, h, classes, rows,
+            {"objeto": 100, "infectado": 0, "animal": 0, "total": -1},
+        )
         st_ap, _, _ = world.apply(
             _make_order(world, "scene.apply", plan_big, op_id="op-big"),
             check=lambda: None,
@@ -2037,8 +2121,44 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
         self.assertEqual(rsn2, "bad_args")
         self.assertEqual(world.effects(SESS_A, "rst-m13-doc"), {"created": 0, "deleted": 0})
 
+        # v1.3 §3.3: if_pending medio vacio (o con otros tipos) tampoco vale
+        for idx, ip in enumerate(({"session": SESS_A, "op_id": ""},
+                                  {"session": "", "op_id": "op-v3-base"},
+                                  {"session": None, "op_id": None},
+                                  {"session": ""})):
+            st3, rsn3, _ = self._reset(
+                world, f"rst-m13-half-{idx}",
+                args={"f2": 1, "doc_id": self.doc["doc_id"], "if_pending": ip},
+            )
+            self.assertEqual((st3, rsn3), ("rejected", "bad_args"), ip)
+
         self.assertEqual(_canon_bytes(world.census()), before_census)
         self.assertEqual(_canon_bytes(world.read(self.doc["doc_id"])), before_read)
+
+    def test_reset_con_if_pending_vacio_es_un_reset_normal(self) -> None:
+        # v1.3 §3.3 (DP-2): `if_pending` va siempre; vacio = reset normal (borra toda la escena)
+        world = FakeWorld(ground=_custom_ground)
+        self._apply_main(world)
+        st, rsn, rd = self._reset(
+            world,
+            "rst-v13-normal",
+            args={"f2": 1, "doc_id": self.doc["doc_id"],
+                  "if_pending": {"session": "", "op_id": ""}},
+        )
+        self.assertEqual((st, rsn), ("done", None))
+        self.assertEqual(world.effects(SESS_A, "rst-v13-normal"), {"created": 0, "deleted": 33})
+        self.assertEqual(rd["scene"]["n"], 0)
+        self.assertEqual(
+            rd["scene"]["last"],
+            {
+                "session": SESS_A,
+                "op_id": "rst-v13-normal",
+                "verb": "scene.reset",
+                "outcome": "done",
+            },
+        )
+        self.assertIsNone(rd["generation"])
+        self.assertEqual([c for c in world.census() if c["scene"] == self.doc["doc_id"]], [])
 
     def test_m14_apply_bad_plan_rev10_doc_id_classes_desordenadas_y_clase_sin_uso(self) -> None:
         cat2 = copy.deepcopy(self.catalog)
@@ -2067,16 +2187,10 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
 
         extra_classes = sorted(set(base["classes"]) | {"AmmoBox"})
         ci_map = {c: i for i, c in enumerate(extra_classes)}
-        extra_rows = [
-            [r[0], ci_map[base["classes"][r[1]]], r[2], r[3], r[4]]
-            for r in base["rows"]
-        ]
         unused = copy.deepcopy(base)
         unused["classes"] = extra_classes
-        unused["rows"] = extra_rows
-        unused["plan_sha256"] = compute_plan_sha256(
-            self.doc["doc_id"], 2, unused["hash"], extra_classes, extra_rows
-        )
+        unused["ci"] = [ci_map[base["classes"][ci]] for ci in base["ci"]]
+        unused["plan_sha256"] = plan_sha256_of(unused)
         reject(unused, "op-m14-unused")
 
         self.assertEqual(_canon_bytes(world.census()), before_census)
@@ -2101,8 +2215,20 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
         self.assertIsNone(rsn_o)
         rows = {r[0]: r for r in rd["obs"]["rows"]}
         self.assertEqual(len(rows["obj-01"]), 8)
-        self.assertEqual(rows["obj-01"][4], 0.0)
+        # §3.9 (b) en el mundo: 359,9996 grados -> 360000 al redondear -> 0 al normalizar
+        self.assertEqual(rows["obj-01"][4], 0)
         self.assertEqual(rows["obj-05"], ["obj-05", None, None, None, None, None, 0, 0])
+        # negativa: 359,9994 no se normaliza a 0
+        world.move_entity((self.doc["doc_id"], "obj-01"), yaw=359.9994)
+        _st, _rsn, rd2 = world.observe(
+            _make_order(
+                world,
+                "scene.observe",
+                {"doc_id": self.doc["doc_id"], "at": "now"},
+                op_id="obs-m15-b",
+            )
+        )
+        self.assertEqual({r[0]: r for r in rd2["obs"]["rows"]}["obj-01"][4], 359999)
 
     def test_m16_seed_scene_clase_desconocida_error_y_catalogo_intacto(self) -> None:
         world = FakeWorld(ground=_custom_ground)
@@ -2228,7 +2354,7 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
         for lid in creatures:
             cp = cp_by_lid[lid]
             ent = census[reg[lid]["eid"]]
-            dist = _dist3(ent["pos"], (cp[2], cp[3], cp[4]))
+            dist = _dist3(ent["pos"], (_m(cp[2]), _m(cp[3]), _m(cp[4])))
             self.assertGreater(
                 dist, POS_TOL_M, f"{lid} no cambio de pose al soltar la IA en el mismo tick"
             )
@@ -2254,8 +2380,8 @@ class TestCase9AclaracionesM1M19(TestFakeWorldBaseMixin, unittest.TestCase):
             },
         ]
         plan = build_plan(doc2, rev=1, catalog=self.catalog)
-        self.assertEqual(plan["rows"][0][4], 0.0)
-        self.assertEqual(plan["rows"][1][4], 0.0)
+        self.assertEqual(plan["yaw_mdeg"][0], 0)
+        self.assertEqual(plan["yaw_mdeg"][1], 0)
 
     def test_segundo_reset_con_solo_contenedor_retenido_que_guarda_ajeno_vuelve_a_retener(self) -> None:
         world = FakeWorld(ground=_custom_ground)
@@ -2711,8 +2837,9 @@ class TestCase11SolR1C05(TestFakeWorldBaseMixin, unittest.TestCase):
             self.assertEqual(rd["scene"]["n"], 33)
             self.assertEqual(len(world.census()), 33)
             for row in rd["obs"]["rows"]:
-                self.assertEqual(row[3], bound)
-                self.assertEqual(row[6], bound)
+                self.assertEqual(row[3], round(bound * 1000))
+                self.assertEqual(row[6], round(bound * 1000))
+                self.assertIn(abs(row[3]), (9999999,))
 
         for idx, bad_gy in enumerate(
             (float("nan"), float("inf"), float("-inf"), -10000.0, -9999.9991, 9999.9991)

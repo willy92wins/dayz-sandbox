@@ -1,19 +1,36 @@
 """Plan de escena, expectativa, validacion previa, envolvente y predicados (F2-offline §3 y §4).
 
 Funciones puras, sin red ni estado global. Solo biblioteca estandar.
-Contrato: plans/2026-11-14-m1-f2-offline-brief.md v1.2.1, §2 (D1-D12), §3, §4.1-§4.3
-y §13 (A2, A3, A6).
+Contrato: plans/2026-11-14-m1-f2-offline-brief.md v1.2.2, §2 (D1-D12), §3, §4.1-§4.3
+y §13 (A2, A3, A6), con el delta del contrato v1.3 del cable `dsbx1`
+(plans/2026-11-15-m1-f2-partida-brief.md §2, DP-1 a DP-5, y §3): enteros y columnas.
 
-Decisiones donde el brief no alcanza (anotadas tambien en RECEIPT_F2-1.md):
+Contrato v1.3 (tanda T1):
+- `build_plan` produce los `args` de §3.2 con **todas** las claves (DP-2): `f2: 1`, `doc_id`,
+  `rev`, `hash`, `plan_sha256`, `caps` con `{objeto, infectado, animal, total}` (`total = -1`
+  si la biblioteca no lo fija), `classes` y las columnas `lid`, `ci`, `x_mm`, `z_mm` y
+  `yaw_mdeg`, de la misma longitud y en el orden del documento.
+- `plan_sha256` es el SHA-256 del JSON canonico de
+  `{doc_id, rev, hash, classes, lid, ci, x_mm, z_mm, yaw_mdeg}` (§3.2).
+- Unidades (§3.1): `x_mm = round(x * 1000)` con el `round` de Python (mitad al par) y
+  `yaw_mdeg = round(yaw * 1000) % 360000`, normalizado despues de redondear.
+- La expectativa (D11) y los predicados trabajan en mm: `EPS_Q` = 2 mm y `POS_TOL` = 500 mm.
+  La expectativa no pasa por el constructor del plan: es `x * 1000.0` sin redondear.
+- Las filas de las lecturas (§3.6) solo admiten enteros; un float o un bool las invalida.
+- La API HTTP sigue en metros (§3.8): `obs_now_row_to_m` convierte las filas `now` al recibir.
+- Un plan v1.2.2 (`rows`) no pasa `valid_plan_args`, y el mundo falso lo rechaza (`bad_plan`).
+
+Decisiones donde el brief no alcanza (anotadas tambien en los recibos):
 - `valid_op_id` acepta `(op|rd)-<1..6 digitos>`; el prefijo `rd-` es el de las internas
   de §4.5.
-- `compute_envelope` usa el maximo normativo 999999 para `ci` de las filas de checkpoint;
-  el cuerpo que decide el tope es `observe now`, que no lleva `ci`, asi que siguen
-  cabiendo 34 raices.
+- `compute_envelope` usa el maximo normativo 999999 para `ci` de las filas de checkpoint y
+  99 999 000 mm para `x_mm` y `z_mm`; el cuerpo que decide el tope es `observe now`.
 - En el predicado de «apply detenido», si `scene.pending` sigue siendo la orden se
   devuelve `("unresolved", None)`: la orden no esta resuelta y toca compensar (§4.5).
 - `validate_for_apply` acepta `op_id` y `conn` opcionales para medir la envolvente con
   sus valores reales; si no se pasan, usa el maximo normativo (`op-999999`, 999999).
+- `build_plan` sin `caps` validos lanza `ValueError`: no hay orden completa que mandar
+  (DP-2, A6). `validate_for_apply` ya para antes con `budget_exceeded`.
 """
 import copy
 import hashlib
@@ -23,8 +40,10 @@ import re
 
 from app.backend.bridge import WIRE_CAP, valid_world_read
 
-POS_TOL_M = 0.5
-EPS_Q = 0.002
+# Tolerancias de D12 en mm (§3.1 del brief de F2-partida): POS_TOL_M = 500 mm y EPS_Q = 2 mm.
+POS_TOL = 500
+EPS_Q = 2
+POS_TOL_M = POS_TOL  # nombre del brief (§3.1); desde v1.3 el valor va en mm
 SCENE_BATCH = 8
 
 NON_ACTOR_KINDS = ("objeto", "infectado", "animal")
@@ -42,6 +61,12 @@ HTTP_STATUS = {
     "plan_too_large": 422,
 }
 
+# Forma v1.3 de los args de scene.apply (§3.2): todas las claves siempre (DP-2).
+PLAN_COLUMNS = ("lid", "ci", "x_mm", "z_mm", "yaw_mdeg")
+PLAN_KEYS = ("f2", "doc_id", "rev", "hash", "plan_sha256", "caps", "classes") + PLAN_COLUMNS
+CAPS_KEYS = ("objeto", "infectado", "animal", "total")
+CAPS_TOTAL_NONE = -1  # valor neutro explicito: la biblioteca no fija total (DP-2)
+
 _DOC_ID_RE = re.compile(r"d-[0-9a-f]{8}")
 _LID_RE = re.compile(r"(obj|zmb|ani)-(0[1-9]|[1-9][0-9]+)")
 _HEX16_RE = re.compile(r"[0-9a-fA-F]{16}")
@@ -50,7 +75,11 @@ _OP_ID_RE = re.compile(r"(op|rd)-([0-9]{1,6})")
 _MAX_COUNT = 999999
 _MAX_REV = 999999999
 _MAX_WORLD_SIZE = 99999
-_MAX_Y = 9999.999
+# Rangos v1.3 de las filas (§3.6), en enteros
+MAX_XZ_MM = 99999000  # world_size <= 99999 m; cabe en un int de 32 bits
+MAX_Y_MM = 9999999  # y_mm y gy_mm en [-9 999 999, 9 999 999]
+YAW_MDEG_MOD = 360000  # yaw_mdeg en [0, 360000)
+MAX_HP_MILLI = 1000  # hp_milli en [0, 1000]
 MAX_STRING_CHARS = 1023  # A15/M20: el motor corta cada cadena de un JSON leido
 
 
@@ -74,25 +103,43 @@ def _is_conn(val):
     return _is_int(val) and 0 <= val <= _MAX_COUNT
 
 
-def _has_at_most_3_decimals(val):
-    if not _is_num(val):
-        return False
-    if _is_int(val):
-        return True
-    f = float(val)
-    return abs(round(f, 3) - f) <= 1e-9
+# --- Unidades del cable (§3.1) --------------------------------------------
 
 
-def _round3(val):
-    return round(float(val), 3)
+def m_to_mm(val):
+    """Metros -> milimetros enteros: `round(metros * 1000)` con el `round` de Python (§3.1)."""
+    return round(float(val) * 1000)
 
 
-def _normalize_yaw(val):
-    """Redondea el yaw a 3 decimales y lo normaliza a [0, 360) (§3.3 y §13 F2-06)."""
-    out = _round3(val) % 360.0
-    if out == 360.0:
-        out = 0.0
-    return out
+def yaw_to_mdeg(val):
+    """Grados -> milesimas de grado en [0, 360000): se normaliza despues de redondear (§3.1)."""
+    return round(float(val) * 1000) % YAW_MDEG_MOD
+
+
+def mm_to_m(val):
+    """Milimetros (o milesimas) enteros -> metros (o unidades). `None` se queda en `None`."""
+    if val is None:
+        return None
+    return val / 1000.0
+
+
+def obs_now_row_to_m(row):
+    """Fila `now` v1.3 -> la forma de la API (§3.8), en metros, grados y hp en [0, 1].
+
+    `[lid, x_mm, y_mm, z_mm, yaw_mdeg, hp_milli, n_own, n_foreign]` ->
+    `[lid, x, y, z, yaw, hp, n_own, n_foreign]`. Los nulos de M15 se quedan nulos.
+    """
+    lid, x, y, z, yaw, hp, n_own, n_foreign = row
+    return [lid, mm_to_m(x), mm_to_m(y), mm_to_m(z), mm_to_m(yaw), mm_to_m(hp), n_own, n_foreign]
+
+
+def obs_checkpoint_row_to_m(row):
+    """Fila de checkpoint v1.3 -> metros y grados: `[lid, ci, x, y, z, yaw, gy]`."""
+    lid, ci, x, y, z, yaw, gy = row
+    return [lid, ci, mm_to_m(x), mm_to_m(y), mm_to_m(z), mm_to_m(yaw), mm_to_m(gy)]
+
+
+# --- Identificadores --------------------------------------------------------
 
 
 def valid_lid(lid):
@@ -124,10 +171,13 @@ def compact_json_bytes(obj):
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def extract_expectation(doc):
-    """Extrae directamente del documento congelado {lid: (cls, x, z)} de cada entidad no actor (D11).
+# --- Expectativa, caps y plan ----------------------------------------------
 
-    No pasa por el constructor del plan ni redondea las coordenadas.
+
+def extract_expectation(doc):
+    """Extrae directamente del documento congelado {lid: (cls, x_mm, z_mm)} de cada entidad no actor (D11).
+
+    En mm (v1.3), pero sin pasar por el constructor del plan ni redondear: `x * 1000.0`.
     """
     if not isinstance(doc, dict):
         return {}
@@ -142,7 +192,7 @@ def extract_expectation(doc):
         x = ent.get("x")
         z = ent.get("z")
         if isinstance(lid, str) and isinstance(cls, str) and _is_num(x) and _is_num(z):
-            out[lid] = (cls, float(x), float(z))
+            out[lid] = (cls, float(x) * 1000.0, float(z) * 1000.0)
     return out
 
 
@@ -171,8 +221,27 @@ def extract_caps(store_catalog):
     return caps
 
 
+def wire_caps(caps):
+    """`caps` del cable v1.3: siempre las cuatro claves, con `total = -1` si no hay total (DP-2)."""
+    out = {kind: caps[kind] for kind in NON_ACTOR_KINDS}
+    out["total"] = caps["total"] if "total" in caps else CAPS_TOTAL_NONE
+    return out
+
+
+def plan_sha256_of(plan):
+    """SHA-256 del JSON canonico de {doc_id, rev, hash, classes, lid, ci, x_mm, z_mm, yaw_mdeg} (§3.2)."""
+    core = {key: plan[key] for key in ("doc_id", "rev", "hash", "classes") + PLAN_COLUMNS}
+    return hashlib.sha256(canonical_json_bytes(core)).hexdigest()
+
+
 def build_plan(doc, rev, hash_, store_catalog):
-    """Construye los args de scene.apply (§3.3) a partir del documento congelado."""
+    """Construye los args v1.3 de scene.apply (§3.2) a partir del documento congelado.
+
+    Todas las claves siempre (DP-2). Sin `caps` validos no hay orden completa: `ValueError`.
+    """
+    caps = extract_caps(store_catalog)
+    if caps is None:
+        raise ValueError("build_plan: sin caps validos no hay orden completa (DP-2, A6)")
     doc_id = doc["doc_id"]
     non_actors = [
         ent for ent in (doc.get("entities") or ())
@@ -180,34 +249,88 @@ def build_plan(doc, rev, hash_, store_catalog):
     ]
     classes = sorted({ent["cls"] for ent in non_actors})
     ci_map = {cls: idx for idx, cls in enumerate(classes)}
-    rows = [
-        [
-            ent["id"],
-            ci_map[ent["cls"]],
-            _round3(ent["x"]),
-            _round3(ent["z"]),
-            _normalize_yaw(ent["yaw"]),
-        ]
-        for ent in non_actors
-    ]
-    caps = extract_caps(store_catalog) or {}
-    core = {
+    plan = {
+        "f2": 1,
         "doc_id": doc_id,
         "rev": int(rev),
         "hash": hash_,
+        "plan_sha256": None,
+        "caps": wire_caps(caps),
         "classes": classes,
-        "rows": rows,
+        "lid": [ent["id"] for ent in non_actors],
+        "ci": [ci_map[ent["cls"]] for ent in non_actors],
+        "x_mm": [m_to_mm(ent["x"]) for ent in non_actors],
+        "z_mm": [m_to_mm(ent["z"]) for ent in non_actors],
+        "yaw_mdeg": [yaw_to_mdeg(ent["yaw"]) for ent in non_actors],
     }
-    plan_sha256 = hashlib.sha256(canonical_json_bytes(core)).hexdigest()
-    return {
-        "doc_id": doc_id,
-        "rev": int(rev),
-        "hash": hash_,
-        "plan_sha256": plan_sha256,
-        "caps": caps,
-        "classes": classes,
-        "rows": rows,
-    }
+    plan["plan_sha256"] = plan_sha256_of(plan)
+    return plan
+
+
+def plan_args_error(plan):
+    """Comprueba la forma v1.3 de los args de scene.apply (§3.2, DP-2).
+
+    Devuelve `None` si valen, o el pointer (`/plan/<clave>`) del primer fallo. Exige
+    exactamente las claves de `PLAN_KEYS`, `f2` = 1, `caps` con sus cuatro claves y las
+    columnas de la misma longitud, solo con enteros donde toca.
+    """
+    if not isinstance(plan, dict):
+        return "/plan"
+    for key in PLAN_KEYS:
+        if key not in plan:
+            return "/plan/%s" % key
+    for key in plan:
+        if key not in PLAN_KEYS:
+            return "/plan/%s" % key
+    if not (_is_int(plan["f2"]) and plan["f2"] == 1):
+        return "/plan/f2"
+    if not valid_doc_id(plan["doc_id"]):
+        return "/plan/doc_id"
+    if not _is_rev(plan["rev"]):
+        return "/plan/rev"
+    for key in ("hash", "plan_sha256"):
+        val = plan[key]
+        if not isinstance(val, str) or _HEX64_RE.fullmatch(val) is None:
+            return "/plan/%s" % key
+    caps = plan["caps"]
+    if not isinstance(caps, dict) or set(caps) != set(CAPS_KEYS):
+        return "/plan/caps"
+    for kind in NON_ACTOR_KINDS:
+        if not _is_int(caps[kind]) or caps[kind] < 0:
+            return "/plan/caps/%s" % kind
+    if not _is_int(caps["total"]) or caps["total"] < CAPS_TOTAL_NONE:
+        return "/plan/caps/total"
+    classes = plan["classes"]
+    if not isinstance(classes, list) or not all(isinstance(c, str) for c in classes):
+        return "/plan/classes"
+    cols = [plan[key] for key in PLAN_COLUMNS]
+    for key, col in zip(PLAN_COLUMNS, cols):
+        if not isinstance(col, list):
+            return "/plan/%s" % key
+    n = len(cols[0])
+    for key, col in zip(PLAN_COLUMNS, cols):
+        if len(col) != n:
+            return "/plan/%s" % key
+    for lid, ci, x, z, yaw in zip(*cols):
+        if not isinstance(lid, str):
+            return "/plan/lid"
+        if not _is_int(ci) or ci < 0 or ci >= len(classes):
+            return "/plan/ci"
+        if not _is_int(x):
+            return "/plan/x_mm"
+        if not _is_int(z):
+            return "/plan/z_mm"
+        if not _valid_yaw_mdeg(yaw):
+            return "/plan/yaw_mdeg"
+    return None
+
+
+def valid_plan_args(plan):
+    """True si los args de scene.apply tienen la forma v1.3 completa (DP-2)."""
+    return plan_args_error(plan) is None
+
+
+# --- Envolvente (§3.6 de F2b y §3.7 del brief de F2-partida) ----------------
 
 
 def _worst_generation(op_id="op-999999"):
@@ -247,33 +370,56 @@ def _worst_read_base(doc_id="d-00000000", max_retained=True, op_id="op-999999"):
     }
 
 
+def _envelope_caps(caps):
+    """caps de la envolvente: los valores reales de la orden; lo que falte, con su cota."""
+    src = caps if isinstance(caps, dict) else {}
+    out = {}
+    for kind in NON_ACTOR_KINDS:
+        val = src.get(kind)
+        out[kind] = val if _is_int(val) else _MAX_COUNT
+    total = src.get("total")
+    out["total"] = total if _is_int(total) else CAPS_TOTAL_NONE
+    return out
+
+
 def compute_envelope(lids, classes, caps=None, doc_id="d-00000000", rev=_MAX_REV,
                      hash_="0" * 64, op_id="op-999999", conn=_MAX_COUNT,
                      session="0" * 16, epoch="0" * 32, inst="0" * 32):
-    """Calcula la envolvente de bytes UTF-8 de los 4 cuerpos de §3.6.
+    """Calcula la envolvente de bytes UTF-8 de los 4 cuerpos de §3.6, con las formas v1.3.
 
     Usa los valores reales de la orden (`lid`, clases, `rev`, `op_id`, `conn`, `caps`,
-    `doc_id`, `hash`) y los maximos normativos de §3.6 solo para lo que pone el mod (A3).
+    `doc_id`, `hash`) y los maximos normativos v1.3 solo para lo que pone el mod (A3):
+    `x_mm`/`z_mm` 99 999 000, `y_mm`/`gy_mm` -9 999 999, `yaw_mdeg` 359 999, `hp_milli`
+    1000 y contadores 999 999.
     """
-    caps_obj = dict(caps) if isinstance(caps, dict) else {}
+    caps_obj = _envelope_caps(caps)
     sorted_classes = sorted(set(classes))
-    plan_rows = []
+    ci_max = max(len(sorted_classes) - 1, 0)
+    norm_lids = []
     ckpt_rows = []
     now_rows = []
     for lid in lids:
         norm_lid = lid if isinstance(lid, str) else "obj-999999"
-        plan_rows.append([norm_lid, 32, 99999.999, 99999.999, 359.999])
-        ckpt_rows.append([norm_lid, _MAX_COUNT, 99999.999, -9999.999, 99999.999, 359.999, -9999.999])
-        now_rows.append([norm_lid, 99999.999, -9999.999, 99999.999, 359.999, 0.999, _MAX_COUNT, _MAX_COUNT])
+        norm_lids.append(norm_lid)
+        ckpt_rows.append([norm_lid, _MAX_COUNT, MAX_XZ_MM, -MAX_Y_MM, MAX_XZ_MM,
+                          YAW_MDEG_MOD - 1, -MAX_Y_MM])
+        now_rows.append([norm_lid, MAX_XZ_MM, -MAX_Y_MM, MAX_XZ_MM, YAW_MDEG_MOD - 1,
+                         MAX_HP_MILLI, _MAX_COUNT, _MAX_COUNT])
+    n = len(norm_lids)
 
     args = {
+        "f2": 1,
         "doc_id": doc_id,
         "rev": rev,
         "hash": hash_,
         "plan_sha256": "0" * 64,
         "caps": caps_obj,
         "classes": sorted_classes,
-        "rows": plan_rows,
+        "lid": norm_lids,
+        "ci": [ci_max] * n,
+        "x_mm": [MAX_XZ_MM] * n,
+        "z_mm": [MAX_XZ_MM] * n,
+        "yaw_mdeg": [YAW_MDEG_MOD - 1] * n,
     }
     poll_body = {
         "ok": True,
@@ -292,7 +438,7 @@ def compute_envelope(lids, classes, caps=None, doc_id="d-00000000", rev=_MAX_REV
     }
     poll_apply_bytes = len(compact_json_bytes(poll_body))
 
-    # Cota superior del envoltorio /result con reason de longitud maxima (31 B sobre reason=null)
+    # Cota superior del envoltorio /result con un reason de longitud maxima
     worst_reason = "foreign_content_retained_000000"
     read_apply = _worst_read_base(doc_id=doc_id, max_retained=False, op_id=op_id)
     read_apply["obs"] = {"at": "checkpoint", "rows": ckpt_rows}
@@ -563,36 +709,42 @@ def validate_for_apply(doc, rev, hash_, store_catalog, world_catalog=None,
     }
 
 
-def _valid_coord_x_z(val, world_size=_MAX_WORLD_SIZE):
-    if not _has_at_most_3_decimals(val):
+# --- Validacion de lecturas (§3.2 de F2b y §3.6 del brief de F2-partida) ----
+
+
+def _xz_limit_mm(world_size):
+    return min(float(world_size) * 1000.0, float(MAX_XZ_MM))
+
+
+def _valid_xz_mm(val, world_size=_MAX_WORLD_SIZE):
+    """`x_mm` y `z_mm`: enteros en [0, world_size * 1000] (y como mucho 99 999 000)."""
+    if not _is_int(val):
         return False
-    f = float(val)
-    return 0.0 <= f <= float(world_size) <= float(_MAX_WORLD_SIZE)
-
-
-def _valid_coord_y(val):
-    if not _has_at_most_3_decimals(val):
+    if not _is_num(world_size) or float(world_size) > float(_MAX_WORLD_SIZE):
         return False
-    f = float(val)
-    return -_MAX_Y <= f <= _MAX_Y
+    return 0 <= val <= _xz_limit_mm(world_size)
 
 
-def _valid_yaw(val):
-    if not _has_at_most_3_decimals(val):
-        return False
-    f = float(val)
-    return 0.0 <= f < 360.0
+def _valid_y_mm(val):
+    """`y_mm` y `gy_mm`: enteros en [-9 999 999, 9 999 999]."""
+    return _is_int(val) and -MAX_Y_MM <= val <= MAX_Y_MM
 
 
-def _valid_hp(val):
-    if not _has_at_most_3_decimals(val):
-        return False
-    f = float(val)
-    return 0.0 <= f <= 1.0
+def _valid_yaw_mdeg(val):
+    """`yaw_mdeg`: entero en [0, 360000)."""
+    return _is_int(val) and 0 <= val < YAW_MDEG_MOD
+
+
+def _valid_hp_milli(val):
+    """`hp_milli`: entero en [0, 1000]."""
+    return _is_int(val) and 0 <= val <= MAX_HP_MILLI
 
 
 def valid_obs_checkpoint_row(row, world_size=_MAX_WORLD_SIZE):
-    """Valida una fila de obs checkpoint: [lid, ci, x, y, z, yaw, gy] (§3.3 y §3.6)."""
+    """Valida una fila de obs checkpoint v1.3: [lid, ci, x_mm, y_mm, z_mm, yaw_mdeg, gy_mm] (§3.6).
+
+    Solo enteros: un float o un bool invalidan la fila.
+    """
     if not isinstance(row, list) or len(row) != 7:
         return False
     lid, ci, x, y, z, yaw, gy = row
@@ -603,27 +755,27 @@ def valid_obs_checkpoint_row(row, world_size=_MAX_WORLD_SIZE):
     if ci == -1:
         # Entidad que ya no vive o con lectura fuera de rango: ci=-1 y x,y,z,yaw a null (§3.3)
         if x is None and y is None and z is None and yaw is None:
-            return gy is None or _valid_coord_y(gy)
+            return gy is None or _valid_y_mm(gy)
         if x is None or y is None or z is None or yaw is None or gy is None:
             return False
     else:
         if x is None or y is None or z is None or yaw is None or gy is None:
             return False
     return (
-        _valid_coord_x_z(x, world_size)
-        and _valid_coord_y(y)
-        and _valid_coord_x_z(z, world_size)
-        and _valid_yaw(yaw)
-        and _valid_coord_y(gy)
+        _valid_xz_mm(x, world_size)
+        and _valid_y_mm(y)
+        and _valid_xz_mm(z, world_size)
+        and _valid_yaw_mdeg(yaw)
+        and _valid_y_mm(gy)
     )
 
 
 def valid_obs_now_row(row, world_size=_MAX_WORLD_SIZE):
-    """Valida una fila de obs now: [lid, x, y, z, yaw, hp, n_own, n_foreign] (§3.5 y §3.6).
+    """Valida una fila de obs now v1.3: [lid, x_mm, y_mm, z_mm, yaw_mdeg, hp_milli, n_own, n_foreign].
 
     M15: una raiz muerta da `x`, `y`, `z`, `yaw` y `hp` a `None` y los dos
     contadores a 0. Se acepta esa variante exacta; cualquier combinacion con solo
-    algunos nulos se rechaza.
+    algunos nulos se rechaza. Solo enteros: un float o un bool invalidan la fila.
     """
     if not isinstance(row, list) or len(row) != 8:
         return False
@@ -636,15 +788,15 @@ def valid_obs_now_row(row, world_size=_MAX_WORLD_SIZE):
         return _is_count(n_own) and _is_count(n_foreign) and n_own == 0 and n_foreign == 0
     if any(nulls):
         return False
-    if not _valid_coord_x_z(x, world_size):
+    if not _valid_xz_mm(x, world_size):
         return False
-    if not _valid_coord_y(y):
+    if not _valid_y_mm(y):
         return False
-    if not _valid_coord_x_z(z, world_size):
+    if not _valid_xz_mm(z, world_size):
         return False
-    if not _valid_yaw(yaw):
+    if not _valid_yaw_mdeg(yaw):
         return False
-    if not _valid_hp(hp):
+    if not _valid_hp_milli(hp):
         return False
     if not _is_count(n_own) or not _is_count(n_foreign):
         return False
@@ -735,6 +887,9 @@ def valid_scene_read(read, require_obs=None, world_size=_MAX_WORLD_SIZE):
     return True
 
 
+# --- Predicados (§4.3), en mm ----------------------------------------------
+
+
 def dist3(a, b):
     """Distancia euclidea 3D entre dos ternas (x, y, z)."""
     dx = float(a[0]) - float(b[0])
@@ -744,20 +899,24 @@ def dist3(a, b):
 
 
 def plan_matches_expectation(plan, expectation):
-    """Comprueba que las filas del plan casen con la expectativa de D11."""
+    """Comprueba que las columnas del plan casen con la expectativa de D11, en mm.
+
+    Las columnas tienen que tener la misma longitud (una columna desalineada no casa).
+    """
     if not isinstance(plan, dict) or not isinstance(expectation, dict):
         return False
     classes = plan.get("classes")
-    rows = plan.get("rows")
-    if not isinstance(classes, list) or not isinstance(rows, list):
+    cols = [plan.get(key) for key in PLAN_COLUMNS]
+    if not isinstance(classes, list) or not all(isinstance(col, list) for col in cols):
         return False
-    if len(rows) != len(expectation):
+    n = len(cols[0])
+    if any(len(col) != n for col in cols):
+        return False
+    if n != len(expectation):
         return False
     seen = set()
-    for row in rows:
-        if not isinstance(row, list) or len(row) != 5:
-            return False
-        lid, ci, x, z, yaw = row
+    limit = POS_TOL - EPS_Q
+    for lid, ci, x, z, yaw in zip(*cols):
         if not valid_lid(lid) or lid in seen or lid not in expectation:
             return False
         seen.add(lid)
@@ -766,15 +925,17 @@ def plan_matches_expectation(plan, expectation):
         exp_cls, exp_x, exp_z = expectation[lid]
         if classes[ci] != exp_cls:
             return False
-        if not _valid_yaw(yaw):
+        if not _valid_yaw_mdeg(yaw):
             return False
-        if dist3((x, 0.0, z), (exp_x, 0.0, exp_z)) >= (POS_TOL_M - EPS_Q):
+        if not _is_int(x) or not _is_int(z):
+            return False
+        if dist3((x, 0.0, z), (exp_x, 0.0, exp_z)) >= limit:
             return False
     return seen == set(expectation.keys())
 
 
 def check_apply_predicate(order, read, expectation=None, world_size=_MAX_WORLD_SIZE):
-    """Predicado de apply (§4.3), valido para la via directa y la reconciliacion."""
+    """Predicado de apply (§4.3), valido para la via directa y la reconciliacion. En mm."""
     if not isinstance(order, dict):
         return False
     exp = expectation if expectation is not None else order.get("expectation")
@@ -820,7 +981,7 @@ def check_apply_predicate(order, read, expectation=None, world_size=_MAX_WORLD_S
 
     classes = args.get("classes") or []
     seen_lids = set()
-    limit = POS_TOL_M - EPS_Q
+    limit = POS_TOL - EPS_Q
     for row in rows:
         lid, ci, x, y, z, _yaw, gy = row
         if lid in seen_lids or lid not in exp:
