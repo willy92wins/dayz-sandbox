@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3.10, **congelada.** La v1.3.9 corrige lo que pasa al reiniciar el backend: sesión nueva, ids que se repiten y la op cortada de P5 sin terminal (§6.1, puntos 2, 5 y 6, y F2P-09). La v1.3.10 recoge el contrato de salud del censo de F0.3 (§5.3). Ver §12. Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
+- **Versión:** v1.3.11, **congelada.** La v1.3.11 recoge el arbitraje de Sol r4: el oráculo se ajusta al cable real de la sonda (las páginas no llevan `server_epoch` y el `result` no lleva `inst`) y cierra los PASA falsos y el FALLA espurio que encontró Sol (§6.1, §12). La v1.3.9 corrige lo que pasa al reiniciar el backend: sesión nueva, ids que se repiten y la op cortada de P5 sin terminal (§6.1, puntos 2, 5 y 6, y F2P-09). La v1.3.10 recoge el contrato de salud del censo de F0.3 (§5.3). Ver §12. Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -256,6 +256,9 @@ Si S-persist decide otros valores, se cambia la constante y se anota su commit e
   - `P5:cut`, el del apply cortado;
   - `P5:apply2`, el del apply nuevo después de reconciliar.
 - **El corte de P5** lo registra el runner como evento `cut`, con su `t_ms` en el reloj común (R-11, §5.4).
+  - **v1.3.11 (F-03):** el efecto previo al corte se acredita con los `poll` de la sonda como ancla (§6.1, F2P-09). El runner no añade nada, pero corta después de al menos un `poll` de la sonda posterior al primer nacimiento del apply cortado. Si corta antes, P5 da INCONCLUSO y se repite.
+  - Tras el corte, el runner reinicia el backend y lo registra como `restart` con `target: backend` (§5.4).
+- **Discos por criatura (v1.3.11, F-02):** cada disco se juzga en su propio instante (§6.1, punto 4). El runner toma el censo principal enseguida y los discos lo antes posible; un disco tardío deja su criatura en INCONCLUSO `coverage_gap`.
 - **Hijos propios (P-09):** en M1 el producto solo crea raíces (sin actores, D3), así que no hay hijos propios que resetear en partida. Esa parte de A3 se acredita offline (F2b, filas F2-A3) y aquí queda **N/A con motivo**. F3 la lleva a partida con el equipo de los actores.
 
 ### 5.3 Sonda (interfaces de F0.3)
@@ -415,6 +418,9 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
     - Después arbitra el orquestador y deja escrito qué cierra cada commit. El arbitraje de r3 está en `C:\tmp\dsbx-f2p-work\recibos\arbitraje-r3.md`.
     - La revisión adversarial de otra familia (un subagente de Claude: ni DeepSeek, autor, ni OpenAI) va **en paralelo y como extra**, nunca en lugar de Sol. La de `2865362` dio UNSOUND (V-01 a V-18).
     - Si el filtro de OpenAI corta a Sol sin veredicto, se arbitra con las negativas y esa pasada.
+    - **Sol r4,** sobre `7ed2615`, dio UNSOUND: F-01 a F-11 BLOQ, F-12 a F-14 MAY y F-15 MEN. El orquestador los acepta todos, más A-01, que encontró al comprobar F-01, y los recoge en esta v1.3.11 (`C:\tmp\dsbx-f2p-work\recibos\arbitraje-r4.md`).
+      - **Cierre:** cada caso pasa primero en rojo sobre `7ed2615` (el resultado espurio que dijo Sol) y después en verde con el arreglo, con su motivo. A eso se suman la prueba de conformidad con el cable real (§6.1, fixture) y la pasada de Claude sobre el diff como extra.
+      - **Pendiente de la principal:** si Sol hace un cierre limitado al diff de T2f-4 antes de congelar. El código final cambia después de r4, que era la última ronda.
   - **Antes de congelar:** cada ataque de Sol (O, R y S) y de la pasada (V) tiene su mutante, su negativa o su variante positiva, y da lo que dice §6.1.
 - **Gate y CLI (DP-13, P-11):** la forma que propone F0.3 para su núcleo (§11):
   - **`F2P` en `SPIKE_REGISTRY`** (`qa/gate_core.py:14`), con `qa/f2p_run.py`, `qa/f2p_eval.py` y `qa/f2p_mutants.py`. Hereda el despacho, las partes, `--evaluate-only` y la agregación;
@@ -442,10 +448,13 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
      - el trabajo (`per_census_start`, `per_witness_start` o el estímulo) se encoló y **se entregó** (evento `deliver` del bridge de la sonda) a una instancia del servidor;
      - esa instancia dio `/hello` 200 con `qa0`, el build y `probe_ver = dsbx-qa1+<identity.probe_stamp>`, **antes** de esa entrega en el reloj común (punto 10);
      - la instancia del encolado, la de la entrega y la de la respuesta (páginas o resultado del estímulo) son **la misma**, también en los estímulos;
+     - **la instancia de una respuesta (v1.3.11, A-01):** el evento `result` del bridge de la sonda **no lleva `inst`** (`qa/bridge_qa.py:858-866`). Es la instancia que el bridge tenía aceptada para ese peer al recibirlo, la del último `hello` aceptado de ese peer antes del `result` en el reloj común. El bridge rechaza con `409 hello_required` cualquier `/result` de otra instancia (`qa/bridge_qa.py:833-836`), y ese rechazo queda en el registro como `inst_reject`;
      - sin `deliver`, con el `/hello` después de la entrega o con instancias que no casan, INCONCLUSO.
    - **Páginas (S-01, S-15):**
-     - están todas, de la 0 a la `n-1`;
-     - cada una lleva el mismo `job`, su índice y el `server_epoch` de esa instancia, **no vacío**;
+     - están todas, de la 0 a la `n-1`; con 0 filas, `pages_n = 0` y se lee la página 0 (`DSBX_QA_Probe.c:1553-1557`);
+     - cada una lleva el mismo `job` y su índice (`page_n`). **No llevan `server_epoch`** (v1.3.11, F-01): en el cable real, las páginas de `job_read` traen en `sk` solo `job`, `state`, `reason` y `resource` (`DSBX_QA_Probe.c:1570-1578`);
+     - **el epoch del trabajo** es el `server_epoch` de su **lectura de arranque**, que sí lo trae (censo y testigo, `censo-interfaz-f03.md:28` y `:121`). No puede estar vacío. Sus páginas se ligan a él por el `job` y por la instancia de su entrega, que tiene que ser la del arranque;
+     - **conformidad (v1.3.11):** el oráculo acepta tal cual las líneas reales de las diags de F0.3. Lo comprueba una prueba (fixture, abajo);
      - en el censo, `snap_tick_ms` y `snap_frame` son mayores que 0, y `rows_captured_n` es igual al número de filas;
      - los selectores del censo tienen los valores de §5.3: `select_all_entityai_b = 1`, `include_director_b = 1`, el centro y el radio de su disco.
    - **Frescura frente al efecto que juzga:**
@@ -457,7 +466,7 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
 2. **Estado de una op (O-02, S-09).**
    - Es el **último** estado **terminal** de su `(sesión, op_id)` en los `op.state` del backend, con su marca de tiempo. Tiene que ser anterior a la medición que lo contrasta.
    - **La identidad de una op es `(sesión, op_id)`, nunca el `op_id` solo** (v1.3.9):
-     - cada instancia del backend tiene su sesión (`app/backend/bridge.py:112`, `secrets.token_hex(8)`), y cada reinicio del backend (P4a, P5) abre una sesión nueva;
+     - cada instancia del backend tiene su sesión (`app/backend/bridge.py:112`, `secrets.token_hex(8)`), y cada reinicio del backend (los dos de P3, P4a y P5) abre una sesión nueva;
      - los ids de la API vuelven a empezar en `op-1` con cada instancia (`app/backend/server.py:88-89`, `scene_live.py:360-362`), así que se **repiten** entre sesiones;
      - el `op.state` del backend no lleva la sesión: es la de la instancia que lo emitió, el tramo entre dos eventos `restart` del backend en el registro del runner (§5.4), que coincide con la sesión de las respuestas a `/hello` de ese tramo;
      - solo las ops de la API emiten `op.state` (`server.py:259`, `:297`; `scene_live.py:378`). Las órdenes internas del bridge, como la lectura de reconciliación, el `scene.observe` del checkpoint y las compensaciones, llevan id `rd-N` (`bridge.py:234-236`) y no emiten ninguno.
@@ -467,6 +476,8 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
      - `fallido/*`;
      - `parcial` solo con los motivos `contenido_ajeno`, `compensada`, `interrumpida`, `superada` y `mundo_reiniciado` (`app/backend/scene_live.py:116-124` y `:676-682`).
    - **No son terminales,** y no cuentan: `pendiente` y cualquier otro `parcial`, como `parcial/sin_resultado`.
+   - **Igualdad exacta (v1.3.11, F-05):** el estado y su motivo se comparan con los que emite el backend por igualdad exacta, nunca por prefijo. Un estado que el backend no emite, como `observado_inventado`, no es terminal.
+   - **El estado esperado de cada etapa** es el de §5.2: por ejemplo, el apply de P2 da `observado`, los resets de P3 dan `parcial/contenido_ajeno` y el reset de P3c da `observado`. Una etapa positiva con otro terminal, como `fallido/create_failed`, hace fallar la comprobación que la juzga, aunque el censo cuadre. La única etapa sin terminal es la op cortada de P5.
 3. **Generaciones (O-03, R-08, S-03, S-04, V-06).**
    - **Reconstrucción:** el conjunto propio de cada apply (P2, P2n, P3, P4a, P4b y los dos de P5) se reconstruye con **su** testigo.
      - Son las **raíces** nacidas en su ventana que casan con una fila del documento, por clase y a menos de 0,5 m en horizontal.
@@ -474,13 +485,16 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
      - Un nacimiento de una clase que **no** es del documento no entra en la generación: es ruido (punto 9).
    - **Correspondencia uno a uno:**
      - cada fila del documento de ese apply casa con un solo nacimiento, y cada nacimiento con una sola fila; las multiplicidades se consumen;
-     - un nacimiento de una clase del documento que no encuentra fila libre es un **extra** de esa generación.
+     - un nacimiento de una clase del documento que no encuentra fila libre es un **extra** de esa generación;
+     - **los hijos (v1.3.11, F-10):** en M1 el producto solo crea raíces (§5.2, P-09). Un nacimiento **con padre** de una clase de las escenas no entra en la generación, pero tampoco se descarta: es un **extra** (F2P-13), con el trato de la CE del punto 9 si su clase la crea la CE.
    - **Completa y disjunta (S-03):**
      - **completa:** cada fila del documento del apply está casada. Una fila sin nacimiento hace fallar la comprobación que juzga ese apply. Por ejemplo, P4b tiene que crear sus 33;
-     - **disjunta:** los `net_id` son nuevos, nunca de otra generación;
+     - **viva (v1.3.11, F-06):** en **cada** apply positivo (P2, los dos de P3, los dos de P4a, P4b y el apply nuevo de P5), la generación completa está viva en el censo válido siguiente a ese apply, seguida por identidad, con la pose de §6 en los objetos. Una generación que nace y desaparece antes de su censo hace fallar la comprobación que juzga ese apply. P2n queda fuera, porque es la negativa;
+     - **disjunta (v1.3.11, F-11):** los `net_id` son nuevos, nunca de otra generación **del mismo epoch**. La interfaz solo garantiza el `net_id` durante la sesión del servidor (`censo-interfaz-f03.md:39`), así que un `net_id` repetido en otro epoch es otra entidad y no rompe la disjunción. Que nada vuelva tras un reinicio lo juzga F2P-07;
      - **sin restos:** donde la parte exige que la generación anterior ya no esté (después de un reset), no queda ninguna entidad suya viva.
    - **Identidades (S-04):**
-     - la generación se sigue después por `net_id` en las mediciones válidas, aunque la entidad se desplace;
+     - la identidad de una entidad es `(epoch, net_id)` (v1.3.11, F-11). El seguimiento no cruza un reinicio del servidor;
+     - la generación se sigue después por esa identidad en las mediciones válidas, aunque la entidad se desplace;
      - **nunca** se vuelve a buscar por pose. Tampoco en P2n;
      - de las criaturas se comprueba la identidad y que estén vivas, **no su pose**, porque se mueven. La pose solo se compara en los objetos.
 4. **Cobertura (O-07, R-04, R-07, S-02, S-12, V-08).**
@@ -488,17 +502,19 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
      - una medición de censo es la **unión** de sus trabajos: el disco principal, con etiqueta `<tag>`, y los discos por entidad, con etiqueta `<tag>:disk:<lid>`. Se ligan **por etiqueta**, no por cercanía en el tiempo;
      - se deduplica por `net_id`;
      - **cada componente** pasa la validación y la frescura del punto 1 frente al efecto que juzga. Si uno no las pasa, la medición entera da INCONCLUSO; nunca se omite en silencio.
-   - **Quién la usa:** **todas** las comprobaciones, para posiciones, inventarios y el control: F2P-03, 05, 06, 07, 08, 10 y 12 incluidas. Ninguna lee un trabajo suelto.
+   - **Quién la usa:** **todas** las comprobaciones, para posiciones, inventarios y el control: F2P-03, 05, 06, 07, 08, 10 y 12 incluidas. Ninguna lee un trabajo suelto. Tampoco el censo propio del control ni las búsquedas hacia atrás de F2P-10 (v1.3.11, F-08).
+   - **Discos prescritos (v1.3.11, F-08):** cada componente lleva el centro y el radio de §5.2: el disco principal en (6170, 7643) con 115 m; el de cada criatura, centrado en su última posición válida, con 60 m para infectados y 120 m para animales; el del control, el de §5.3. Un componente con otros argumentos no vale, y la medición da INCONCLUSO. No basta con que la respuesta repita los argumentos pedidos.
    - **Contención:** «la unión cubre un disco» se comprueba contra la **unión** de los discos, no contra uno solo. Vale una rejilla de 0,5 m o un cálculo exacto.
    - **La última posición válida:**
      - sale de una medición válida (punto 1) **del mismo epoch** que la medición que muestra la ausencia;
      - la posición del documento **nunca** hace de posición observada (S-12);
      - sin esa posición, INCONCLUSO.
    - **Ausencia de un objeto:** se concluye solo si su última posición válida está dentro de la unión y a más de 15 m de su borde. Si no, INCONCLUSO `coverage_gap`.
-   - **Ausencia de una criatura (R-04):**
-     - se concluye si la unión cubre el disco centrado en su última posición válida con radio `V_MAX · Δt + 2 m`;
+   - **Ausencia de una criatura (R-04; v1.3.11, F-02):**
+     - se concluye solo si **un único componente** de la unión, el principal o un disco, no la tiene y cubre el disco centrado en su última posición válida con radio `V_MAX · Δt + 2 m`, con Δt calculado al tick de **ese** componente. Los componentes se capturan en instantes distintos: la unión de varios no prueba nada, porque la criatura puede moverse entre capturas;
      - `V_MAX` = 7 m/s para infectados y 12 m/s para animales `[verify F2 en partida]`;
-     - Δt es el tick de la medición que muestra la ausencia menos el tick de esa última posición (`snap_tick_ms` del censo o `tick_ms` del testigo), los dos del mismo epoch;
+     - Δt es el `snap_tick_ms` de ese componente menos el tick de esa última posición (`snap_tick_ms` del censo o `tick_ms` del testigo), los dos del mismo epoch;
+     - **el tipo** (criatura u objeto, y qué criatura) sale de lo observado, `ai_agent_b` en su última medición válida, y de la fila del documento con la que casó su nacimiento. **Nunca** del prefijo de un `lid` que informe el producto. Si se contradicen, INCONCLUSO `kind_mismatch`;
      - el runner toma, justo después de cada reset, un disco por criatura centrado en su posición de antes: 60 m para infectados y 120 m para animales (§5.2);
      - si no lo cubre, o los ticks son de epochs distintos, INCONCLUSO `coverage_gap`, que §7 admite con su motivo.
 5. **Traza (O-11, R-10).**
@@ -506,7 +522,12 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
      - cada resultado va después de una entrega de la misma identidad y conexión;
      - cada acuse va después de su resultado;
      - en P2, la segunda respuesta va después de la segunda entrega.
-   - **Una sola resolución por entrega (S-07, V-15):** cada entrega tiene **una** resolución: su resultado y un acuse **aceptado**, HTTP 2xx con `ok: true`. La excepción es el corte de P5. En P2, la segunda entrega tiene su resultado con `dup: true`.
+   - **Identidad completa (v1.3.11, F-04):**
+     - la sesión del query de una petición es la misma que la de su cuerpo;
+     - la instancia y el epoch de cada resultado son los de su entrega;
+     - la sesión vale solo si su `/hello` del producto fue **aceptado**: HTTP 200 con la sesión en la respuesta. Un `/hello` rechazado no abre sesión;
+     - un desacuerdo en cualquiera de estas cosas rompe la traza.
+   - **Una sola resolución por entrega (S-07, V-15):** cada entrega tiene **una** resolución: su resultado y un acuse **aceptado**, HTTP 2xx con `ok` igual al booleano `true` (una cadena `"false"` o `"true"` no vale; v1.3.11, F-04). La excepción es el corte de P5. En P2, la segunda entrega tiene su resultado con `dup: true`.
    - **Rompen la traza:**
      - una respuesta de otra sesión o de otra conexión;
      - un resultado sin entrega previa;
@@ -515,9 +536,14 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
      - un `op.state` sin su `/result` recibido.
    - **La única excepción es el corte de P5:** hay entrega y no hay resultado, por diseño.
      - Si el producto reenvía el resultado de la op cortada al backend nuevo, el backend lo rechaza con `409 hello_required` o `400 bad_request`, porque la sesión ya no es la vigente (`bridge.py:592-593` y `:610-611`). Ese reenvío y su rechazo tampoco rompen la traza, y no cuentan como resolución.
+     - **Alcance de la excepción (v1.3.11, F-04):** vale solo para el `(sesión, op_id)` de la op cortada, después del `cut`, en el tramo del backend nuevo y con el rechazo. Un resultado rechazado con otra identidad, en otro momento o en otro tramo rompe la traza. Por ejemplo, uno de una sesión desconocida en P2 cuyo `op_id` coincide con el de la futura op cortada.
    - **Sesiones (v1.3.9):** la traza se correlaciona dentro de cada sesión del backend (punto 2). Tras cada reinicio del backend, el peer recibe `409 hello_required` con la sesión vieja y repite `/hello`, que le da la sesión nueva. Ese `409` en un `/poll` no rompe la traza.
 6. **Reconciliación (O-12, R-02, S-08, V-01).**
-   - **La evidencia:** tras el reinicio del backend (P4a) y tras el corte (P5) tiene que aparecer en el `tap`, **antes de la entrega del apply siguiente de esa parte**:
+   - **Cuándo (v1.3.11, F-03):** tras **cada** reinicio del backend, los dos de P3, el de P4a y el de P5 tras el corte.
+     - **El reinicio se acredita** con el evento `restart` del runner (`target: backend`) y con un `/hello` aceptado después, con una sesión distinta de la del tramo anterior.
+     - Si no se acredita, la comprobación de esa parte da INCONCLUSO, porque el escenario no ocurrió. Esa comprobación es F2P-05 en P3, F2P-08 en P4a y F2P-09 en P5.
+     - Si se acredita y falta la lectura, o va antes del `restart`, o en la sesión vieja, o después de la primera entrega de escena del tramo, es **FALLA**.
+   - **La evidencia:** tras ese reinicio tiene que aparecer en el `tap`, **antes de la primera entrega de escena (`scene.apply` o `scene.reset`) del tramo nuevo**:
      - un `state.read` entregado al servidor del epoch vigente;
      - y su `/result` con `status: done` y una lectura **válida**: la que acepta el consumidor real, `_valid_read_compat` de `app/backend/scene_live.py:147` (que delega en `valid_scene_read`, `scene_plan.py:806`), con el tamaño del mundo del servidor y sin exigir `obs`. El oráculo usa ese validador tal cual, para no divergir del backend en ningún sentido;
      - el `epoch` de la lectura es el del `/hello` vigente, y su bloque `scene` lleva el `doc_id` de la orden;
@@ -560,6 +586,7 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
    - Las comparaciones entre censos (el segundo reset de P3, P3c y P4) usan solo las identidades seguidas: las propias, las ajenas y las de la escena 2.
    - El total de P5 sale de las generaciones, no de las clases nuevas frente a P1. Nunca se usa `spawn_tick_ms` de lo que crea el producto: la sonda lo deja a 0 (`DSBX_QA_X_Persist.c:1648-1659`, #22; V-03).
    - **Clases que la CE crea en la zona:** las que el censo de P1 trae fuera de toda generación. Para ellas, un extra o una reaparición que **no** se distingue del botín da INCONCLUSO `posible_botin_ce`, no FALLA (S-13). Los casos concretos están en F2P-07 y F2P-13.
+   - **En todas las comprobaciones (v1.3.11, F-12):** el mismo trato vale en **cada** comprobación que cuenta extras o compara conteos: F2P-01, 04, 07, 08, 09 y 13. Un extra de una clase que crea la CE nunca da FALLA en una y `posible_botin_ce` en otra; da INCONCLUSO `posible_botin_ce` en todas, nunca PASA.
 10. **Reloj común (R-03).**
     - Todos los `t_ms` de `samples/` salen del mismo reloj: el monotónico del proceso del runner, con un único origen por parte (§5.4). Eso incluye el `tap`, el backend, el bridge de la sonda y los eventos del runner (`cut` y los reinicios).
     - Los `t_ms` solo se comparan entre sí.
@@ -597,17 +624,21 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
     - padre;
     - **inventario:** clases y `net_id` de los hijos, no solo el contador;
   - estado terminal `parcial/contenido_ajeno` en los dos resets;
+  - **tras cada reset, las retenidas se recalculan desde cero** (v1.3.11, F-07): todas las propias presentes en el censo de después de ese reset se contrastan con el conjunto permitido completo, los contenedores con algo ajeno. No basta con que siga lo que quedó tras el primero. Una raíz de más de la generación de P3, como `1:201` en `P3:post_reset2`, es FALLA;
+  - la reconciliación tras los dos reinicios del backend de P3 (punto 6);
   - sin ningún estímulo crudo de ajenos, INCONCLUSO, no FALLA (V-18).
 - **F2P-06 (O-08, O-09):**
   - Tras la limpieza: 0 propias vivas de la generación de P3, y las tres de la escena 2 intactas con la misma comparación completa.
   - Los estímulos de la sonda, acreditados por sus respuestas crudas:
     - `per_spawn_raw`: cada ajeno con su `net_id`, y en el cargo con `obs_parent_net_id` igual al contenedor pedido;
     - `per_cleanup_qa`, llamada **sin discos** (§5.3): `cleaned_raw_n` igual al número de ajenos puestos. El control persistente todavía no existe en P3c.
+  - **Lo declarado frente a lo observado (v1.3.11, F-07):** cada ajeno que la limpieza dice haber borrado falta en el censo válido de después. Si `cleaned_raw_n` cuadra pero un ajeno sigue vivo, como el `Apple`, es FALLA.
   - Sin estímulos, INCONCLUSO (V-18).
 - **F2P-07 (O-10, R-09, S-13, V-09, V-11):**
   - **Los reinicios:** acreditados (punto 8).
   - **El control persistente:**
-    - su creación se acredita con la respuesta cruda de `per_spawn_raw persistent_control` al empezar P4a, validada (punto 1): la clase, el `net_id`, la posición fuera de la zona y la marca pedida (§5.3);
+    - su creación se acredita con la respuesta cruda de `per_spawn_raw persistent_control` al empezar P4a, validada (punto 1): la clase, el `net_id`, la posición fuera de la zona y la marca pedida (§5.3). **La creación exige salud real con la marca** (§5.3 v1.3.10: lo que crea el QA lleva salud real). Una creación con `-1/-1` no acredita el control (v1.3.11, F-08). La lectura después del reinicio se juzga aparte, en su censo propio;
+    - su censo propio pasa por la unión validada (punto 4), de la instancia y el epoch vigentes después de ese reinicio. Un censo de la instancia anterior no vale (v1.3.11, F-08);
     - reaparece después de cada reinicio, reconocido en su censo propio como dice §5.3;
     - si no reaparece, INCONCLUSO;
     - está **fuera** de la zona de F2, así que dentro de ella no se exime a nada por clase ni por salud (V-11).
@@ -616,6 +647,10 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
     - **FALLA** si aparece una entidad de su misma clase con la pose de esa última posición: a 0,1 m en x, y y z y a 1° en yaw. Es lo que restaura la persistencia.
     - **FALLA** también si la entidad es de una clase de la escena 1 a menos de 2 m de esa posición, aunque no case con el documento, siempre que la clase no la cree la CE en la zona (punto 9).
     - **INCONCLUSO `posible_botin_ce`** si la clase sí la crea la CE en la zona y la pose no es exacta. Nunca PASA.
+    - **Las criaturas (v1.3.11, F-09):** se mueven, así que la pose no sirve. Cuenta cualquier criatura (`ai_agent_b = 1`) de una clase de criatura de las escenas de F2 en la zona, en el censo después del reinicio y antes del apply siguiente, sin umbral de distancia:
+      - **FALLA** si su clase no la crea la CE en la zona (punto 9);
+      - **INCONCLUSO `posible_criatura_ce`** si la crea. Nunca PASA.
+      - M1 corta las criaturas de la CE con los `globals` a 0 (§5.3, `[verify F2 en partida]`), así que en una partida buena no debería haber ninguna.
 - **F2P-08 (S-04):**
   - reconciliación (punto 6);
   - los mismos conteos;
@@ -623,9 +658,15 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
   - las criaturas, con la misma identidad y vivas, sin comparar su pose;
   - sin extras.
 - **F2P-09 (O-13, R-08, R-11, S-05, S-09, V-03, V-04):**
-  - **K** son los nacimientos de la generación del apply cortado (punto 3) en la ventana `P5:cut`. Tiene que ser mayor que 0; si no, INCONCLUSO `p5_sin_efecto`, porque el estímulo no ocurrió.
+  - **K** son los nacimientos de la generación del apply cortado (punto 3) en la ventana `P5:cut` **anteriores al corte** (v1.3.11, F-03). Tiene que ser mayor que 0; si no, INCONCLUSO `p5_sin_efecto`, porque el estímulo no ocurrió antes del corte (§6: «corte antes del primer efecto en P5»).
+  - **Anterior al corte, con un ancla:** un nacimiento es anterior al corte si hay un `poll` de la sonda de la misma instancia con estas dos condiciones:
+    - su `t_ms` en el reloj común (evento `poll` del bridge) es anterior al `t_ms` del `cut`;
+    - `1000 · tick_s` (el tick que la sonda manda en ese `poll`, `DSBX_QA_Probe.c:872`, el mismo reloj que `NowMs()`, `:358`) es mayor o igual que el `tick_ms` del nacimiento.
+
+    Así se comparan ticks con ticks y `t_ms` con `t_ms` (R-03). Los nacimientos posteriores al último `poll` de antes del corte no cuentan para K, pero sí para la generación cortada y para el total final.
+  - **El reinicio del backend tras el corte** se acredita como dice el punto 6. Si no se acredita, INCONCLUSO.
   - **La generación del apply nuevo** sale de la ventana `P5:apply2`. Las dos ventanas no se solapan (punto 7).
-  - **La op cortada** no tiene estado terminal, y no se le exige (punto 2). Lo que se exige es la lectura de reconciliación del backend nuevo, en su sesión, antes de la entrega de `P5:apply2` (punto 6). Si falta, FALLA.
+  - **La op cortada** no tiene estado terminal, y no se le exige (punto 2). Lo que se exige es la lectura de reconciliación del backend nuevo, en su sesión, después de su `/hello` y antes de la entrega de `P5:apply2` (punto 6). Si falta, o va antes del `restart` o en la sesión vieja, FALLA.
   - **El corte:**
     - lo registra el runner como evento `cut` en `samples/backend.jsonl`, en el reloj común (§5.4);
     - cae después de la entrega del apply y antes de cualquier resultado suyo, que no llega;
@@ -659,6 +700,20 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
     - INCONCLUSO `posible_botin_ce` si sí la crea, porque no se distingue del botín (punto 9).
 
 #### Mutantes, negativas y fixture
+- **Sol r4 (v1.3.11):** cada F-nn y A-01 tiene su caso (mutante, negativa o variante positiva), que pasa en dos pasos:
+  - **en rojo,** sobre el evaluador de `7ed2615`, da el resultado espurio que dijo Sol: PASA, o FALLA en F-11;
+  - **en verde,** con el arreglo, da el estado y el motivo de esta sección.
+
+  Las pruebas exigen el motivo, no solo el estado (F-13).
+- **Conformidad con el cable real (v1.3.11, F-01 y A-01):**
+  - `qa/fixtures/f2p_native_probe.json` guarda líneas reales de `diag_bridge.jsonl` y `diag2_bridge.jsonl` de F0.3, **copiadas como cadenas sin tocar**, con su fichero y su número de línea: los `hello`, `enq`, `deliver`, `poll` y `result` de sus trabajos de censo y de testigo;
+  - una prueba las pasa por el parser del evaluador y comprueba que cada trabajo es válido y toma el epoch de su lectura de arranque;
+  - la fixture sintética sigue las mismas formas: páginas sin `server_epoch`, `result` sin `inst` y `pages_n = 0` con 0 filas.
+- **Cronología de la fixture (v1.3.11, F-14):**
+  - los discos van en serie, con `snap_tick_ms` crecientes;
+  - cada lectura de reconciliación pide el documento vigente del backend (`app/backend/scene_live.py:320`);
+  - `P5:cut` trae las muestras 1…K de sus nacimientos;
+  - hay `poll` de la sonda con `tick_s` antes y después del corte.
 - **Cada contraejemplo de Sol r1 que hoy da PASA** pasa a ser un mutante, con la comprobación que tiene que tumbar, o una negativa.
 - **Los casos que hoy dan FALLA siendo una partida buena** pasan a variantes positivas que tienen que dar PASA:
   - `legitimate_fresh_P3_generation`;
@@ -806,6 +861,15 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
 - **Botín de la CE (H-6):** durante una ventana de operación, la CE puede crear dentro del radio un objeto de una clase de la escena; `MediumTent` y `Barrel_Red` salen como botín. F2P-13 daría FALLA con la clase y la posición de ese objeto. Falla cerrado: si pasa, se mira la ventana de control de P1 y se decide con el dato.
 - **Las filas del censo a 120 m más los discos extra:** F0.3 calcula unas cientos, sin medir; el tope es 4096 por trabajo.
 - **Cobertura (P-05):** las criaturas que se alejan pueden dejar la comprobación en INCONCLUSO. Es lo honesto; los discos extra lo reducen.
+- **Un solo componente por criatura (v1.3.11, F-02):**
+  - la ausencia de una criatura solo se concluye con un disco que la cubra en su propio instante;
+  - si los discos van en serie y despacio (unos 4,4 s cada uno), las criaturas de los últimos discos pueden quedar en INCONCLUSO `coverage_gap`: a 7 m/s, 60 m cubren unos 8 s;
+  - T4 toma el principal enseguida, porque con un Δt corto cubre la mayoría, y después los discos de las criaturas más cercanas al borde. Se mide en partida.
+- **Criaturas tras un reinicio (v1.3.11, F-09):** si la CE cuela criaturas de las clases de las escenas pese a los `globals` a 0, F2P-07 da INCONCLUSO `posible_criatura_ce`, nunca PASA. Lo mide la ventana de control de P1.
+- **El cable real (v1.3.11, F-01 y A-01):**
+  - la conformidad se prueba con las dos diags de F0.3 del 16-nov;
+  - si el #22 o un PBO posterior cambia las páginas, el `result` o los `poll`, se repite la prueba con una diag nueva antes de T4;
+  - el ancla del corte depende de que el `poll` siga llevando `tick_s` (`DSBX_QA_Probe.c:872`).
 - **P2n (P-04):** puede que ningún estímulo natural haga fallar al motor. Entonces la negativa del producto queda INCONCLUSA y se queda con los mutantes y con lo acreditado offline (F2b F2-A2).
 - **El testigo de creación (P-03) y el control persistente (P-06)** dependen de F0.3. Sin ellos, T2 no se congela y P4b/P4c dan INCONCLUSO.
 - **Limitación conocida (Q-02), para después de M1:** «sin extras» se acredita **dentro de la cobertura** del censo y del testigo, en modo de radio. Un huérfano nacido fuera de esa cobertura no se ve en M1. El testigo de mapa entero quedó fuera por decisión de la principal: era MAY, no BLOQ, y cada pieza de Enforce en la sonda cuesta una ronda de Sol, partida y riesgo.
@@ -994,3 +1058,25 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
     - §6.1, la fixture: la salud por tipo de entidad, con las dos variantes en lo que crea el producto.
   - **Pendiente en el motor (F0.3, en la diag de después del rebase):** que `WoodenCrate`, `Barrel_Green`, `SeaChest` y la gallina acepten la marca al crear.
   - Nada de §3 (T1) ni de §4 (T3) cambia.
+- v1.3.11 (2026-11-16): **arbitraje de Sol r4,** sobre `7ed2615` (UNSOUND: F-01 a F-11 BLOQ, F-12 a F-14 MAY y F-15 MEN). Los acepto todos, más A-01, que encontré al comprobar F-01. La tabla y su porqué están en `C:\tmp\dsbx-f2p-work\recibos\arbitraje-r4.md`.
+  - **Comprobado por mí en el cable real** (las diags de F0.3 y el código de `7ed2615`):
+    - las páginas de `job_read` no llevan `server_epoch`, que solo va en la lectura de arranque (`DSBX_QA_Probe.c:1570-1578`; `censo-interfaz-f03.md:28` y `:121`);
+    - el evento `result` del bridge de la sonda no lleva `inst`, aunque el bridge la valida (`qa/bridge_qa.py:833-836` y `:858-866`);
+    - el `poll` de la sonda lleva `tick_s`, del mismo reloj que `NowMs()` (`DSBX_QA_Probe.c:872` y `:358`).
+  - **Error de spec mío que corrijo (F-01):** la v1.3.4 pedía `server_epoch` en cada página. Con páginas reales, ninguna partida podía dar PASA.
+  - **Cambios en §6.1:**
+    - punto 1: la instancia de un `result` y el epoch de un trabajo, como los da el cable real; la conformidad con las diags (F-01, A-01);
+    - punto 2: igualdad exacta y estado esperado por etapa (F-05); los reinicios del backend, P3 incluido;
+    - punto 3: los hijos de clases de las escenas son extras (F-10); la generación viva en cada apply (F-06); la identidad `(epoch, net_id)` y la disjunción dentro del epoch (F-11);
+    - punto 4: todos los consumidores usan la unión, con los discos prescritos (F-08); la ausencia de una criatura, con un solo componente y su Δt, y el tipo, de lo observado (F-02);
+    - punto 5: la identidad completa en la traza, el `/hello` aceptado, `ok` booleano y el alcance del reenvío cortado (F-04);
+    - punto 6: la reconciliación tras cada reinicio del backend, con el reinicio acreditado (F-03);
+    - punto 9: el trato de la CE en todas las comprobaciones (F-12);
+    - F2P-05 y F2P-06: las retenidas, recalculadas tras cada reset, y lo declarado frente a lo observado (F-07);
+    - F2P-07: la creación del control con salud real y su censo de la instancia vigente (F-08); las criaturas tras el reinicio, sin umbral de distancia (F-09);
+    - F2P-09: K, solo con nacimientos anteriores al corte, con el ancla del `poll` (F-03);
+    - la fixture y las pruebas: los casos en rojo y en verde, la conformidad, y la cronología (F-13, F-14).
+  - **§5.2:** el corte, después de un `poll` posterior al primer nacimiento; el reinicio del backend tras el corte; los discos, cada uno en su instante.
+  - **§6, «Revisión y congelado»:** lo que dio r4 y cómo se cierra. Queda pendiente que la principal decida sobre un cierre de Sol limitado al diff de T2f-4.
+  - **§10:** el riesgo de `coverage_gap` con un solo componente, las criaturas de la CE tras un reinicio y el cable real.
+  - Nada de §3 (T1) ni de §4 (T3) cambia. El contrato de evidencias (`qa/f2p_evidence_contract.md`) se pone al día en T2f-4 (F-15).
