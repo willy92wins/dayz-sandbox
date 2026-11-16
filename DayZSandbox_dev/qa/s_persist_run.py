@@ -30,6 +30,12 @@ FIXTURE_PATH = QA_DIR / "fixtures" / "s_persist_fixture.json"
 IN_SCOL = ["logical_id", "parent_id", "cat", "class_name", "slot_name"]
 IN_NCOL = ["req_x_m", "req_z_m", "req_yaw_deg", "health_mark_ratio", "must_vanish_b"]
 TERMINAL_STATES = ("done", "failed", "stopped", "expired")
+# En partida el director puede tardar en entrar en el mundo tras el hello del
+# cliente (24 s medidos el 16-nov) y en volver tras el reinicio de t4 (hello a
+# los 65,7 s + unos 24 s hasta estar en el mundo): ambas esperas dan 300 s.
+T0_DIRECTOR_TIMEOUT_S = 300.0
+T0_DIRECTOR_POLL_S = 2.0
+T4_DIRECTOR_TIMEOUT_S = 300.0
 # Holgura del primer disco t5: en partida la latencia del censo varia mucho
 # mas que offline y cada reintento es otro censo grande (GetObjectsAtPosition3D),
 # asi que el radio inicial cubre el alcance estimado con margen acotado.
@@ -836,6 +842,57 @@ def _clear_expected_peer_cut_failure(ctx):
     return False
 
 
+def _director_status_ready(st):
+    """True si un per_status trae al director presente, vivo y legible."""
+    if st is None or getattr(st, "status", None) != "done":
+        return False
+    payload = getattr(st, "payload", None)
+    if not payload:
+        return False
+    try:
+        strings = payload.get("str") or {}
+        numbers = payload.get("num") or {}
+    except AttributeError:
+        return False
+    if not str(strings.get("director_uid") or ""):
+        return False
+    for key in ("director_present_b", "director_alive_b", "director_inv_readable_b"):
+        try:
+            if int(round(float(numbers.get(key, 0.0)))) != 1:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _wait_for_director_t0(ctx, *, timeout_s=None, poll_s=None, monotonic=None, sleep=None):
+    """t0 en partida: sondea per_status cada poll_s hasta ver al director.
+
+    Devuelve (ultimo_per_status, polls, waited_ms, ready). Con el tope agotado
+    ready es False y el llamador registra el ultimo estado visto y corta.
+    """
+    timeout = T0_DIRECTOR_TIMEOUT_S if timeout_s is None else float(timeout_s)
+    interval = T0_DIRECTOR_POLL_S if poll_s is None else float(poll_s)
+    clock = time.monotonic if monotonic is None else monotonic
+    sleeper = time.sleep if sleep is None else sleep
+    started = clock()
+    deadline = started + max(0.0, timeout)
+    polls = 0
+    last = None
+    ready = False
+    while True:
+        last = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
+        polls += 1
+        if _director_status_ready(last):
+            ready = True
+            break
+        if clock() >= deadline:
+            break
+        sleeper(interval)
+    waited_ms = int(round(max(0.0, clock() - started) * 1000.0))
+    return last, polls, waited_ms, ready
+
+
 def _restart_server_live(ctx, old_epoch, director_uid_t0):
     """t4 en diag/retail: el operador reinicia DayZServer y reconecta el mismo director."""
     instructions = (
@@ -880,7 +937,7 @@ def _restart_server_live(ctx, old_epoch, director_uid_t0):
             "type": type(fail_before).__name__,
         })
 
-    deadline = time.monotonic() + 120.0
+    deadline = time.monotonic() + T4_DIRECTOR_TIMEOUT_S
     new_epoch = ""
     while time.monotonic() < deadline:
         st = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
@@ -1229,7 +1286,15 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 shutil.copytree(sim_storage, backup_slot)
                 ctx.record_scenario({"ev": "storage_snapshot_t0", "files": storage_t0})
 
-            st_t0 = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
+            # En partida el hello del cliente llega antes de que el jugador
+            # este en el mundo: t0 sondea hasta ver al director (o agota el
+            # tope) antes de fijar epoch/uid. Offline el primer per_status
+            # ya vale y la rama no cambia.
+            if is_live:
+                st_t0, t0_polls, t0_waited_ms, t0_ready = _wait_for_director_t0(ctx)
+            else:
+                st_t0 = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
+                t0_polls, t0_waited_ms, t0_ready = 1, 0, _director_status_ready(st_t0)
             server_epoch_old = ""
             director_uid_t0 = ""
             if st_t0.status == "done" and st_t0.payload:
@@ -1242,6 +1307,20 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 "director_uid": director_uid_t0,
                 "num": dict(st_t0.payload["num"]) if st_t0.payload else {},
             })
+            if is_live:
+                ctx.record_scenario({
+                    "ev": "t0_director_wait",
+                    "polls": t0_polls,
+                    "waited_ms": t0_waited_ms,
+                })
+                if not t0_ready:
+                    ctx.record_scenario({"ev": "t0_director_absent"})
+                    # Sin director no se juega y aun no se ha mutado nada:
+                    # se anula el snapshot para que el finally no intente
+                    # una restauracion en frio y se corta como los demas
+                    # fallos de t0.
+                    storage_t0 = None
+                    raise RuntimeError("t0_director_absent")
 
             baseline_director_rows = []
             for idx, area_id in enumerate(cfg["base_areas"]):

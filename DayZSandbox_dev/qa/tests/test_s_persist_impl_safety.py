@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 QA_DIR = Path(__file__).resolve().parents[1]
@@ -909,6 +910,138 @@ class TestPeerCutFailureClear(unittest.TestCase):
         ctx = _FakeCtx(failure=None)
         self.assertFalse(s_persist_run._clear_expected_peer_cut_failure(ctx))
         self.assertIsNone(ctx.bridge.failure)
+
+
+def _status_outcome(uid="", present=0, alive=0, inv=0, epoch="epoch-1"):
+    return SimpleNamespace(
+        status="done",
+        reason="",
+        op_id="op-status",
+        payload={
+            "str": {"server_epoch": epoch, "director_uid": uid},
+            "num": {
+                "director_present_b": float(present),
+                "director_alive_b": float(alive),
+                "director_inv_readable_b": float(inv),
+            },
+        },
+    )
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += float(seconds)
+
+
+class TestT0DirectorWait(unittest.TestCase):
+    def test_t0_waits_and_keeps_good_status(self):
+        clock = _FakeClock()
+        absent = _status_outcome(uid="", present=0, alive=0, inv=0)
+        not_ready = _status_outcome(uid="director-1", present=0, alive=1, inv=1)
+        good = _status_outcome(uid="director-1", present=1, alive=1, inv=1, epoch="epoch-good")
+        outcomes = iter([absent, not_ready, good])
+        with mock.patch.object(f03_common, "issue_one", side_effect=lambda *a, **k: next(outcomes)):
+            st, polls, waited_ms, ready = s_persist_run._wait_for_director_t0(
+                mock.Mock(), timeout_s=300.0, poll_s=2.0,
+                monotonic=clock.monotonic, sleep=clock.sleep,
+            )
+        self.assertTrue(ready)
+        self.assertIs(st, good)
+        self.assertEqual(st.payload["str"]["server_epoch"], "epoch-good")
+        self.assertEqual(st.payload["str"]["director_uid"], "director-1")
+        self.assertEqual(polls, 3)
+        self.assertEqual(waited_ms, 4000)
+
+    def test_t0_wait_exhausts_top_without_director(self):
+        clock = _FakeClock()
+        absent = _status_outcome(uid="", present=0, alive=0, inv=0)
+        with mock.patch.object(f03_common, "issue_one", return_value=absent):
+            st, polls, waited_ms, ready = s_persist_run._wait_for_director_t0(
+                mock.Mock(), timeout_s=5.0, poll_s=2.0,
+                monotonic=clock.monotonic, sleep=clock.sleep,
+            )
+        self.assertFalse(ready)
+        self.assertIs(st, absent)
+        self.assertGreaterEqual(polls, 3)
+        self.assertGreaterEqual(waited_ms, 5000)
+
+
+class TestT0DirectorAbsentAborts(_GuardedTestCase):
+    def setUp(self):
+        super().setUp()
+        _FakePartContext.calls = []
+        _FakePartContext.instances = []
+        _FakePartContext.next_startup_reason = None
+
+    def test_t0_absent_cuts_part_without_playing(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, _mission, _storage, _backup = _make_env(tmp)
+            base_dir = tmp / "evidence"
+            absent = _status_outcome(uid="", present=0, alive=0, inv=0)
+            calls = []
+
+            def fake_issue(ctx, peer, verb, payload=None, **kwargs):
+                calls.append(verb)
+                return absent
+
+            backup_return = (env, {}, tmp / "_storage_backup", None, "")
+            with mock.patch.object(
+                s_persist_run, "_live_cold_backup_before_open", return_value=backup_return
+            ), mock.patch.object(
+                s_persist_run, "_probe_sources_at_commit", return_value={}
+            ), mock.patch.object(
+                s_persist_run, "T0_DIRECTOR_TIMEOUT_S", 0.0
+            ), mock.patch.object(
+                f03_common, "PartContext", _FakePartContext
+            ), mock.patch.object(
+                f03_common, "issue_one", side_effect=fake_issue
+            ):
+                with self.assertRaises(RuntimeError) as raised:
+                    s_persist_run.run_part(_live_args(), base_dir, [], "run")
+            self.assertEqual(str(raised.exception), "t0_director_absent")
+            self.assertEqual(calls, ["per_status"])
+            scenario = _FakePartContext.instances[0].scenario
+            evs = [row.get("ev") for row in scenario]
+            self.assertIn("t0_status", evs)
+            self.assertIn("t0_director_wait", evs)
+            self.assertIn("t0_director_absent", evs)
+            t0_row = [r for r in scenario if r.get("ev") == "t0_status"][0]
+            self.assertEqual(t0_row.get("director_uid"), "")
+            self.assertNotIn("baseline_director_foreign", evs)
+            self.assertNotIn("apply_scene_t1", evs)
+
+
+class TestT4DirectorWindow(unittest.TestCase):
+    def test_t4_window_reaches_beyond_120s(self):
+        self.assertEqual(s_persist_run.T0_DIRECTOR_TIMEOUT_S, 300.0)
+        self.assertEqual(s_persist_run.T4_DIRECTOR_TIMEOUT_S, 300.0)
+        clock = _FakeClock()
+        ctx = _FakeCtxT4(now_ms=5000.0)
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            if clock.now < 150.0:
+                return _status_outcome(uid="director-1", present=0, alive=0, inv=0, epoch="epoch-new")
+            return _status_outcome(uid="director-1", present=1, alive=1, inv=1, epoch="epoch-new")
+
+        with mock.patch.object(
+            f03_common, "await_operator", return_value={"ok": True}
+        ), mock.patch.object(
+            f03_common, "issue_one", side_effect=fake_issue
+        ), mock.patch.object(
+            s_persist_run.time, "monotonic", clock.monotonic
+        ), mock.patch.object(
+            s_persist_run.time, "sleep", clock.sleep
+        ):
+            result = s_persist_run._restart_server_live(ctx, "epoch-old", "director-1")
+        self.assertEqual(result, "epoch-new")
+        self.assertGreaterEqual(clock.now, 150.0)
 
 
 if __name__ == "__main__":
