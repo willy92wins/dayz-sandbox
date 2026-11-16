@@ -5,6 +5,13 @@ ticks simulados con deriva de criaturas tras soltar la IA, registro de propiedad
 por epoch y escena, censo independiente que no lee el registro, e inyeccion de
 fallos y reinicio de mision. Solo biblioteca estandar y sin red.
 
+Contrato v1.3 del cable (brief de F2-partida §3): lee los `args` de `scene.apply` en
+columnas (`lid`, `ci`, `x_mm`, `z_mm`, `yaw_mdeg`) y escribe las filas de las lecturas
+solo con enteros (mm, milesimas de grado y milesimas de hp). Un plan v1.2.2 (`rows`) o
+con columnas de longitudes distintas da `bad_plan`. Un `if_pending` vacio
+(`{session: "", op_id: ""}`) es un reset normal. Por dentro, las entidades y el censo
+siguen en metros. `registry_sha256` sigue siendo SHA-256 (DP-3: es opaco).
+
 El gancho publico `seed_record(doc_id, lid, cls, x, z, session, op_id)` existe SOLO
 para pruebas: siembra una entidad viva registrada en la escena con otra orden, para
 comprobar que las compensaciones no borran lo que no es de su `(session, op_id)`.
@@ -61,7 +68,9 @@ _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 _DOC_ID_RE = re.compile(r"^d-[0-9a-f]{8}$")
 _LID_RE = re.compile(r"^(obj|zmb|ani)-(0[1-9]|[1-9][0-9]+)$")
 _MAX_REV = 999999999  # 9 digitos (§3.6, M14)
-_MAX_Y = 9999.999  # rango normativo de y y gy (§3.6)
+_MAX_Y = 9999.999  # rango normativo de y y gy (§3.6), en metros
+_YAW_MDEG_MOD = 360000  # yaw_mdeg en [0, 360000) (v1.3 §3.1)
+_PLAN_COLUMNS = ("lid", "ci", "x_mm", "z_mm", "yaw_mdeg")  # v1.3 §3.2
 _PREFIX_KIND = {
     "obj": "objeto",
     "zmb": "infectado",
@@ -108,19 +117,19 @@ def _is_hex(val: object, length: int) -> bool:
     return isinstance(val, str) and len(val) == length and _HEX_RE.match(val) is not None
 
 
-def _r3(val: float | int) -> float:
-    out = round(float(val), 3)
-    return 0.0 if out == 0.0 else out
+def _mm(val: float | int) -> int:
+    """Metros -> mm enteros, `round(metros * 1000)` con el round de Python (v1.3 §3.1)."""
+    return round(float(val) * 1000)
 
 
-def _r_yaw(val: float | int) -> float:
-    """Redondea a 3 decimales y normaliza a [0, 360) (§3.3, F2-06)."""
-    out = round(float(val), 3) % 360.0
-    return 0.0 if out == 0.0 else out
+def _mdeg(val: float | int) -> int:
+    """Grados -> milesimas en [0, 360000), normalizado despues de redondear (v1.3 §3.1)."""
+    return round(float(val) * 1000) % _YAW_MDEG_MOD
 
 
-def _has_3_decimals(val: float) -> bool:
-    return abs(round(float(val), 3) - float(val)) <= 1e-9
+def _milli(val: float | int) -> int:
+    """hp en [0, 1] -> hp_milli entero en [0, 1000] (v1.3 §3.1)."""
+    return round(float(val) * 1000)
 
 
 def _is_ascii_text(val: object) -> bool:
@@ -154,16 +163,60 @@ def hash_doc(doc: dict) -> str:
 
 
 def compute_plan_sha256(
-    doc_id: str, rev: int, doc_hash: str, classes: list[str], rows: list[list]
+    doc_id: str,
+    rev: int,
+    doc_hash: str,
+    classes: list[str],
+    lid: list,
+    ci: list,
+    x_mm: list,
+    z_mm: list,
+    yaw_mdeg: list,
 ) -> str:
-    """SHA-256 del JSON canonico de {doc_id, rev, hash, classes, rows} (§3.3)."""
+    """SHA-256 del JSON canonico de {doc_id, rev, hash, classes, lid, ci, x_mm, z_mm, yaw_mdeg} (v1.3 §3.2)."""
     return _canon_sha256({
         "doc_id": doc_id,
         "rev": rev,
         "hash": doc_hash,
         "classes": classes,
-        "rows": rows,
+        "lid": lid,
+        "ci": ci,
+        "x_mm": x_mm,
+        "z_mm": z_mm,
+        "yaw_mdeg": yaw_mdeg,
     })
+
+
+def plan_sha256_of(plan: dict) -> str:
+    """`plan_sha256` de unos args v1.3 ya construidos (§3.2)."""
+    return compute_plan_sha256(
+        plan["doc_id"], plan["rev"], plan["hash"], plan["classes"],
+        *(plan[key] for key in _PLAN_COLUMNS),
+    )
+
+
+def plan_from_rows(
+    doc_id: str,
+    rev: int,
+    doc_hash: str,
+    classes: list[str],
+    rows_mm: list,
+    caps: dict,
+) -> dict:
+    """Args v1.3 completos a partir de filas `[lid, ci, x_mm, z_mm, yaw_mdeg]` (para pruebas)."""
+    cols = {key: [row[i] for row in rows_mm] for i, key in enumerate(_PLAN_COLUMNS)}
+    plan = {
+        "f2": 1,
+        "doc_id": doc_id,
+        "rev": rev,
+        "hash": doc_hash,
+        "plan_sha256": None,
+        "caps": copy.deepcopy(caps),
+        "classes": list(classes),
+        **cols,
+    }
+    plan["plan_sha256"] = plan_sha256_of(plan)
+    return plan
 
 
 def has_inventory(cls_name: str) -> bool:
@@ -246,6 +299,14 @@ def _normalize_catalog_classes(classes: object) -> list[list[str]]:
     raise ValueError("formato de classes no soportado")
 
 
+def _wire_caps(raw_caps: dict) -> dict:
+    """`caps` v1.3: siempre las cuatro claves; `total = -1` si no hay total (DP-2)."""
+    out = {kind: raw_caps.get(kind) for kind in ("objeto", "infectado", "animal")}
+    total = raw_caps.get("total")
+    out["total"] = -1 if total is None else total
+    return out
+
+
 def build_plan(
     doc: dict,
     *,
@@ -254,7 +315,7 @@ def build_plan(
     caps: dict | None = None,
     catalog: dict | None = None,
 ) -> dict:
-    """Construye los args de scene.apply (§3.3) a partir de un documento."""
+    """Construye los args v1.3 de scene.apply (brief de F2-partida §3.2) a partir de un documento."""
     doc_id = doc["doc_id"]
     doc_hash = hash if hash is not None else hash_doc(doc)
 
@@ -265,11 +326,12 @@ def build_plan(
             "objeto": int(raw_caps["objeto"]),
             "infectado": int(raw_caps["infectado"]),
             "animal": int(raw_caps["animal"]),
+            "total": -1,
         }
         if "total" in raw_caps and raw_caps["total"] is not None:
             caps_out["total"] = int(raw_caps["total"])
     else:
-        caps_out = copy.deepcopy(caps)
+        caps_out = _wire_caps(caps)
 
     non_actors = [
         ent for ent in doc.get("entities", [])
@@ -277,26 +339,17 @@ def build_plan(
     ]
     classes = sorted({ent["cls"] for ent in non_actors})
     ci_by_cls = {cls_name: idx for idx, cls_name in enumerate(classes)}
-    rows = [
+    rows_mm = [
         [
             ent["id"],
             ci_by_cls[ent["cls"]],
-            _r3(ent["x"]),
-            _r3(ent["z"]),
-            _r_yaw(ent["yaw"]),
+            _mm(ent["x"]),
+            _mm(ent["z"]),
+            _mdeg(ent["yaw"]),
         ]
         for ent in non_actors
     ]
-    plan_sha = compute_plan_sha256(doc_id, rev, doc_hash, classes, rows)
-    return {
-        "doc_id": doc_id,
-        "rev": rev,
-        "hash": doc_hash,
-        "plan_sha256": plan_sha,
-        "caps": caps_out,
-        "classes": classes,
-        "rows": rows,
-    }
+    return plan_from_rows(doc_id, rev, doc_hash, classes, rows_mm, caps_out)
 
 
 make_plan = build_plan
@@ -1006,7 +1059,14 @@ class FakeWorld:
             }
 
     def _validate_plan_locked(self, args: object) -> tuple[str | None, str | None]:
-        """Valida etapas 1 y 2 de §3.3 sin efecto. Devuelve (error_reason, doc_id_valido)."""
+        """Valida etapas 1 y 2 de §3.3 sin efecto, con la forma v1.3. Devuelve (error_reason, doc_id_valido).
+
+        v1.3 (brief de F2-partida §3.2): columnas `lid`, `ci`, `x_mm`, `z_mm` y `yaw_mdeg` de
+        la misma longitud, solo enteros donde toca. Un plan v1.2.2 (`rows`, sin columnas), o
+        con columnas desalineadas, da `bad_plan` antes de mirar los `caps`. `caps` lleva sus
+        cuatro claves: `total = -1` es «sin total»; un `total` ausente se trata como el mod
+        real, que no distingue ausente de 0 (DP-2): falla cerrado con `budget_exceeded`.
+        """
         if not isinstance(args, dict):
             return "bad_plan", None
         doc_id = args.get("doc_id")
@@ -1018,22 +1078,12 @@ class FakeWorld:
         plan_sha = args.get("plan_sha256")
         caps = args.get("caps")
         classes = args.get("classes")
-        rows = args.get("rows")
+        cols = [args.get(key) for key in _PLAN_COLUMNS]
 
         if not _is_int(rev) or rev < 0 or rev > _MAX_REV:
             return "bad_plan", doc_id
         if not _is_hex(doc_hash, 64) or not _is_hex(plan_sha, 64):
             return "bad_plan", doc_id
-
-        # A6: falla cerrado, sin caps validos no hay presupuesto que respetar
-        if not isinstance(caps, dict):
-            return "budget_exceeded", doc_id
-        for k in ("objeto", "infectado", "animal"):
-            if k not in caps or not _is_int(caps[k]) or caps[k] < 0:
-                return "budget_exceeded", doc_id
-        if "total" in caps and caps["total"] is not None:
-            if not _is_int(caps["total"]) or caps["total"] < 0:
-                return "budget_exceeded", doc_id
 
         if not isinstance(classes, list):
             return "bad_plan", doc_id
@@ -1044,41 +1094,48 @@ class FakeWorld:
         if list(classes) != sorted(classes):
             return "bad_plan", doc_id
 
-        if not isinstance(rows, list):
+        # v1.3: columnas homogeneas de la misma longitud (un plan v1.2.2 no las trae)
+        if not all(isinstance(col, list) for col in cols):
+            return "bad_plan", doc_id
+        n_rows = len(cols[0])
+        if any(len(col) != n_rows for col in cols):
             return "bad_plan", doc_id
 
         seen_lids: set[str] = set()
         counts = {"objeto": 0, "infectado": 0, "animal": 0}
-        coords: list[tuple[float, float]] = []
+        coords: list[tuple[int, int]] = []
         referenced_cis: set[int] = set()
 
-        for row in rows:
-            if not isinstance(row, (list, tuple)) or len(row) != 5:
-                return "bad_plan", doc_id
-            lid, ci, x, z, yaw = row
+        for lid, ci, x_mm, z_mm, yaw_mdeg in zip(*cols):
             if not _valid_lid(lid) or lid in seen_lids:
                 return "bad_plan", doc_id
             seen_lids.add(lid)
             if not _is_int(ci) or ci < 0 or ci >= len(classes):
                 return "bad_plan", doc_id
-            if not (_is_num(x) and _is_num(z) and _is_num(yaw)):
+            # Solo enteros: un float (aunque sea 6188000.0), un NaN o un bool no valen
+            if not (_is_int(x_mm) and _is_int(z_mm) and _is_int(yaw_mdeg)):
                 return "bad_plan", doc_id
-            fx, fz, fyaw = float(x), float(z), float(yaw)
-            if not (math.isfinite(fx) and math.isfinite(fz) and math.isfinite(fyaw)):
-                return "bad_plan", doc_id
-            if fyaw < 0.0 or fyaw >= 360.0:
-                return "bad_plan", doc_id
-            if not (_has_3_decimals(fx) and _has_3_decimals(fz) and _has_3_decimals(fyaw)):
+            if yaw_mdeg < 0 or yaw_mdeg >= _YAW_MDEG_MOD:
                 return "bad_plan", doc_id
 
             prefix = lid.split("-", 1)[0]
             counts[_PREFIX_KIND[prefix]] += 1
-            coords.append((fx, fz))
+            coords.append((x_mm, z_mm))
             referenced_cis.add(ci)
 
         # M14: todas las clases de `classes` tienen que usarse
-        if rows and len(referenced_cis) != len(classes):
+        if n_rows and len(referenced_cis) != len(classes):
             return "bad_plan", doc_id
+
+        # A6: falla cerrado, sin caps validos no hay presupuesto que respetar
+        if not isinstance(caps, dict):
+            return "budget_exceeded", doc_id
+        for k in ("objeto", "infectado", "animal"):
+            if k not in caps or not _is_int(caps[k]) or caps[k] < 0:
+                return "budget_exceeded", doc_id
+        total = caps.get("total")
+        if not _is_int(total) or total < -1:
+            return "budget_exceeded", doc_id
 
         # Etapa 1b: cada clase existe en el mundo
         for ci in referenced_cis:
@@ -1088,19 +1145,18 @@ class FakeWorld:
             if cls_name not in self._known_classes:
                 return "unknown_class", doc_id
 
-        # Etapa 1c: coordenadas en [0, world_size]
-        limit = float(self.world_size)
-        for fx, fz in coords:
-            if fx < 0.0 or fx > limit or fz < 0.0 or fz > limit:
+        # Etapa 1c: coordenadas en [0, world_size * 1000] mm
+        limit_mm = float(self.world_size) * 1000.0
+        for x_mm, z_mm in coords:
+            if x_mm < 0 or x_mm > limit_mm or z_mm < 0 or z_mm > limit_mm:
                 return "out_of_map", doc_id
 
-        # Etapa 2: reservar presupuesto
+        # Etapa 2: reservar presupuesto; total = -1 es «sin total» (DP-2)
         for kind in ("objeto", "infectado", "animal"):
             if counts[kind] > caps[kind]:
                 return "budget_exceeded", doc_id
-        if "total" in caps and caps["total"] is not None:
-            if len(rows) > caps["total"]:
-                return "budget_exceeded", doc_id
+        if total >= 0 and n_rows > total:
+            return "budget_exceeded", doc_id
 
         return None, doc_id
 
@@ -1137,7 +1193,8 @@ class FakeWorld:
             doc_hash = str(args["hash"])
             plan_sha = str(args["plan_sha256"])
             classes = list(args["classes"])
-            rows = [list(r) for r in args["rows"]]
+            # v1.3: filas reconstruidas de las columnas (mm y milesimas de grado)
+            rows = [list(r) for r in zip(*(args[key] for key in _PLAN_COLUMNS))]
 
         ctx = _OpCtx()
 
@@ -1238,7 +1295,7 @@ class FakeWorld:
         # Etapa 5: crear por lotes de batch por tick
         checkpoint_rows: list[list] = []
 
-        for idx, (lid, ci, x, z, yaw) in enumerate(rows):
+        for idx, (lid, ci, x_mm, z_mm, yaw_mdeg) in enumerate(rows):
             if check is not None:
                 fail = check()
                 if fail is not None:
@@ -1264,7 +1321,7 @@ class FakeWorld:
                 # M3: antes de cada efecto, con el cerrojo, si el mundo reinicio
                 if self.epoch != order_epoch:
                     return ("error" if had_effect else "rejected"), "stale_epoch", self.read(doc_id)
-                fx, fz, fyaw = float(x), float(z), float(yaw)
+                fx, fz, fyaw = x_mm / 1000.0, z_mm / 1000.0, yaw_mdeg / 1000.0
                 gy = float(self.ground_y(fx, fz))
                 if (
                     self._hook_hit(self._fail_create, doc_id, lid)
@@ -1333,19 +1390,20 @@ class FakeWorld:
                     if self._hook_hit(self._suppress_create, doc_id, lid):
                         ent.alive = False
 
-                    # D9: checkpoint en el mismo tick de la creacion, antes de soltar la IA
+                    # D9: checkpoint en el mismo tick de la creacion, antes de soltar la IA.
+                    # v1.3 §3.6: la fila va solo con enteros (mm y milesimas de grado).
                     if not ent.alive:
-                        checkpoint_rows.append([lid, -1, None, None, None, None, _r3(gy)])
+                        checkpoint_rows.append([lid, -1, None, None, None, None, _mm(gy)])
                     else:
                         ci_read = classes.index(ent.cls) if ent.cls in classes else -1
                         checkpoint_rows.append([
                             lid,
                             ci_read,
-                            _r3(ent.x),
-                            _r3(ent.y),
-                            _r3(ent.z),
-                            _r_yaw(ent.yaw),
-                            _r3(gy),
+                            _mm(ent.x),
+                            _mm(ent.y),
+                            _mm(ent.z),
+                            _mdeg(ent.yaw),
+                            _mm(gy),
                         ])
                         if is_creature:
                             ent.ai_active = True
@@ -1503,21 +1561,29 @@ class FakeWorld:
             if not isinstance(doc_id, str) or _DOC_ID_RE.match(doc_id) is None:
                 return "rejected", "bad_args", {}
 
-            has_if_pending = "if_pending" in args
+            has_if_pending = False
             target_pending: tuple[str, str] | None = None
-            if has_if_pending:
-                # M13: si viene `if_pending` tiene que ser {session, op_id} valido
+            if "if_pending" in args:
+                # M13: si viene `if_pending` tiene que ser {session, op_id} con dos textos.
+                # v1.3 §3.3 (DP-2): `if_pending` va siempre, y vacio
+                # (`session == ""` y `op_id == ""`) es un reset normal. Medio vacio no vale.
                 ip = args["if_pending"]
                 if (
                     not isinstance(ip, dict)
                     or not isinstance(ip.get("session"), str)
-                    or not ip.get("session")
                     or not isinstance(ip.get("op_id"), str)
-                    or not ip.get("op_id")
                 ):
                     return "rejected", "bad_args", self.read(doc_id)
-                target_pending = (ip["session"], ip["op_id"])
+                if ip["session"] == "" and ip["op_id"] == "":
+                    has_if_pending = False
+                elif ip["session"] == "" or ip["op_id"] == "":
+                    return "rejected", "bad_args", self.read(doc_id)
+                else:
+                    has_if_pending = True
+                    target_pending = (ip["session"], ip["op_id"])
 
+            if has_if_pending:
+                assert target_pending is not None
                 # Paso 1 (§3.4): comprobar que scene.pending coincide
                 st_cur = self._scene_state_locked(doc_id, create=False)
                 cur_pending_n = len(
@@ -1683,14 +1749,15 @@ class FakeWorld:
                             n_own += 1
                         else:
                             n_foreign += 1
-                    hp = _r3(max(0.0, min(1.0, ent.hp)))
+                    hp = max(0.0, min(1.0, ent.hp))
+                    # v1.3 §3.6: [lid, x_mm, y_mm, z_mm, yaw_mdeg, hp_milli, n_own, n_foreign]
                     obs_rows.append([
                         rec["lid"],
-                        _r3(ent.x),
-                        _r3(ent.y),
-                        _r3(ent.z),
-                        _r_yaw(ent.yaw),
-                        hp,
+                        _mm(ent.x),
+                        _mm(ent.y),
+                        _mm(ent.z),
+                        _mdeg(ent.yaw),
+                        _milli(hp),
                         n_own,
                         n_foreign,
                     ])
@@ -1932,69 +1999,74 @@ class FakeWorld:
         *,
         classes: list[str] | None = None,
     ) -> dict:
-        """Registra y materializa otra escena con el mismo algoritmo de apply (§5)."""
+        """Registra y materializa otra escena con el mismo algoritmo de apply (§5).
+
+        Las filas de entrada del gancho van en metros y grados (`[lid, cls|ci, x, z, yaw]`,
+        entidades del documento o `{classes, rows}`), o como args v1.3 en columnas; por
+        dentro se convierten a un plan v1.3 y se validan igual que un apply.
+        """
+        seed_caps = {"objeto": 10000, "infectado": 10000, "animal": 10000, "total": -1}
         with self._lock:
             self._seed_seq += 1
             seed_op_id = f"seed-{self._seed_seq}"
             seed_session = "0" * 16
 
+            def _seed_row(lid, ci, x, z, yaw) -> list:
+                return [str(lid), int(ci), _mm(x), _mm(z), _mdeg(yaw)]
+
             if isinstance(rows, dict):
                 if "entities" in rows:
                     doc_copy = copy.deepcopy(rows)
                     doc_copy["doc_id"] = doc_id
-                    plan_args = build_plan(
-                        doc_copy,
-                        caps={"objeto": 10000, "infectado": 10000, "animal": 10000},
-                    )
+                    plan_args = build_plan(doc_copy, caps=seed_caps)
+                elif all(key in rows for key in _PLAN_COLUMNS) and "classes" in rows:
+                    plan_args = copy.deepcopy(rows)
+                    plan_args["doc_id"] = doc_id
+                    plan_args.setdefault("f2", 1)
+                    plan_args.setdefault("rev", 1)
+                    plan_args.setdefault("hash", _canon_sha256({"seed": doc_id}))
+                    plan_args.setdefault("caps", copy.deepcopy(seed_caps))
+                    plan_args["plan_sha256"] = plan_args.get("plan_sha256") or plan_sha256_of(plan_args)
                 elif "rows" in rows and "classes" in rows:
                     cls_list = list(rows["classes"])
-                    row_list = [list(r) for r in rows["rows"]]
+                    rows_mm = [_seed_row(*r) for r in rows["rows"]]
                     rev_val = int(rows.get("rev", 1))
-                    h = rows.get("hash") or _canon_sha256({"seed": doc_id, "rows": row_list})
-                    p_sha = rows.get("plan_sha256") or compute_plan_sha256(
-                        doc_id, rev_val, h, cls_list, row_list
-                    )
-                    plan_args = {
-                        "doc_id": doc_id,
-                        "rev": rev_val,
-                        "hash": h,
-                        "plan_sha256": p_sha,
-                        "caps": {"objeto": 10000, "infectado": 10000, "animal": 10000},
-                        "classes": cls_list,
-                        "rows": row_list,
-                    }
+                    h = rows.get("hash") or _canon_sha256({"seed": doc_id, "rows": rows_mm})
+                    plan_args = plan_from_rows(doc_id, rev_val, h, cls_list, rows_mm, seed_caps)
+                    if rows.get("plan_sha256"):
+                        plan_args["plan_sha256"] = rows["plan_sha256"]
                 else:
                     raise ValueError("diccionario de seed_scene invalido")
             elif isinstance(rows, list):
                 if not rows:
                     cls_list = list(classes) if classes is not None else []
-                    row_list = []
+                    rows_mm = []
                 elif isinstance(rows[0], dict):
                     non_act = [e for e in rows if e.get("kind") != "actor"]
                     cls_list = sorted({e["cls"] for e in non_act})
                     ci_map = {c: i for i, c in enumerate(cls_list)}
-                    row_list = [
-                        [
+                    rows_mm = [
+                        _seed_row(
                             e.get("id") or e["lid"],
                             ci_map[e["cls"]],
-                            _r3(e["x"]),
-                            _r3(e["z"]),
-                            _r_yaw(e.get("yaw", 0.0)),
-                        ]
+                            e["x"],
+                            e["z"],
+                            e.get("yaw", 0.0),
+                        )
                         for e in non_act
                     ]
                 elif isinstance(rows[0], (list, tuple)) and len(rows[0]) in (4, 5):
                     if isinstance(rows[0][1], str):
                         cls_list = sorted({str(r[1]) for r in rows})
                         ci_map = {c: i for i, c in enumerate(cls_list)}
-                        row_list = [
-                            [
-                                str(r[0]),
+                        rows_mm = [
+                            _seed_row(
+                                r[0],
                                 ci_map[str(r[1])],
-                                _r3(r[2]),
-                                _r3(r[3]),
-                                _r_yaw(r[4] if len(r) == 5 else 0.0),
-                            ]
+                                r[2],
+                                r[3],
+                                r[4] if len(r) == 5 else 0.0,
+                            )
                             for r in rows
                         ]
                     else:
@@ -2003,29 +2075,15 @@ class FakeWorld:
                             if classes is not None
                             else sorted(self._known_classes)
                         )
-                        row_list = [
-                            [
-                                str(r[0]),
-                                int(r[1]),
-                                _r3(r[2]),
-                                _r3(r[3]),
-                                _r_yaw(r[4] if len(r) == 5 else 0.0),
-                            ]
+                        rows_mm = [
+                            _seed_row(r[0], r[1], r[2], r[3], r[4] if len(r) == 5 else 0.0)
                             for r in rows
                         ]
                 else:
                     raise ValueError("formato de filas de seed_scene invalido")
 
-                h = _canon_sha256({"seed": doc_id, "rows": row_list})
-                plan_args = {
-                    "doc_id": doc_id,
-                    "rev": 1,
-                    "hash": h,
-                    "plan_sha256": compute_plan_sha256(doc_id, 1, h, cls_list, row_list),
-                    "caps": {"objeto": 10000, "infectado": 10000, "animal": 10000},
-                    "classes": cls_list,
-                    "rows": row_list,
-                }
+                h = _canon_sha256({"seed": doc_id, "rows": rows_mm})
+                plan_args = plan_from_rows(doc_id, 1, h, cls_list, rows_mm, seed_caps)
             else:
                 raise ValueError("rows debe ser lista o diccionario")
 
@@ -2058,9 +2116,9 @@ class FakeWorld:
             cls_plan = list(plan_args["classes"])
             checkpoint_rows: list[list] = []
 
-            for lid, ci, x, z, yaw in plan_args["rows"]:
+            for lid, ci, x_mm, z_mm, yaw_mdeg in zip(*(plan_args[key] for key in _PLAN_COLUMNS)):
                 cls_name = cls_plan[ci]
-                fx, fz, fyaw = float(x), float(z), float(yaw)
+                fx, fz, fyaw = x_mm / 1000.0, z_mm / 1000.0, yaw_mdeg / 1000.0
                 gy = float(self.ground_y(fx, fz))
                 prefix = lid.split("-", 1)[0]
                 is_creature = prefix in ("zmb", "ani")
@@ -2096,11 +2154,11 @@ class FakeWorld:
                 checkpoint_rows.append([
                     lid,
                     ci,
-                    _r3(ent.x),
-                    _r3(ent.y),
-                    _r3(ent.z),
-                    _r_yaw(ent.yaw),
-                    _r3(gy),
+                    _mm(ent.x),
+                    _mm(ent.y),
+                    _mm(ent.z),
+                    _mdeg(ent.yaw),
+                    _mm(gy),
                 ])
                 if is_creature:
                     ent.ai_active = True
