@@ -1,0 +1,32 @@
+{
+ "schema": "dsbx.scene/1",
+ "doc_id": "d-f2p-scene2",
+ "name": "Escena 2 F2P",
+ "map": "chernarusplus",
+ "entities": [
+  {
+   "id": "s2-01",
+   "kind": "objeto",
+   "cls": "WoodenCrate",
+   "x": 6190.0,
+   "z": 7660.0,
+   "yaw": 12
+  },
+  {
+   "id": "s2-02",
+   "kind": "objeto",
+   "cls": "Barrel_Red",
+   "x": 6200.0,
+   "z": 7648.0,
+   "yaw": 0
+  },
+  {
+   "id": "s2-03",
+   "kind": "objeto",
+   "cls": "MediumTent",
+   "x": 6178.0,
+   "z": 7672.0,
+   "yaw": 95
+  }
+ ]
+}
