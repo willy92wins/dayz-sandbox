@@ -24,6 +24,7 @@ if str(QA_DIR) not in sys.path:
 
 import fake_ext_persist
 import fake_peer
+import f03_common
 import s_persist_eval
 import s_persist_run
 import wire
@@ -708,6 +709,165 @@ class TestPostCleanupCensusNotN49(_GuardedTestCase):
             verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
             self.assertEqual(_checks_by_id(verdict)["PER-08"]["status"], "missing")
             self.assertNotEqual(_checks_by_id(verdict)["PER-08"]["status"], "pass")
+
+
+class _FakePartContext:
+    """PartContext falso: registra open y aborta sin jugar si se pide."""
+
+    calls = []
+    instances = []
+    next_startup_reason = "peer_timeout"
+
+    def __init__(self, *, base_dir, part_name, spike_id, args, argv):
+        self.base_dir = Path(base_dir)
+        self.part_name = part_name
+        self.part_dir = self.base_dir / part_name
+        self.build = args.build
+        self.startup_reason = type(self).next_startup_reason
+        self.git_head = ""
+        self.expected_stamp = ""
+        self.scenario = []
+        self.bridge = _FakeBridge()
+        type(self).instances.append(self)
+
+    def __enter__(self):
+        type(self).calls.append("open")
+        (self.part_dir / "samples").mkdir(parents=True, exist_ok=True)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def record_scenario(self, row):
+        self.scenario.append(dict(row))
+
+    def collect_probe_budget_logs(self):
+        return []
+
+    def finalize_manifest(self):
+        return {}
+
+    def _verify_hello_events(self):
+        return None
+
+
+def _live_args():
+    return mock.Mock(build="diag", both=True)
+
+
+class TestLiveColdBackupOrder(_GuardedTestCase):
+    def setUp(self):
+        super().setUp()
+        _FakePartContext.calls = []
+        _FakePartContext.instances = []
+        _FakePartContext.next_startup_reason = "peer_timeout"
+
+    def test_backup_before_open_when_server_stopped(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, _backup = _make_env(tmp)
+            base_dir = tmp / "evidence"
+            real_backup = s_persist_run._backup_storage
+
+            def recording_backup(storage_env, backup_dir, label):
+                _FakePartContext.calls.append("backup")
+                return real_backup(storage_env, backup_dir, label)
+
+            with mock.patch.object(s_persist_run, "_storage_env", return_value=env), mock.patch.object(
+                s_persist_run, "_list_server_processes", return_value=[]
+            ), mock.patch.object(
+                s_persist_run, "_backup_storage", side_effect=recording_backup
+            ), mock.patch.object(
+                f03_common, "PartContext", _FakePartContext
+            ):
+                verdict = s_persist_run.run_part(_live_args(), base_dir, [], "run")
+            self.assertEqual(verdict.get("exit_code"), 2)
+            self.assertLess(
+                _FakePartContext.calls.index("backup"),
+                _FakePartContext.calls.index("open"),
+            )
+            slot = base_dir / "run" / "_storage_backup"
+            self.assertTrue(slot.is_dir())
+            self.assertEqual((slot / "players.db").read_bytes(), b"players-baseline")
+
+    def test_no_backup_and_no_play_when_server_running(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, _backup = _make_env(tmp)
+            base_dir = tmp / "evidence"
+            _FakePartContext.next_startup_reason = None
+            running = [{"name": "DayZServer_x64.exe", "pid": 99, "command_line": ""}]
+            backup_mock = mock.Mock(return_value=({}, base_dir / "run" / "_storage_backup"))
+            with mock.patch.object(s_persist_run, "_storage_env", return_value=env), mock.patch.object(
+                s_persist_run, "_list_server_processes", return_value=running
+            ), mock.patch.object(
+                s_persist_run, "_backup_storage", backup_mock
+            ), mock.patch.object(
+                f03_common, "PartContext", _FakePartContext
+            ):
+                with self.assertRaises(RuntimeError):
+                    s_persist_run.run_part(_live_args(), base_dir, [], "run")
+            backup_mock.assert_not_called()
+            self.assertFalse((base_dir / "run" / "_storage_backup").exists())
+            self.assertEqual(len(_FakePartContext.instances), 1)
+            scenario = _FakePartContext.instances[0].scenario
+            self.assertEqual(len(scenario), 1)
+            self.assertEqual(scenario[0].get("ev"), "storage_restore_result")
+            self.assertEqual(scenario[0].get("restore_incomplete_b"), 1)
+            self.assertIn("server_still_running", str(scenario[0].get("error") or ""))
+            self.assertNotIn("t0_status", [ev.get("ev") for ev in scenario])
+
+
+class _FakeBridgeT4:
+    def __init__(self, now_ms):
+        self._now_ms = float(now_ms)
+        self.failure = None
+        self.hold_ms = 2000
+
+    def now_ms(self):
+        return self._now_ms
+
+
+class _FakeCtxT4:
+    def __init__(self, now_ms):
+        self.bridge = _FakeBridgeT4(now_ms)
+        self.scenario = []
+
+    def record_scenario(self, row):
+        self.scenario.append(dict(row))
+
+
+class TestT4NewServerHello(unittest.TestCase):
+    def _captured_predicate(self, now_ms=5000.0):
+        ctx = _FakeCtxT4(now_ms)
+        captured = {}
+
+        def fake_await_operator(ctx_arg, *, step, action, instructions, predicate, timeout_s):
+            captured["predicate"] = predicate
+            captured["step"] = step
+            return {"ok": False, "reason": "operator_timeout"}
+
+        with mock.patch.object(f03_common, "await_operator", fake_await_operator):
+            result = s_persist_run._restart_server_live(ctx, "epoch-old", "director-1")
+        self.assertEqual(result, "")
+        self.assertEqual(captured.get("step"), "t4_restart")
+        return captured["predicate"]
+
+    def test_rejects_old_hello_before_threshold_and_accepts_after(self):
+        predicate = self._captured_predicate(now_ms=5000.0)
+        old_hello = {
+            "ev": "hello", "http": 200, "peer": "server",
+            "inst": "epoch-new", "t_ms": 4999.0,
+        }
+        self.assertFalse(predicate(old_hello))
+        at_threshold = dict(old_hello, t_ms=5000.0)
+        self.assertTrue(predicate(at_threshold))
+        after = dict(old_hello, t_ms=5001.0)
+        self.assertTrue(predicate(after))
+        same_epoch_after = dict(old_hello, inst="epoch-old", t_ms=6000.0)
+        self.assertFalse(predicate(same_epoch_after))
+        missing_t = {"ev": "hello", "http": 200, "peer": "server", "inst": "epoch-new"}
+        self.assertFalse(predicate(missing_t))
 
 
 class _FakeBridge:

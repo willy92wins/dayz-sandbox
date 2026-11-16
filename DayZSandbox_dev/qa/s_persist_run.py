@@ -503,6 +503,51 @@ def _restore_storage(storage_env, backup_dir, storage_t0):
         return 0, _snapshot_dir(dest) or {}, f"storage_restore_incomplete:{type(exc).__name__}:{exc}"
 
 
+def _live_cold_backup_before_open(base_dir, part_name):
+    """Backup en frio de t0 en partida, antes de abrir la parte.
+
+    Devuelve (storage_env, storage_t0, backup_slot, failure_event,
+    failure_error). En exito failure_event es None; en fallo storage_env,
+    storage_t0 y backup_slot son None, failure_event es el evento de
+    escenario equivalente al de siempre (storage_config_invalid o el
+    recibo storage_restore_result con restore_incomplete_b=1) y
+    failure_error es el texto para la RuntimeError del llamador. Aqui
+    todavia no hay ctx, asi que no se puede pedir al operador que pare
+    el servidor: la parada tiene que estar ya acreditada.
+    """
+    backup_dir = Path(base_dir) / part_name / "_storage_backup"
+    raw_env = _storage_env()
+    checked = None
+    if raw_env is not None:
+        checked = _validate_storage_env(raw_env, backup_dir=None)
+        if checked is not None and not Path(checked["mission_dir"]).is_dir():
+            checked = None
+    if checked is None:
+        return None, None, None, {"ev": "storage_config_invalid"}, "storage_config_invalid"
+    ok, err = _require_server_stopped(checked)
+    if not ok:
+        event = {
+            "ev": "storage_restore_result",
+            "restore_ok_b": 0,
+            "restore_incomplete_b": 1,
+            "error": f"storage_backup_incomplete:{err}",
+            "files": {},
+        }
+        return None, None, None, event, err
+    try:
+        storage_t0, backup_slot = _backup_storage(checked, backup_dir, "t0")
+    except Exception as exc:
+        event = {
+            "ev": "storage_restore_result",
+            "restore_ok_b": 0,
+            "restore_incomplete_b": 1,
+            "error": f"storage_backup_incomplete:{exc}",
+            "files": {},
+        }
+        return None, None, None, event, str(exc)
+    return checked, storage_t0, backup_slot, None, ""
+
+
 def _snapshot_stage(is_live, storage_env, sim_storage):
     if is_live and storage_env is not None:
         try:
@@ -793,12 +838,17 @@ def _restart_server_live(ctx, old_epoch, director_uid_t0):
         f"(director_uid={director_uid_t0}). El epoch del servidor debe cambiar respecto a {old_epoch}."
     )
 
+    threshold = ctx.bridge.now_ms()
+
     def _new_server_hello(ev):
         if ev.get("ev") != "hello" or ev.get("http") != 200 or ev.get("peer") != "server":
             return False
         args = ev.get("args") if isinstance(ev.get("args"), dict) else {}
         inst = str(ev.get("inst") or args.get("inst") or "")
-        return inst != "" and inst != old_epoch
+        if inst == "" or inst == old_epoch:
+            return False
+        t = ev.get("t_ms")
+        return isinstance(t, (int, float)) and float(t) >= float(threshold)
 
     res = f03_common.await_operator(
         ctx,
@@ -1082,6 +1132,24 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
     base_dir = Path(base_dir)
     fixture = _fixture()
     cfg = _part_config(part_name, fixture)
+    # En partida el backup en frio va antes de abrir la parte: si se
+    # abriera primero, PartContext esperaria a los peers y el servidor
+    # ya habria creado un epoch previo al backup (E0) que el oraculo
+    # tomaria como epoch viejo. Sin backup acreditado no se juega.
+    is_live_build = getattr(args, "build", None) in ("diag", "retail")
+    pre_storage_env = None
+    pre_storage_t0 = None
+    pre_backup_slot = None
+    pre_failure_event = None
+    pre_failure_error = ""
+    if is_live_build:
+        (
+            pre_storage_env,
+            pre_storage_t0,
+            pre_backup_slot,
+            pre_failure_event,
+            pre_failure_error,
+        ) = _live_cold_backup_before_open(base_dir, part_name)
     with f03_common.PartContext(
         base_dir=base_dir,
         part_name=part_name,
@@ -1089,6 +1157,12 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
         args=args,
         argv=argv,
     ) as ctx:
+        if pre_failure_event is not None:
+            # Sin backup acreditado no se juega: se deja la evidencia
+            # equivalente a la de siempre y se aborta (INCONCLUSO en el
+            # gate). Abrir la parte aqui solo da donde escribirla.
+            ctx.record_scenario(pre_failure_event)
+            raise RuntimeError(pre_failure_error)
         if ctx.startup_reason is not None:
             ctx.collect_probe_budget_logs()
             ctx.finalize_manifest()
@@ -1123,73 +1197,22 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             )
 
         is_live = ctx.build in ("diag", "retail")
-        storage_env = _storage_env() if is_live else None
-        if is_live and storage_env is not None:
-            # BLOQ 3: rutas delimitadas antes de cualquier operacion.
-            storage_env = _validate_storage_env(storage_env, backup_dir=None)
-            if storage_env is not None and not Path(storage_env["mission_dir"]).is_dir():
-                storage_env = None
-        if is_live and storage_env is None:
-            ctx.record_scenario({"ev": "storage_config_invalid"})
+        # En partida la config y el backup ya vienen acreditados de
+        # antes de abrir la parte (ver _live_cold_backup_before_open);
+        # un fallo previo ya ha abortado arriba, asi que aqui solo
+        # queda registrar el snapshot y verificar los hellos que
+        # PartContext.open() ya espero. No hay parada ni arranque en
+        # t0: los peers llegan arrancados y verificados, y por tanto
+        # hay un unico epoch del servidor antes de t1.
+        storage_env = pre_storage_env if is_live else None
         sim_storage = ctx.part_dir / "_sim_storage"
         backup_dir = ctx.part_dir / "_storage_backup"
-        storage_t0 = None
-        backup_slot = None
+        storage_t0 = pre_storage_t0 if is_live else None
+        backup_slot = pre_backup_slot if is_live else None
 
         try:
-            if is_live and storage_env is None:
-                raise RuntimeError("storage_config_invalid")
-            if is_live and storage_env is not None:
-                if _server_state(storage_env) != "stopped":
-                    f03_common.await_operator(
-                        ctx,
-                        step="t0_stop_server_for_cold_backup",
-                        action="stop_server",
-                        instructions="Para DayZServer para el backup en frio de $mission:storage_#.",
-                        predicate=lambda _ev: _server_state(storage_env) == "stopped",
-                        timeout_s=300.0,
-                    )
-                # BLOQ 2: parada comprobada inmediatamente antes de copiar;
-                # si no se acredita, _backup_storage falla sin copiar.
-                try:
-                    storage_t0, backup_slot = _backup_storage(storage_env, backup_dir, "t0")
-                except Exception as exc:
-                    ctx.record_scenario({
-                        "ev": "storage_restore_result",
-                        "restore_ok_b": 0,
-                        "restore_incomplete_b": 1,
-                        "error": f"storage_backup_incomplete:{exc}",
-                        "files": {},
-                    })
-                    raise
+            if is_live:
                 ctx.record_scenario({"ev": "storage_snapshot_t0", "files": storage_t0})
-                start_threshold = ctx.bridge.now_ms()
-
-                def _both_peers_hello_after(ev):
-                    if ev.get("ev") != "hello" or ev.get("http") != 200:
-                        return False
-                    if ev.get("peer") not in ("server", "client"):
-                        return False
-                    t = ev.get("t_ms")
-                    return isinstance(t, (int, float)) and float(t) >= start_threshold
-
-                f03_common.await_operator(
-                    ctx,
-                    step="t0_start_peers",
-                    action="start_server_and_client",
-                    instructions="Arranca DayZServer y el cliente QA tras el backup en frio.",
-                    predicate=_both_peers_hello_after,
-                    timeout_s=600.0,
-                )
-                drain_s = float(getattr(ctx.bridge, "hold_ms", 2000)) / 1000.0 + 0.2
-                time.sleep(drain_s)
-                fail_before = getattr(ctx.bridge, "failure", None)
-                if _clear_expected_peer_cut_failure(ctx):
-                    ctx.record_scenario({
-                        "ev": "peer_cut_failure_cleared",
-                        "step": "t0_start_peers",
-                        "type": type(fail_before).__name__,
-                    })
                 verify_reason = ctx._verify_hello_events()
                 ctx.record_scenario({"ev": "t0_hello_verify", "reason": verify_reason or ""})
             elif not is_live:
