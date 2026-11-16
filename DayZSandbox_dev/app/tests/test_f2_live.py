@@ -30,8 +30,8 @@ from app.tests.fake_world import (
     POS_TOL_M,
     FakeWorld,
     build_plan,
-    compute_plan_sha256,
     hash_doc,
+    plan_sha256_of,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,6 +79,17 @@ def dist3(a, b):
         + (float(a[1]) - float(b[1])) ** 2
         + (float(a[2]) - float(b[2])) ** 2
     )
+
+
+def m(val):
+    """mm (o milesimas) del cable v1.3 -> metros (o unidades)."""
+    return None if val is None else val / 1000.0
+
+
+def plan_rows(args):
+    """Filas `[lid, ci, x_mm, z_mm, yaw_mdeg]` de las columnas v1.3."""
+    return [list(r) for r in zip(args["lid"], args["ci"], args["x_mm"],
+                                 args["z_mm"], args["yaw_mdeg"])]
 
 
 def _load(name):
@@ -289,25 +300,27 @@ class F2A1Plan(LiveBase):
                   if o["op_id"] == op_id]
         self.assertEqual(len(orders), 1)
         args = orders[0]["args"]
-        self.assertEqual(len(args["rows"]), 33)
+        # v1.3 §3.2: columnas, todas las claves y plan_sha256 sobre ellas
+        self.assertEqual(len(args["lid"]), 33)
+        self.assertEqual(args["f2"], 1)
+        self.assertEqual(args["caps"]["total"], -1)
         self.assertIn("plan_sha256", args)
-        recomputed = compute_plan_sha256(
-            args["doc_id"], args["rev"], args["hash"], args["classes"], args["rows"])
-        self.assertEqual(recomputed, args["plan_sha256"])
-        row = next(r for r in args["rows"] if r[0] == "obj-01")
-        self.assertEqual(row[4], 0.0)
-        # D11: las filas son las del documento congelado (redondeadas)
+        self.assertNotIn("rows", args)
+        self.assertEqual(plan_sha256_of(args), args["plan_sha256"])
+        idx = args["lid"].index("obj-01")
+        self.assertEqual(args["yaw_mdeg"][idx], 0)
+        # D11: las filas son las del documento congelado (redondeadas a mm)
         exp = {}
         for ent in doc["entities"]:
             if ent.get("kind") == "actor":
                 continue
-            exp[ent["id"]] = (ent["cls"], round(float(ent["x"]), 3),
-                              round(float(ent["z"]), 3))
-        self.assertEqual({r[0] for r in args["rows"]}, set(exp))
-        for lid, ci, x, z, _yaw in args["rows"]:
+            exp[ent["id"]] = (ent["cls"], float(ent["x"]), float(ent["z"]))
+        self.assertEqual(set(args["lid"]), set(exp))
+        for lid, ci, x, z, _yaw in plan_rows(args):
             cls, ex, ez = exp[lid]
             self.assertEqual(args["classes"][ci], cls)
-            self.assertLess(dist3((x, 0.0, z), (ex, 0.0, ez)), POS_TOL_M - 0.002)
+            self.assertEqual((x, z), (round(ex * 1000), round(ez * 1000)))
+            self.assertLess(dist3((m(x), 0.0, m(z)), (ex, 0.0, ez)), POS_TOL_M - 0.002)
         self.assertEqual(fake.world.census() and len(fake.world.census()), 33)
 
     def test_negativos_antes_de_mandar_nada(self):
@@ -502,15 +515,17 @@ class F2A2Apply(LiveBase):
         self.assertEqual(len(rows), 33)
         by_lid = {e["id"]: e for e in doc["entities"]}
         for row in rows:
+            # v1.3: la fila del cable va en enteros (mm y milesimas)
+            self.assertTrue(all(type(v) is int for v in row[1:]), row)
             lid, ci, x, y, z, _yaw, gy = row
             ent = by_lid[lid]
             self.assertEqual(row[1], read_classes_index(doc, ent["cls"], bodies[-1]),
                              lid)
-            self.assertLess(dist3((x, y, z), (float(ent["x"]), gy, float(ent["z"]))),
+            self.assertLess(dist3((m(x), m(y), m(z)), (float(ent["x"]), m(gy), float(ent["z"]))),
                             POS_TOL_M - 0.002)
         # deriva activa: la lectura `now` del mundo ya no coincide con el checkpoint
         order = {"op_id": "obs-a2", "session": "a" * 16, "epoch": world.epoch,
-                 "verb": "scene.observe", "args": {"doc_id": DOC_ID, "at": "now"}}
+                 "verb": "scene.observe", "args": {"f2": 1, "doc_id": DOC_ID, "at": "now"}}
         st, rsn, now_read = world.observe(order)
         self.assertEqual(st, "done", rsn)
         now_rows = {r[0]: r for r in now_read["obs"]["rows"]}
@@ -521,7 +536,7 @@ class F2A2Apply(LiveBase):
                 continue
             nrow = now_rows[lid]
             crow = ckpt_rows[lid]
-            if dist3((nrow[1], nrow[2], nrow[3]), (crow[2], crow[3], crow[4])) > 0.5:
+            if dist3((nrow[1], nrow[2], nrow[3]), (crow[2], crow[3], crow[4])) > 500:
                 moved += 1
         self.assertGreater(moved, 0)
 
@@ -571,14 +586,16 @@ class F2A2Apply(LiveBase):
         self.assertNotIn("observado", [e["state"] for e in env.events_for(r["op_id"])])
 
     def test_error_real_05004_que_el_redondeo_deja_en_04999(self):
-        # EPS_Q: con tolerancia 0,5 el 0,4999 redondeado pasaria; con 0,498 no.
+        # EPS_Q: con tolerancia 500 mm el 499,9 redondeado pasaria; con 498 no (v1.3, mm).
         order = {
             "session": "a" * 16, "op_id": "op-1", "epoch": "e" * 32,
             "verb": "scene.apply",
             "args": {
-                "doc_id": DOC_ID, "rev": 1, "hash": "0" * 64,
-                "plan_sha256": "0" * 64, "classes": ["WoodenCrate"],
-                "rows": [["obj-01", 0, 0.0, 0.0, 0.0]],
+                "f2": 1, "doc_id": DOC_ID, "rev": 1, "hash": "0" * 64,
+                "plan_sha256": "0" * 64,
+                "caps": {"objeto": 1, "infectado": 0, "animal": 0, "total": -1},
+                "classes": ["WoodenCrate"],
+                "lid": ["obj-01"], "ci": [0], "x_mm": [0], "z_mm": [0], "yaw_mdeg": [0],
             },
             "expectation": {"obj-01": ("WoodenCrate", 0.0, 0.0)},
         }
@@ -586,13 +603,14 @@ class F2A2Apply(LiveBase):
                "hash": "0" * 64, "plan_sha256": "0" * 64}
         last = {"session": "a" * 16, "op_id": "op-1",
                 "verb": "scene.apply", "outcome": "done"}
+        # posicion real (0,0704, 0, 0,4954) m -> (70, 0, 495) mm en el cable
         read = self.scene_read(
             "e" * 32, generation=gen, n=1, last=last, obs_at="checkpoint",
-            rows=[["obj-01", 0, 0.07, 0.0, 0.495, 0.0, 0.0]])
+            rows=[["obj-01", 0, 70, 0, 495, 0, 0]])
         self.assertFalse(check_apply_predicate(order, read))
         read_ok = self.scene_read(
             "e" * 32, generation=gen, n=1, last=last, obs_at="checkpoint",
-            rows=[["obj-01", 0, 0.0, 0.0, 0.0, 0.0, 0.0]])
+            rows=[["obj-01", 0, 0, 0, 0, 0, 0]])
         self.assertTrue(check_apply_predicate(order, read_ok))
 
     def test_fila_omitida_y_ci_de_otra_clase(self):
@@ -622,15 +640,12 @@ class F2A2Apply(LiveBase):
                           caps=env.store.catalog["caps"])
         exp2 = env.live.prepare_apply_locked(mutated, snap["rev"], hash_doc(mutated))
         self.assertTrue(exp2.get("ok"), exp2)
-        rows = copy.deepcopy(plan["rows"])
         other_ci = plan["classes"].index("Land_Wreck_V3S")
-        for row in rows:
-            if row[0] == "obj-01":
-                row[1] = other_ci
+        ci = list(plan["ci"])
+        ci[plan["lid"].index("obj-01")] = other_ci
         plan2 = dict(plan)
-        plan2["rows"] = rows
-        plan2["plan_sha256"] = compute_plan_sha256(
-            plan["doc_id"], plan["rev"], plan["hash"], plan["classes"], rows)
+        plan2["ci"] = ci
+        plan2["plan_sha256"] = plan_sha256_of(plan2)
         ok, order = env.live.enqueue_apply_locked("op-902", plan2, exp2["expectation"])
         self.assertTrue(ok, order)
         op = env.wait_state("op-902", "fallido")
@@ -842,7 +857,8 @@ class F2A3Reset(LiveBase):
         order = {
             "op_id": "op-stale-reset", "session": srv.session, "conn": srv.conn,
             "epoch": old_epoch, "inst": srv.inst, "verb": "scene.reset",
-            "args": {"doc_id": DOC_ID}, "issued_ms": int(time.monotonic() * 1000),
+            "args": {"f2": 1, "doc_id": DOC_ID, "if_pending": {"session": "", "op_id": ""}},
+            "issued_ms": int(time.monotonic() * 1000),
             "ttl_ms": 4000,
         }
         srv.handle_order(order, now_ms=order["issued_ms"])
@@ -1063,7 +1079,7 @@ class F2CCompensation(LiveBase):
         order = {
             "op_id": "op-ifp", "session": srv.session, "conn": srv.conn,
             "epoch": fake.epoch, "inst": srv.inst, "verb": "scene.reset",
-            "args": {"doc_id": DOC_ID,
+            "args": {"f2": 1, "doc_id": DOC_ID,
                      "if_pending": {"session": srv.session, "op_id": "op-999"}},
             "issued_ms": int(time.monotonic() * 1000), "ttl_ms": 4000,
         }
@@ -1100,7 +1116,7 @@ class F2CCompensation(LiveBase):
                           "b" * 16, "op-B")
         reset_order = {"op_id": "op-comp", "session": "a" * 16,
                        "epoch": world.epoch, "verb": "scene.reset",
-                       "args": {"doc_id": DOC_ID,
+                       "args": {"f2": 1, "doc_id": DOC_ID,
                                 "if_pending": {"session": "a" * 16, "op_id": "op-A"}}}
         st, rsn, rd = world.reset(reset_order, check=lambda: None, tick=lambda: None)
         self.assertEqual(st, "done", rsn)
@@ -1232,9 +1248,11 @@ class F2RReconcile(LiveBase):
         order_a = {
             "session": "a" * 16, "op_id": "op-1", "epoch": "e" * 32,
             "verb": "scene.apply",
-            "args": {"doc_id": DOC_ID, "rev": 1, "hash": "0" * 64,
-                     "plan_sha256": "0" * 64, "classes": ["WoodenCrate"],
-                     "rows": [["obj-01", 0, 0.0, 0.0, 0.0]]},
+            "args": {"f2": 1, "doc_id": DOC_ID, "rev": 1, "hash": "0" * 64,
+                     "plan_sha256": "0" * 64,
+                     "caps": {"objeto": 1, "infectado": 0, "animal": 0, "total": -1},
+                     "classes": ["WoodenCrate"],
+                     "lid": ["obj-01"], "ci": [0], "x_mm": [0], "z_mm": [0], "yaw_mdeg": [0]},
             "expectation": {"obj-01": ("WoodenCrate", 0.0, 0.0)},
         }
         good = self.scene_read(
@@ -1243,7 +1261,7 @@ class F2RReconcile(LiveBase):
             n=1, last={"session": "a" * 16, "op_id": "op-1",
                        "verb": "scene.apply", "outcome": "done"},
             obs_at="checkpoint",
-            rows=[["obj-01", 0, 0.0, 0.0, 0.0, 0.0, 0.0]])
+            rows=[["obj-01", 0, 0, 0, 0, 0, 0]])
         self.assertTrue(check_apply_predicate(order_a, good))
         bad = copy.deepcopy(good)
         bad["generation"]["rev"] = 2
@@ -1386,6 +1404,127 @@ class F2D1Contract(LiveBase):
         op = env.op(op_id)
         self.assertEqual(op["state"], "parcial")
         self.assertNotIn("observado", [e["state"] for e in env.events_for(op_id)])
+
+
+class F2PContratoV13(LiveBase):
+    """Contrato v1.3 del cable de punta a punta (brief de F2-partida §3.9)."""
+
+    def _direct_order(self, fake, op_id, verb, args):
+        srv = fake.server
+        order = {
+            "op_id": op_id, "session": srv.session, "conn": srv.conn,
+            "epoch": fake.epoch, "inst": srv.inst, "verb": verb,
+            "args": args, "issued_ms": int(time.monotonic() * 1000), "ttl_ms": 4000,
+        }
+        srv.handle_order(order, now_ms=order["issued_ms"])
+        entry = wait_until(
+            lambda: next((e for e in srv.cache.values()
+                          if e.order["op_id"] == op_id and e.state == "terminada"), None), 8)
+        self.assertIsNotNone(entry, op_id)
+        return entry.result
+
+    def _state_reads_ok(self, env, fake):
+        reads = env.orders(verb="state.read", internal=True)
+        self.assertTrue(reads)
+        for o in reads:
+            self.assertEqual(o["args"], {"f2": 1, "doc_id": DOC_ID})
+            self.assertFalse(env.live.is_f2_order(o))
+        read_ids = {o["op_id"] for o in reads}
+        answered = [b for b in fake.server.sent_results
+                    if b["op_id"] in read_ids and b.get("status") == "done"]
+        self.assertTrue(answered)
+        self.assertTrue(all("scene" in b["read"] for b in answered))
+
+    def test_g_p01_primer_hello_y_reinicio_del_backend_reconcilian_y_el_apply_se_entrega(self):
+        shared = tempfile.mkdtemp(prefix="dsbx-f2-p01-")
+        self.addCleanup(shutil.rmtree, shared, True)
+        env1 = self.make_env(dir=shared, remove_dir=False)
+        fake = self.start(env1, world=FakeWorld())
+        # primer hello: el state.read lleva f2 (el mod anade scene) y sigue el camino comun
+        self.assertTrue(env1.live.server_has_scene_locked())
+        self.assertIs(env1.bridge.reconciled, True)
+        self._state_reads_ok(env1, fake)
+        r1 = env1.apply()
+        self.assertTrue(r1.get("ok"), r1)
+        env1.wait_state(r1["op_id"], "observado")
+        env1.close()
+        # reinicio del backend sobre el mismo fichero: reconcilia otra vez y el apply se entrega
+        env2 = self.make_env(dir=shared, remove_dir=False)
+        fake.reconnect("http://127.0.0.1:%d" % env2.bridge.port)
+        self.assertTrue(wait_until(lambda: env2.bridge.reconciled, 12))
+        self.assertIs(env2.bridge.reconciled, True)
+        self._state_reads_ok(env2, fake)
+        r2 = env2.apply()
+        self.assertTrue(r2.get("ok"), r2)
+        op = env2.wait_state(r2["op_id"], "observado")
+        self.assertEqual(op["state"], "observado")
+        own = [c for c in fake.world.census()
+               if c["origin"] == "sandbox" and c["scene"] == DOC_ID]
+        self.assertEqual(len(own), 33)
+
+    def test_d_orden_directa_v122_con_rows_bad_plan_y_censo_sin_cambios(self):
+        env = self.make_env()
+        fake = self.start(env, world=FakeWorld())
+        doc = _doc_without_actors()
+        plan = build_plan(doc, rev=1, hash=hash_doc(doc))
+        # T-02: con la marca `f2: 1` explicita para que llegue al parser F2 del mod falso;
+        # sin ella iria por el camino F1 (lo cubre T02MarcaF2 en test_fake_mod_world.py).
+        legacy = {
+            "f2": 1,
+            "doc_id": plan["doc_id"], "rev": plan["rev"], "hash": plan["hash"],
+            "plan_sha256": plan["plan_sha256"],
+            "caps": {"objeto": 20, "infectado": 10, "animal": 3},
+            "classes": plan["classes"],
+            "rows": [[lid, ci, m(x), m(z), m(yaw)] for lid, ci, x, z, yaw in plan_rows(plan)],
+        }
+        before = fake.world.census()
+        result = self._direct_order(fake, "op-v122", "scene.apply", legacy)
+        self.assertEqual((result.get("status"), result.get("reason")), ("rejected", "bad_plan"))
+        self.assertEqual(fake.world.census(), before)
+        # columnas de longitudes distintas: tambien bad_plan
+        short = copy.deepcopy(plan)
+        short["yaw_mdeg"] = short["yaw_mdeg"][:-1]
+        result = self._direct_order(fake, "op-short", "scene.apply", short)
+        self.assertEqual((result.get("status"), result.get("reason")), ("rejected", "bad_plan"))
+        self.assertEqual(fake.world.census(), before)
+        # y el plan v1.3 completo, directo al mod, si se aplica
+        result = self._direct_order(fake, "op-v13", "scene.apply", plan)
+        self.assertEqual(result.get("status"), "done", result)
+        self.assertEqual(len(fake.world.census()), 33)
+
+    def test_f_api_observation_en_metros_y_el_cable_en_mm(self):
+        env = self.make_env()
+        world = FakeWorld()
+        fake = self.start(env, world=world)
+        r = env.apply()
+        env.wait_state(r["op_id"], "observado")
+        st, resp = env.http("POST", "/api/observe", {"doc_id": DOC_ID})
+        self.assertEqual(st, 200, resp)
+        read_id = resp["read_id"]
+        self.assertTrue(wait_until(
+            lambda: (getattr(env.backend, "observation", None) or {}).get("read_id") == read_id, 10))
+        st, resp = env.http("GET", "/api/observation")
+        self.assertEqual(st, 200, resp)
+        api_rows = {row[0]: row for row in resp["observation"]["rows"]}
+        doc = {e["id"]: e for e in _doc_without_actors()["entities"]}
+        ent = doc["obj-01"]
+        row = api_rows["obj-01"]
+        # API: metros, grados y hp en [0, 1], como en v1.2.2
+        self.assertAlmostEqual(row[1], float(ent["x"]), delta=0.001)
+        self.assertAlmostEqual(row[3], float(ent["z"]), delta=0.001)
+        self.assertAlmostEqual(row[2], world.ground_y(ent["x"], ent["z"]), delta=0.001)
+        self.assertAlmostEqual(row[4], float(ent["yaw"]) % 360.0, delta=0.001)
+        self.assertEqual(row[5], 1.0)
+        self.assertEqual(row[6:], [0, 0])
+        # cable: la misma fila en enteros (mm, milesimas de grado y de hp)
+        wire = [b for b in fake.server.sent_results
+                if b["op_id"] == read_id and b.get("status") == "done"]
+        self.assertTrue(wire)
+        wire_row = {w[0]: w for w in wire[-1]["read"]["obs"]["rows"]}["obj-01"]
+        self.assertTrue(all(type(v) is int for v in wire_row[1:]), wire_row)
+        self.assertEqual(wire_row[1], round(float(ent["x"]) * 1000))
+        self.assertEqual(wire_row[5], 1000)
+        self.assertNotEqual(row[1], wire_row[1])
 
 
 if __name__ == "__main__":

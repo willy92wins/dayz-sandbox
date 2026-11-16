@@ -1,0 +1,879 @@
+=====================================================================
+== C:\Program Files (x86)\Steam\steamapps\common\DayZ\DayZ_x64.exe
+== "C:\Program "-mod=C:\tmp\dsbx-f1bpeers-work\pbo\1155973\@DayZSandbox" -connect=127.0.0.1 -port=2502 "-profiles=C:\tmp\dsbx-f1bpeers-work\partida\profiles_retail\client" -name=DSBXQA -window -x=1280 -y=720 -noPause
+=====================================================================
+Exe timestamp: 2026/11/04 18:53:50
+Current time:  2026/11/15 17:38:56
+Version 1.30.164289.70
+=====================================================================
+
+17:38:56.469 [Inputs] Loading inputs default "bin/constants.xml"
+17:38:56.472 [Inputs] Loading inputs default "bin/specific.xml"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot01"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot02"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot03"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot04"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot05"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot06"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot07"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot08"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot09"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot10"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot11"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGestureSlot12"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteGreeting"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteSOS"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteHeart"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteTaunt"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteLyingDown"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteTauntKiss"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmotePoint"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteTauntElbow"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteThumb"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteThumbDown"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteThroat"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteDance"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteSalute"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteTimeout"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteFacepalm"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteClap"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteSilent"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteWatching"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteHold"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteListening"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmotePointSelf"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteLookAtMe"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteTauntThink"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteMove"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteGetDown"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteCome"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteSurrender"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteCampfireSit"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteSitA"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteSitB"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteRPSRandom"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteRPSRock"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteRPSPaper"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteRPSScisors"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteNod"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteShake"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteShrug"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteSuicide"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "EmoteVomit"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAAimLeft"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAAimRight"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAAimUp"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAAimDown"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAGetOver"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAStance"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAStand"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UACrouch"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAProne"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAZeroingUp"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAZeroingDown"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAZoomIn"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAZoomInOptics"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAZoomOutOptics"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAZoomInToggle"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UATurbo"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAPersonView"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UALookAround"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAFire"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAHeavyMeleeAttack"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UADefaultAction"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAAction"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UADropitem"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAThrowitem"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAToggleWeapons"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAUIQuickbarToggle"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UATempRaiseWeapon"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UATempRaiseWeaponGamepad"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAReloadMagazine"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UAPrevActionCategory"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UANextActionCategory"
+17:38:56.473 !!! [Inputs] Attempt to insert input twice "UACarHorn"
+17:38:56.474 [Inputs] Loading inputs cfg "C:\tmp\dsbx-f1bpeers-work\partida\profiles_retail\client\Users\DSBXQA\guill.core.xml"
+17:38:56.493 [Inputs] Exporting inputs cfg "C:\tmp\dsbx-f1bpeers-work\partida\profiles_retail\client\Users\DSBXQA\guill.core.xml"
+17:38:56.978 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableCrouchCameraHorizontalRotation'
+17:38:56.978 SCRIPT    (W): @"scripts/3_Game/human.c,241": Method not linked 'HumanInputController.DisableCrouchCameratHorizontalRotation'
+17:38:56.978 SCRIPT    (W): @"scripts/3_Game/human.c,240": Method not linked 'HumanInputController.DisableErectCameratHorizontalRotation'
+17:38:56.978 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableErectHorizontalRotation'
+17:38:57.556 ANIMATION (E): Can't load C:\tmp\dsbx-f1bpeers-work\pbo\1155973\@DayZSandbox/Anims/cfg/skeletons.anim.xml
+17:38:57.557 ANIMATION (E): Failed to open file, line 0, column 0
+17:38:57.557 ANIMATION (E): Can't load nasdara/Anims/cfg/skeletons.anim.xml
+17:38:57.557 ANIMATION (E): Failed to open file, line 0, column 0
+17:38:57.557 ANIMATION (E): Can't load sakhal/Anims/cfg/skeletons.anim.xml
+17:38:57.557 ANIMATION (E): Failed to open file, line 0, column 0
+17:38:59.218 SCRIPT    (W): @"scripts/4_World/entities/building/underground/entrance/land_underground_entrance.c,149": 'UpdatePathgraphDoorByAnimationSourceName' is obsolete: 1.30: Use UpdatePathgraphEntityState
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetActions'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.SetRoboRespawn'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.SetName'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetInitialState'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetEvents'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.SetRoboRespawnTime'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetName'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetFromStates'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetToStates'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetRoboRespawn'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetActive'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetRoboRespawnTime'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetGuards'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.GetDefaultRoboRespawn'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.ReadStateMachines'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.GetDefaultRoboRespawnTime'
+17:38:59.601 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.GetStateMachines'
+17:38:59.654 WORLD        : Create entity type 'Static'
+17:38:59.654  WORLD        : Create entity type 'All'
+17:38:59.654   GUI       (W): String "STR_DN_UNKNOWN" not found (not in localization table)
+17:38:59.654 WORLD        : Create entity type 'Air'
+17:38:59.654  WORLD        : Create entity type 'Transport'
+17:38:59.654   GUI       (W): String "STR_DN_TRANSPORT" not found (not in localization table)
+17:38:59.654  GUI       (W): String "STR_DN_HELICOPTER" not found (not in localization table)
+17:38:59.654 WORLD        : Create entity type 'Car'
+17:38:59.654  GUI       (W): String "STR_DN_CAR" not found (not in localization table)
+17:38:59.654 WORLD        : Create entity type 'Man'
+17:38:59.654  GUI       (W): String "STR_DN_MAN" not found (not in localization table)
+17:38:59.690 RENDER    (E): Cannot find PP effect CloudsEffect, is the name correct?
+17:38:59.756 WORLD        : Create entity type 'Boat'
+17:38:59.756  GUI       (W): String "STR_DN_BOAT" not found (not in localization table)
+17:38:59.756 WORLD        : Create entity type 'Motorbike'
+17:38:59.756  GUI       (W): String "STR_DN_MOTORBIKE" not found (not in localization table)
+17:38:59.756 WORLD        : Create entity type 'Animal'
+17:38:59.756  GUI       (W): String "STR_DN_ANIMAL" not found (not in localization table)
+17:38:59.757 WORLD        : Create entity type 'Fortress'
+17:38:59.757  GUI       (W): String "STR_DN_BUNKER" not found (not in localization table)
+17:39:00.530 WORLD        : Create entity type 'M79_Base'
+17:39:00.530  AUDIO        : Loading SoundSet 'IZH18_silencerHomeMade_SoundSet'
+17:39:00.530   AUDIO     (E): Sound set 'IZH18_silencerHomeMade_SoundSet' references missing sound shader 'IZH18_Closure_SoundShader'
+17:39:00.604 WORLD        : Create entity type 'LeeEnfield_Base'
+17:39:00.604  RESOURCES    : GetResourceObject @"{547244D924C753A2}/DZ/anims/anm/player/reloads/LeeEnfield/w_enfield_states.anm"
+17:39:00.604   RESOURCES (E): Failed to open
+17:39:07.352 RESOURCES    : GetResourceObject '.ptc'
+17:39:07.352  RESOURCES (E): Failed to open
+17:39:07.354 RESOURCES    : GetResourceObject 'graphics/particles/debug_dot.ptc'
+17:39:07.354  RESOURCES (E): Bad texture name 'alpha'
+17:39:07.354  MATERIAL  (E): Can't load 'AlbedoMap' 'alpha', in material @"Graphics/Particles/materials/glow/glow1.emat"
+17:39:07.523 RESOURCES    : GetResourceObject 'graphics/particles/tandoor_fire_small_house_01_start.ptc'
+17:39:07.523  MATERIAL  (E): Can't load 'NormalMap' 'Particles/Textures/_Normals/8x16_sphere_N.edds', in material @"Graphics/Particles/materials/smoke/Smoke_Swirl_anim_03.emat"
+17:39:07.724 RESOURCES    : GetResourceObject 'graphics/particles/explosion_grenade_sand.ptc'
+17:39:07.724  MATERIAL  (E): Can't load 'NormalMap' 'Particles/Textures/_Normals/8x16_sphere_N.edds', in material @"Graphics/Particles/materials/smoke/Smoke_Smooth_anim.emat"
+17:39:07.871 RESOURCES    : GetResourceObject 'graphics/particles/smoking_barrel.ptc'
+17:39:07.871  PARTICLES (E): ParticleEffect graphics/particles/smoking_barrel.ptc cannot find material Graphics/Particles/materials/smoke/gunsmoke_muzzle_1.emat
+17:39:30.774 NETWORK      : Network simulation
+17:39:30.774  Loading landscape 'chernarusplus'
+17:39:30.774   WORLD        : Create entity type 'Land_power_pole_conc1_amp'
+17:39:30.774    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+17:39:30.816   ENTITY       : Load entity type 'Land_Mil_Barracks5'
+17:39:30.816    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:30.818   WORLD        : Create entity type 'Land_radio_panelpas'
+17:39:30.818    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASBroadcasterType'
+17:39:30.845   ENTITY       : Load entity type 'Land_Prison_Side'
+17:39:30.846    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:30.846    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:30.846    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+17:39:30.846    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+17:39:30.846    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+17:39:30.846    ENTITY    (W): Door 'DoorsTwin6' is missing geometry components for selection 'DoorsTwin6', check model+config
+17:39:30.846    ENTITY    (W): Door 'DoorsTwin7' is missing geometry components for selection 'DoorsTwin7', check model+config
+17:39:30.846    ENTITY    (W): Door 'DoorsTwin8' is missing geometry components for selection 'DoorsTwin8', check model+config
+17:39:30.878   WORLD        : Create entity type 'Land_power_pole_wood1_amp'
+17:39:30.882    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+17:39:30.892   ENTITY       : Load entity type 'Land_Container_1Mo'
+17:39:30.892    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:30.892    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:30.892   ENTITY       : Load entity type 'Land_Workshop3'
+17:39:30.892    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:30.892    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:30.939   WORLD        : Create entity type 'Land_lamp_city1_amp'
+17:39:30.939    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+17:39:30.958   ENTITY       : Load entity type 'Land_Workshop1'
+17:39:30.958    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.07    ENTITY       : Load entity type 'Land_Wall_Gate_FenG_Big'
+17:39:31.07     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.55    ENTITY       : Load entity type 'Land_Wreck_sed01_aban1_white'
+17:39:31.55     ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.55    ENTITY       : Load entity type 'Land_Wreck_hb02_aban1_blue'
+17:39:31.55     ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.56    ENTITY       : Load entity type 'Land_House_2W03_Brown'
+17:39:31.56     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.57    ENTITY       : Load entity type 'Land_House_2W03'
+17:39:31.57     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.75    ENTITY       : Load entity type 'Land_Wall_Gate_FenR_Big'
+17:39:31.75     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.76    ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_yellow'
+17:39:31.76     ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:31.76     ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:31.76     ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.102   ENTITY       : Load entity type 'Land_Wall_Gate_FenR_Big_Open'
+17:39:31.102    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.119   WORLD        : Create entity type 'Land_power_pole_wood1_lamp_amp'
+17:39:31.119    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+17:39:31.133   ENTITY       : Load entity type 'Land_Church2_2'
+17:39:31.133    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.159   ENTITY       : Load entity type 'Land_Wreck_sed01_aban2_wine'
+17:39:31.159    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.177   ENTITY       : Load entity type 'Land_Wreck_sed01_aban2_white'
+17:39:31.177    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.179   ENTITY       : Load entity type 'Land_Tenement_Small'
+17:39:31.179    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.179    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.179    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.181    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.181    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.181    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.181    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.224   ENTITY       : Load entity type 'Land_Tenement_Big'
+17:39:31.224    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.224    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.224    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.226    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.226    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.226    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.226    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.226    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.227    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.350   ENTITY       : Load entity type 'Land_City_Store'
+17:39:31.350    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.350    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:31.350    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+17:39:31.350    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+17:39:31.350    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+17:39:31.351   ENTITY       : Load entity type 'Land_Wreck_sed01_aban2_black'
+17:39:31.351    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.357   ENTITY       : Load entity type 'Land_Wreck_sed01_aban1_black'
+17:39:31.357    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.357   ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_red'
+17:39:31.357    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:31.357    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:31.357    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.402   ENTITY       : Load entity type 'Land_Wreck_hb01_aban1_blue'
+17:39:31.402    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:31.402    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:31.403   ENTITY       : Load entity type 'Land_City_School'
+17:39:31.403    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.403    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+17:39:31.403    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+17:39:31.403    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+17:39:31.403    ENTITY    (W): Door 'DoorsTwin6' is missing geometry components for selection 'DoorsTwin6', check model+config
+17:39:31.403    ENTITY    (W): Door 'DoorsTwin7' is missing geometry components for selection 'DoorsTwin7', check model+config
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.414    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+17:39:31.571   ENTITY       : Load entity type 'Land_Garage_Row_Small'
+17:39:31.571    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.571    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:31.571    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+17:39:31.590   ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_grey'
+17:39:31.590    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:31.590    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:31.590    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.595   ENTITY       : Load entity type 'Land_Wreck_hb01_aban1_white'
+17:39:31.596    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:31.596    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:31.607   ENTITY       : Load entity type 'Land_Wreck_hb02_aban1_red'
+17:39:31.607    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.631   ENTITY       : Load entity type 'Land_Wreck_hb01_aban2_green'
+17:39:31.631    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:31.631    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:31.658   ENTITY       : Load entity type 'Land_HouseBlock_1F4'
+17:39:31.658    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.658   ENTITY       : Load entity type 'Land_HouseBlock_2F_Corner'
+17:39:31.658    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.658    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:31.659   ENTITY       : Load entity type 'Land_HouseBlock_2F8'
+17:39:31.659    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.665   ENTITY       : Load entity type 'Land_House_2W02'
+17:39:31.665    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.677   ENTITY       : Load entity type 'Land_HouseBlock_2F1'
+17:39:31.677    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.677    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:31.679   ENTITY       : Load entity type 'Land_HouseBlock_2F2'
+17:39:31.679    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.679    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:31.679    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.679    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.681    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.692   ENTITY       : Load entity type 'Land_Garage_Small'
+17:39:31.692    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.692   ENTITY       : Load entity type 'Land_House_2W04_Yellow'
+17:39:31.692    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.694   ENTITY       : Load entity type 'Land_HouseBlock_1F1'
+17:39:31.694    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.694    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.694    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.702   ENTITY       : Load entity type 'Land_Church3'
+17:39:31.702    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.749   ENTITY       : Load entity type 'Land_HouseBlock_3F2'
+17:39:31.749    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.749    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:31.754   ENTITY       : Load entity type 'Land_HouseBlock_3F_Corner1'
+17:39:31.754    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.754    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:31.755    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.757    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.758    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:31.785   ENTITY       : Load entity type 'Land_Wreck_hb02_aban1_black'
+17:39:31.785    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.786   ENTITY       : Load entity type 'Land_HouseBlock_2F6'
+17:39:31.786    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.793   ENTITY       : Load entity type 'Land_Wreck_sed01_aban1_wine'
+17:39:31.793    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.800   ENTITY       : Load entity type 'Land_Workshop4'
+17:39:31.800    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.804   ENTITY       : Load entity type 'Land_Workshop2'
+17:39:31.804    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.816   WORLD        : Create entity type 'Land_power_pole_conc4_lamp_amp'
+17:39:31.816    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+17:39:31.831   ENTITY       : Load entity type 'Land_Wreck_sed02_aban2_red'
+17:39:31.831    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:31.831    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:31.831    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.838   ENTITY       : Load entity type 'Land_HouseBlock_1F3'
+17:39:31.838    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.861   ENTITY       : Load entity type 'Land_HouseBlock_2F4'
+17:39:31.862    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.873   ENTITY       : Load entity type 'Land_HouseBlock_2F9'
+17:39:31.873    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.880   ENTITY       : Load entity type 'Land_Wreck_sed02_aban2_yellow'
+17:39:31.880    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:31.880    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:31.880    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.901   ENTITY       : Load entity type 'Land_Wreck_hb01_aban2_blue'
+17:39:31.901    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:31.901    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:31.902   ENTITY       : Load entity type 'Land_Rail_Station_Big'
+17:39:31.902    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.918   ENTITY       : Load entity type 'Land_Wall_Gate_FenG_Big_Open'
+17:39:31.918    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.920   ENTITY       : Load entity type 'Land_City_PoliceStation'
+17:39:31.920    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.920    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:31.920    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+17:39:31.953   ENTITY       : Load entity type 'Land_Wreck_sed02_aban2_grey'
+17:39:31.953    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:31.953    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:31.953    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:31.958   ENTITY       : Load entity type 'Land_Garage_Row_Big'
+17:39:31.958    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.958    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:31.958    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+17:39:31.958    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+17:39:31.970   ENTITY       : Load entity type 'Land_City_Hospital'
+17:39:31.970    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.981   ENTITY       : Load entity type 'Land_Container_1Bo'
+17:39:31.981    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.981    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:31.981   ENTITY       : Load entity type 'Land_City_Store_WithStairs'
+17:39:31.981    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:31.981    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:31.981    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+17:39:31.981    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+17:39:31.981    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+17:39:31.993   ENTITY       : Load entity type 'Land_House_2W04'
+17:39:31.993    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.10    ENTITY       : Load entity type 'Land_Office2'
+17:39:32.10     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.10     ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:32.10     ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+17:39:32.10     ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+17:39:32.10     ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+17:39:32.39    ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:39:32.110   ENTITY       : Load entity type 'Land_House_1W12_Brown'
+17:39:32.110    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:32.110    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:32.111    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:32.128   ENTITY       : Load entity type 'Land_House_1W08_Brown'
+17:39:32.128    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:32.128    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:32.128    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+17:39:32.198   ENTITY       : Load entity type 'Land_Wreck_hb01_aban2_white'
+17:39:32.198    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:32.198    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:32.251   ENTITY       : Load entity type 'Land_Office1'
+17:39:32.251    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.251    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:32.251    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+17:39:32.251    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+17:39:32.251    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+17:39:32.251    ENTITY    (W): Door 'DoorsTwin6' is missing geometry components for selection 'DoorsTwin6', check model+config
+17:39:32.251    ENTITY    (W): Door 'DoorsTwin7' is missing geometry components for selection 'DoorsTwin7', check model+config
+17:39:32.291   ENTITY       : Load entity type 'Land_Workshop5'
+17:39:32.291    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.291   ENTITY       : Load entity type 'Land_Factory_Small'
+17:39:32.291    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.291    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:32.404   ENTITY       : Load entity type 'Land_Wreck_hb01_aban1_green'
+17:39:32.404    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+17:39:32.404    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:32.515   ENTITY       : Load entity type 'Land_Mil_Barracks3'
+17:39:32.515    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.649   ENTITY       : Load entity type 'Land_wreck_truck01_aban2_firetruck'
+17:39:32.649    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:32.649    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.649    ENTITY    (W): Door 'Doors5' is missing geometry components for selection 'Doors5', check model+config
+17:39:32.649    ENTITY    (W): Door 'Doors6' is missing geometry components for selection 'Doors6', check model+config
+17:39:32.650    ENTITY    (W): Door 'Doors7' is missing geometry components for selection 'Doors7', check model+config
+17:39:32.650    ENTITY    (W): Door 'Doors8' is missing geometry components for selection 'Doors8', check model+config
+17:39:32.650    ENTITY    (W): Door 'Doors9' is missing geometry components for selection 'Doors9', check model+config
+17:39:32.650   ENTITY       : Load entity type 'Land_wreck_truck01_aban1_firetruck'
+17:39:32.650    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+17:39:32.650    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.650    ENTITY    (W): Door 'Doors5' is missing geometry components for selection 'Doors5', check model+config
+17:39:32.650    ENTITY    (W): Door 'Doors6' is missing geometry components for selection 'Doors6', check model+config
+17:39:32.650    ENTITY    (W): Door 'Doors7' is missing geometry components for selection 'Doors7', check model+config
+17:39:32.650    ENTITY    (W): Door 'Doors8' is missing geometry components for selection 'Doors8', check model+config
+17:39:32.650    ENTITY    (W): Door 'Doors9' is missing geometry components for selection 'Doors9', check model+config
+17:39:32.669   ENTITY       : Load entity type 'Land_Container_1Moh'
+17:39:32.669    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.670   ENTITY       : Load entity type 'Land_Rail_Warehouse_Small'
+17:39:32.670    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.670    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:32.675   ENTITY       : Load entity type 'Land_Container_1Aoh'
+17:39:32.676    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.698   ENTITY       : Load entity type 'Land_Village_HealthCare'
+17:39:32.698    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:32.698    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:33.122   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_38_01.p3d)
+17:39:33.122   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_38_02.p3d)
+17:39:33.464   ENTITY       : Load entity type 'Land_Farm_CowshedA'
+17:39:33.464    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:33.464    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:39:33.464   ENTITY       : Load entity type 'Land_Farm_CowshedC'
+17:39:33.464    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:33.681   ENTITY       : Load entity type 'Land_CementWorks_Hall2_Brick'
+17:39:33.681    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:33.777   ENTITY       : Load entity type 'Land_Wreck_offroad02_aban2'
+17:39:33.777    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+17:39:33.847   ENTITY       : Load entity type 'Land_Mil_Airfield_HQ'
+17:39:33.847    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:33.874   ENTITY       : Load entity type 'Land_Mil_Barracks1'
+17:39:33.874    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:33.928   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_06.p3d)
+17:39:33.940   WORLD        : Create entity type 'Land_radio_panelbig'
+17:39:33.940    ENTITY    (E): Type 'HouseType' must be inherited from class 'StaticTransmitterType'
+17:39:33.951   ENTITY       : Load entity type 'Land_Radio_building'
+17:39:33.951    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:34.104   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:39:34.285   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:39:34.296   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:39:34.349   ENTITY       : Load entity type 'Land_Garage_Big'
+17:39:34.349    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:34.371   ENTITY       : Load entity type 'Land_Tisy_HQ'
+17:39:34.371    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:34.701   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_20.p3d)
+17:39:34.768   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_02.p3d)
+17:39:34.930   ENTITY       : Load entity type 'Land_Office_Municipal2'
+17:39:34.930    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:34.934   ENTITY       : Load entity type 'Land_HouseBlock_5F'
+17:39:34.934    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_ice_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_ice_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_snow_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_snow_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_ground_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_ground_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_metal_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_metal_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_organic_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_organic_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_foliage_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_foliage_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_plastic_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_plastic_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_wood_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_wood_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_glass_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_glass_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_sand_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_sand_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_mud_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_mud_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.892  AUDIO        : Loading SoundSet 'Impact_metal_textile_Soundset'
+17:39:35.892   AUDIO     (E): Sound set 'Impact_metal_textile_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+17:39:35.909  AUDIO        : Loading SoundSet 'Impact_wood_ice_Soundset'
+17:39:35.909   AUDIO     (E): Sound set 'Impact_wood_ice_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.909  AUDIO        : Loading SoundSet 'Impact_wood_snow_Soundset'
+17:39:35.909   AUDIO     (E): Sound set 'Impact_wood_snow_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.909  AUDIO        : Loading SoundSet 'Impact_wood_ground_Soundset'
+17:39:35.909   AUDIO     (E): Sound set 'Impact_wood_ground_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.909  AUDIO        : Loading SoundSet 'Impact_wood_metal_Soundset'
+17:39:35.909   AUDIO     (E): Sound set 'Impact_wood_metal_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.909  AUDIO        : Loading SoundSet 'Impact_wood_organic_Soundset'
+17:39:35.909   AUDIO     (E): Sound set 'Impact_wood_organic_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.909  AUDIO        : Loading SoundSet 'Impact_wood_foliage_Soundset'
+17:39:35.909   AUDIO     (E): Sound set 'Impact_wood_foliage_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.909  AUDIO        : Loading SoundSet 'Impact_wood_plastic_Soundset'
+17:39:35.909   AUDIO     (E): Sound set 'Impact_wood_plastic_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.909  AUDIO        : Loading SoundSet 'Impact_wood_wood_Soundset'
+17:39:35.909   AUDIO     (E): Sound set 'Impact_wood_wood_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.910  AUDIO        : Loading SoundSet 'Impact_wood_glass_Soundset'
+17:39:35.910   AUDIO     (E): Sound set 'Impact_wood_glass_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.910  AUDIO        : Loading SoundSet 'Impact_wood_sand_Soundset'
+17:39:35.910   AUDIO     (E): Sound set 'Impact_wood_sand_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.910  AUDIO        : Loading SoundSet 'Impact_wood_mud_Soundset'
+17:39:35.910   AUDIO     (E): Sound set 'Impact_wood_mud_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.910  AUDIO        : Loading SoundSet 'Impact_wood_textile_Soundset'
+17:39:35.910   AUDIO     (E): Sound set 'Impact_wood_textile_Soundset' references missing sound shader 'Impact_Item_wood_SoundShader'
+17:39:35.913  ENTITY       : Load entity type 'P1'
+17:39:35.913   RESOURCES    : GetResourceObject @"{934CA9D85BFC36AB}dz/characters/bodies/player_testing.xob"
+17:39:35.913    MATERIAL  (E): Object dz/characters/bodies/player_testing.xob - cannot load material cross_red.emat
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_ice_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_ice_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_snow_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_snow_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_ground_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_ground_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_metal_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_metal_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_organic_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_organic_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_foliage_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_foliage_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_plastic_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_plastic_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_wood_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_wood_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_glass_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_glass_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_sand_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_sand_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_mud_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_mud_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.930  AUDIO        : Loading SoundSet 'Impact_organic_textile_Soundset'
+17:39:35.930   AUDIO     (E): Sound set 'Impact_organic_textile_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+17:39:35.952  AUDIO        : Loading SoundSet 'Impact_textile_ice_Soundset'
+17:39:35.952   AUDIO     (E): Sound set 'Impact_textile_ice_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.952  AUDIO        : Loading SoundSet 'Impact_textile_snow_Soundset'
+17:39:35.952   AUDIO     (E): Sound set 'Impact_textile_snow_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.952  AUDIO        : Loading SoundSet 'Impact_textile_ground_Soundset'
+17:39:35.952   AUDIO     (E): Sound set 'Impact_textile_ground_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.953  AUDIO        : Loading SoundSet 'Impact_textile_metal_Soundset'
+17:39:35.953   AUDIO     (E): Sound set 'Impact_textile_metal_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.953  AUDIO        : Loading SoundSet 'Impact_textile_organic_Soundset'
+17:39:35.953   AUDIO     (E): Sound set 'Impact_textile_organic_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.953  AUDIO        : Loading SoundSet 'Impact_textile_foliage_Soundset'
+17:39:35.953   AUDIO     (E): Sound set 'Impact_textile_foliage_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.953  AUDIO        : Loading SoundSet 'Impact_textile_plastic_Soundset'
+17:39:35.953   AUDIO     (E): Sound set 'Impact_textile_plastic_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.953  AUDIO        : Loading SoundSet 'Impact_textile_wood_Soundset'
+17:39:35.953   AUDIO     (E): Sound set 'Impact_textile_wood_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.953  AUDIO        : Loading SoundSet 'Impact_textile_glass_Soundset'
+17:39:35.953   AUDIO     (E): Sound set 'Impact_textile_glass_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.953  AUDIO        : Loading SoundSet 'Impact_textile_sand_Soundset'
+17:39:35.953   AUDIO     (E): Sound set 'Impact_textile_sand_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.953  AUDIO        : Loading SoundSet 'Impact_textile_mud_Soundset'
+17:39:35.953   AUDIO     (E): Sound set 'Impact_textile_mud_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.953  AUDIO        : Loading SoundSet 'Impact_textile_textile_Soundset'
+17:39:35.953   AUDIO     (E): Sound set 'Impact_textile_textile_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+17:39:35.961  WORLD        : Create entity type 'Animal_CapraHircusF'
+17:39:35.961   ENTITY    (E): Type 'ManType' must be inherited from class 'DayZAnimalType'
+17:39:35.970   AUDIO        : Loading SoundSet 'HoofSmallRun_Forest_SoundSet'
+17:39:35.970    AUDIO     (E): Sound set 'HoofSmallRun_Forest_SoundSet' references missing sound shader 'default_HoofSmallRun_default_SoundShader'
+17:39:36.71   AUDIO        : Loading SoundSet 'Impact_glass_ice_Soundset'
+17:39:36.71    AUDIO     (E): Sound set 'Impact_glass_ice_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.71   AUDIO        : Loading SoundSet 'Impact_glass_snow_Soundset'
+17:39:36.71    AUDIO     (E): Sound set 'Impact_glass_snow_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.71   AUDIO        : Loading SoundSet 'Impact_glass_ground_Soundset'
+17:39:36.71    AUDIO     (E): Sound set 'Impact_glass_ground_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.71   AUDIO        : Loading SoundSet 'Impact_glass_metal_Soundset'
+17:39:36.71    AUDIO     (E): Sound set 'Impact_glass_metal_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.71   AUDIO        : Loading SoundSet 'Impact_glass_organic_Soundset'
+17:39:36.71    AUDIO     (E): Sound set 'Impact_glass_organic_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.71   AUDIO        : Loading SoundSet 'Impact_glass_foliage_Soundset'
+17:39:36.71    AUDIO     (E): Sound set 'Impact_glass_foliage_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.71   AUDIO        : Loading SoundSet 'Impact_glass_plastic_Soundset'
+17:39:36.71    AUDIO     (E): Sound set 'Impact_glass_plastic_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.72   AUDIO        : Loading SoundSet 'Impact_glass_wood_Soundset'
+17:39:36.72    AUDIO     (E): Sound set 'Impact_glass_wood_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.72   AUDIO        : Loading SoundSet 'Impact_glass_glass_Soundset'
+17:39:36.72    AUDIO     (E): Sound set 'Impact_glass_glass_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.72   AUDIO        : Loading SoundSet 'Impact_glass_sand_Soundset'
+17:39:36.72    AUDIO     (E): Sound set 'Impact_glass_sand_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.72   AUDIO        : Loading SoundSet 'Impact_glass_mud_Soundset'
+17:39:36.72    AUDIO     (E): Sound set 'Impact_glass_mud_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.72   AUDIO        : Loading SoundSet 'Impact_glass_textile_Soundset'
+17:39:36.72    AUDIO     (E): Sound set 'Impact_glass_textile_Soundset' references missing sound shader 'Impact_Item_glass_SoundShader'
+17:39:36.162  AUDIO        : Loading SoundSet 'Impact_plastic_ice_Soundset'
+17:39:36.162   AUDIO     (E): Sound set 'Impact_plastic_ice_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.162  AUDIO        : Loading SoundSet 'Impact_plastic_snow_Soundset'
+17:39:36.162   AUDIO     (E): Sound set 'Impact_plastic_snow_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.162  AUDIO        : Loading SoundSet 'Impact_plastic_ground_Soundset'
+17:39:36.162   AUDIO     (E): Sound set 'Impact_plastic_ground_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.162  AUDIO        : Loading SoundSet 'Impact_plastic_metal_Soundset'
+17:39:36.162   AUDIO     (E): Sound set 'Impact_plastic_metal_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.162  AUDIO        : Loading SoundSet 'Impact_plastic_organic_Soundset'
+17:39:36.162   AUDIO     (E): Sound set 'Impact_plastic_organic_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.163  AUDIO        : Loading SoundSet 'Impact_plastic_foliage_Soundset'
+17:39:36.163   AUDIO     (E): Sound set 'Impact_plastic_foliage_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.163  AUDIO        : Loading SoundSet 'Impact_plastic_plastic_Soundset'
+17:39:36.163   AUDIO     (E): Sound set 'Impact_plastic_plastic_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.163  AUDIO        : Loading SoundSet 'Impact_plastic_wood_Soundset'
+17:39:36.163   AUDIO     (E): Sound set 'Impact_plastic_wood_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.163  AUDIO        : Loading SoundSet 'Impact_plastic_glass_Soundset'
+17:39:36.163   AUDIO     (E): Sound set 'Impact_plastic_glass_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.163  AUDIO        : Loading SoundSet 'Impact_plastic_sand_Soundset'
+17:39:36.163   AUDIO     (E): Sound set 'Impact_plastic_sand_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.163  AUDIO        : Loading SoundSet 'Impact_plastic_mud_Soundset'
+17:39:36.163   AUDIO     (E): Sound set 'Impact_plastic_mud_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.163  AUDIO        : Loading SoundSet 'Impact_plastic_textile_Soundset'
+17:39:36.163   AUDIO     (E): Sound set 'Impact_plastic_textile_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+17:39:36.645 NETWORK      : Network simulation
+17:39:36.645  ENTITY       : Load entity type 'Land_Boathouse'
+17:39:36.645   ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:39:36.810 NETWORK      : Network simulation
+17:39:36.810  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_17_moss.p3d)
+17:39:37.737 NETWORK      : Network simulation
+17:39:37.737  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_03_moss.p3d)
+17:39:37.740  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_36_03_moss.p3d)
+17:39:37.743  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_36_04_moss.p3d)
+17:39:37.751  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_03_moss.p3d)
+17:39:37.752  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_04_moss.p3d)
+17:39:37.757  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_36_02_moss.p3d)
+17:39:37.757  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_36_01_moss.p3d)
+17:39:37.762  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_31_03_moss.p3d)
+17:39:37.763  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_31_04_moss.p3d)
+17:39:37.763  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_01_moss.p3d)
+17:39:37.763  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_34_01_moss.p3d)
+17:39:37.764  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_34_03_moss.p3d)
+17:39:37.764  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_02_moss.p3d)
+17:39:37.765  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_34_04_moss.p3d)
+17:39:37.765  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_34_02_moss.p3d)
+17:39:37.777  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_29_03_moss.p3d)
+17:39:37.778  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_31_01_moss.p3d)
+17:39:37.778  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_31_02_moss.p3d)
+17:39:37.778  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_15_moss.p3d)
+17:39:37.778  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_03_moss.p3d)
+17:39:37.779  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_04_moss.p3d)
+17:39:37.783  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_30_03_moss.p3d)
+17:39:37.784  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_29_01_moss.p3d)
+17:39:37.784  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_29_02_moss.p3d)
+17:39:37.784  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_30_04_moss.p3d)
+17:39:37.784  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_08_moss.p3d)
+17:39:37.786  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_04_moss.p3d)
+17:39:37.786  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_01_moss.p3d)
+17:39:37.786  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_02_moss.p3d)
+17:39:37.800  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_30_01_moss.p3d)
+17:39:37.801  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_01_moss.p3d)
+17:39:37.802  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_03_moss.p3d)
+17:39:37.802  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_30_02_moss.p3d)
+17:39:37.802  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_02_moss.p3d)
+17:39:37.802  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_06_moss.p3d)
+17:39:37.812  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+17:39:37.812  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+17:39:37.980  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_36_03.p3d)
+17:39:37.980  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_36_04.p3d)
+17:39:38.29   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_36_01.p3d)
+17:39:38.29   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_36_02.p3d)
+17:39:38.499  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:39:38.506  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:39:44.373 NETWORK      : Network simulation
+17:39:44.373  WORLD        : Create entity type 'SurvivorM_Denis'
+17:39:44.373   AUDIO        : Loading SoundSet 'Gag_Drowning_SoundVoice_Char_SoundSet'
+17:39:44.373    AUDIO     (E): Sound set 'Gag_Drowning_SoundVoice_Char_SoundSet' references missing sound shader 'Drowning_male_2_gag_SoundVoice_Char_SoundShader'
+17:39:44.373   AUDIO        : Loading SoundSet 'Gag_UnderwaterBreathHold_SoundVoice_Char_SoundSet'
+17:39:44.373    AUDIO     (E): Sound set 'Gag_UnderwaterBreathHold_SoundVoice_Char_SoundSet' references missing sound shader 'UnderwaterBreathHold_male_2_gag_SoundVoice_Char_SoundShader'
+17:39:44.375   AUDIO        : Loading SoundSet 'Motohelmet_pushHeavy_SoundVoice_Char_SoundSet'
+17:39:44.375    AUDIO     (E): Sound set 'Motohelmet_pushHeavy_SoundVoice_Char_SoundSet' references missing sound shader 'pushHeavy_female_1_motohelmet_SoundVoice_Char_SoundShader'
+17:39:44.377   AUDIO        : Loading SoundSet 'walkErc_sakhal_snow_forest_Char_Soundset'
+17:39:44.377    AUDIO     (E): Sound set 'walkErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_heel_Char_SoundShader'
+17:39:44.377    AUDIO     (E): Sound set 'walkErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_thump_Char_SoundShader'
+17:39:44.377   AUDIO        : Loading SoundSet 'walkErc_sakhal_forest_spruce_Char_Soundset'
+17:39:44.377    AUDIO     (E): Sound set 'walkErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_heel_Char_SoundShader'
+17:39:44.377    AUDIO     (E): Sound set 'walkErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+17:39:44.377    AUDIO     (E): Sound set 'walkErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+17:39:44.381   AUDIO        : Loading SoundSet 'runErc_sakhal_snow_forest_Char_Soundset'
+17:39:44.381    AUDIO     (E): Sound set 'runErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+17:39:44.381    AUDIO     (E): Sound set 'runErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+17:39:44.381   AUDIO        : Loading SoundSet 'runErc_sakhal_forest_spruce_Char_Soundset'
+17:39:44.381    AUDIO     (E): Sound set 'runErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+17:39:44.381    AUDIO     (E): Sound set 'runErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+17:39:44.385   AUDIO        : Loading SoundSet 'sprintErc_sakhal_snow_forest_Char_Soundset'
+17:39:44.386    AUDIO     (E): Sound set 'sprintErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'sprintErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+17:39:44.386    AUDIO     (E): Sound set 'sprintErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'sprintErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+17:39:44.386   AUDIO        : Loading SoundSet 'sprintErc_sakhal_forest_spruce_Char_Soundset'
+17:39:44.386    AUDIO     (E): Sound set 'sprintErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'sprintErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+17:39:44.387    AUDIO     (E): Sound set 'sprintErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'sprintErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+17:39:44.426   AUDIO        : Loading SoundSet 'walkCro_sakhal_snow_forest_Char_Soundset'
+17:39:44.427    AUDIO     (E): Sound set 'walkCro_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_heel_Char_SoundShader'
+17:39:44.427    AUDIO     (E): Sound set 'walkCro_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_thump_Char_SoundShader'
+17:39:44.428   AUDIO        : Loading SoundSet 'walkCro_sakhal_forest_spruce_Char_Soundset'
+17:39:44.428    AUDIO     (E): Sound set 'walkCro_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_heel_Char_SoundShader'
+17:39:44.428    AUDIO     (E): Sound set 'walkCro_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+17:39:44.428    AUDIO     (E): Sound set 'walkCro_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+17:39:44.431   AUDIO        : Loading SoundSet 'runCro_sakhal_snow_forest_Char_Soundset'
+17:39:44.431    AUDIO     (E): Sound set 'runCro_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+17:39:44.431    AUDIO     (E): Sound set 'runCro_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+17:39:44.432   AUDIO        : Loading SoundSet 'runCro_sakhal_forest_spruce_Char_Soundset'
+17:39:44.432    AUDIO     (E): Sound set 'runCro_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+17:39:44.432    AUDIO     (E): Sound set 'runCro_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+17:39:44.438   AUDIO        : Loading SoundSet 'walkProne_nasdara_desert_Char_Soundset'
+17:39:44.438    AUDIO     (E): Sound set 'walkProne_nasdara_desert_Char_Soundset' references missing sound shader 'Handstep_nasdara_desert_Char_SoundShader'
+17:39:44.438   AUDIO        : Loading SoundSet 'walkProne_nasdara_grass_dry_Char_Soundset'
+17:39:44.438    AUDIO     (E): Sound set 'walkProne_nasdara_grass_dry_Char_Soundset' references missing sound shader 'Handstep_nasdara_grass_dry_Char_SoundShader'
+17:39:44.449   AUDIO        : Loading SoundSet 'runProne_nasdara_desert_Char_Soundset'
+17:39:44.449    AUDIO     (E): Sound set 'runProne_nasdara_desert_Char_Soundset' references missing sound shader 'Handstep_nasdara_desert_Char_SoundShader'
+17:39:44.449   AUDIO        : Loading SoundSet 'runProne_nasdara_grass_dry_Char_Soundset'
+17:39:44.449    AUDIO     (E): Sound set 'runProne_nasdara_grass_dry_Char_Soundset' references missing sound shader 'Handstep_nasdara_grass_dry_Char_SoundShader'
+17:39:44.482   AUDIO        : Loading SoundSet 'walkProneElbow_nasdara_desert_Char_Soundset'
+17:39:44.482    AUDIO     (E): Sound set 'walkProneElbow_nasdara_desert_Char_Soundset' references missing sound shader 'Elbowstep_nasdara_desert_Char_SoundShader'
+17:39:44.482   AUDIO        : Loading SoundSet 'walkProneElbow_nasdara_grass_dry_Char_Soundset'
+17:39:44.484    AUDIO     (E): Sound set 'walkProneElbow_nasdara_grass_dry_Char_Soundset' references missing sound shader 'Elbowstep_nasdara_grass_dry_Char_SoundShader'
+17:39:44.496   AUDIO        : Loading SoundSet 'runProneElbow_nasdara_desert_Char_Soundset'
+17:39:44.496    AUDIO     (E): Sound set 'runProneElbow_nasdara_desert_Char_Soundset' references missing sound shader 'Elbowstep_nasdara_desert_Char_SoundShader'
+17:39:44.496   AUDIO        : Loading SoundSet 'runProneElbow_nasdara_grass_dry_Char_Soundset'
+17:39:44.496    AUDIO     (E): Sound set 'runProneElbow_nasdara_grass_dry_Char_Soundset' references missing sound shader 'Elbowstep_nasdara_grass_dry_Char_SoundShader'
+17:39:44.496   AUDIO        : Loading SoundSet 'jumpErc_sakhal_snow_forest_Char_Soundset'
+17:39:44.496    AUDIO     (E): Sound set 'jumpErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+17:39:44.496    AUDIO     (E): Sound set 'jumpErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+17:39:44.503   AUDIO        : Loading SoundSet 'jumpErc_sakhal_forest_spruce_Char_Soundset'
+17:39:44.503    AUDIO     (E): Sound set 'jumpErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+17:39:44.503    AUDIO     (E): Sound set 'jumpErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+17:39:44.509   AUDIO        : Loading SoundSet 'landFootErc_sakhal_snow_forest_Char_Soundset'
+17:39:44.509    AUDIO     (E): Sound set 'landFootErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+17:39:44.509    AUDIO     (E): Sound set 'landFootErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+17:39:44.510   AUDIO        : Loading SoundSet 'landFootErc_sakhal_forest_spruce_Char_Soundset'
+17:39:44.510    AUDIO     (E): Sound set 'landFootErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+17:39:44.510    AUDIO     (E): Sound set 'landFootErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+17:39:44.515   AUDIO        : Loading SoundSet 'walkRasErc_sakhal_snow_forest_Char_Soundset'
+17:39:44.515    AUDIO     (E): Sound set 'walkRasErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_heel_Char_SoundShader'
+17:39:44.515    AUDIO     (E): Sound set 'walkRasErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_thump_Char_SoundShader'
+17:39:44.515   AUDIO        : Loading SoundSet 'walkRasErc_sakhal_forest_spruce_Char_Soundset'
+17:39:44.515    AUDIO     (E): Sound set 'walkRasErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_heel_Char_SoundShader'
+17:39:44.515    AUDIO     (E): Sound set 'walkRasErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+17:39:44.515    AUDIO     (E): Sound set 'walkRasErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+17:39:44.520   AUDIO        : Loading SoundSet 'runRasErc_sakhal_snow_forest_Char_Soundset'
+17:39:44.520    AUDIO     (E): Sound set 'runRasErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+17:39:44.520    AUDIO     (E): Sound set 'runRasErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+17:39:44.521   AUDIO        : Loading SoundSet 'runRasErc_sakhal_forest_spruce_Char_Soundset'
+17:39:44.521    AUDIO     (E): Sound set 'runRasErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+17:39:44.521    AUDIO     (E): Sound set 'runRasErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+17:39:44.619   AUDIO        : Loading SoundSet 'repeater_empty_SoundSet'
+17:39:44.619    AUDIO     (E): Sound set 'repeater_empty_SoundSet' references missing sound shader 'repeater_empty_TailInterior_SoundShader'
+17:39:44.634   AUDIO        : Loading SoundSet 'WaltherP1_charge_open_SoundSet'
+17:39:44.634    AUDIO     (E): Sound set 'WaltherP1_charge_open_SoundSet' references missing sound shader 'WaltherP1_charge_open_SoundShader_TailInterio_SoundShader'
+17:39:44.634   AUDIO        : Loading SoundSet 'WaltherP1_charge_close_SoundSet'
+17:39:44.634    AUDIO     (E): Sound set 'WaltherP1_charge_close_SoundSet' references missing sound shader 'WaltherP1_charge_close_SoundShader_TailInterio_SoundShader'
+17:39:44.634   AUDIO        : Loading SoundSet 'WaltherP1_charge_close_release_SoundSet'
+17:39:44.634    AUDIO     (E): Sound set 'WaltherP1_charge_close_release_SoundSet' references missing sound shader 'WaltherP1_charge_close_release_SoundShader_TailInterio_SoundShader'
+17:39:44.634   AUDIO        : Loading SoundSet 'WaltherP1_pullout_SoundSet'
+17:39:44.634    AUDIO     (E): Sound set 'WaltherP1_pullout_SoundSet' references missing sound shader 'WaltherP1_pullout_SoundShader_TailInterio_SoundShader'
+17:39:44.634   AUDIO        : Loading SoundSet 'WaltherP1_mag_in_SoundSet'
+17:39:44.634    AUDIO     (E): Sound set 'WaltherP1_mag_in_SoundSet' references missing sound shader 'WaltherP1_mag_in_SoundShader_TailInterio_SoundShader'
+17:39:44.635   AUDIO        : Loading SoundSet 'WaltherP1_mag_load_SoundSet'
+17:39:44.635    AUDIO     (E): Sound set 'WaltherP1_mag_load_SoundSet' references missing sound shader 'WaltherP1_mag_load_SoundShader_TailInterio_SoundShader'
+17:39:44.635   AUDIO        : Loading SoundSet 'WaltherP1_mag_out_SoundSet'
+17:39:44.635    AUDIO     (E): Sound set 'WaltherP1_mag_out_SoundSet' references missing sound shader 'WaltherP1_mag_out_SoundShader_TailInterio_SoundShader'
+17:39:44.635   AUDIO        : Loading SoundSet 'WaltherP1_mag_remove_SoundSet'
+17:39:44.635    AUDIO     (E): Sound set 'WaltherP1_mag_remove_SoundSet' references missing sound shader 'WaltherP1_mag_remove_SoundShader_TailInterio_SoundShader'
+17:39:44.649   AUDIO        : Loading SoundSet 'Offroad_Horn_Start_SoundSet'
+17:39:44.649    AUDIO     (E): Sound set 'Offroad_Horn_Start_SoundSet' references missing sound shader 'Offroad_Horn_Start_SoundShader'
+17:39:45.177  WORLD        : Create entity type 'ZmbM_JoggerSkinny_Red'
+17:39:45.177   RESOURCES    : GetResourceObject @"{F3850CA6D49ADFD2}dz/characters/zombies/z_hermit_m.xob"
+17:39:45.177    MATERIAL  (E): Object dz/characters/zombies/z_hermit_m.xob - cannot load material Material_1.emat
+17:39:45.257   AUDIO        : Loading SoundSet 'walkProne_nasdara_desert_Zmb_Soundset'
+17:39:45.257    AUDIO     (E): Sound set 'walkProne_nasdara_desert_Zmb_Soundset' references missing sound shader 'Handstep_nasdara_desert_Char_SoundShader'
+17:39:45.257   AUDIO        : Loading SoundSet 'walkProne_nasdara_grass_dry_Zmb_Soundset'
+17:39:45.257    AUDIO     (E): Sound set 'walkProne_nasdara_grass_dry_Zmb_Soundset' references missing sound shader 'Handstep_nasdara_grass_dry_Char_SoundShader'
+17:39:45.265   AUDIO        : Loading SoundSet 'runProne_nasdara_desert_Zmb_Soundset'
+17:39:45.265    AUDIO     (E): Sound set 'runProne_nasdara_desert_Zmb_Soundset' references missing sound shader 'Handstep_nasdara_desert_Char_SoundShader'
+17:39:45.265   AUDIO        : Loading SoundSet 'runProne_nasdara_grass_dry_Zmb_Soundset'
+17:39:45.265    AUDIO     (E): Sound set 'runProne_nasdara_grass_dry_Zmb_Soundset' references missing sound shader 'Handstep_nasdara_grass_dry_Char_SoundShader'
+17:39:45.284  WORLD        : Create entity type 'ZmbF_MilkMaidOld_Green'
+17:39:45.284   AUDIO        : Loading SoundSet 'walkErc_building_dirt_int_boots_Zmb_Soundset'
+17:39:45.284    AUDIO     (E): Sound set 'walkErc_building_dirt_int_boots_Zmb_Soundset' references missing sound shader 'walkErc_building_dirt_int_asphalt_felt_int_walkErc_Zmb_SoundShader'
+17:39:45.287   AUDIO        : Loading SoundSet 'runErc_building_dirt_int_boots_Zmb_Soundset'
+17:39:45.287    AUDIO     (E): Sound set 'runErc_building_dirt_int_boots_Zmb_Soundset' references missing sound shader 'runErc_building_dirt_int_asphalt_felt_int_runErc_Zmb_SoundShader'
+17:39:45.289   AUDIO        : Loading SoundSet 'sprintErc_building_dirt_int_boots_Zmb_Soundset'
+17:39:45.289    AUDIO     (E): Sound set 'sprintErc_building_dirt_int_boots_Zmb_Soundset' references missing sound shader 'sprintErc_building_dirt_int_asphalt_felt_int_sprintErc_Zmb_SoundShader'
+17:43:22.896 [ErrorModuleHandler] :: Error thrown: 0x00040001 ()
+17:43:24.903 GUI       (W): String "STR_main_menu_root_character_name_xbox_background_character_name_xbox0" not found (not in localization table)
+17:43:24.913 GUI       (W): String "" not found (not in localization table)
+17:43:24.914 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+17:43:24.914 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+17:43:24.916 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+17:43:24.916 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+17:43:24.917 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+17:43:24.917 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+17:43:24.917 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+17:43:24.917 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+17:43:24.918 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+17:43:24.918 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+17:43:24.918 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+17:43:24.918 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+17:43:24.950 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:43:24.981 ENTITY    (W): Unknown object class 'building' (dz\structures\military\tisy\tisy_garages_grass_l.p3d)
+17:43:24.981 ENTITY    (W): Unknown object class 'building' (dz\structures\military\tisy\tisy_garages_grass_r.p3d)
+17:43:24.984 ENTITY       : Load entity type 'Land_Tisy_Garages'
+17:43:24.984  ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+17:43:24.984  ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+17:43:24.987 ENTITY    (W): Unknown object class 'building' (dz\structures\military\tisy\tisy_garages_grass_l.p3d)
+17:43:24.987 ENTITY    (W): Unknown object class 'building' (dz\structures\military\tisy\tisy_garages_grass_r.p3d)
+17:43:25.343 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_06_moss.p3d)
+17:43:28.387 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+17:43:28.461 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_06_moss.p3d)
+17:43:28.461 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_22_moss.p3d)
+17:43:47.432 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:43:49.954 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_38_04_moss.p3d)
+17:43:50.682 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+17:43:55.432 RENDER    (W): MatMulti: material dz/structures/military/improvised/data/fort_watchtowerfort_watchtower_mlod_co.paa forces alpha test, disabling, multi material has not to have alpha tested textures
+17:44:05.182 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:44:12.309 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:44:39.503 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:44:43.258 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:44:54.750 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:45:29.831 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:45:36.566 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:45:38.540 ENTITY    (W): Unknown object class 'building' (dz\structures\military\tisy\tisy_garages_grass_l.p3d)
+17:45:38.540 ENTITY    (W): Unknown object class 'building' (dz\structures\military\tisy\tisy_garages_grass_r.p3d)
+17:45:41.412 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:45:51.323 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:45:58.456 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+17:45:58.957 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
