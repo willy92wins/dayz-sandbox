@@ -995,10 +995,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		int idxHealthRatio = FindColIdx(args.ncol, "health_mark_ratio");
 		int idxMustVanish = FindColIdx(args.ncol, "must_vanish_b");
 
-		if (
-			idxLogical < 0 || idxParent < 0 || idxCat < 0 || idxClass < 0 || idxSlot < 0
-			|| idxReqX < 0 || idxReqZ < 0 || idxReqYaw < 0 || idxHealthRatio < 0 || idxMustVanish < 0
-		)
+		if (idxLogical < 0 || idxParent < 0 || idxCat < 0 || idxClass < 0 || idxSlot < 0 || idxReqX < 0 || idxReqZ < 0 || idxReqYaw < 0 || idxHealthRatio < 0 || idxMustVanish < 0)
 		{
 			res.status = "rejected";
 			res.reason = "bad_args";
