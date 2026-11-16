@@ -5,11 +5,13 @@ esto. El evaluador lee **solo** lo que este documento permite; lo demás se igno
 
 ## 0. Disposición
 
-Una partida = una carpeta de parte: `BASE/run/` (y `BASE/run-retail/` si se corre también retail).
+Una partida = **una campaña por build** (diag y retail), cada una con **una sola parte `run`** en su
+propia `BASE`. No hay parte `run-retail`: el build retail se entrega en su propio `BASE/run/`.
 
 ```
 run/
   manifest.json                 # §1
+  part.json                     # §8 (arnés: `op_nonce` de 16 hex)
   samples/bridge.jsonl          # §2 (sonda, tal cual la escribe f03_common.PartContext.open)
   samples/bridge_tap.jsonl      # §3 (proxy del producto)
   samples/backend.jsonl         # §4 (backend y API)
@@ -32,9 +34,12 @@ Se leen **solo** estas claves: `schema`, `id` (=`"F2P"`), `kind` (=`"spike"`), `
   - `git_head` (40 hex), `git_dirty` (bool; en diag/retail tiene que ser `false`), `build`
     (`diag`|`retail`|`offline`), `params` (`hold_ms`, `lease_ms`, `ttl_ms`, `retry_ms`, `seed`),
     `probe_stamp` (16 hex), `peer_builds` (`{"server":...,"client":...}`), `pbo_sha256` (64 hex, sonda);
-  - `product_pbo_sha256` (64 hex, **PBO del producto**, P-11).
+  - `product_pbo_sha256` (64 hex, **PBO del producto**, P-11);
+  - **`oracle_commit` (40 hex):** el commit congelado que el gate verificó, ya resuelto. Es **el mismo
+    id** que `f2p.oracle_commit` y que el `commit` del evento `oracle.frozen` (H-7, §6.1). Si los tres
+    no coinciden → INCONCLUSO `oracle_modified`.
 - `f2p`:
-  - `oracle_commit` (40 hex): el commit congelado del oráculo;
+  - `oracle_commit` (40 hex): el commit congelado del oráculo (igual que `identity.oracle_commit`);
   - `oracle_files`: `{"f2p_eval.py":"<64 hex>","f2p_mutants.py":"<64 hex>"}` — SHA-256 de los bytes
     de cada fichero del oráculo en ese commit (DP-13). Si el gate congela también `f2p_run.py` (T4),
     añade su SHA-256; el oráculo de T2 solo exige las dos entradas de eval/mutants, pero el gate compara
@@ -80,9 +85,13 @@ Verbos y lecturas usados (interfaz de F0.3, `_ref/censo-interfaz-f03.md`):
     el oráculo de F2 **no los usa**.
 - `per_witness_start`: read `str`: `job`,`state`,`witness_tag`,`server_epoch`; `num`: `start_tick_ms`,
   `start_frame`,`center_x_m`,`center_z_m`,`radius_m`,`window_ms`. Filas (orden real de la sonda,
-  `c41298e`): `scol=["class_name","net_id","parent_net_id"]`,
-  `ncol=["sample_idx","pos_x_m","pos_y_m","pos_z_m","yaw_deg","tick_ms","frame","ai_agent_b","alive_b"]`.
+  `489f348`, #22): `scol=["class_name","net_id","parent_net_id"]`,
+  `ncol=["sample_idx","pos_x_m","pos_y_m","pos_z_m","yaw_deg","tick_ms","frame","ai_agent_b","alive_b","surface_y_m"]`.
   El oráculo lee **siempre por nombre**; el orden de `ncol` no se usa para decidir.
+  - **`surface_y_m` es la última columna** (brief v1.3.5 §5.3): `g_Game.SurfaceY` en la x y la z de cada
+    muestra. En la muestra 0, en las de `EEInit`; en las de la 1 a la K, en su posición de ese tick; con
+    `alive_b = 0`, en la última posición conocida. Es la altura **independiente** que usa F2P-02; la
+    `pos_y_m` del testigo nunca hace de suelo. Si una fila no la trae → INCONCLUSO `surface_unbacked`.
   - **`witness_tag` es opcional.** Un testigo con el tag vacío no se rechaza: se identifica por su
     `start_t` dentro de la ventana de su parte y, si la parte tiene varias ventanas (P3), por el orden
     canónico de etapas (`apply1`, `apply2`).
@@ -111,7 +120,8 @@ después hasta `pages_n-1` (`qa/f03_common.py:1130-1149`), y `pages_n`/`rows_tot
 trabajo no tiene filas. Con `pages_n>0` se exigen las páginas 1..`pages_n-1`. El `t_ms` de la página
 tiene que ser **posterior** al arranque del trabajo y al efecto que juzga (resultado del
 apply/reset/reinicio). Si no hay página válida → INCONCLUSO (`unbacked_rows`); si la página es anterior
-al efecto → FALLA (`stale_rows`).
+al efecto → INCONCLUSO (`unbacked_rows`), porque una medición no respaldada no es una FALLA (§6.1
+punto 1 del brief v1.3.4).
 
 ## 3. `samples/bridge_tap.jsonl` (proxy del producto)
 
@@ -167,6 +177,12 @@ Si la posición de la entidad no se puede situar dentro del disco del censo sigu
 (`not_covered`), nunca «borrada». La posición se toma del último censo anterior que tenga la entidad;
 si no está, del documento por `lid`.
 
+**Métrica de confirmación (O-17).** El tick informado en `delete_confirm_max_ms` es la separación entre
+la primera línea de **petición** del mismo `(lid, net_id)` —señal de borrado con
+`deleted_confirmed_b==0` y `delete_failed_b==0`— y la línea de **confirmación**
+(`deleted_confirmed_b==1`), con el mismo reloj `t_ms`. Una sola línea que lleve señal y confirmación usa
+su `confirm_tick_ms` como confirmación. No se resta el tiempo de la propia línea confirmatoria.
+
 ## 6. Frescura y cobertura
 
 - Cobertura = discos de `per_census_start`/`per_witness_start` declarados en sus `nk`
@@ -195,3 +211,26 @@ El oráculo lleva estas negativas, y las pruebas offline comprueban que dan FALL
 `qa/f2p_mutants.py` expone `SECTION6_MUTANTS` y `SECTION6_NEGATIVES`: el mapa explícito de cada punto de
 §6 del brief a los mutantes/negativas reales que lo tumban. Las pruebas offline verifican que no falta
 ninguno.
+
+## 8. Arnés del núcleo, builds y checkout (O-15, H-3, H-5, H-7)
+
+- **Una campaña por build.** La partida se entrega como una campaña diag y una campaña retail, cada una
+  con **una sola parte `run`**. No existe `run-retail`: el build retail va en su propio `BASE/run/`.
+- **Artefactos que exige el núcleo** (`qa/f03_common.py`, `aggregate_spike`) en cada parte `run`:
+  - `part.json` con un `op_nonce` **único** de 16 hex en minúsculas;
+  - la identidad de implementación común: `git_head` real, `git_dirty` coherente, `build`,
+    `identity.params` con `wire_cap = wire.WIRE_CAP` y los parámetros D12 (`probe_budget_log_poll_ms`,
+    `probe_budget_retry_ms`), `peer_builds` y `probe_stamp = compute_probe_stamp_at_commit(git_head)`;
+  - los `/hello` de server y client con `proto = "qa0"`, el build de la parte y
+    `probe_ver = dsbx-qa1+<probe_stamp>`;
+  - `verdict.json` de la parte (lo escribe el runner con el veredicto del oráculo);
+  - **ningún** evento `wire_cap_exceeded` en `samples/bridge.jsonl`.
+- **Los mutantes de F2P son sin conexión.** `qa/f2p_mutants.py` **no** exporta `EXPECTED_MUTANTS`: la
+  agregación de §7 se prueba con `f03_common.aggregate_spike`, que exige solo la parte `run`. La tabla
+  `EXPECTED_MUTANTS` del núcleo es para mutantes en partida (`injection.json`) y no admite `missing` en
+  `must_fail_checks`.
+- **El checkout tiene que estar en LF** (H-5, brief §5.1). El núcleo compara bytes sin normalizar y el
+  repo no tiene `.gitattributes`; un checkout con `core.autocrlf=true` trae CRLF y da INCONCLUSO
+  `oracle_modified`. El runner de T4 corre con `git -c core.autocrlf=false` y entrega ficheros LF,
+  UTF-8 sin BOM.
+
