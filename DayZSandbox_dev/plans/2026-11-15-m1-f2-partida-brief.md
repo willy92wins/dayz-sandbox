@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3.2, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda, más la medida de la envolvente v1.3 (§12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito. 2026-11-15, por el orquestador de F2.
+- **Versión:** v1.3.3, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda, más la medida de la envolvente v1.3 y la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate (§12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -229,6 +229,7 @@ Si S-persist decide otros valores, se cambia la constante y se anota su commit e
 - **El backend real** (`app/backend/server.py`) con el bridge en `127.0.0.1`. La escena 1 es `fixtures/escena-sin-actores.json`, copiada al directorio de la parte. La escena 2 es una fixture nueva y pequeña, `fixtures/escena-f2p-2.json`: 3 objetos dentro del disco de censo, con otro `doc_id`.
 - **`PartContext` de F0.3** (`qa/f03_common.py:504-549`) para la sonda: censo, testigo, ajenos y control persistente (§5.3).
 - **El lanzador** sigue el modelo de `qa/live/run_f1bp_partida.ps1` de F1b-peers: WMI, `-mod=`, `--min-vram-libre 4000` y el lease soltado cuando no queda ningún PID propio.
+- **Checkout en LF** (`git -c core.autocrlf=false`). El núcleo compara byte a byte los ficheros del oráculo con el commit congelado, sin normalizar los finales de línea, y el repo no tiene `.gitattributes`. Un checkout en CRLF da INCONCLUSO `oracle_modified` (H-5).
 - **Un solo mundo y un solo storage** para toda la partida. El orden de las partes es normativo, y cada una deja el estado que pide la siguiente (P-07).
 
 ### 5.2 Partes, en orden
@@ -253,20 +254,28 @@ Todas van por el bridge de la sonda (`qa0`), así que quedan en la evidencia.
 - **Censo:** `per_census_start`, con:
   - `select_all_entityai_b = 1` e `include_director_b = 1`, para los inventarios de jugador;
   - `radius_m = 120`, centrado en (6170, 7643), más un disco de 60 m por cada entidad seguida cuya última posición quede a menos de 15 m del borde de lo cubierto (P-05);
-  - el resultado se deduplica por `net_id`.
+  - el resultado se deduplica por `net_id`;
+  - medido en la diag de F0.3: `max_hp = health_hp = -1` significa «sin sistema de daño», y los edificios del mapa **sí** tienen `net_id` real, con la parte alta negativa (`-2147225600:847447385`). El `net_id` se lee como `high:low` con signo.
 
   **La cobertura es parte de la evidencia:** si una entidad seguida falta de todos los discos y podía haber salido de lo cubierto (criatura, o a menos de 15 m del borde), la comprobación da **INCONCLUSO**, nunca «borrada».
 - **Testigo de creación (P-03):** `per_witness_start`, que añade F0.3 (pendiente del OK de la principal, §11).
   - Es un trabajo `per_witness`, exclusivo, con páginas de 5 y hasta 4096 filas.
   - `nk`: `center_x_m`, `center_z_m`, `radius_m` (120) y `window_ms`, que cubre el apply con margen.
-  - Columnas: `scol` `class_name`, `net_id` y `parent_net_id`; `ncol` `pos_x_m`, `pos_y_m`, `pos_z_m`, `yaw_deg`, `tick_ms`, `frame` y `ai_agent_b`. Hay una fila por cada `EntityAI` que pasa por `EEInit` dentro del radio.
+  - Columnas: `scol` `class_name`, `net_id` y `parent_net_id`; `ncol` `pos_x_m`, `pos_y_m`, `pos_z_m`, `yaw_deg`, `tick_ms`, `frame` y `ai_agent_b`.
+  - Hay una fila por cada entidad que pasa por `EEInit` dentro del radio **y deriva de una raíz enganchada:** `ItemBase`, `ZombieBase`, `AnimalBase`, `CarScript` o `BuildingBase`, más 4 clases vanilla que no llaman a `super.EEInit()`. `EntityAI` es una clase del motor y no se puede modar (PR #22).
+  - Las dos escenas quedan cubiertas. Lo que no deriva de esas raíces no se ve (§10).
   - Es la observación independiente de las 33 posiciones en el momento de crear, **criaturas incluidas**.
-  - `[verify F2 en partida]`: que en `EEInit` la posición ya sea la final. Lo contrasta F2P-12.
+  - **Medido en la diag de F0.3:** en lo que crea la sonda con `PLACE_ON_SURFACE`, la posición de `EEInit` es la final, con 1 cm como mucho. En lo que crea el producto lo sigue contrastando F2P-12 `[verify F2 en partida]`.
   - **Trayectoria (Q-01), confirmada por F0.3:**
     - son filas con `sample_idx`: el 0 es `EEInit` y del 1 a `K` son los `K` ticks siguientes;
     - `witness_follow_ticks` = `K`, en [1, 5] y 3 por defecto;
     - `ncol` añade `sample_idx` y `alive_b`, y las filas cuentan para el tope de 4096;
     - un salto de más de `JUMP_MAX_M` = 0,3 m entre `EEInit` y el tick 1 delata un desplazamiento del mod antes del checkpoint. La IA no recorre eso en un tick de unos 33 ms.
+  - **La muestra 0, tras la diag de F0.3** (PR #22, `DSBX_QA_X_Persist.c:1987-2036`):
+    - lleva la posición, la orientación, `tick_ms`, `frame` y `ai_agent_b` de `EEInit`;
+    - lleva el `net_id` y el `parent_net_id` del primer tick, porque en `EEInit` todavía no existen. Es el mismo `net_id` que el de las muestras de la 1 a la K;
+    - si en ese tick la entidad ya no existe, sale `0:0` con `alive_b = 0`;
+    - **su `ai_agent_b` no sirve para decidir si algo es una criatura.** Que la IA ya exista en `EEInit` al crear con `ECE_INITAI` no está medido. Las muestras de la 1 a la K sí lo releen en cada tick (H-4).
   - **Modo de radio:** el oráculo usa el testigo y el censo en modo de radio. El modo mapa entero no entra en M1 (Q-02, §10).
 - **Ruido de la CE:**
   - la partida corre con una copia de la misión con `db/globals.xml` en `ZombieMaxCount = 0` y `AnimalMaxCount = 0`, como recomienda F0.3;
@@ -296,7 +305,7 @@ Todas van por el bridge de la sonda (`qa0`), así que quedan en la evidencia.
 - **Del mod:** las líneas `DSBX_SCENE_DEL` de su log de script, con las señales de borrado por tick (DP-6).
 - **Del manifest:**
   - la identidad de F0.3;
-  - **los dos PBO por separado** (`product_pbo_sha256` y `probe_pbo_sha256`, P-11);
+  - **los dos PBO por separado** (`identity.product_pbo_sha256` del producto e `identity.pbo_sha256` de la sonda, P-11);
   - la ruta y el identificador del storage del servidor (P-06);
   - `oracle_commit`.
 
@@ -339,7 +348,7 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
   | F2P-10 | DP-6: cada borrado que el mod da por confirmado falta en el censo siguiente, dentro de lo cubierto; cada `delete_failed` sigue vivo. Informa del tick medido | log, censo y cobertura |
   | F2P-11 | El modo de censo y el testigo funcionan: hay filas, están los edificios de referencia de P1 (por clase y pose) y `surface_y_m` varía con la posición | censo y testigo |
   | F2P-12 | El testigo es fiable: en los **objetos** de P2, que no se mueven, su posición coincide con la del censo posterior a menos de 0,05 m `[verify F2 en partida]`. Si no, F2P-02 da INCONCLUSO para las criaturas, porque la posición de `EEInit` no sería la final | testigo y censo |
-  | F2P-13 | **Sin extras dentro de la cobertura:** durante las ventanas de operación, el testigo en modo de radio no ve nacer ninguna entidad de las clases de la escena que no case con una fila esperada (clase y posición a menos de 0,5 m).<br>Un objeto de más → FALLA.<br>Una criatura de más → FALLA si la ventana de control de P1 no tuvo criaturas, e INCONCLUSO si las tuvo.<br>**Alcance:** lo que nazca fuera de la cobertura no se ve en M1 (Q-02, §10) | testigo |
+  | F2P-13 | **Sin extras dentro de la cobertura:** durante las ventanas de operación, el testigo en modo de radio no ve nacer ninguna entidad de las clases de la escena que no case con una fila esperada (clase y posición a menos de 0,5 m).<br>Un objeto de más → FALLA.<br>Una criatura de más → FALLA si la ventana de control de P1 no tuvo criaturas, e INCONCLUSO si las tuvo.<br>**Qué es una criatura (H-4):** para un extra de una clase de la escena, lo que el documento declara para esa clase (infectado o animal); en la ventana de control, una entidad con `ai_agent_b = 1` en alguna muestra de la 0 a la K de su `net_id`. El `ai_agent_b` de la muestra 0, por sí solo, no decide (§5.3).<br>**Alcance:** lo que nazca fuera de la cobertura no se ve en M1 (Q-02, §10) | testigo |
 
 - **Negativas contra la fabricación,** obligatorias, que dan FALLA o INCONCLUSO y nunca PASA:
   - filas sin respuesta cruda de la sonda que las respalde, o con trabajo, página, epoch o sello que no casan, o tomadas antes del efecto (frescura);
@@ -367,7 +376,7 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
   - una sola entrega en P2;
   - corte antes del primer efecto en P5;
   - testigo cuya posición en `EEInit` no es la final: los objetos estáticos discrepan del censo y F2P-12 da INCONCLUSO, no PASA.
-- **Revisión y congelado:** Sol, como mucho 2 rondas; después se congela (commit y sha).
+- **Revisión y congelado:** Sol, como mucho 2 rondas; después se congela (commit y sha). Antes de congelar, las pruebas offline corren **sin saltos** sobre `main` más el núcleo del gate (PR #20), aunque este aún no esté en `main` (H-1).
 - **Gate y CLI (DP-13, P-11):** la forma que propone F0.3 para su núcleo (§11):
   - **`F2P` en `SPIKE_REGISTRY`** (`qa/gate_core.py:14`), con `qa/f2p_run.py`, `qa/f2p_eval.py` y `qa/f2p_mutants.py`. Hereda el despacho, las partes, `--evaluate-only` y la agregación;
   - **`m1_gate.py spike F2P --oracle-commit <sha>`:** antes de correr o evaluar nada, compara byte a byte los ficheros del oráculo frente al commit congelado. Si no coinciden, INCONCLUSO `oracle_modified` y sale 2, también con `--evaluate-only`;
@@ -381,7 +390,8 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
 - **T2:**
   - las pruebas offline del oráculo en verde;
   - cada mutante tumba su comprobación;
-  - con la evidencia sintética de una partida buena, PASA.
+  - con la evidencia sintética de una partida buena, PASA;
+  - **por la agregación del núcleo** (H-3): esa misma evidencia, completada como una parte `run` del arnés de F0.3, da PASA en `f03_common.aggregate_spike`. La parte lleva `part.json` con `op_nonce`, la identidad con el `git_head` real, `probe_stamp` calculado en ese commit, `params.wire_cap` y los `/hello`, como en `test_s_persist_offline.py`. Un mutante da FALLA y una negativa nunca da PASA.
 - **T3:**
   - el linter offline con 0 errores nuevos frente a la base (DP-14);
   - la comprobación estática de storage de §5.6;
@@ -431,7 +441,16 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
 
 ## 10. Riesgos y lo que no se ha medido
 - **DP-6:** la confirmación del borrado no está medida. Si `GetObjectByNetworkId` tarda más de `DEL_CONFIRM_TICKS`, salen `delete_failed` falsos; los ve F2P-10 y se ajusta la constante con el dato.
-- **El `net_id` de los edificios del mapa** puede ser 0: se identifican por clase y pose (§5.3).
+- **El `net_id` de los edificios del mapa:** F0.3 midió en su diag que es real, con la parte alta negativa, y se lee con signo (§5.3). Los edificios de referencia de P1 se siguen identificando por clase y pose (F2P-11).
+- **Cobertura del testigo (F0.3, tras la diag):** solo ve lo que deriva de las 5 raíces enganchadas. Un extra de alguna de estas clases no lo ve F2P-13:
+  - jugadores;
+  - `BoatScript` y `Helicopter`;
+  - edificios que derivan directo de `Building`;
+  - `AdvancedCommunication`, `ScriptedEntity` y `EffecterBase`;
+  - clases de mods.
+
+  Las clases de las dos escenas sí están cubiertas.
+- **Botín de la CE (H-6):** durante una ventana de operación, la CE puede crear dentro del radio un objeto de una clase de la escena; `MediumTent` y `Barrel_Red` salen como botín. F2P-13 daría FALLA con la clase y la posición de ese objeto. Falla cerrado: si pasa, se mira la ventana de control de P1 y se decide con el dato.
 - **Las filas del censo a 120 m más los discos extra:** F0.3 calcula unas cientos, sin medir; el tope es 4096 por trabajo.
 - **Cobertura (P-05):** las criaturas que se alejan pueden dejar la comprobación en INCONCLUSO. Es lo honesto; los discos extra lo reducen.
 - **P2n (P-04):** puede que ningún estímulo natural haga fallar al motor. Entonces la negativa del producto queda INCONCLUSA y se queda con los mutantes y con lo acreditado offline (F2b F2-A2).
@@ -507,3 +526,15 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
 
   Nada de §3 (el contrato v1.3, T1) cambia.
 - v1.3.2 (2026-11-15): **solo documentación**, por U-01 (MEN) de Sol r2 sobre el código de T1. §3.7 trae la envolvente v1.3 medida con su comando reproducible (1985, 2934, 3198 y 926 B) en lugar de remitir a la tabla v1.2.2 de F2b §3.6. Ninguna regla cambia.
+- v1.3.3 (2026-11-16): **alineación con la sonda real y con el núcleo del gate,** antes de congelar el oráculo. Los hallazgos H-1 a H-6 de la integración del oráculo están en `C:\tmp\dsbx-f2p-work\recibos\T2-integracion.md`.
+
+  | Origen | Cambio |
+  |---|---|
+  | F0.3 tras su diag (PR #22, `71697fb`) | las raíces del gancho del testigo y su cobertura; la muestra 0; la posición de `EEInit`, medida; `hp = -1` y el `net_id` real de los edificios del mapa (§5.3, §10) |
+  | H-4 | qué es una criatura en F2P-13: no basta el `ai_agent_b` de la muestra 0 (§6) |
+  | H-1 a H-3 | la aceptación de T2 por la agregación del núcleo, y el congelado sin saltos sobre `main` más el PR #20 (§6, §7) |
+  | H-5 | checkout en LF para la partida (§5.1) |
+  | H-6 | riesgo: el botín de la CE (§10) |
+  | errata | en el manifest, la sonda va en `identity.pbo_sha256`, no en `probe_pbo_sha256` (§5.4) |
+
+  Nada de §3 (T1) ni de §4 (T3) cambia.
