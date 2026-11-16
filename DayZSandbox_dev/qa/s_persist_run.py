@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,11 @@ FIXTURE_PATH = QA_DIR / "fixtures" / "s_persist_fixture.json"
 IN_SCOL = ["logical_id", "parent_id", "cat", "class_name", "slot_name"]
 IN_NCOL = ["req_x_m", "req_z_m", "req_yaw_deg", "health_mark_ratio", "must_vanish_b"]
 TERMINAL_STATES = ("done", "failed", "stopped", "expired")
+# Holgura del primer disco t5: en partida la latencia del censo varia mucho
+# mas que offline y cada reintento es otro censo grande (GetObjectsAtPosition3D),
+# asi que el radio inicial cubre el alcance estimado con margen acotado.
+SLACK_REL = 0.10
+SLACK_ABS_M = 5.0
 
 
 def _fixture():
@@ -169,45 +175,284 @@ def _storage_env():
     }
 
 
-def _server_process_running(storage_env):
-    if storage_env is None:
+_STORAGE_LEAF_RE = re.compile(r"^storage_\d+$")
+_SERVER_EXE_NAMES = frozenset({"dayzserver_x64.exe", "dayzserver.exe", "dayzdiag_x64.exe"})
+
+
+def _resolve_abs(raw):
+    """Ruta absoluta resuelta, o None si es relativa, raiz de unidad o '.'."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or text == ".":
+        return None
+    p = Path(text)
+    if not p.is_absolute():
+        return None
+    try:
+        resolved = p.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if resolved == Path(resolved.anchor):
+        return None
+    return resolved
+
+
+def _paths_overlap(a, b):
+    try:
+        a.relative_to(b)
+        return True
+    except ValueError:
+        pass
+    try:
+        b.relative_to(a)
+        return True
+    except ValueError:
         return False
-    names = set(storage_env["server_exe_names"])
+
+
+def _validate_storage_env(storage_env, backup_dir=None):
+    """BLOQ 3: el destino de borrado es exactamente <mision>/storage_<n> de la corrida.
+
+    Devuelve el dict con rutas resueltas, o None rechazando antes de operar:
+    rutas relativas/raices/'.', storage que no cuelga de mission_dir con hoja
+    storage_<n>, datos fuera del storage y solapamiento storage<->backup.
+    """
+    if not isinstance(storage_env, dict):
+        return None
+    server_root = _resolve_abs(storage_env.get("server_root_dir"))
+    mission = _resolve_abs(storage_env.get("mission_dir"))
+    storage = _resolve_abs(storage_env.get("storage_dir"))
+    storage_data = _resolve_abs(storage_env.get("storage_data_dir"))
+    if server_root is None or mission is None or storage is None or storage_data is None:
+        return None
+    if storage.parent != mission:
+        return None
+    if not _STORAGE_LEAF_RE.match(storage.name):
+        return None
+    try:
+        mission.relative_to(server_root)
+    except ValueError:
+        return None
+    if storage_data != storage and storage_data.parent == storage:
+        pass
+    elif storage_data != storage:
+        try:
+            storage_data.relative_to(storage)
+        except ValueError:
+            return None
+    if backup_dir is not None:
+        backup = Path(backup_dir)
+        if not backup.is_absolute():
+            return None
+        try:
+            backup = backup.resolve()
+        except (OSError, RuntimeError, ValueError):
+            return None
+        if _paths_overlap(storage, backup):
+            return None
+    out = dict(storage_env)
+    out["server_root_dir"] = str(server_root)
+    out["mission_dir"] = str(mission)
+    out["storage_dir"] = str(storage)
+    out["storage_data_dir"] = str(storage_data)
+    return out
+
+
+def _server_query_error():
+    return "unknown"
+
+
+def _classify_server_processes(rows, storage_env, *, own_pid=None):
+    """Clasifica filas (name,pid,cmdline): 'running'|'stopped'|'unknown'.
+
+    Solo cuenta el servidor de la corrida: ejecutable de servidor (nunca un
+    cliente DayZDiag_x64.exe) y, si hay linea de comandos, -mission/-profiles
+    de esta mision; o el PID propio registrado al lanzarlo.
+    """
+    if rows is None:
+        return _server_query_error()
+    mission = str(storage_env.get("mission_dir") or "") if storage_env else ""
+    found = False
+    for row in rows or []:
+        try:
+            name = str(row.get("name") or "")
+            pid = row.get("pid")
+            cmd = str(row.get("command_line") or "")
+        except AttributeError:
+            continue
+        if own_pid is not None and pid is not None and int(pid) == int(own_pid):
+            found = True
+            continue
+        if name.lower() not in _SERVER_EXE_NAMES:
+            continue
+        if not cmd:
+            continue
+        low = cmd.lower()
+        # Un cliente DayZDiag_x64.exe no es el servidor: el servidor Diag
+        # acredita con -server en su linea de comandos.
+        if name.lower() == "dayzdiag_x64.exe" and "-server" not in low:
+            continue
+        if mission and mission.lower() not in low:
+            continue
+        if "-mission" not in low and "-profiles" not in low and not mission:
+            continue
+        found = True
+    return "running" if found else "stopped"
+
+
+def _list_server_processes(storage_env):
+    """Filas de procesos via tasklist/WMI; None si la consulta falla."""
     try:
         proc = subprocess.run(
-            ["tasklist", "/FO", "CSV", "/NH"],
+            ["tasklist", "/FO", "CSV", "/NH", "/V"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
         )
     except OSError:
-        return False
+        return None
     if proc.returncode != 0:
-        return False
+        return None
+    rows = []
     for line in proc.stdout.splitlines():
         try:
             row = next(csv.reader([line]), [])
         except (csv.Error, StopIteration):
             continue
-        if row and row[0] in names:
-            return True
-    return False
+        if not row:
+            continue
+        pid = None
+        if len(row) > 1:
+            try:
+                pid = int(row[1])
+            except ValueError:
+                pid = None
+        rows.append({"name": row[0], "pid": pid, "command_line": ""})
+    try:
+        proc2 = subprocess.run(
+            [
+                "powershell", "-NoProfile", "-Command",
+                "Get-CimInstance Win32_Process | Select-Object Name,ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation",
+            ],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        )
+    except OSError:
+        return rows
+    if proc2.returncode != 0:
+        return rows
+    by_pid = {}
+    for line in proc2.stdout.splitlines():
+        try:
+            row = next(csv.reader([line]), [])
+        except (csv.Error, StopIteration):
+            continue
+        if len(row) < 3 or row[0] == "Name":
+            continue
+        try:
+            pid2 = int(row[1])
+        except ValueError:
+            continue
+        by_pid[pid2] = {"name": row[0], "pid": pid2, "command_line": row[2]}
+    if by_pid:
+        merged = []
+        seen = set()
+        for r in rows:
+            if r["pid"] in by_pid:
+                merged.append(by_pid[r["pid"]])
+                seen.add(r["pid"])
+            else:
+                merged.append(r)
+        for pid2, r in by_pid.items():
+            if pid2 not in seen:
+                merged.append(r)
+        return merged
+    return rows
+
+
+def _server_state(storage_env, *, own_pid=None, rows=None):
+    """'running'|'stopped'|'unknown': un error de consulta nunca es 'stopped'."""
+    if storage_env is None:
+        return "unknown"
+    if rows is None:
+        rows = _list_server_processes(storage_env)
+    return _classify_server_processes(rows, storage_env, own_pid=own_pid)
+
+
+def _server_process_running(storage_env):
+    # Compat: True solo con servidor de la corrida acreditado; unknown -> False
+    # en booleanos, pero los llamadores criticos usan _require_server_stopped.
+    return _server_state(storage_env) == "running"
+
+
+def _require_server_stopped(storage_env, *, own_pid=None, rows=None):
+    """Puerta previa a copiar/restaurar: (True,'') solo si parada comprobada."""
+    state = _server_state(storage_env, own_pid=own_pid, rows=rows)
+    if state == "stopped":
+        return True, ""
+    if state == "running":
+        return False, "server_still_running"
+    return False, "server_state_unknown"
+
+
+def _unique_backup_path(backup_dir):
+    """Slot de backup nuevo: nunca se reutiliza ni se borra uno previo."""
+    backup_dir = Path(backup_dir)
+    if not backup_dir.exists():
+        return backup_dir
+    for n in range(2, 1000):
+        cand = backup_dir.with_name(f"{backup_dir.name}.bak{n}")
+        if not cand.exists():
+            return cand
+    raise RuntimeError("storage_backup_slot_exhausted")
+
+
+def _copy_tree_verified(src, dst, expected_snapshot=None):
+    """Copia src->dst (dst no debe existir) y verifica por sha256+size."""
+    src = Path(src)
+    dst = Path(dst)
+    if expected_snapshot is None:
+        expected_snapshot = _snapshot_dir(src) or {}
+    if src.is_dir():
+        shutil.copytree(src, dst)
+    else:
+        dst.mkdir(parents=True, exist_ok=True)
+    got = _snapshot_dir(dst) or {}
+    if _sha_map(got) != _sha_map(expected_snapshot):
+        raise RuntimeError("storage_copy_verify_failed")
+    return got
 
 
 def _backup_storage(storage_env, backup_dir, label):
-    src = Path(storage_env["storage_dir"])
+    # BLOQ 2/3: parada comprobada y rutas delimitadas antes de copiar.
+    checked = _validate_storage_env(storage_env, backup_dir)
+    if checked is None:
+        raise RuntimeError("storage_path_rejected")
+    ok, err = _require_server_stopped(checked)
+    if not ok:
+        raise RuntimeError(err)
+    src = Path(checked["storage_dir"])
     snapshot = _snapshot_dir(src)
     if snapshot is None:
         snapshot = {}
-    backup_dir = Path(backup_dir)
-    if backup_dir.exists():
-        shutil.rmtree(backup_dir, ignore_errors=True)
-    if src.is_dir():
-        shutil.copytree(src, backup_dir)
-    else:
-        backup_dir.mkdir(parents=True, exist_ok=True)
-    backup_snap = _snapshot_dir(backup_dir)
-    if _sha_map(backup_snap) != _sha_map(snapshot):
-        raise RuntimeError("storage_backup_verify_failed")
+    # BLOQ 4: un backup previo es evidencia de recuperacion; no se borra.
+    target = _unique_backup_path(backup_dir)
+    _copy_tree_verified(src, target, snapshot)
     return snapshot
+
+
+def _resolve_backup_dir(backup_dir):
+    """El slot de backup vigente: el de mayor numero, sin borrar ninguno."""
+    backup_dir = Path(backup_dir)
+    best = None
+    best_n = 0
+    if backup_dir.is_dir():
+        best, best_n = backup_dir, 1
+    parent = backup_dir.parent
+    if parent.is_dir():
+        for cand in parent.glob(backup_dir.name + ".bak*"):
+            suffix = cand.name[len(backup_dir.name) + 4:]
+            if cand.is_dir() and suffix.isdigit() and int(suffix) > best_n:
+                best, best_n = cand, int(suffix)
+    return best
 
 
 def _sha_map(snapshot):
@@ -221,19 +466,65 @@ def _sha_map(snapshot):
 
 
 def _restore_storage(storage_env, backup_dir, storage_t0):
-    src = Path(storage_env["storage_dir"])
-    backup_dir = Path(backup_dir)
-    if src.exists():
-        shutil.rmtree(src, ignore_errors=True)
-    if backup_dir.is_dir():
-        shutil.copytree(backup_dir, src)
-    else:
-        src.mkdir(parents=True, exist_ok=True)
-    restored = _snapshot_dir(src)
-    if restored is None:
-        restored = {}
-    # Brief §10.2/N33: la restauracion en frio se acredita por sha256 (+size), no por mtime.
-    return 1 if _sha_map(restored) == _sha_map(storage_t0) else 0, restored
+    """BLOQ 4: copia preparada y verificada antes de sustituir, con rollback.
+
+    Devuelve (restore_ok_b, snapshot, error). Cualquier fallo deja el destino
+    intacto o restaurado desde la copia de rollback y error != '' (el llamador
+    lo publica como restauracion incompleta). El backup nunca se borra aqui.
+    """
+    checked = _validate_storage_env(storage_env, backup_dir)
+    if checked is None:
+        return 0, {}, "storage_path_rejected"
+    ok, err = _require_server_stopped(checked)
+    if not ok:
+        return 0, _snapshot_dir(Path(checked["storage_dir"])) or {}, err
+    dest = Path(checked["storage_dir"])
+    actual_backup = _resolve_backup_dir(backup_dir)
+    if actual_backup is None:
+        return 0, _snapshot_dir(dest) or {}, "storage_backup_missing"
+    expected = _snapshot_dir(actual_backup) or {}
+    if storage_t0 is not None and _sha_map(expected) != _sha_map(storage_t0):
+        return 0, _snapshot_dir(dest) or {}, "storage_backup_verify_failed"
+    parent = dest.parent
+    stamp = f"{os.getpid()}-{time.time_ns()}"
+    staged = parent / f".{dest.name}.r7stage-{stamp}"
+    rollback = parent / f".{dest.name}.r7rollback-{stamp}"
+    try:
+        # 1) Preparar y verificar la copia fuera del destino.
+        _copy_tree_verified(actual_backup, staged, expected)
+        # 2) Solo entonces sustituir: destino -> rollback, staged -> destino.
+        moved_dest = False
+        try:
+            if dest.exists():
+                os.rename(dest, rollback)
+                moved_dest = True
+            os.rename(staged, dest)
+        except OSError:
+            if moved_dest and not dest.exists() and rollback.exists():
+                os.rename(rollback, dest)
+            raise
+        # 3) Verificar el destino ya sustituido; si no, rollback.
+        restored = _snapshot_dir(dest) or {}
+        if _sha_map(restored) != _sha_map(expected):
+            if dest.exists():
+                shutil.rmtree(dest, ignore_errors=True)
+            if rollback.exists():
+                os.rename(rollback, dest)
+            restored = _snapshot_dir(dest) or {}
+            return 0, restored, "storage_restore_verify_failed"
+        if rollback.exists():
+            shutil.rmtree(rollback, ignore_errors=True)
+        # Brief §10.2/N33: la restauracion en frio se acredita por sha256 (+size).
+        return (1 if _sha_map(restored) == _sha_map(storage_t0) else 0), restored, ""
+    except Exception as exc:  # fallo de copia/sustitucion: destino intacto o restaurado
+        try:
+            if staged.exists():
+                shutil.rmtree(staged, ignore_errors=True)
+            if not dest.exists() and rollback.exists():
+                os.rename(rollback, dest)
+        except OSError:
+            pass
+        return 0, _snapshot_dir(dest) or {}, f"storage_restore_incomplete:{type(exc).__name__}:{exc}"
 
 
 def _snapshot_stage(is_live, storage_env, sim_storage):
@@ -285,6 +576,33 @@ def _bridge_hello_t(events, inst):
     return min(vals) if vals else None
 
 
+def _bridge_old_max_tick_ms(events, hello_t_ms):
+    """max_old_srv_tick_ms del oraculo (eval :2448): maximo de recv_ms/done_ms
+    registrados en los resultados del bridge del peer servidor del epoch viejo
+    (todos anteriores al hello nuevo), no el tick_ms de un solo payload."""
+    best = 0.0
+    for ev in events:
+        if ev.get("ev") != "result" or ev.get("peer") != "server":
+            continue
+        t = ev.get("t_ms")
+        if hello_t_ms is not None:
+            if not isinstance(t, (int, float)) or not math.isfinite(float(t)) or float(t) >= float(hello_t_ms):
+                continue
+        res_list = []
+        if isinstance(ev.get("result"), dict):
+            res_list.append(ev["result"])
+        if isinstance(ev.get("results"), list):
+            res_list.extend(r for r in ev["results"] if isinstance(r, dict))
+        for res in res_list:
+            if bool(res.get("dup")):
+                continue
+            for key in ("recv_ms", "done_ms"):
+                v = res.get(key)
+                if isinstance(v, (int, float)) and math.isfinite(float(v)) and float(v) > best:
+                    best = float(v)
+    return best
+
+
 def _probe_sources_at_commit(git_head):
     top = f03_common._git_toplevel(REPO_ROOT)
     cwd = str(top if top is not None else REPO_ROOT)
@@ -320,15 +638,26 @@ def _job_free(ctx, job_id):
     )
 
 
+def _census_tag(stage, area_id, has_center_override=False):
+    """Etiqueta explicita de etapa para el evaluador congelado.
+
+    BLOQ 1: un disco de seguimiento o posterior a la limpieza nunca lleva la
+    etiqueta desnuda t5_track_* (que el evaluador clasifica como t5): lleva
+    '<etapa>:<disco>', p. ej. 't6_post_cleanup_census:t5_track_b_inf_1_p0_r0',
+    y asi ninguna lectura posterior a la limpieza entra en N49/PER-08.
+    """
+    return f"{stage}:{area_id}"
+
+
 def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy_fault=None, qa_fault=None, defer_free=False, center_override=None, radius_override=None):
     if center_override is None:
         area = fixture["areas"][area_id]
-        tag = f"{stage}:{area_id}"
+        tag = _census_tag(stage, area_id)
         cx = float(area["center_x_m"])
         cz = float(area["center_z_m"])
         rad = float(area["radius_m"])
     else:
-        tag = area_id
+        tag = _census_tag(stage, area_id, has_center_override=True)
         cx = float(center_override[0])
         cz = float(center_override[1])
         rad = float(radius_override) if radius_override is not None else 60.0
@@ -792,6 +1121,9 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
 
         is_live = ctx.build in ("diag", "retail")
         storage_env = _storage_env() if is_live else None
+        if is_live and storage_env is not None:
+            # BLOQ 3: rutas delimitadas antes de cualquier operacion.
+            storage_env = _validate_storage_env(storage_env, backup_dir=None)
         if is_live and storage_env is None:
             ctx.record_scenario({"ev": "storage_config_invalid"})
         sim_storage = ctx.part_dir / "_sim_storage"
@@ -800,16 +1132,28 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
 
         try:
             if is_live and storage_env is not None:
-                if _server_process_running(storage_env):
+                if _server_state(storage_env) != "stopped":
                     f03_common.await_operator(
                         ctx,
                         step="t0_stop_server_for_cold_backup",
                         action="stop_server",
                         instructions="Para DayZServer para el backup en frio de $mission:storage_#.",
-                        predicate=lambda _ev: not _server_process_running(storage_env),
+                        predicate=lambda _ev: _server_state(storage_env) == "stopped",
                         timeout_s=300.0,
                     )
-                storage_t0 = _backup_storage(storage_env, backup_dir, "t0")
+                # BLOQ 2: parada comprobada inmediatamente antes de copiar;
+                # si no se acredita, _backup_storage falla sin copiar.
+                try:
+                    storage_t0 = _backup_storage(storage_env, backup_dir, "t0")
+                except Exception as exc:
+                    ctx.record_scenario({
+                        "ev": "storage_restore_result",
+                        "restore_ok_b": 0,
+                        "restore_incomplete_b": 1,
+                        "error": f"storage_backup_incomplete:{exc}",
+                        "files": {},
+                    })
+                    raise
                 ctx.record_scenario({"ev": "storage_snapshot_t0", "files": storage_t0})
                 start_threshold = ctx.bridge.now_ms()
 
@@ -835,9 +1179,8 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 sim_storage.mkdir(parents=True, exist_ok=True)
                 (sim_storage / "objects.bin").write_bytes(b"DSBX_STORAGE_T0_CLEAN\n")
                 storage_t0 = _snapshot_dir(sim_storage)
-                if backup_dir.exists():
-                    shutil.rmtree(backup_dir, ignore_errors=True)
-                shutil.copytree(sim_storage, backup_dir)
+                # BLOQ 4: slot nuevo; un backup previo nunca se borra.
+                shutil.copytree(sim_storage, _unique_backup_path(backup_dir))
                 ctx.record_scenario({"ev": "storage_snapshot_t0", "files": storage_t0})
 
             st_t0 = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
@@ -1085,7 +1428,8 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             if hello_t_ms is not None and stop_first_t_ms is not None and hello_t_ms >= stop_first_t_ms:
                 stop_window_ms = float(hello_t_ms) - float(stop_first_t_ms)
             max_old_srv_tick_ms = max(
-                [stop_tick_ms, rr_tick_ms] + [float(v) for v in t3_post_snap_by_area.values()]
+                [stop_tick_ms, rr_tick_ms, _bridge_old_max_tick_ms(events_after_restart, hello_t_ms)]
+                + [float(v) for v in t3_post_snap_by_area.values()]
             )
 
             t5_director_areas = {cfg["retained_area"], "area_a", "area_b"}
@@ -1103,6 +1447,13 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 r0 = c0.get("start_result_t_ms")
                 if f0 is not None and r0 is not None and float(r0) > float(f0):
                     t5_census_dur_ms = max(t5_census_dur_ms, float(r0) - float(f0))
+
+            # Latencia de dimensionado registrada de verdad: cuanto crece el dt_post
+            # real de un disco sobre la cota inferior medida al dimensionarlo
+            # (tick del per_status y reloj del bridge de ese instante). Arranca con
+            # la duracion first->result de los censos t5 base y se corrige con el
+            # snap/resultado reales de cada disco lanzado.
+            sizing_latency_ms = t5_census_dur_ms
 
             tracks_by_lid = {}
             for trk in creature_tracks:
@@ -1139,23 +1490,37 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 for idx, trk in enumerate(relevant):
                     if _n49_covered(trk, t5_censuses, dt_pre_ms, v_m_s, first_new_tick_ms):
                         continue
-                    for attempt in range(3):
+                    prev_actual_dt_post_ms = None
+                    prev_result_t_ms = None
+                    prev_required_radius_m = 0.0
+                    for attempt in range(5):
                         # Misma formula N49 (eval :2662) para dimensionar y para reintentar:
                         # dt_post = max(snap_del_proceso_nuevo, resultado_en_bridge - hello).
                         # Para el censo aun no lanzado, snap >= tick actual del proceso nuevo
-                        # y resultado >= ahora en el bridge; ambos son cotas del mismo termino.
+                        # y resultado >= ahora en el bridge; ambos son cotas inferiores del
+                        # mismo termino, y sobre ellas se suma la latencia registrada de
+                        # verdad en los discos ya lanzados (su snap/resultado reales menos
+                        # la cota medida al dimensionarlos), no una duracion ajena.
                         st_disc = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
                         tick_now = 0.0
                         if st_disc.status == "done" and st_disc.payload:
                             tick_now = float(st_disc.payload["num"].get("tick_ms", 0.0))
+                        bridge_now_ms = float(ctx.bridge.now_ms())
                         bridge_dt_post = 0.0
                         if hello_t_ms is not None:
-                            bridge_dt_post = max(0.0, float(ctx.bridge.now_ms()) - float(hello_t_ms))
-                        # El dt_post del oraculo se mide en el resultado del censo, no al
-                        # dimensionarlo: se proyecta con la duracion medida del censo previo.
-                        dt_post_est = max(tick_now, bridge_dt_post, 0.0) + t5_census_dur_ms
+                            bridge_dt_post = max(0.0, bridge_now_ms - float(hello_t_ms))
+                        lower_dt_post_ms = max(tick_now, bridge_dt_post, 0.0)
+                        dt_post_est = lower_dt_post_ms + sizing_latency_ms
+                        if prev_actual_dt_post_ms is not None and prev_result_t_ms is not None:
+                            # El siguiente disco no puede tener un dt_post menor que el
+                            # real del disco fallido mas el tiempo de bridge ya pasado
+                            # desde su resultado registrado.
+                            dt_post_est = max(
+                                dt_post_est,
+                                prev_actual_dt_post_ms + max(0.0, bridge_now_ms - float(prev_result_t_ms)),
+                            )
                         reach_m = max(15.0, v_m_s * (dt_pre_ms + dt_post_est) / 1000.0)
-                        radius_m = max(60.0, reach_m)
+                        radius_m = max(60.0, reach_m * (1 + SLACK_REL) + SLACK_ABS_M, prev_required_radius_m)
                         track_tag = f"t5_track_{lid}_p{idx}_r{attempt}"
                         rec_disc = _census(
                             ctx, fixture, "t5_post_restart_census", track_tag, 0,
@@ -1172,18 +1537,33 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                             "center_x_m": trk["x_m"],
                             "center_z_m": trk["z_m"],
                             "radius_m": radius_m,
+                            "reach_m": reach_m,
                             "v_m_s": v_m_s,
                             "dt_pre_ms": dt_pre_ms,
+                            "dt_post_est_ms": dt_post_est,
                             "attempt": attempt,
                         })
                         d_first = rec_disc.get("start_first_t_ms")
                         d_res = rec_disc.get("start_result_t_ms")
                         if d_first is not None and d_res is not None and float(d_res) > float(d_first):
                             t5_census_dur_ms = max(t5_census_dur_ms, float(d_res) - float(d_first))
+                        # Registra el dt_post real de este disco (formula del oraculo)
+                        # para corregir la latencia de dimensionado del siguiente.
+                        d_snap = float(rec_disc.get("snap_tick_ms", 0.0))
+                        if rec_disc.get("job_complete") and d_snap > 0.0 and d_res is not None and hello_t_ms is not None:
+                            actual_dt_post_ms = max(d_snap, float(d_res) - float(hello_t_ms), 0.0)
+                            sizing_latency_ms = max(sizing_latency_ms, actual_dt_post_ms - lower_dt_post_ms)
+                            prev_actual_dt_post_ms = actual_dt_post_ms
+                            prev_result_t_ms = float(d_res)
+                            dist_m = math.hypot(
+                                float(trk["x_m"]) - float(rec_disc["center_x_m"]),
+                                float(trk["z_m"]) - float(rec_disc["center_z_m"]),
+                            )
+                            prev_required_radius_m = dist_m + max(15.0, v_m_s * (dt_pre_ms + actual_dt_post_ms) / 1000.0)
                         if _n49_covered(trk, [rec_disc], dt_pre_ms, v_m_s, first_new_tick_ms):
                             break
-                        # El siguiente intento recalcula arriba con la misma formula y
-                        # con el tick/bridge ya avanzados; sin constantes distintas.
+                        # El siguiente intento recalcula arriba con la misma formula,
+                        # la latencia registrada de este disco y los relojes avanzados.
 
             witness_rows, _ = _build_scene_rows(fixture, "scene_b")
             w_op_id = ctx.peek_next_op_id()
@@ -1253,46 +1633,46 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
 
         finally:
             if is_live and storage_env is not None and storage_t0 is not None:
-                if _server_process_running(storage_env):
+                if _server_state(storage_env) != "stopped":
                     f03_common.await_operator(
                         ctx,
                         step="t6_stop_server_for_cold_restore",
                         action="stop_server",
                         instructions="Para DayZServer para restaurar en frio $mission:storage_#.",
-                        predicate=lambda _ev: not _server_process_running(storage_env),
+                        predicate=lambda _ev: _server_state(storage_env) == "stopped",
                         timeout_s=300.0,
                     )
-                if _server_process_running(storage_env):
-                    # Sin parada en frio no hay restauracion: no tocar storage en caliente (N33).
-                    ctx.record_scenario({
-                        "ev": "storage_restore_result",
-                        "restore_ok_b": 0,
-                        "error": "server_still_running",
-                        "files": _snapshot_stage(True, storage_env, sim_storage),
-                    })
-                    restore_ok = 0
-                else:
-                    restore_ok, restored_snapshot = _restore_storage(storage_env, backup_dir, storage_t0)
-                    ctx.record_scenario({
-                        "ev": "storage_restore_result",
-                        "restore_ok_b": restore_ok,
-                        "files": restored_snapshot,
-                    })
-                if restore_ok == 1:
-                    shutil.rmtree(backup_dir, ignore_errors=True)
-            elif not is_live and storage_t0 is not None and backup_dir.is_dir():
+                # BLOQ 2/4: _restore_storage exige parada comprobada justo
+                # antes de sustituir y nunca borra el backup; cualquier
+                # fallo queda como restauracion incompleta en el recibo.
+                try:
+                    restore_ok, restored_snapshot, restore_err = _restore_storage(
+                        storage_env, backup_dir, storage_t0
+                    )
+                except Exception as exc:
+                    restore_ok, restored_snapshot = 0, _snapshot_stage(True, storage_env, sim_storage)
+                    restore_err = f"storage_restore_incomplete:{type(exc).__name__}:{exc}"
+                ctx.record_scenario({
+                    "ev": "storage_restore_result",
+                    "restore_ok_b": restore_ok,
+                    "restore_incomplete_b": 0 if restore_ok == 1 else 1,
+                    "error": restore_err,
+                    "files": restored_snapshot,
+                })
+            elif not is_live and storage_t0 is not None and _resolve_backup_dir(backup_dir) is not None:
                 if sim_storage.exists():
                     shutil.rmtree(sim_storage, ignore_errors=True)
-                shutil.copytree(backup_dir, sim_storage)
+                shutil.copytree(_resolve_backup_dir(backup_dir), sim_storage)
                 restored_snapshot = _snapshot_dir(sim_storage)
                 restore_ok = 1 if restored_snapshot == storage_t0 else 0
                 ctx.record_scenario({
                     "ev": "storage_restore_result",
                     "restore_ok_b": restore_ok,
+                    "restore_incomplete_b": 0 if restore_ok == 1 else 1,
+                    "error": "" if restore_ok == 1 else "storage_restore_incomplete",
                     "files": restored_snapshot,
                 })
-                if restore_ok == 1:
-                    shutil.rmtree(backup_dir, ignore_errors=True)
+                # BLOQ 4: el backup se conserva como evidencia de recuperacion.
 
         ctx.collect_probe_budget_logs()
         ctx.finalize_manifest()

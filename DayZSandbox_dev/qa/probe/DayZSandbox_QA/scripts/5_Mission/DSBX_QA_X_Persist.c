@@ -141,9 +141,18 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	protected ref array<string> m_CensusScol;
 	protected ref array<string> m_PendingFinishIds;
 	protected ref array<int> m_PendingFinishTicks;
+	protected ref array<int> m_PendingFinishSeen;
+	protected ref array<float> m_PendingFinishAgeMs;
 	protected float m_CensusCaptureStartMs;
+	protected bool m_CaptureFailed;
+	protected string m_CaptureFailReason;
+	protected string m_CaptureFailJobId;
+	protected int m_LastApplyRetainedSkipped;
 	// Presupuesto verificable de captura del censo (MEN-14); el cupo de filas llega por StartJob.
 	static const float CENSUS_CAPTURE_BUDGET_MS = 120000.0;
+	// BLOQ 6: A retiene per_census hasta acreditar el intento de B; salida acotada.
+	static const float CENSUS_HOLD_MAX_MS = 750.0;
+	static const int CENSUS_FINISH_AFTER_ATTEMPT_TICKS = 2;
 
 	void DSBX_QA_X_Persist()
 	{
@@ -157,7 +166,13 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_CensusScol = new array<string>();
 		m_PendingFinishIds = new array<string>();
 		m_PendingFinishTicks = new array<int>();
+		m_PendingFinishSeen = new array<int>();
+		m_PendingFinishAgeMs = new array<float>();
 		m_CensusCaptureStartMs = 0.0;
+		m_CaptureFailed = false;
+		m_CaptureFailReason = "";
+		m_CaptureFailJobId = "";
+		m_LastApplyRetainedSkipped = 0;
 
 		InitSentinelClasses();
 		InitCensusColumns();
@@ -494,6 +509,76 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		return null;
 	}
 
+	// MEN 7: busqueda dentro de la generacion pedida; el padre de una fila
+	// nueva puede ser el retenido de la generacion anterior (sin duplicados:
+	// cada logical_id tiene como mucho un registro vivo por escena).
+	protected DSBX_QA_PersistRecord FindRecordGen(string sceneId, string logicalId, int genN)
+	{
+		int n = m_Records.Count();
+		for (int i = 0; i < n; i++)
+		{
+			DSBX_QA_PersistRecord rec = m_Records.Get(i);
+			if (rec && rec.m_SceneId == sceneId && rec.m_LogicalId == logicalId && rec.m_GenN == genN)
+				return rec;
+		}
+		return null;
+	}
+
+	protected DSBX_QA_PersistRecord FindRecordApplyParent(string sceneId, string logicalId, int genN)
+	{
+		DSBX_QA_PersistRecord rec = FindRecordGen(sceneId, logicalId, genN);
+		if (rec)
+			return rec;
+		int n = m_Records.Count();
+		for (int i = 0; i < n; i++)
+		{
+			DSBX_QA_PersistRecord cand = m_Records.Get(i);
+			if (cand && cand.m_SceneId == sceneId && cand.m_LogicalId == logicalId && cand.m_RetainOnReset)
+				return cand;
+		}
+		return null;
+	}
+
+	protected DSBX_QA_PersistRawRecord FindRawRecordByObject(Object obj)
+	{
+		if (!obj)
+			return null;
+		int n = m_RawRecords.Count();
+		for (int i = 0; i < n; i++)
+		{
+			DSBX_QA_PersistRawRecord raw = m_RawRecords.Get(i);
+			if (raw && (raw.m_RefEnt == obj || raw.m_ChildEnt == obj))
+				return raw;
+		}
+		return null;
+	}
+
+	// BLOQ 5: descendientes que la limpieza no conoce (ni registro de escena
+	// ni registro raw): su presencia protege al contenedor que los lleva.
+	protected int CountCleanupForeignDescendants(Object obj)
+	{
+		EntityAI ent = EntityAI.Cast(obj);
+		if (!ent || !ent.GetInventory())
+			return 0;
+		array<EntityAI> items = new array<EntityAI>();
+		ent.GetInventory().EnumerateInventory(InventoryTraversalType.PREORDER, items);
+		int foreignCount = 0;
+		for (int i = 0; i < items.Count(); i++)
+		{
+			EntityAI child = items.Get(i);
+			if (!child || child == ent)
+				continue;
+			if (!FindRecordByObject(child) && !FindRawRecordByObject(child))
+				foreignCount = foreignCount + 1;
+		}
+		return foreignCount;
+	}
+
+	protected bool IsValidIdentity(string ident, string zeroValue)
+	{
+		return ident != "" && ident != zeroValue;
+	}
+
 	protected bool IsSentinelClass(string className)
 	{
 		int n = m_SentinelClasses.Count();
@@ -563,7 +648,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		return foreignCount;
 	}
 
-	protected void ReapplyResetWithRetention(string sceneId, string expectEpoch)
+	// MEN 8: False si el lease caduca a mitad; cada borrado va guardado y la
+	// caducidad se propaga como error, nunca como exito parcial silencioso.
+	protected bool ReapplyResetWithRetention(string sceneId, string expectEpoch)
 	{
 		for (int i = 0; i < m_Records.Count(); i++)
 		{
@@ -609,7 +696,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			if (childRec.m_ParentId == "" || childRec.m_RetainOnReset)
 				continue;
 			if (!m_Probe.LeaseOk())
-				break;
+				return false;
 			if (IsObjectAlive(childRec.m_RefEnt))
 				g_Game.ObjectDelete(childRec.m_RefEnt);
 			childRec.m_RefEnt = null;
@@ -623,12 +710,13 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			if (rootRec.m_ParentId != "" || rootRec.m_RetainOnReset)
 				continue;
 			if (!m_Probe.LeaseOk())
-				break;
+				return false;
 			if (IsObjectAlive(rootRec.m_RefEnt))
 				g_Game.ObjectDelete(rootRec.m_RefEnt);
 			rootRec.m_RefEnt = null;
 			m_Records.RemoveOrdered(p2);
 		}
+		return true;
 	}
 
 	override void OnStartOp(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
@@ -821,6 +909,15 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			applyStatus = "partial";
 			applyReason = "creation_failed";
 		}
+		// MEN 7: filas retenidas de la generacion anterior -> parcial explicito.
+		if (m_LastApplyRetainedSkipped > 0)
+		{
+			applyReason = "retained_prior_generation";
+			if (okCount == 0)
+				applyStatus = "failed";
+			else
+				applyStatus = "partial";
+		}
 		PutStr(read, "apply_status", applyStatus);
 		PutStr(read, "reason", applyReason);
 		PutStr(read, "server_epoch", m_Probe.GetInst());
@@ -829,6 +926,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutStr(read, "q9_pathway", pathway);
 
 		PutNum(read, "gen_n", genN);
+		PutNum(read, "retained_skipped_n", m_LastApplyRetainedSkipped);
 		PutNum(read, "created_roots_n", rootsN);
 		PutNum(read, "created_children_n", childrenN);
 		PutNum(read, "idempotent_hit_b", idempotentHitB);
@@ -867,6 +965,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		if (scIdx >= 0 && m_SceneLastOp.Get(scIdx) == sceneOpId)
 		{
 			res.status = "done";
+			m_LastApplyRetainedSkipped = 0;
 			EmitApplyResponse(res.read, sceneId, sceneOpId, pathway, m_SceneGen.Get(scIdx), 1);
 			return;
 		}
@@ -906,7 +1005,21 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			return;
 		}
 
-		ReapplyResetWithRetention(sceneId, expectEpoch);
+		if (!ReapplyResetWithRetention(sceneId, expectEpoch))
+		{
+			res.status = "error";
+			res.reason = "lease_expired";
+			return;
+		}
+		// MEN 7: logical_ids retenidos de la generacion anterior.
+		array<string> retainedLids = new array<string>();
+		for (int ri = 0; ri < m_Records.Count(); ri++)
+		{
+			DSBX_QA_PersistRecord rrec = m_Records.Get(ri);
+			if (rrec && rrec.m_SceneId == sceneId && rrec.m_ServerEpoch == expectEpoch)
+				retainedLids.Insert(rrec.m_LogicalId);
+		}
+		m_LastApplyRetainedSkipped = 0;
 		UpsertSceneMeta(sceneId, genN, sceneOpId);
 
 		string opFault = m_Probe.GetOpFault();
@@ -921,12 +1034,29 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 		for (int r = 0; r < rows; r++)
 		{
+			// MEN 8: guarda en cada efecto; la caducidad es error, no done parcial.
 			if (!m_Probe.LeaseOk())
-				break;
+			{
+				res.status = "error";
+				res.reason = "lease_expired";
+				return;
+			}
 			int sBase = r * scolCount;
 			int nBase = r * ncolCount;
 
 			string logicalId = args.scell.Get(sBase + idxLogical);
+			bool isRetainedRow = false;
+			for (int rl = 0; rl < retainedLids.Count(); rl++)
+			{
+				if (retainedLids.Get(rl) == logicalId)
+					isRetainedRow = true;
+			}
+			if (isRetainedRow)
+			{
+				// No se crea duplicado ni registro nuevo de la fila retenida.
+				m_LastApplyRetainedSkipped = m_LastApplyRetainedSkipped + 1;
+				continue;
+			}
 			string parentId = args.scell.Get(sBase + idxParent);
 			string cat = args.scell.Get(sBase + idxCat);
 			string className = args.scell.Get(sBase + idxClass);
@@ -965,7 +1095,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			}
 			else
 			{
-				DSBX_QA_PersistRecord parentRec = FindRecord(sceneId, parentId);
+				DSBX_QA_PersistRecord parentRec = FindRecordApplyParent(sceneId, parentId, genN);
 				if (parentRec && parentRec.m_RefEnt)
 				{
 					EntityAI parentEnt = EntityAI.Cast(parentRec.m_RefEnt);
@@ -1163,7 +1293,11 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		for (int p1 = m_Records.Count() - 1; p1 >= 0; p1--)
 		{
 			if (!m_Probe.LeaseOk())
-				break;
+			{
+				res.status = "error";
+				res.reason = "lease_expired";
+				return;
+			}
 			DSBX_QA_PersistRecord childRec = m_Records.Get(p1);
 			if (!childRec || childRec.m_SceneId != sceneId || childRec.m_GenN != targetGenN)
 				continue;
@@ -1181,7 +1315,11 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		for (int p2 = m_Records.Count() - 1; p2 >= 0; p2--)
 		{
 			if (!m_Probe.LeaseOk())
-				break;
+			{
+				res.status = "error";
+				res.reason = "lease_expired";
+				return;
+			}
 			DSBX_QA_PersistRecord rootRec = m_Records.Get(p2);
 			if (!rootRec || rootRec.m_SceneId != sceneId || rootRec.m_GenN != targetGenN)
 				continue;
@@ -1210,6 +1348,12 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				EntityAI wEnt = EntityAI.Cast(wObj);
 				if (!wEnt || wEnt.IsMan())
 					continue;
+				if (!m_Probe.LeaseOk())
+				{
+					res.status = "error";
+					res.reason = "lease_expired";
+					return;
+				}
 				g_Game.ObjectDelete(wObj);
 			}
 			for (int wr = m_Records.Count() - 1; wr >= 0; wr--)
@@ -1463,7 +1607,13 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			{
 				createdObj.SetPosition(targetPos);
 				createdObj.SetOrientation(Vector(yawDeg, 0.0, 0.0));
-				if (childCargoClass != "" && m_Probe.LeaseOk())
+				if (childCargoClass != "" && !m_Probe.LeaseOk())
+				{
+					res.status = "error";
+					res.reason = "lease_expired";
+					return;
+				}
+				if (childCargoClass != "")
 				{
 					EntityAI ctrlEnt = EntityAI.Cast(createdObj);
 					if (ctrlEnt && ctrlEnt.GetInventory())
@@ -1559,12 +1709,22 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 	protected bool AppendEntityCensusRow(string jobId, Object obj, int inRadiusB, Man director, string directorUid, array<Object> seen)
 	{
-		// E1 + MEN-14: sin lease o sin presupuesto de captura, la captura se detiene
-		// (LeaseOk, DSBX_QA_Probe.c:447; NowMs, DSBX_QA_Probe.c:356).
+		// E1 + MEN 9/14: sin lease o sin presupuesto, la captura queda fallida
+		// (no un censo done truncado). LeaseOk: DSBX_QA_Probe.c:447.
 		if (!m_Probe.LeaseOk())
+		{
+			m_CaptureFailed = true;
+			m_CaptureFailReason = "lease_expired";
+			m_CaptureFailJobId = jobId;
 			return false;
+		}
 		if (m_CensusCaptureStartMs > 0.0 && m_Probe.NowMs() - m_CensusCaptureStartMs > CENSUS_CAPTURE_BUDGET_MS)
+		{
+			m_CaptureFailed = true;
+			m_CaptureFailReason = "capture_budget_exceeded";
+			m_CaptureFailJobId = jobId;
 			return false;
+		}
 		if (!IsObjectAlive(obj))
 			return true;
 		for (int s = 0; s < seen.Count(); s++)
@@ -1641,6 +1801,12 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		bool appended = m_Jobs.AppendRow(jobId, nvals, svals);
 		if (appended)
 			seen.Insert(obj);
+		else
+		{
+			m_CaptureFailed = true;
+			m_CaptureFailReason = "capture_truncated";
+			m_CaptureFailJobId = jobId;
+		}
 		return appended;
 	}
 
@@ -1651,6 +1817,14 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		float centerZ = GetNumArg(args, "center_z_m", 0.0);
 		float radiusM = GetNumArg(args, "radius_m", 60.0);
 		int includeDirectorB = (int)GetNumArg(args, "include_director_b", 0.0);
+
+		// BLOQ 6: este arranque acredita el intento de B sobre cada censo
+		// retenido; A solo se libera tras este intento o la salida acotada.
+		for (int pa = 0; pa < m_PendingFinishIds.Count(); pa++)
+		{
+			if (m_PendingFinishIds.Get(pa) != op.op_id)
+				m_PendingFinishSeen.Set(pa, 1);
+		}
 
 		string opFaultEarly = m_Probe.GetOpFault();
 		ref array<ref DSBX_QA_Job> heldJobs = new array<ref DSBX_QA_Job>();
@@ -1712,6 +1886,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		Man director = FindDirectorMan(directorUid, presentB, aliveB, invReadableB, invCountN);
 
 		array<Object> seen = new array<Object>();
+		m_CaptureFailed = false;
+		m_CaptureFailReason = "";
+		m_CaptureFailJobId = "";
 		m_CensusCaptureStartMs = m_Probe.NowMs();
 		// GetObjectsAtPosition3D: P:/scripts/3_game/global/game.c:930.
 		vector centerPos = Vector(centerX, g_Game.SurfaceY(centerX, centerZ), centerZ);
@@ -1799,7 +1976,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		}
 
 		m_PendingFinishIds.Insert(op.op_id);
-		m_PendingFinishTicks.Insert(10);
+		m_PendingFinishTicks.Insert(CENSUS_FINISH_AFTER_ATTEMPT_TICKS);
+		m_PendingFinishSeen.Insert(0);
+		m_PendingFinishAgeMs.Insert(0.0);
 		res.status = "done";
 		m_Jobs.FillStartRead(res.read, op.op_id, "per_census");
 		PutStr(res.read, "area_tag", areaTag);
@@ -1820,10 +1999,21 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 	override void OnTick(float timeslice)
 	{
+		// BLOQ 6: la ocupacion se mantiene hasta acreditar el intento de B
+		// (m_PendingFinishSeen) o hasta CENSUS_HOLD_MAX_MS desde el inicio;
+		// el solapamiento se acredita con snap_tick de B < released_tick de A.
 		int i = m_PendingFinishIds.Count() - 1;
 		while (i >= 0)
 		{
 			string jid = m_PendingFinishIds.Get(i);
+			float ageMs = m_PendingFinishAgeMs.Get(i) + timeslice * 1000.0;
+			m_PendingFinishAgeMs.Set(i, ageMs);
+			bool seenAttempt = m_PendingFinishSeen.Get(i) != 0;
+			if (!seenAttempt && ageMs < CENSUS_HOLD_MAX_MS)
+			{
+				i = i - 1;
+				continue;
+			}
 			int left = m_PendingFinishTicks.Get(i);
 			if (left > 0)
 			{
@@ -1833,7 +2023,14 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			}
 			m_PendingFinishIds.RemoveOrdered(i);
 			m_PendingFinishTicks.RemoveOrdered(i);
-			if (m_Jobs.IsDeadmanTripped(jid))
+			m_PendingFinishSeen.RemoveOrdered(i);
+			m_PendingFinishAgeMs.RemoveOrdered(i);
+			if (m_CaptureFailed && m_CaptureFailJobId == jid)
+			{
+				// MEN 9: captura truncada -> trabajo fallido, nunca done.
+				m_Jobs.EndJob(jid, "failed", m_CaptureFailReason);
+			}
+			else if (m_Jobs.IsDeadmanTripped(jid))
 			{
 				m_Jobs.EndJob(jid, "failed", "lease_expired");
 			}
@@ -1854,6 +2051,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			{
 				m_PendingFinishIds.RemoveOrdered(i);
 				m_PendingFinishTicks.RemoveOrdered(i);
+				m_PendingFinishSeen.RemoveOrdered(i);
+				m_PendingFinishAgeMs.RemoveOrdered(i);
 				return;
 			}
 			i = i + 1;
@@ -1862,15 +2061,23 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 	protected bool IsQaIdentity(string netId, string persId, array<string> netIds, array<string> persIds)
 	{
-		for (int i = 0; i < netIds.Count(); i++)
+		// BLOQ 5: una identidad vacia o cero (0:0 / 0:0:0:0) nunca coincide,
+		// ni como candidata ni como entrada registrada.
+		if (IsValidIdentity(netId, "0:0"))
 		{
-			if (netIds.Get(i) == netId)
-				return true;
+			for (int i = 0; i < netIds.Count(); i++)
+			{
+				if (IsValidIdentity(netIds.Get(i), "0:0") && netIds.Get(i) == netId)
+					return true;
+			}
 		}
-		for (int j = 0; j < persIds.Count(); j++)
+		if (IsValidIdentity(persId, "0:0:0:0"))
 		{
-			if (persIds.Get(j) == persId)
-				return true;
+			for (int j = 0; j < persIds.Count(); j++)
+			{
+				if (IsValidIdentity(persIds.Get(j), "0:0:0:0") && persIds.Get(j) == persId)
+					return true;
+			}
 		}
 		return false;
 	}
@@ -1912,23 +2119,35 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			DSBX_QA_PersistRecord qrec = m_Records.Get(q);
 			if (!qrec)
 				continue;
-			qaNetIds.Insert(qrec.m_NetId);
-			qaPersIds.Insert(qrec.m_PersId);
+			if (IsValidIdentity(qrec.m_NetId, "0:0"))
+				qaNetIds.Insert(qrec.m_NetId);
+			if (IsValidIdentity(qrec.m_PersId, "0:0:0:0"))
+				qaPersIds.Insert(qrec.m_PersId);
 		}
 		for (int qr = 0; qr < m_RawRecords.Count(); qr++)
 		{
 			DSBX_QA_PersistRawRecord qraw = m_RawRecords.Get(qr);
 			if (!qraw)
 				continue;
-			qaNetIds.Insert(qraw.m_NetId);
-			qaPersIds.Insert(qraw.m_PersId);
+			if (IsValidIdentity(qraw.m_NetId, "0:0"))
+				qaNetIds.Insert(qraw.m_NetId);
+			if (IsValidIdentity(qraw.m_PersId, "0:0:0:0"))
+				qaPersIds.Insert(qraw.m_PersId);
 			if (IsObjectAlive(qraw.m_ChildEnt))
-				qaNetIds.Insert(FormatNetId(qraw.m_ChildEnt));
+			{
+				string childNet = FormatNetId(qraw.m_ChildEnt);
+				if (IsValidIdentity(childNet, "0:0"))
+					qaNetIds.Insert(childNet);
+			}
 		}
 
 		for (int i = m_Records.Count() - 1; i >= 0; i--)
 		{
 			DSBX_QA_PersistRecord rec = m_Records.Get(i);
+			// BLOQ 5: un contenedor registrado con descendientes ajenos o
+			// desconocidos no se borra (como al reaplicar); se conserva.
+			if (rec && IsObjectAlive(rec.m_RefEnt) && CountCleanupForeignDescendants(rec.m_RefEnt) > 0)
+				continue;
 			if (rec && IsObjectAlive(rec.m_RefEnt))
 			{
 				g_Game.ObjectDelete(rec.m_RefEnt);
@@ -1951,6 +2170,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			DSBX_QA_PersistRawRecord raw = m_RawRecords.Get(j);
 			if (raw)
 			{
+				// BLOQ 5: tampoco un raw con descendientes desconocidos.
+				if (IsObjectAlive(raw.m_RefEnt) && CountCleanupForeignDescendants(raw.m_RefEnt) > 0)
+					continue;
 				if (IsObjectAlive(raw.m_ChildEnt))
 					g_Game.ObjectDelete(raw.m_ChildEnt);
 				if (IsObjectAlive(raw.m_RefEnt))
@@ -1990,7 +2212,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 						continue;
 					bool byIdentity = IsQaIdentity(FormatNetId(cand), FormatPersId(cand), qaNetIds, qaPersIds);
 					bool byMark = IsSentinelClass(cand.GetType()) && IsQaHealthMark(cand);
-					if (byIdentity || byMark)
+					if ((byIdentity || byMark) && CountCleanupForeignDescendants(cand) == 0)
 					{
 						g_Game.ObjectDelete(cand);
 						cleanedRawN = cleanedRawN + 1;
