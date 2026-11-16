@@ -296,12 +296,16 @@ def _classify_server_processes(rows, storage_env, *, own_pid=None):
 
 def _list_server_processes(storage_env):
     """Filas de procesos via tasklist/WMI; None si la consulta falla."""
+    # Sin /V: aqui solo hacen falta nombre y PID (la linea de comandos sale de WMI), y /V consulta el titulo
+    # de la ventana de cada proceso: en la caja de partidas tardo 127,6 s (16-nov), contra 1,3 s sin /V.
+    # Un tope agotado cuenta como consulta fallida (None -> "unknown", nunca "stopped").
     try:
         proc = subprocess.run(
-            ["tasklist", "/FO", "CSV", "/NH", "/V"],
+            ["tasklist", "/FO", "CSV", "/NH"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            timeout=60,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
         return None
@@ -327,8 +331,9 @@ def _list_server_processes(storage_env):
                 "Get-CimInstance Win32_Process | Select-Object Name,ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation",
             ],
             capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            timeout=60,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return rows
     if proc2.returncode != 0:
         return rows
