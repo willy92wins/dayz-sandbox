@@ -204,7 +204,20 @@ def _backup_storage(storage_env, backup_dir, label):
         shutil.copytree(src, backup_dir)
     else:
         backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_snap = _snapshot_dir(backup_dir)
+    if _sha_map(backup_snap) != _sha_map(snapshot):
+        raise RuntimeError("storage_backup_verify_failed")
     return snapshot
+
+
+def _sha_map(snapshot):
+    out = {}
+    for rel, meta in (snapshot or {}).items():
+        if isinstance(meta, dict):
+            out[rel] = (str(meta.get("sha256") or ""), int(meta.get("size_b") or 0))
+        else:
+            out[rel] = (str(meta or ""), 0)
+    return out
 
 
 def _restore_storage(storage_env, backup_dir, storage_t0):
@@ -219,7 +232,18 @@ def _restore_storage(storage_env, backup_dir, storage_t0):
     restored = _snapshot_dir(src)
     if restored is None:
         restored = {}
-    return 1 if restored == (storage_t0 or {}) else 0, restored
+    # Brief §10.2/N33: la restauracion en frio se acredita por sha256 (+size), no por mtime.
+    return 1 if _sha_map(restored) == _sha_map(storage_t0) else 0, restored
+
+
+def _snapshot_stage(is_live, storage_env, sim_storage):
+    if is_live and storage_env is not None:
+        try:
+            snap = _snapshot_dir(Path(storage_env["storage_dir"]))
+        except OSError:
+            snap = None
+        return snap if snap is not None else {}
+    return _snapshot_dir(sim_storage)
 
 
 def _bridge_events(ctx):
@@ -486,7 +510,7 @@ def _restart_server_live(ctx, old_epoch, director_uid_t0):
                 return new_epoch
         time.sleep(2.0)
     ctx.record_scenario({"ev": "live_restart_failed", "reason": "director_not_reconnected"})
-    return new_epoch
+    return ""
 
 
 def _restart_server(ctx, old_epoch, director_uid_t0=""):
@@ -671,12 +695,15 @@ def _tracks_speed(obs_list):
     return v_m_s
 
 
-def _n49_covered(obs, t5_censuses, dt_pre_ms, v_bound_m_s):
+def _n49_covered(obs, t5_censuses, dt_pre_ms, v_bound_m_s, first_new_tick_ms=0.0):
     for c in t5_censuses:
         if not c.get("job_complete"):
             continue
         snap = float(c.get("snap_tick_ms", 0.0))
         if snap <= 0.0:
+            continue
+        # N49 (eval :2655): solo censos del epoch nuevo, desde su primer tick acreditado.
+        if first_new_tick_ms > 0.0 and snap < first_new_tick_ms:
             continue
         res_t = c.get("start_result_t_ms")
         hello_t = c.get("hello_t_ms")
@@ -960,7 +987,7 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
 
             for area_id in cfg["base_areas"]:
                 _census(ctx, fixture, "t1_post_transition_census", area_id, 1 if area_id in ("area_a", "area_b") else 0)
-            ctx.record_scenario({"ev": "storage_snapshot_t1", "files": _snapshot_dir(sim_storage)})
+            ctx.record_scenario({"ev": "storage_snapshot_t1", "files": _snapshot_stage(is_live, storage_env, sim_storage)})
 
             creature_tracks = []
             if is_live and apply_spawn_ticks:
@@ -987,7 +1014,7 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 obs_req_t = time.time()
                 rec_t2 = _census(ctx, fixture, "t2_census_10min", area_id, 0)
                 _collect_creature_tracks(rec_t2, creature_lids, creature_tracks, obs_req_t)
-            ctx.record_scenario({"ev": "storage_snapshot_t2", "files": _snapshot_dir(sim_storage)})
+            ctx.record_scenario({"ev": "storage_snapshot_t2", "files": _snapshot_stage(is_live, storage_env, sim_storage)})
 
             t3_director_areas = {cfg["retained_area"], "area_a", "area_b"}
             for area_id in cfg["base_areas"]:
@@ -1039,8 +1066,10 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
 
             server_epoch_new = _restart_server(ctx, server_epoch_old, director_uid_t0)
             st_t4 = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
+            first_new_tick_ms = 0.0
             if st_t4.status == "done" and st_t4.payload:
                 server_epoch_new = str(st_t4.payload["str"].get("server_epoch") or server_epoch_new)
+                first_new_tick_ms = float(st_t4.payload["num"].get("tick_ms", 0.0))
             ctx.record_scenario({
                 "ev": "t4_post_restart_status",
                 "status": st_t4.status,
@@ -1066,6 +1095,15 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 rec_t5["hello_t_ms"] = hello_t_ms
                 t5_censuses.append(rec_t5)
 
+            # Duracion bridge medida de un censo t5 (first->result): proyecta el dt_post
+            # del censo aun no lanzado hasta su propio resultado, con la misma formula N49.
+            t5_census_dur_ms = 0.0
+            for c0 in t5_censuses:
+                f0 = c0.get("start_first_t_ms")
+                r0 = c0.get("start_result_t_ms")
+                if f0 is not None and r0 is not None and float(r0) > float(f0):
+                    t5_census_dur_ms = max(t5_census_dur_ms, float(r0) - float(f0))
+
             tracks_by_lid = {}
             for trk in creature_tracks:
                 tracks_by_lid.setdefault(trk["logical_id"], []).append(trk)
@@ -1086,14 +1124,12 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 v_m_s = _tracks_speed(relevant)
                 if reset_branch:
                     post_ret_snap = float(t3_post_snap_by_area.get(cfg["retained_area"], 0.0))
-                    if rr_tick_ms > 0.0 and post_ret_snap >= rr_tick_ms and rr_tick_ms >= last_obs_tick:
-                        dt_pre_ms = (
-                            max(0.0, rr_tick_ms - last_obs_tick)
-                            + max(0.0, max_old_srv_tick_ms - post_ret_snap)
-                            + stop_window_ms
-                        )
-                    else:
-                        dt_pre_ms = max(0.0, max_old_srv_tick_ms - last_obs_tick) + stop_window_ms
+                    # N49 rama reset (eval :2629): misma formula, sin atajo optimista.
+                    dt_pre_ms = (
+                        max(0.0, rr_tick_ms - last_obs_tick)
+                        + max(0.0, max_old_srv_tick_ms - post_ret_snap)
+                        + stop_window_ms
+                    )
                 else:
                     dt_pre_ms = max(0.0, max_old_srv_tick_ms - last_obs_tick) + stop_window_ms
                     last_obs_first = relevant[-1].get("start_first_t_ms")
@@ -1101,14 +1137,25 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                         dt_pre_ms = max(dt_pre_ms, float(hello_t_ms) - float(last_obs_first))
 
                 for idx, trk in enumerate(relevant):
-                    if _n49_covered(trk, t5_censuses, dt_pre_ms, v_m_s):
+                    if _n49_covered(trk, t5_censuses, dt_pre_ms, v_m_s, first_new_tick_ms):
                         continue
-                    st_disc = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
-                    tick_now = 0.0
-                    if st_disc.status == "done" and st_disc.payload:
-                        tick_now = float(st_disc.payload["num"].get("tick_ms", 0.0))
-                    radius_m = max(60.0, v_m_s * (dt_pre_ms + tick_now + 5000.0) / 1000.0)
                     for attempt in range(3):
+                        # Misma formula N49 (eval :2662) para dimensionar y para reintentar:
+                        # dt_post = max(snap_del_proceso_nuevo, resultado_en_bridge - hello).
+                        # Para el censo aun no lanzado, snap >= tick actual del proceso nuevo
+                        # y resultado >= ahora en el bridge; ambos son cotas del mismo termino.
+                        st_disc = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
+                        tick_now = 0.0
+                        if st_disc.status == "done" and st_disc.payload:
+                            tick_now = float(st_disc.payload["num"].get("tick_ms", 0.0))
+                        bridge_dt_post = 0.0
+                        if hello_t_ms is not None:
+                            bridge_dt_post = max(0.0, float(ctx.bridge.now_ms()) - float(hello_t_ms))
+                        # El dt_post del oraculo se mide en el resultado del censo, no al
+                        # dimensionarlo: se proyecta con la duracion medida del censo previo.
+                        dt_post_est = max(tick_now, bridge_dt_post, 0.0) + t5_census_dur_ms
+                        reach_m = max(15.0, v_m_s * (dt_pre_ms + dt_post_est) / 1000.0)
+                        radius_m = max(60.0, reach_m)
                         track_tag = f"t5_track_{lid}_p{idx}_r{attempt}"
                         rec_disc = _census(
                             ctx, fixture, "t5_post_restart_census", track_tag, 0,
@@ -1129,15 +1176,14 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                             "dt_pre_ms": dt_pre_ms,
                             "attempt": attempt,
                         })
-                        if _n49_covered(trk, [rec_disc], dt_pre_ms, v_m_s):
+                        d_first = rec_disc.get("start_first_t_ms")
+                        d_res = rec_disc.get("start_result_t_ms")
+                        if d_first is not None and d_res is not None and float(d_res) > float(d_first):
+                            t5_census_dur_ms = max(t5_census_dur_ms, float(d_res) - float(d_first))
+                        if _n49_covered(trk, [rec_disc], dt_pre_ms, v_m_s, first_new_tick_ms):
                             break
-                        snap = float(rec_disc.get("snap_tick_ms", 0.0))
-                        res_t = rec_disc.get("start_result_t_ms")
-                        if res_t is not None and hello_t_ms is not None:
-                            dt_post_ms = max(snap, float(res_t) - float(hello_t_ms), 0.0)
-                        else:
-                            dt_post_ms = snap
-                        radius_m = max(60.0, max(15.0, v_m_s * (dt_pre_ms + dt_post_ms) / 1000.0) + 1.0)
+                        # El siguiente intento recalcula arriba con la misma formula y
+                        # con el tick/bridge ya avanzados; sin constantes distintas.
 
             witness_rows, _ = _build_scene_rows(fixture, "scene_b")
             w_op_id = ctx.peek_next_op_id()
@@ -1216,12 +1262,22 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                         predicate=lambda _ev: not _server_process_running(storage_env),
                         timeout_s=300.0,
                     )
-                restore_ok, restored_snapshot = _restore_storage(storage_env, backup_dir, storage_t0)
-                ctx.record_scenario({
-                    "ev": "storage_restore_result",
-                    "restore_ok_b": restore_ok,
-                    "files": restored_snapshot,
-                })
+                if _server_process_running(storage_env):
+                    # Sin parada en frio no hay restauracion: no tocar storage en caliente (N33).
+                    ctx.record_scenario({
+                        "ev": "storage_restore_result",
+                        "restore_ok_b": 0,
+                        "error": "server_still_running",
+                        "files": _snapshot_stage(True, storage_env, sim_storage),
+                    })
+                    restore_ok = 0
+                else:
+                    restore_ok, restored_snapshot = _restore_storage(storage_env, backup_dir, storage_t0)
+                    ctx.record_scenario({
+                        "ev": "storage_restore_result",
+                        "restore_ok_b": restore_ok,
+                        "files": restored_snapshot,
+                    })
                 if restore_ok == 1:
                     shutil.rmtree(backup_dir, ignore_errors=True)
             elif not is_live and storage_t0 is not None and backup_dir.is_dir():

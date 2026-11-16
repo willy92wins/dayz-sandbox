@@ -536,7 +536,17 @@ class PersistFakeExt(FakeExt):
             else:
                 parent = local.get(pid)
                 if parent is None:
-                    return ("rejected", "bad_args", wire.empty_payload())
+                    # MEN-13 (espejo del .c): fila fallida sin creacion, sin salud observada.
+                    out_rows.append({
+                        "logical_id": lid, "class_name": cname, "net_id": "",
+                        "obs_loc_kind": "", "obs_parent_net_id": "", "obs_slot_name": "",
+                        "ok_b": 0.0, "alive_b": 0.0, "ai_agent_b": 0.0,
+                        "req_y_m": 0.0, "q9_x_m": 0.0, "q9_y_m": 0.0, "q9_z_m": 0.0,
+                        "q9_dx_m": 0.0, "q9_dy_m": 0.0, "q9_dz_m": 0.0, "q9_err_3d_m": 0.0,
+                        "q9_yaw_deg": 0.0, "q9_pitch_deg": 0.0, "q9_roll_deg": 0.0,
+                        "max_hp": 0.0, "health_hp": 0.0, "spawn_tick_ms": now_ms,
+                    })
+                    continue
                 pos = parent["pos"]
                 ori = parent["ori"]
                 if sname == "Cargo":
@@ -623,9 +633,16 @@ class PersistFakeExt(FakeExt):
             cx = sum(p[0] for p in root_positions) / float(len(root_positions))
             cz = sum(p[1] for p in root_positions) / float(len(root_positions))
             self.scene_center[scene_id] = (cx, cz)
+        ok_n = sum(1 for r in out_rows if float(r.get("ok_b", 0.0)) == 1.0)
+        if ok_n == 0:
+            apply_status, apply_reason = "failed", "creation_failed"
+        elif ok_n < len(out_rows):
+            apply_status, apply_reason = "partial", "creation_failed"
+        else:
+            apply_status, apply_reason = "ok", ""
         s = {
-            "apply_status": "ok",
-            "reason": "",
+            "apply_status": apply_status,
+            "reason": apply_reason,
             "server_epoch": self.epoch,
             "scene_id": scene_id,
             "scene_op_id": scene_op_id,
@@ -1088,9 +1105,18 @@ class PersistFakeExt(FakeExt):
                 cleaned_raw += 1
                 self._delete_entity(ent)
         # La limpieza identifica por net_id/pers_id o marca de salud, nunca solo por clase en el radio.
+        # MEN-9: la marca solo barre dentro de los discos pedidos (base + seguimiento t5).
+        discs = []
+        for row in args_unpacked.get("rows") or []:
+            try:
+                discs.append((float(row.get("center_x_m", 0.0)), float(row.get("center_z_m", 0.0)), float(row.get("radius_m", 0.0))))
+            except (TypeError, ValueError):
+                continue
         for net_id in list(self.world.keys()):
             ent = self.world[net_id]
             if ent["owner_uid"] == self.director_uid or net_id in qa_ids:
+                continue
+            if discs and not any(_dist2(ent["pos"][0], ent["pos"][2], cx, cz) <= rad for cx, cz, rad in discs):
                 continue
             max_hp = float(ent.get("max_hp", 0.0))
             hp = float(ent.get("health_hp", 0.0))
@@ -1130,6 +1156,10 @@ class PersistFakeExt(FakeExt):
         self.scene_last_op = {}
         self.scene_applied = {}
         self.scene_center = {}
+        # MEN-12 tambien al reiniciar: ningun trabajo queda running reteniendo per_census.
+        for jid in list(self.pending_finish):
+            if self.jobs.get_state(jid) == "running":
+                self.jobs.end_job(jid, "done", "")
         self.pending_finish.clear()
         self._save_state()
 
@@ -1144,6 +1174,9 @@ class PersistFakeExt(FakeExt):
             self.pending_finish.pop(job_id, None)
 
     def on_shutdown(self):
+        for jid in list(self.pending_finish):
+            if self.jobs.get_state(jid) == "running":
+                self.jobs.end_job(jid, "done", "")
         self.pending_finish.clear()
 
 

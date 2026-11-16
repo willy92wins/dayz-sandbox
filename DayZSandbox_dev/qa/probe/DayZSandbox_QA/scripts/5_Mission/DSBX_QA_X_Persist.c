@@ -141,6 +141,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	protected ref array<string> m_CensusScol;
 	protected ref array<string> m_PendingFinishIds;
 	protected ref array<int> m_PendingFinishTicks;
+	protected float m_CensusCaptureStartMs;
+	// Presupuesto verificable de captura del censo (MEN-14); el cupo de filas llega por StartJob.
+	static const float CENSUS_CAPTURE_BUDGET_MS = 120000.0;
 
 	void DSBX_QA_X_Persist()
 	{
@@ -154,6 +157,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_CensusScol = new array<string>();
 		m_PendingFinishIds = new array<string>();
 		m_PendingFinishTicks = new array<int>();
+		m_CensusCaptureStartMs = 0.0;
 
 		InitSentinelClasses();
 		InitCensusColumns();
@@ -636,16 +640,18 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			return;
 		}
 
+		// per_status solo observa (sin efecto): legible aun con lease caducado, como el fake.
+		if (verb == "per_status" && m_Probe)
+		{
+			HandleStatus(op, args, res);
+			return;
+		}
+
+		// LeaseOk: DSBX_QA_Probe.c:447; guarda de entrada y antes de cada efecto (E1).
 		if (!m_Probe || !m_Probe.LeaseOk())
 		{
 			res.status = "error";
 			res.reason = "lease_expired";
-			return;
-		}
-
-		if (verb == "per_status")
-		{
-			HandleStatus(op, args, res);
 			return;
 		}
 		if (verb == "per_apply_scene")
@@ -1304,6 +1310,14 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			return;
 		}
 
+		// E1: guarda antes del efecto de movimiento (LeaseOk, DSBX_QA_Probe.c:447).
+		if (!m_Probe.LeaseOk())
+		{
+			res.status = "error";
+			res.reason = "lease_expired";
+			return;
+		}
+
 		bool moveOk = false;
 		if (action == "drop_to_ground")
 		{
@@ -1401,6 +1415,15 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		float zm = GetNumArg(args, "z_m", 0.0);
 		float yawDeg = GetNumArg(args, "yaw_deg", 0.0);
 		float hRatio = GetNumArg(args, "health_mark_ratio", 1.0);
+
+		// E1: guarda antes de crear (LeaseOk, DSBX_QA_Probe.c:447).
+		// CreateObjectEx: P:/scripts/3_game/global/game.c:703; SurfaceY: game.c:1176.
+		if (!m_Probe.LeaseOk())
+		{
+			res.status = "error";
+			res.reason = "lease_expired";
+			return;
+		}
 
 		Object createdObj = null;
 		Object childObj = null;
@@ -1536,6 +1559,12 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 	protected bool AppendEntityCensusRow(string jobId, Object obj, int inRadiusB, Man director, string directorUid, array<Object> seen)
 	{
+		// E1 + MEN-14: sin lease o sin presupuesto de captura, la captura se detiene
+		// (LeaseOk, DSBX_QA_Probe.c:447; NowMs, DSBX_QA_Probe.c:356).
+		if (!m_Probe.LeaseOk())
+			return false;
+		if (m_CensusCaptureStartMs > 0.0 && m_Probe.NowMs() - m_CensusCaptureStartMs > CENSUS_CAPTURE_BUDGET_MS)
+			return false;
 		if (!IsObjectAlive(obj))
 			return true;
 		for (int s = 0; s < seen.Count(); s++)
@@ -1683,6 +1712,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		Man director = FindDirectorMan(directorUid, presentB, aliveB, invReadableB, invCountN);
 
 		array<Object> seen = new array<Object>();
+		m_CensusCaptureStartMs = m_Probe.NowMs();
+		// GetObjectsAtPosition3D: P:/scripts/3_game/global/game.c:930.
 		vector centerPos = Vector(centerX, g_Game.SurfaceY(centerX, centerZ), centerZ);
 		array<Object> nearObjs = new array<Object>();
 		array<CargoBase> nearCargos = new array<CargoBase>();
