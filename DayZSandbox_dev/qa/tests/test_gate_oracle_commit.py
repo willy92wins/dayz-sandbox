@@ -18,7 +18,6 @@ from pathlib import Path
 from unittest import mock
 
 import f03_common
-import f2p_eval
 import gate_core
 import m1_gate
 
@@ -195,9 +194,8 @@ class OracleCommitNegativeTests(_TempRepo):
         verdict_bytes = gate_core.dump_text(gate_core.make_verdict(SPIKE, 2, reasons=["previo"])).encode("utf-8")
         (part / "verdict.json").write_bytes(verdict_bytes)
         self.disk("qa/f2p_eval.py").write_bytes(b"changed\n")
-        with mock.patch.object(f2p_eval, "evaluate") as ev:
-            code = _run_main(self.argv("--evaluate-only"))
-        ev.assert_not_called()
+        code = _run_main(self.argv("--evaluate-only"))
+        self.assertNotIn("f2p_eval", sys.modules)  # el evaluador no se cargo ni se llamo
         self.assert_inconcluso(code, [f"modified:{PREFIX}qa/f2p_eval.py"])
         self.assertEqual((part / "verdict.json").read_bytes(), verdict_bytes)
 
@@ -593,22 +591,50 @@ class ProductPboTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertFalse(self.ev.exists())
 
-    def test_p3_offline_run_not_implemented_and_evaluate_reaches_f2p_eval(self):
+    def test_p3_dispatch_reaches_registry_run_and_evaluate(self):
+        # Modulos centinela propios de la prueba: no dependen del contenido de qa/f2p_*.py (que los sustituye el oraculo).
+        calls = []
+        run_mod = types.ModuleType("f2p_run")
+        eval_mod = types.ModuleType("f2p_eval")
+        mut_mod = types.ModuleType("f2p_mutants")
+
+        def _run(args, evidence, argv):
+            calls.append(("run", args.id, Path(evidence).name))
+            return 1
+
+        def _evaluate(part_dir):
+            calls.append(("evaluate", Path(part_dir).name))
+            return gate_core.make_verdict(SPIKE, 1, reasons=["sentinel_eval"])
+
+        run_mod.run = _run
+        eval_mod.evaluate = _evaluate
+        mut_mod.EXPECTED_MUTANTS = {}
+        mut_mod.EXPECTED_HARNESS_TESTS = {}
+        saved = {n: sys.modules.get(n) for n in ("f2p_run", "f2p_eval", "f2p_mutants")}
+
+        def _restore():
+            for name, mod in saved.items():
+                sys.modules.pop(name, None)
+                if mod is not None:
+                    sys.modules[name] = mod
+
+        self.addCleanup(_restore)
+        sys.modules.update({"f2p_run": run_mod, "f2p_eval": eval_mod, "f2p_mutants": mut_mod})
+
         code = _run_main(["spike", SPIKE, "--both", "--build", "offline", "--evidence", str(self.ev)])
-        self.assertEqual(code, 2)
-        verdict = json.loads((self.ev / "verdict.json").read_text(encoding="utf-8"))
-        self.assertEqual(verdict["reasons"], ["not_implemented"])
+        self.assertEqual(code, 1)  # el exit del run del registro se devuelve tal cual
+        self.assertEqual(calls, [("run", SPIKE, "ev")])
+
+        calls.clear()
         ev2 = self.tmp / "ev2"
         part = ev2 / "run"
         (part / "samples").mkdir(parents=True)
         (part / "manifest.json").write_bytes(b"{}\n")
-        with mock.patch.object(f2p_eval, "evaluate", wraps=f2p_eval.evaluate) as ev:
-            code = _run_main(["spike", SPIKE, "--both", "--build", "offline", "--evidence", str(ev2),
-                              "--evaluate-only"])
-        self.assertEqual(code, 2)
-        ev.assert_called_once()
+        code = _run_main(["spike", SPIKE, "--both", "--build", "offline", "--evidence", str(ev2), "--evaluate-only"])
+        self.assertEqual(calls, [("evaluate", "run")])
         pv = json.loads((part / "verdict.json").read_text(encoding="utf-8"))
-        self.assertEqual((pv["id"], pv["reasons"]), (SPIKE, ["not_implemented"]))
+        self.assertEqual((pv["id"], pv["exit_code"], pv["reasons"]), (SPIKE, 1, ["sentinel_eval"]))
+        self.assertEqual(code, 2)  # la agregacion del nucleo (falta part.json) decide el exit, no el centinela
 
     def test_registry_entry(self):
         self.assertEqual(gate_core.SPIKE_REGISTRY[SPIKE], ("f2p_run", "f2p_eval", "f2p_mutants"))
