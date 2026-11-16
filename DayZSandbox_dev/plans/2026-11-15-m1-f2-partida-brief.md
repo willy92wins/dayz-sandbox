@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3.3, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda, más la medida de la envolvente v1.3 y la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate (§12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
+- **Versión:** v1.3.4, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -275,7 +275,8 @@ Todas van por el bridge de la sonda (`qa0`), así que quedan en la evidencia.
     - lleva la posición, la orientación, `tick_ms`, `frame` y `ai_agent_b` de `EEInit`;
     - lleva el `net_id` y el `parent_net_id` del primer tick, porque en `EEInit` todavía no existen. Es el mismo `net_id` que el de las muestras de la 1 a la K;
     - si en ese tick la entidad ya no existe, sale `0:0` con `alive_b = 0`;
-    - **su `ai_agent_b` no sirve para decidir si algo es una criatura.** Que la IA ya exista en `EEInit` al crear con `ECE_INITAI` no está medido. Las muestras de la 1 a la K sí lo releen en cada tick (H-4).
+    - **su `ai_agent_b` no sirve para decidir si algo es una criatura.** Que la IA ya exista en `EEInit` al crear con `ECE_INITAI` no está medido. Las muestras de la 1 a la K sí lo releen en cada tick (H-4);
+    - en P2, la partida anota para cada criatura el `ai_agent_b` de la muestra 0 frente al de la 1. Es solo para medir H-4; no decide nada.
   - **Modo de radio:** el oráculo usa el testigo y el censo en modo de radio. El modo mapa entero no entra en M1 (Q-02, §10).
 - **Ruido de la CE:**
   - la partida corre con una copia de la misión con `db/globals.xml` en `ZombieMaxCount = 0` y `AnimalMaxCount = 0`, como recomienda F0.3;
@@ -384,6 +385,125 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
   - la única vía de aceptación es esa entrada con `--oracle-commit`: un `f2p_eval` suelto no cuenta.
 
   Es un PR de núcleo de F0.3, con su Sol. Quién lo hace lo decide la principal.
+
+### 6.1 Semántica exacta (v1.3.4, tras Sol r1 sobre el oráculo)
+Donde esta sección precisa la tabla de §6, manda esta sección.
+- **Hallazgos citados (O-nn):** `C:\tmp\dsbx-f2p-work\sol\LAST_sol_o_r1.md`.
+- **Contraejemplos ejecutables:** `sol_o_r1_contraejemplos.txt`, en la misma carpeta.
+- **Hallazgos H-n:** `C:\tmp\dsbx-f2p-work\recibos\T2-integracion.md`.
+
+#### Base común, para todas las comprobaciones
+1. **Medición válida (O-05, O-06).** Una medición es un censo o un testigo de la sonda, y solo cuenta si cumple las tres condiciones siguientes. Las comprueba **una sola función**, que usan todas las comprobaciones, F2P-10 incluida. Si falla, la comprobación que la consume da INCONCLUSO `unbacked_rows`.
+   - **Origen:** el trabajo (`per_census_start` o `per_witness_start`) se encoló y se entregó a una instancia del servidor que antes dio `/hello` 200 con `qa0`, el build y `probe_ver = dsbx-qa1+<identity.probe_stamp>`.
+   - **Páginas:** están todas, de la 0 a la `n-1`. Cada una lleva el mismo `job`, su índice y el `server_epoch` de esa instancia, y las devuelve la misma instancia del trabajo.
+   - **Frescura frente al efecto que juzga:**
+     - en el censo, `snap_tick_ms` y `snap_frame` son posteriores al estado terminal de la op que contrasta (punto 2);
+     - con la vía (b) de Q9, además, posteriores al plazo de `InitAIAgent`;
+     - en el testigo manda la ventana (punto 7).
+2. **Estado de una op (O-02).** Es el **último** estado terminal de su `op_id` en los `op.state` del backend, con su marca de tiempo. Los intermedios, como `pendiente`, no cuentan. Tiene que ser anterior a la medición que lo contrasta.
+3. **Generaciones (O-03).** El conjunto propio de cada apply (P2, P2n, P3, P4a, P4b y P5) se reconstruye con **su** testigo: las raíces nacidas en su ventana que casan con una fila del documento, por clase y posición a 0,5 m. Cada apply tiene su generación, con `net_id` nuevos, y nunca se reutilizan los de otra. Una creación de más en una generación no queda tapada por buscar solo los `net_id` viejos.
+4. **Cobertura (O-07).**
+   - Una medición de censo es la **unión** de los trabajos tomados para ese instante (el disco de 120 m más los discos por entidad de §5.3), deduplicada por `net_id`.
+   - Una ausencia solo se concluye para un objeto cuya última posición conocida esté a más de 15 m del borde de la unión.
+   - Una criatura ausente, o un objeto a menos de 15 m del borde, da INCONCLUSO `coverage_gap`.
+5. **Traza (O-11).**
+   - Cada op se correlaciona en el `tap` por `(session, op_id)` y `conn`, en orden temporal: entregas, después resultados, después acuses.
+   - Rompen la traza una respuesta de otra sesión y un `op.state` sin su `/result` recibido.
+   - La única excepción es el corte de P5: hay entrega y no hay resultado, por diseño.
+6. **Reconciliación (O-12).** Tras el reinicio del backend (P4a) y tras el corte (P5) tienen que darse tres cosas, todas **antes de la entrega del apply siguiente de esa parte**:
+   - `state.read` entregado;
+   - su resultado válido recibido (§3.5);
+   - el backend en `reconciliada`.
+
+   Un `reconciliada` de otra parte no vale.
+7. **Ventanas del testigo (O-14).**
+   - Hay un testigo por cada operación: P2, P2n, P3 (apply1 y apply2), P4a, P4b, P5, y la ventana de control de P1.
+   - Su centro está en (6170, 7643) y su radio es de 120 m.
+   - `[start_tick_ms, start_tick_ms + window_ms]` contiene la entrega y el resultado de la op. En P5 contiene la entrega y el corte.
+   - Sus páginas son posteriores al cierre de la ventana.
+   - Si falta una ventana o no cubre su op, F2P-13 da INCONCLUSO.
+8. **Reinicios (O-10).** Un reinicio del servidor se acredita con un `server_epoch` nuevo en los `/hello` y en la parte, y con el mismo `storage.id`. Sin eso, P4b y P4c dan INCONCLUSO.
+9. **Ruido de la CE (H-6, H-10).**
+   - El censo puede traer botín de la CE: `net_id` nuevos que no son de ninguna generación, también de clases de la escena (`Barrel_Yellow` aparece como botín en la zona).
+   - Ninguna comprobación cuenta la diferencia entera entre dos censos. Se cuentan las generaciones (punto 3) y, como extras, solo los nacimientos que ve el testigo (F2P-13).
+
+#### Por comprobación
+- **F2P-01:** el testigo de P2 ve nacer las 33 raíces que casan con el documento, con su multiconjunto de clases, y las 33 están en el censo posterior por el `net_id` del primer tick. La diferencia con P1 no tiene que ser exactamente 33 (punto 9).
+- **F2P-02 (O-04):**
+  - Cada nacimiento está a menos de 0,5 m, en 3D, de `(x_doc, suelo, z_doc)`.
+    - `suelo` es una altura del terreno **independiente** en `(x_doc, z_doc)`. Sale de la `surface_y_m` de la muestra 0 del testigo: `g_Game.SurfaceY` en la x y la z de `EEInit`, como la del censo (`DSBX_QA_X_Persist.c:1704-1705`). Se la pedí a F0.3 para el #22 el 16-nov. Si la fila no la trae, la parte vertical da INCONCLUSO `surface_unbacked`.
+    - La `pos_y_m` del propio testigo nunca hace de suelo.
+  - **Criaturas:**
+    - el salto en 3D de la muestra 0 a la 1 no pasa de `JUMP_MAX_M`;
+    - el checkpoint del mod está a `JUMP_MAX_M` o menos de la muestra 1;
+    - sin trayectoria, INCONCLUSO.
+  - **Objetos:** en el censo posterior, a menos de 0,5 m en 3D.
+  - **Q-05:** en un censo válido (punto 1), `alive_b = 1` y `ai_agent_b = 1`.
+- **F2P-03:** el estímulo está acreditado (por el testigo o por la traza); el estado es el **terminal**, con el motivo de su variante (§5.5); y el censo lo confirma.
+- **F2P-04:** dos entregas del mismo `(session, op_id)`, correlacionadas (punto 5); la segunda respuesta lleva `dup: true`; y el testigo de P2 ve 33 nacimientos, no 66.
+- **F2P-05 (O-09):** tras **cada** reset (el primero y el segundo), con la generación de P3:
+  - retenidas, solo las propias con contenido ajeno;
+  - los ajenos y las tres entidades de la escena 2, intactos en:
+    - `net_id` y clase;
+    - **pose completa:** x, y, z a 0,05 m y yaw a 1°;
+    - padre;
+    - **inventario:** clases y `net_id` de los hijos, no solo el contador;
+  - estado terminal `parcial/contenido_ajeno` en los dos resets.
+- **F2P-06 (O-08, O-09):**
+  - Tras la limpieza: 0 propias vivas de la generación de P3, y las tres de la escena 2 intactas con la misma comparación completa.
+  - Los estímulos de la sonda, acreditados por sus respuestas crudas:
+    - `per_spawn_raw`: cada ajeno con su `net_id`, y en el cargo con `obs_parent_net_id` igual al contenedor pedido;
+    - `per_cleanup_qa`: `cleaned_raw_n` igual al número de ajenos puestos.
+- **F2P-07 (O-10):**
+  - Los reinicios, acreditados (punto 8).
+  - El control persistente, creado en P1 (respuesta cruda de `per_spawn_raw persistent_control`), reaparece por clase y por la marca de `health_hp`. Si falta, INCONCLUSO.
+  - No aparece ninguna entidad de una clase de la escena 1 a menos de 2 m de la última posición conocida de una entidad de cualquier generación de F2, aunque no case con el documento.
+- **F2P-08:** reconciliación (punto 6), y los mismos conteos y poses en 3D (x, y, z), sin extras.
+- **F2P-09 (O-13):**
+  - K son los nacimientos del testigo del apply cortado que casan con el documento y son anteriores al corte. K tiene que ser mayor que 0.
+  - No llega ningún resultado de ese apply.
+  - Reconciliación (punto 6).
+  - El total final es 33, contando **todas** las entidades vivas de las generaciones de P5 dentro de la cobertura, aunque estén desplazadas.
+- **F2P-10 (O-17):**
+  - cada borrado «confirmado» falta en la medición siguiente (puntos 1 y 4);
+  - cada `delete_failed` sigue vivo;
+  - el tick informado es la separación entre la petición y la confirmación **del mismo** borrado, con el mismo reloj.
+- **F2P-11 (O-01):** los edificios de referencia, medidos en la diag de F0.3 (PR #22, `run_20261116T000915Z`, censo a 115 m de (6170, 7643)), por clase y pose, a 0,5 m y 2°:
+
+  | Clase | x | z | yaw |
+  |---|---|---|---|
+  | `Land_Lunapark_Shooting_Gallery` | 6137,06 | 7643,80 | −128,64 |
+  | `Land_House_2W01` | 6212,85 | 7644,65 | −138,33 |
+  | `Land_City_Stand_Grocery` | 6137,23 | 7702,65 | 39,30 |
+  | `Land_House_2B01` | 6184,06 | 7715,68 | −142,45 |
+
+  Llevan `net_id` real, con la parte alta negativa, y `health_hp = -1`.
+- **F2P-12:** sin cambios.
+- **F2P-13:** el punto 7, más la definición de criatura de §6 (H-4).
+
+#### Mutantes, negativas y fixture
+- **Cada contraejemplo de Sol r1 que hoy da PASA** pasa a ser un mutante, con la comprobación que tiene que tumbar, o una negativa.
+- **Los casos que hoy dan FALLA siendo una partida buena** pasan a variantes positivas que tienen que dar PASA:
+  - `legitimate_fresh_P3_generation`;
+  - `normal_opstate_transitions_before_terminal`;
+  - `good_creature_tracked_by_extra_disk`;
+  - `33_correct_roots_plus_background_Apple`;
+  - `H4_control_creature_AI_initializes_at_tick1`.
+- **O-16:** la negativa de procedencia copia como filas de la sonda las lecturas del backend (`/api/observation`) y tiene que dar `unbacked_rows`. Va aparte del mutante geométrico de F2P-12.
+- **La fixture positiva tiene que ser una partida plausible:**
+  - las referencias reales de F2P-11;
+  - botín de la CE en los censos, también nuevo entre censos y de una clase de la escena (`Barrel_Yellow`);
+  - `net_id` firmados y `hp = -1` en los edificios;
+  - una generación con `net_id` nuevos por cada apply;
+  - estados `pendiente` y después el terminal;
+  - ventanas y páginas con tiempos coherentes;
+  - reinicios con epoch nuevo;
+  - los artefactos del arnés para la agregación (§7).
+
+#### Gate (O-15, H-7)
+- **Una campaña por build** (diag y retail), cada una con una sola parte `run`. No hay parte `run-retail`.
+- **Los mutantes de F2P son sin conexión.** `f2p_mutants.py` no exporta `EXPECTED_MUTANTS`: esa tabla del núcleo es para mutantes en partida, con `injection.json`, y no admite `missing` en `must_fail_checks`. La agregación de §7 se prueba con `aggregate_spike`.
+- **El commit del oráculo es uno solo:** en el manifest, `identity.oracle_commit` (lo escribe `PartContext` con el commit ya verificado), `f2p.oracle_commit` y el commit del evento `oracle.frozen` son el mismo id de 40 hex. Si no, INCONCLUSO `oracle_modified`.
 
 ## 7. Aceptación
 - **T1:** §3.9.
@@ -538,3 +658,16 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
   | errata | en el manifest, la sonda va en `identity.pbo_sha256`, no en `probe_pbo_sha256` (§5.4) |
 
   Nada de §3 (T1) ni de §4 (T3) cambia.
+- v1.3.4 (2026-11-16): **la semántica exacta del oráculo (§6.1),** tras la ronda 1 de Sol sobre él.
+  - Sol dio UNSOUND, con 15 BLOQ (O-01 a O-15) y 2 MAY (O-16 y O-17). Confirmó H-1 a H-5 y precisó H-6.
+  - Varios BLOQ eran huecos del brief:
+    - los edificios de referencia sin fijar (O-01, H-9);
+    - de dónde sale la altura del suelo (O-04);
+    - qué es una medición válida y fresca (O-05, O-06);
+    - las generaciones (O-03);
+    - la cobertura como unión de discos (O-07);
+    - la traza y la reconciliación (O-11, O-12);
+    - las ventanas del testigo (O-14).
+  - §6.1 los fija, con la fixture positiva plausible y el encaje con el gate (O-15, H-7).
+  - En §5.3, la medida informativa de `ai_agent_b` (H-4).
+  - Nada de §3 (T1) ni de §4 (T3) cambia.
