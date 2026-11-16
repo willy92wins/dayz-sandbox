@@ -420,10 +420,14 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		{
 			array<EntityAI> children = new array<EntityAI>();
 			inv.EnumerateInventory(InventoryTraversalType.PREORDER, children);
+			// inv_children_n son los hijos directos, como cuenta el oraculo (filas con parent_net_id == net_id,
+			// s_persist_eval.py:2290-2306) y el fake; EnumerateInventory PREORDER trae ademas los nietos (la venda
+			// del kit dentro del cofre, partida 6). GetHierarchyParent: entityai.c:885.
 			int chCnt = 0;
 			for (int i = 0; i < children.Count(); i++)
 			{
-				if (children.Get(i) != ent)
+				EntityAI chEnt = children.Get(i);
+				if (chEnt && chEnt != ent && chEnt.GetHierarchyParent() == ent)
 					chCnt = chCnt + 1;
 			}
 			invChildrenN = chCnt;
