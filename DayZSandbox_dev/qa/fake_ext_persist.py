@@ -612,7 +612,7 @@ class PersistFakeExt(FakeExt):
                 retained_skipped += 1
                 rent = retained_by_lid[lid]
                 out_rows.append({
-                    "logical_id": lid, "class_name": rent["class_name"], "net_id": rent["net_id"], "pers_id": rent["pers_id"],
+                    "logical_id": lid, "class_name": rent["class_name"], "net_id": rent["net_id"],
                     "obs_loc_kind": rent["loc_kind"], "obs_parent_net_id": rent["parent_net_id"], "obs_slot_name": rent["slot_name"],
                     "ok_b": 0.0, "alive_b": 1.0 if rent["alive"] else 0.0, "ai_agent_b": 1.0 if rent["ai_agent"] else 0.0,
                     "req_y_m": float(rent["pos"][1]), "q9_x_m": float(rent["pos"][0]), "q9_y_m": float(rent["pos"][1]), "q9_z_m": float(rent["pos"][2]),
@@ -651,7 +651,7 @@ class PersistFakeExt(FakeExt):
                 if parent is None:
                     # MEN-13 (espejo del .c): fila fallida sin creacion, sin salud observada.
                     out_rows.append({
-                        "logical_id": lid, "class_name": cname, "net_id": "", "pers_id": "",
+                        "logical_id": lid, "class_name": cname, "net_id": "",
                         "obs_loc_kind": "", "obs_parent_net_id": "", "obs_slot_name": "",
                         "ok_b": 0.0, "alive_b": 0.0, "ai_agent_b": 0.0,
                         "req_y_m": 0.0, "q9_x_m": 0.0, "q9_y_m": 0.0, "q9_z_m": 0.0,
@@ -721,7 +721,6 @@ class PersistFakeExt(FakeExt):
                 "logical_id": lid,
                 "class_name": cname,
                 "net_id": net_id,
-                "pers_id": ent["pers_id"],
                 "obs_loc_kind": loc_kind,
                 "obs_parent_net_id": parent_net,
                 "obs_slot_name": slot_name,
@@ -781,7 +780,7 @@ class PersistFakeExt(FakeExt):
             "health_hp", "spawn_tick_ms",
         ]
         scol = [
-            "logical_id", "class_name", "net_id", "pers_id", "obs_loc_kind",
+            "logical_id", "class_name", "net_id", "obs_loc_kind",
             "obs_parent_net_id", "obs_slot_name",
         ]
         self.scene_gen[scene_id] = gen_n

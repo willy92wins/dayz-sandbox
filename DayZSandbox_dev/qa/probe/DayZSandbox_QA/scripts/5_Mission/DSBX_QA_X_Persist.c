@@ -829,7 +829,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		read.scol.Insert("logical_id");
 		read.scol.Insert("class_name");
 		read.scol.Insert("net_id");
-		read.scol.Insert("pers_id");
 		read.scol.Insert("obs_loc_kind");
 		read.scol.Insert("obs_parent_net_id");
 		read.scol.Insert("obs_slot_name");
@@ -874,7 +873,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			read.scell.Insert(r.m_LogicalId);
 			read.scell.Insert(r.m_ClassName);
 			read.scell.Insert(r.m_NetId);
-			read.scell.Insert(FormatPersId(r.m_RefEnt));
 			read.scell.Insert(r.m_ObsLocKind);
 			read.scell.Insert(r.m_ObsParentNetId);
 			read.scell.Insert(r.m_ObsSlotName);
