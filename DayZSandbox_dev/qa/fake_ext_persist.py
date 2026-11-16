@@ -96,6 +96,7 @@ WITNESS_NCOL = [
     "frame",
     "ai_agent_b",
     "alive_b",
+    "surface_y_m",
 ]
 WITNESS_PAGE_SIZE = 5
 WITNESS_MAX_ROWS = 4096
@@ -1368,6 +1369,8 @@ class PersistFakeExt(FakeExt):
             "frame": float(frame),
             "ai_agent_b": float(ai),
             "alive_b": 1.0 if alive else 0.0,
+            # SurfaceY de la x y la z de esta fila (la ultima posicion conocida si la entidad ya no existe)
+            "surface_y_m": float(_surface_y(pos[0], pos[2])),
         }
 
     def _witness_append(self, job_id, row):

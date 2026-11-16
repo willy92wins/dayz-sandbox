@@ -292,6 +292,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_WitnessNcol.Insert("frame");
 		m_WitnessNcol.Insert("ai_agent_b");
 		m_WitnessNcol.Insert("alive_b");
+		m_WitnessNcol.Insert("surface_y_m");
 	}
 
 	override void Init(DSBX_QA_Probe probe)
@@ -1971,6 +1972,11 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		nvals.Insert(frame);
 		nvals.Insert(aiAgentB);
 		nvals.Insert(aliveB);
+		// surface_y_m, la ultima columna: SurfaceY(x, z) (game.c:1176; la misma API que el censo, :1705) con la x y la z
+		// de ESTA fila, calculada al emitirla (muestra 0: la x y la z de EEInit, en el primer tick; no se consulta el motor
+		// en EEInit). Si la entidad ya no existe, la fila lleva su ultima posicion conocida (la de EEInit si no hubo otra)
+		// y surface_y_m se calcula con esa posicion.
+		nvals.Insert(g_Game.SurfaceY(x, z));
 		return m_Jobs.AppendRow(jobId, nvals, svals);
 	}
 

@@ -46,7 +46,7 @@ CENSUS_NCOL_MODE0 = [
     "roll_deg", "max_hp", "health_hp", "inv_children_n", "spawn_tick_ms",
 ]
 WITNESS_SCOL = ["class_name", "net_id", "parent_net_id"]
-WITNESS_NCOL = ["sample_idx", "pos_x_m", "pos_y_m", "pos_z_m", "yaw_deg", "tick_ms", "frame", "ai_agent_b", "alive_b"]
+WITNESS_NCOL = ["sample_idx", "pos_x_m", "pos_y_m", "pos_z_m", "yaw_deg", "tick_ms", "frame", "ai_agent_b", "alive_b", "surface_y_m"]
 WITNESS_START_NK = {
     "start_tick_ms", "start_frame", "center_x_m", "center_z_m", "radius_m", "window_ms", "witness_follow_ticks",
 }
@@ -485,6 +485,11 @@ class WitnessE2E(_E2EBase):
             # Las muestras 0..K comparten net_id (el de la fila 0 se lee en el primer tick, no en EEInit) y no es 0:0.
             self.assertEqual(len({r["net_id"] for r in samples}), 1, net_id)
             self.assertNotEqual(samples[0]["net_id"], "0:0")
+            # surface_y_m: SurfaceY de la x y la z de cada fila (la muestra 0, las de EEInit; las demas, las de su tick).
+            for r in samples:
+                self.assertAlmostEqual(
+                    r["surface_y_m"], fake_ext_persist._surface_y(r["pos_x_m"], r["pos_z_m"]), places=9, msg=net_id,
+                )
         g = by_net[ground.payload["str"]["net_id"]]
         self.assertEqual(g[0]["class_name"], "Barrel_Yellow")
         self.assertEqual(g[0]["parent_net_id"], "")
@@ -692,6 +697,8 @@ class WitnessInProcess(unittest.TestCase):
         rows = _job_rows(self.jobs, job_id)
         self.assertEqual([r["sample_idx"] for r in rows], [0.0, 1.0, 2.0, 3.0])
         self.assertEqual([r["alive_b"] for r in rows], [1.0, 1.0, 0.0, 0.0])
+        for r in rows:  # tambien con alive_b = 0: SurfaceY de la ultima posicion emitida
+            self.assertAlmostEqual(r["surface_y_m"], fake_ext_persist._surface_y(r["pos_x_m"], r["pos_z_m"]), places=9)
         self.assertEqual({r["class_name"] for r in rows}, {"Barrel_Yellow"})
         self.assertEqual({(r["pos_x_m"], r["pos_z_m"]) for r in rows}, {(6180.0, 7650.0)})  # ultima posicion conocida
         self.assertEqual([r["frame"] for r in rows], [rows[0]["frame"] + i for i in range(4)])  # 0, 1, 2, 3 consecutivos
@@ -966,7 +973,7 @@ class WirePageSizeInProcess(unittest.TestCase):
 
     def _witness_row(self, i, ffn):
         svals = [self.LONG, self.NET, self.NET]
-        base = [3.0, 6170.123456789 + i, 188.123456789, 7643.987654321, 359.123456, 123456789.123456, 999999.0, 0.0, 1.0]
+        base = [3.0, 6170.123456789 + i, 188.123456789, 7643.987654321, 359.123456, 123456789.123456, 999999.0, 0.0, 1.0, 188.1234567]
         return [ffn(v) for v in base], svals
 
     def test_census_mode1_page_under_cap(self):
@@ -1411,6 +1418,17 @@ class StaticPersistExtensionTests(unittest.TestCase):
         self.assertIn("healthHp = -1.0;", helpers["ReadHealth"])
         # y el testigo no lee salud.
         self.assertNotRegex(_code(WITNESS_C)[1], r"Get(Max)?Health\(")
+
+    def test_surface_y_is_last_column_and_computed_when_the_row_is_emitted(self):
+        self.assertEqual(WITNESS_NCOL[-1], "surface_y_m")
+        self.assertEqual(_inserted(self.code, "m_WitnessNcol")[-1], "surface_y_m")
+        row = _block_after(self.code, r"protected\s+bool\s+AppendWitnessRow\s*\([^)]*\)\s*\{")
+        self.assertIn("nvals.Insert(g_Game.SurfaceY(x, z));", row)
+        self.assertLess(row.index("nvals.Insert(aliveB)"), row.index("SurfaceY(x, z)"))  # ultima de ncol
+        # La muestra 0 no lo calcula en Capture ni en EEInit: el gancho de 4_World no llama a SurfaceY.
+        self.assertNotIn("SurfaceY", _code(WITNESS_C)[1])
+        tick = _block_after(self.code, r"protected\s+void\s+TickWitness\s*\(\s*\)\s*\{")
+        self.assertNotIn("SurfaceY", tick)  # solo AppendWitnessRow la consulta, al emitir cada fila
 
     def test_sample0_row_uses_ids_read_at_the_first_tick(self):
         tick = _block_after(self.code, r"protected\s+void\s+TickWitness\s*\(\s*\)\s*\{")
