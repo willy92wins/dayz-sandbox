@@ -767,6 +767,25 @@ def _collect_creature_tracks(rec, lids, tracks, obs_req_t):
         })
 
 
+def _clear_expected_peer_cut_failure(ctx):
+    """Limpia el fallo esperado al cortar un peer; devuelve si limpio algo.
+
+    Al parar un peer, el bridge puede guardar en ``bridge.failure`` el
+    error de escribir la respuesta del long-poll contra un socket ya
+    cerrado (``ConnectionResetError``/``ConnectionAbortedError``). Ese
+    fallo es esperado y no debe tumbar las ordenes del epoch nuevo;
+    cualquier otro fallo se deja tal cual.
+    """
+    bridge = getattr(ctx, "bridge", None)
+    if bridge is None:
+        return False
+    fail = getattr(bridge, "failure", None)
+    if isinstance(fail, (ConnectionResetError, ConnectionAbortedError)):
+        bridge.failure = None
+        return True
+    return False
+
+
 def _restart_server_live(ctx, old_epoch, director_uid_t0):
     """t4 en diag/retail: el operador reinicia DayZServer y reconecta el mismo director."""
     instructions = (
@@ -795,6 +814,16 @@ def _restart_server_live(ctx, old_epoch, director_uid_t0):
             "reason": str(res.get("reason") or "not_implemented_live_restart"),
         })
         return ""
+
+    drain_s = float(getattr(ctx.bridge, "hold_ms", 2000)) / 1000.0 + 0.2
+    time.sleep(drain_s)
+    fail_before = getattr(ctx.bridge, "failure", None)
+    if _clear_expected_peer_cut_failure(ctx):
+        ctx.record_scenario({
+            "ev": "peer_cut_failure_cleared",
+            "step": "t4_restart",
+            "type": type(fail_before).__name__,
+        })
 
     deadline = time.monotonic() + 120.0
     new_epoch = ""
@@ -846,9 +875,7 @@ def _restart_server_offline(ctx, old_epoch):
         # El 200 del ultimo long-poll del peer viejo se escribe contra un socket ya cerrado
         # (ConnectionResetError) y el bridge lo guarda como fallo; es esperado al matar el peer
         # y no debe tumbar las ordenes del epoch nuevo.
-        fail = getattr(ctx.bridge, "failure", None)
-        if isinstance(fail, (ConnectionResetError, ConnectionAbortedError)):
-            ctx.bridge.failure = None
+        _clear_expected_peer_cut_failure(ctx)
     cfg_path = ctx.profiles["server"] / "dsbx_qa.json"
     log_path = ctx.peer_logs["server"]
     log_fh = log_path.open("a", encoding="utf-8", newline="\n")
@@ -1154,6 +1181,15 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                     predicate=_both_peers_hello_after,
                     timeout_s=600.0,
                 )
+                drain_s = float(getattr(ctx.bridge, "hold_ms", 2000)) / 1000.0 + 0.2
+                time.sleep(drain_s)
+                fail_before = getattr(ctx.bridge, "failure", None)
+                if _clear_expected_peer_cut_failure(ctx):
+                    ctx.record_scenario({
+                        "ev": "peer_cut_failure_cleared",
+                        "step": "t0_start_peers",
+                        "type": type(fail_before).__name__,
+                    })
                 verify_reason = ctx._verify_hello_events()
                 ctx.record_scenario({"ev": "t0_hello_verify", "reason": verify_reason or ""})
             elif not is_live:

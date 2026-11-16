@@ -710,5 +710,46 @@ class TestPostCleanupCensusNotN49(_GuardedTestCase):
             self.assertNotEqual(_checks_by_id(verdict)["PER-08"]["status"], "pass")
 
 
+class _FakeBridge:
+    def __init__(self, failure=None):
+        self.failure = failure
+        self.hold_ms = 2000
+
+
+class _FakeCtx:
+    def __init__(self, failure=None):
+        self.bridge = _FakeBridge(failure)
+        self.scenario = []
+
+    def record_scenario(self, row):
+        self.scenario.append(dict(row))
+
+
+class TestPeerCutFailureClear(unittest.TestCase):
+    def test_clears_connection_reset_error(self):
+        err = ConnectionResetError(10054, "conexion restablecida")
+        ctx = _FakeCtx(failure=err)
+        self.assertTrue(s_persist_run._clear_expected_peer_cut_failure(ctx))
+        self.assertIsNone(ctx.bridge.failure)
+
+    def test_clears_connection_aborted_error(self):
+        err = ConnectionAbortedError(10053, "conexion anulada")
+        ctx = _FakeCtx(failure=err)
+        self.assertTrue(s_persist_run._clear_expected_peer_cut_failure(ctx))
+        self.assertIsNone(ctx.bridge.failure)
+
+    def test_does_not_clear_other_failures(self):
+        for err in (TimeoutError("timeout"), RuntimeError("boom")):
+            with self.subTest(type=type(err).__name__):
+                ctx = _FakeCtx(failure=err)
+                self.assertFalse(s_persist_run._clear_expected_peer_cut_failure(ctx))
+                self.assertIs(ctx.bridge.failure, err)
+
+    def test_no_failure_does_nothing(self):
+        ctx = _FakeCtx(failure=None)
+        self.assertFalse(s_persist_run._clear_expected_peer_cut_failure(ctx))
+        self.assertIsNone(ctx.bridge.failure)
+
+
 if __name__ == "__main__":
     unittest.main()
