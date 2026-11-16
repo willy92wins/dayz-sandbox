@@ -265,14 +265,16 @@ def _n6(b, s, refs):
     log = []
     for seq in range(1000, 1040):
         accepted = seq <= 1009
-        log.append(
-            {
-                "decision": "accepted" if accepted else "rejected_lease",
-                "lease_age_ms": 100 if accepted else 4000,
-                "recv_ms": seq,
-                "seq": seq,
-            }
-        )
+        entry = {
+            "decision": "accepted" if accepted else "rejected_lease",
+            "lease_age_ms": 100 if accepted else 4000,
+            "recv_ms": seq,
+            "seq": seq,
+        }
+        if accepted:
+            # Registro de aplicacion del peer (F02-H3): aplicada en el frame siguiente con el lease vigente.
+            entry.update({"apply_ms": seq + 1, "apply_lease_age_ms": 101, "applied_b": 1})
+        log.append(entry)
     b("enq", op_id="N6.log", verb="rpc_log_read", peer="client", args={})
     log_res = b(
         "result",
