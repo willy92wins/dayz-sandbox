@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3.8, **congelada.** Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
+- **Versión:** v1.3.9, **congelada.** La v1.3.9 corrige lo que pasa al reiniciar el backend: sesión nueva, ids que se repiten y la op cortada de P5 sin terminal (§6.1, puntos 2, 5 y 6, y F2P-09; §12). Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -323,6 +323,7 @@ Todas van por el bridge de la sonda (`qa0`), así que quedan en la evidencia.
 - **Del mod:** las líneas `DSBX_SCENE_DEL` de su log de script, con las señales de borrado por tick (DP-6).
 - **Un solo reloj (R-03):** todos los `t_ms` de `samples/` salen del monotónico del proceso del runner, con un único origen por parte. Eso incluye el `tap`, los eventos del backend, el bridge de la sonda y los eventos del runner (`cut` y los reinicios). Los ticks del motor van aparte y solo se comparan entre sí (§6.1, punto 10).
 - **El epoch, por evento (S-10, V-07):** cada evento del `tap` y de la sonda lleva la instancia (`inst`) y el `epoch` vigentes. Una parte puede abarcar dos (§6.1, punto 8).
+- **Los reinicios (v1.3.9):** el runner registra cada reinicio en `samples/backend.jsonl` como evento `restart`, con `target` (`backend` o `server`) y el epoch del mundo, igual que el `cut` (contrato, `qa/f2p_evidence_contract.md`). Los `restart` del backend parten los `op.state` en tramos, uno por sesión (§6.1, punto 2).
 - **Las etiquetas de los censos (V-08):** el disco principal lleva `<tag>`, y cada disco por entidad, `<tag>:disk:<lid>` (§6.1, punto 4).
 - **Del manifest:**
   - la identidad de F0.3;
@@ -448,7 +449,13 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
      - en el testigo manda la ventana (punto 7);
      - M1 usa la vía (a) de Q9 (`FLAGS_CREATURE` con `ECE_INITAI`, §4.4), así que no hay plazo de `InitAIAgent` que comprobar.
 2. **Estado de una op (O-02, S-09).**
-   - Es el **último** estado **terminal** de su `op_id` en los `op.state` del backend, con su marca de tiempo. Tiene que ser anterior a la medición que lo contrasta.
+   - Es el **último** estado **terminal** de su `(sesión, op_id)` en los `op.state` del backend, con su marca de tiempo. Tiene que ser anterior a la medición que lo contrasta.
+   - **La identidad de una op es `(sesión, op_id)`, nunca el `op_id` solo** (v1.3.9):
+     - cada instancia del backend tiene su sesión (`app/backend/bridge.py:112`, `secrets.token_hex(8)`), y cada reinicio del backend (P4a, P5) abre una sesión nueva;
+     - los ids de la API vuelven a empezar en `op-1` con cada instancia (`app/backend/server.py:88-89`, `scene_live.py:360-362`), así que se **repiten** entre sesiones;
+     - el `op.state` del backend no lleva la sesión: es la de la instancia que lo emitió, el tramo entre dos eventos `restart` del backend en el registro del runner (§5.4), que coincide con la sesión de las respuestas a `/hello` de ese tramo;
+     - solo las ops de la API emiten `op.state` (`server.py:259`, `:297`; `scene_live.py:378`). Las órdenes internas del bridge, como la lectura de reconciliación, el `scene.observe` del checkpoint y las compensaciones, llevan id `rd-N` (`bridge.py:234-236`) y no emiten ninguno.
+   - **La op cortada de P5 no tiene terminal, y no se le exige:** su backend muere en el corte, y el nuevo no conoce sus ops (`server.py:88`). Ninguna medición se contrasta con ella: K sale de la ventana `P5:cut` (punto 7).
    - **Terminales, los del backend:**
      - `observado/*`;
      - `fallido/*`;
@@ -501,14 +508,17 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
      - una entrega sin resolución;
      - un `op.state` sin su `/result` recibido.
    - **La única excepción es el corte de P5:** hay entrega y no hay resultado, por diseño.
+     - Si el producto reenvía el resultado de la op cortada al backend nuevo, el backend lo rechaza con `409 hello_required` o `400 bad_request`, porque la sesión ya no es la vigente (`bridge.py:592-593` y `:610-611`). Ese reenvío y su rechazo tampoco rompen la traza, y no cuentan como resolución.
+   - **Sesiones (v1.3.9):** la traza se correlaciona dentro de cada sesión del backend (punto 2). Tras cada reinicio del backend, el peer recibe `409 hello_required` con la sesión vieja y repite `/hello`, que le da la sesión nueva. Ese `409` en un `/poll` no rompe la traza.
 6. **Reconciliación (O-12, R-02, S-08, V-01).**
    - **La evidencia:** tras el reinicio del backend (P4a) y tras el corte (P5) tiene que aparecer en el `tap`, **antes de la entrega del apply siguiente de esa parte**:
      - un `state.read` entregado al servidor del epoch vigente;
-     - y su `/result` con `status: done` y una lectura **válida**: la que acepta el consumidor real, `_valid_read_compat` de `app/backend/scene_plan.py`, con el tamaño del mundo del servidor y sin exigir `obs`. El oráculo usa ese validador tal cual, para no divergir del backend en ningún sentido;
+     - y su `/result` con `status: done` y una lectura **válida**: la que acepta el consumidor real, `_valid_read_compat` de `app/backend/scene_live.py:147` (que delega en `valid_scene_read`, `scene_plan.py:806`), con el tamaño del mundo del servidor y sin exigir `obs`. El oráculo usa ese validador tal cual, para no divergir del backend en ningún sentido;
      - el `epoch` de la lectura es el del `/hello` vigente, y su bloque `scene` lleva el `doc_id` de la orden;
      - `obs` es **opcional**: la lectura real de `state.read` no lo trae (`app/tests/fake_world.py:1053-1059`). Si viene, el validador lo comprueba. Una lectura `{}` no vale.
    - **El backend no emite ningún evento propio de reconciliación.** Lo garantiza que el bridge no entrega `scene.apply` ni `scene.reset` sin haber reconciliado (`app/backend/bridge.py:579` y `:687-699`), así que no se exige ningún evento.
-   - **En P5,** además, la op cortada acaba en un estado terminal (punto 2) **posterior** a esa lectura (S-09, V-04): `observado/reconciliada`, que pone `scene_live.py:636`, o el que corresponda.
+   - **La lectura de reconciliación es una orden interna** (`rd-N`, sin `op.state`; punto 2) del backend **nuevo**: va en su sesión, después de su `/hello`.
+   - **En P5, la op cortada no recibe estado terminal** (v1.3.9, corrige la v1.3.8): su backend muere en el corte, y el nuevo arranca con otra sesión y sin sus ops (`bridge.py:112`, `server.py:88-89`). El oráculo no lo exige. Lo que exige es la lectura de reconciliación de arriba, en la sesión nueva, antes de la entrega de `P5:apply2`.
 7. **Ventanas del testigo (O-14, R-03, R-11, S-05, S-06, S-11, V-02, V-05).**
    - **Cuántas:** hay un testigo por cada operación:
      - P2 y P2n;
@@ -609,7 +619,7 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
 - **F2P-09 (O-13, R-08, R-11, S-05, S-09, V-03, V-04):**
   - **K** son los nacimientos de la generación del apply cortado (punto 3) en la ventana `P5:cut`. Tiene que ser mayor que 0; si no, INCONCLUSO `p5_sin_efecto`, porque el estímulo no ocurrió.
   - **La generación del apply nuevo** sale de la ventana `P5:apply2`. Las dos ventanas no se solapan (punto 7).
-  - **La op cortada** acaba en un estado terminal posterior a la lectura de reconciliación (punto 6). Si no, FALLA.
+  - **La op cortada** no tiene estado terminal, y no se le exige (punto 2). Lo que se exige es la lectura de reconciliación del backend nuevo, en su sesión, antes de la entrega de `P5:apply2` (punto 6). Si falta, FALLA.
   - **El corte:**
     - lo registra el runner como evento `cut` en `samples/backend.jsonl`, en el reloj común (§5.4);
     - cae después de la entrega del apply y antes de cualquier resultado suyo, que no llega;
@@ -675,7 +685,7 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
   - reinicios con epoch nuevo;
   - los artefactos del arnés para la agregación (§7);
   - y, tras Sol r2 (R-15):
-    - lecturas del producto válidas para los validadores reales (`app/backend/scene_plan.py`, `_valid_read_compat`, y `valid_world_read` de `app/backend/bridge.py`), con el checkpoint en `read.obs`;
+    - lecturas del producto válidas para los validadores reales (`_valid_read_compat` de `app/backend/scene_live.py:147` y `valid_world_read` de `app/backend/bridge.py:53`), con el checkpoint en `read.obs`;
     - testigos exclusivos, sin solaparse;
     - argumentos completos en las llamadas de arranque;
     - todos los nacimientos de cada apply dentro de su ventana, también los del segundo apply de P4a;
@@ -693,7 +703,12 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
       - `health_hp = −1` donde la sonda lo da;
     - **contra el backend real:**
       - `state.read` sin `obs`;
-      - la op cortada con su terminal `observado/reconciliada`;
+      - la op cortada **sin** terminal (v1.3.9);
+      - una sesión nueva por cada reinicio del backend, con el `409 hello_required` y el `/hello` que le siguen;
+      - ids `op-N` sin ceros a la izquierda, que vuelven a empezar en cada sesión y se repiten;
+      - lecturas internas `rd-N`, sin `op.state`;
+      - el `op.state` inicial con `origin: "backend"` (`server.py:288`, `scene_live.py:371`);
+      - el epoch de cada observación de la API, el de su lectura, es decir, el del mundo vigente (`scene_live.py:601-606`);
     - **la partida completa:**
       - P4c con sus dos epochs y su censo antes del reinicio;
       - P5 con sus dos testigos y los 33 nacimientos del apply nuevo;
@@ -704,7 +719,8 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
       - la de los validadores reales va en los dos sentidos: lo que el backend acepta no puede dar INCONCLUSO por la lectura, y lo que rechaza no puede pasar;
       - los mutantes del checkpoint editan `read.obs`;
       - los de `oracle_check` exigen `oracle_unverified`;
-      - el de R-06 aísla la criatura objetivo y comprueba el motivo (S-16).
+      - el de R-06 aísla la criatura objetivo y comprueba el motivo (S-16);
+      - y, en la v1.3.9: una variante positiva con los ids de la API repetidos entre sesiones (`op-1` en P2 y otra vez en P4a), que tiene que dar PASA, y un mutante que toma el terminal de la op del mismo id de otra sesión, que no puede pasar.
 
 #### Gate (O-15, H-7)
 - **Una campaña por build** (diag y retail), cada una con una sola parte `run`. No hay parte `run-retail`.
@@ -945,4 +961,18 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
       - F2P-10, el mismo epoch y sin documento (S-12);
       - F2P-13, el botín de la CE (S-13).
   - **§6, «Revisión y congelado»:** Sol revisa siempre el código final, como mucho con una ronda más (r4). La pasada de otra familia es un extra.
+  - Nada de §3 (T1) ni de §4 (T3) cambia.
+- v1.3.9 (2026-11-16): **el reinicio del backend,** visto por el orquestador al revisar la salida de T2f-1, antes de Sol r4.
+  - **Hechos del backend que comprobé yo:**
+    - cada instancia del backend tiene su sesión (`app/backend/bridge.py:112`, `secrets.token_hex(8)`), y sus ops viven en memoria (`server.py:88-89`): un reinicio las pierde, y los ids vuelven a `op-1`;
+    - una petición con la sesión vieja recibe `409 hello_required` o `400 bad_request` (`bridge.py:592-593`, `:610-611`);
+    - las órdenes internas del bridge (`state.read`, `scene.observe` del checkpoint y compensaciones) llevan id `rd-N` (`bridge.py:234-236`) y no emiten `op.state`; solo las ops de la API lo emiten (`server.py:259`, `:297`; `scene_live.py:378`);
+    - `_valid_read_compat` está en `app/backend/scene_live.py:147`, no en `scene_plan.py`, como decían las v1.3.7 y v1.3.8.
+  - **Error de la v1.3.8 que corrijo:** exigía un terminal posterior a la reconciliación para la op cortada de P5 (puntos 6 y F2P-09, por S-09 y V-04). Es imposible: el backend que la emitió muere en el corte. Se retira esa exigencia. De S-09 queda el conjunto de terminales para las ops vivas.
+  - **Cambios en §6.1:**
+    - punto 2: la identidad de una op es `(sesión, op_id)`, la sesión de un `op.state` es la del tramo entre reinicios del backend, solo las ops de la API emiten `op.state`, y la op cortada no tiene terminal;
+    - punto 5: la traza va por sesión, el `409` del `/poll` tras un reinicio no la rompe, y el reenvío rechazado del resultado cortado tampoco;
+    - punto 6: la lectura de reconciliación es interna (`rd-N`) y del backend nuevo; la ruta del validador;
+    - F2P-09: sin terminal de la op cortada;
+    - la fixture y las pruebas: sesiones nuevas, ids repetidos, lecturas `rd-N` sin `op.state`, el `origin` inicial y el epoch de las observaciones.
   - Nada de §3 (T1) ni de §4 (T3) cambia.
