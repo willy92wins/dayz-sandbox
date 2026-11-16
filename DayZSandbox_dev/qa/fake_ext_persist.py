@@ -82,8 +82,6 @@ DIRECTOR_UID = "dir-uid-778899"
 DIRECTOR_ROOT_NET = "1:2"
 DIRECTOR_JEANS_NET = "1:10"
 DIRECTOR_APPLE_NET = "1:11"
-PERSISTENT_CONTROL_PERS_ID = "11:22:33:44"
-PERSISTENT_CHILD_PERS_ID = "55:66:77:88"
 ZERO_PERS_ID = "0:0:0:0"
 
 
@@ -116,6 +114,20 @@ CENSUS_FINISH_AFTER_ATTEMPT_TICKS = 2
 def _is_valid_identity(value, zero):
     text = str(value or "")
     return text != "" and text != zero
+
+
+def _is_nonzero_pers_id(value):
+    parts = str(value or "").split(":")
+    if len(parts) != 4:
+        return False
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return False
+    for p, n in zip(parts, nums):
+        if str(n) != p or n < -2147483648 or n > 2147483647:
+            return False
+    return any(n != 0 for n in nums)
 
 
 def _identity_matches(net_id, pers_id, qa_net_ids, qa_pers_ids):
@@ -156,6 +168,7 @@ class PersistFakeExt(FakeExt):
         self.census_failed = {}
         self.director_items = []
         self.director_uid = DIRECTOR_UID
+        self.next_pers_seq = 1
 
     def _state_file(self):
         cfg = getattr(self.peer, "config", None)
@@ -200,6 +213,7 @@ class PersistFakeExt(FakeExt):
         data = {
             "director_uid": self.director_uid,
             "next_net_low": self.next_net_low,
+            "next_pers_seq": self.next_pers_seq,
             "entities": entities,
         }
         try:
@@ -219,15 +233,23 @@ class PersistFakeExt(FakeExt):
             self.next_net_low = max(int(data.get("next_net_low", 100)), 100)
         except (TypeError, ValueError):
             self.next_net_low = 100
+        try:
+            self.next_pers_seq = max(int(data.get("next_pers_seq", 1)), 1)
+        except (TypeError, ValueError):
+            self.next_pers_seq = 1
         loaded = data.get("entities")
         if not isinstance(loaded, list):
             return False
         for raw in loaded:
             if not isinstance(raw, dict) or not raw.get("persistent"):
                 continue
+            saved_pers = str(raw.get("pers_id") or "")
+            used_pers = {e.get("pers_id") for e in self.world.values()}
+            if not _is_nonzero_pers_id(saved_pers) or saved_pers in used_pers:
+                saved_pers = self._alloc_pers_id()
             ent = self._add_entity(
                 net_id=str(raw.get("net_id") or ""),
-                pers_id=str(raw.get("pers_id") or ZERO_PERS_ID),
+                pers_id=saved_pers,
                 class_name=str(raw.get("class_name") or ""),
                 cat=str(raw.get("cat") or "raw"),
                 loc_kind=str(raw.get("loc_kind") or "ground"),
@@ -274,7 +296,7 @@ class PersistFakeExt(FakeExt):
     def _build_director(self):
         jeans = self._add_entity(
             net_id=DIRECTOR_JEANS_NET,
-            pers_id=ZERO_PERS_ID,
+            pers_id=self._alloc_pers_id(),
             class_name="Jeans_Blue",
             cat="director",
             loc_kind="attachment",
@@ -291,7 +313,7 @@ class PersistFakeExt(FakeExt):
         )
         apple = self._add_entity(
             net_id=DIRECTOR_APPLE_NET,
-            pers_id=ZERO_PERS_ID,
+            pers_id=self._alloc_pers_id(),
             class_name="Apple",
             cat="director",
             loc_kind="cargo",
@@ -311,6 +333,16 @@ class PersistFakeExt(FakeExt):
     def _alloc_net_id(self):
         self.next_net_low += 1
         return "1:%d" % self.next_net_low
+
+    def _alloc_pers_id(self):
+        used = {ent.get("pers_id") for ent in self.world.values()}
+        seq = int(getattr(self, "next_pers_seq", 1) or 1)
+        if seq < 1:
+            seq = 1
+        while ("%d:0:0:0" % seq) in used:
+            seq += 1
+        self.next_pers_seq = seq + 1
+        return "%d:0:0:0" % seq
 
     def _add_entity(self, **kw):
         ent = {
@@ -580,7 +612,7 @@ class PersistFakeExt(FakeExt):
                 retained_skipped += 1
                 rent = retained_by_lid[lid]
                 out_rows.append({
-                    "logical_id": lid, "class_name": rent["class_name"], "net_id": rent["net_id"],
+                    "logical_id": lid, "class_name": rent["class_name"], "net_id": rent["net_id"], "pers_id": rent["pers_id"],
                     "obs_loc_kind": rent["loc_kind"], "obs_parent_net_id": rent["parent_net_id"], "obs_slot_name": rent["slot_name"],
                     "ok_b": 0.0, "alive_b": 1.0 if rent["alive"] else 0.0, "ai_agent_b": 1.0 if rent["ai_agent"] else 0.0,
                     "req_y_m": float(rent["pos"][1]), "q9_x_m": float(rent["pos"][0]), "q9_y_m": float(rent["pos"][1]), "q9_z_m": float(rent["pos"][2]),
@@ -619,7 +651,7 @@ class PersistFakeExt(FakeExt):
                 if parent is None:
                     # MEN-13 (espejo del .c): fila fallida sin creacion, sin salud observada.
                     out_rows.append({
-                        "logical_id": lid, "class_name": cname, "net_id": "",
+                        "logical_id": lid, "class_name": cname, "net_id": "", "pers_id": "",
                         "obs_loc_kind": "", "obs_parent_net_id": "", "obs_slot_name": "",
                         "ok_b": 0.0, "alive_b": 0.0, "ai_agent_b": 0.0,
                         "req_y_m": 0.0, "q9_x_m": 0.0, "q9_y_m": 0.0, "q9_z_m": 0.0,
@@ -647,7 +679,7 @@ class PersistFakeExt(FakeExt):
             net_id = self._alloc_net_id()
             ent = self._add_entity(
                 net_id=net_id,
-                pers_id=ZERO_PERS_ID,
+                pers_id=self._alloc_pers_id(),
                 class_name=cname,
                 cat=cat,
                 loc_kind=loc_kind,
@@ -689,6 +721,7 @@ class PersistFakeExt(FakeExt):
                 "logical_id": lid,
                 "class_name": cname,
                 "net_id": net_id,
+                "pers_id": ent["pers_id"],
                 "obs_loc_kind": loc_kind,
                 "obs_parent_net_id": parent_net,
                 "obs_slot_name": slot_name,
@@ -748,7 +781,7 @@ class PersistFakeExt(FakeExt):
             "health_hp", "spawn_tick_ms",
         ]
         scol = [
-            "logical_id", "class_name", "net_id", "obs_loc_kind",
+            "logical_id", "class_name", "net_id", "pers_id", "obs_loc_kind",
             "obs_parent_net_id", "obs_slot_name",
         ]
         self.scene_gen[scene_id] = gen_n
@@ -980,7 +1013,7 @@ class PersistFakeExt(FakeExt):
         hp = max_hp * ratio if ratio > 0.0 else max_hp
         now_ms = float(self.peer.local_ms())
         persistent = mode == "persistent_control"
-        pers_id = ZERO_PERS_ID
+        pers_id = self._alloc_pers_id()
         loc_kind = "ground"
         parent_net = ""
         parent_class = ""
@@ -1004,8 +1037,6 @@ class PersistFakeExt(FakeExt):
             pos = tgt_ent["pos"]
             ori = tgt_ent["ori"]
             area_id = tgt_ent["area_id"]
-        elif mode == "persistent_control":
-            pers_id = PERSISTENT_CONTROL_PERS_ID
         net_id = self._alloc_net_id()
         ent = self._add_entity(
             net_id=net_id,
@@ -1033,7 +1064,7 @@ class PersistFakeExt(FakeExt):
             child_net = self._alloc_net_id()
             self._add_entity(
                 net_id=child_net,
-                pers_id=PERSISTENT_CHILD_PERS_ID,
+                pers_id=self._alloc_pers_id(),
                 class_name=child_class,
                 cat="raw_child",
                 loc_kind="cargo",
