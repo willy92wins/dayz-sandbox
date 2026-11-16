@@ -362,7 +362,7 @@ class SpawnTargetNetIdE2E(_E2EBase):
         self.assertEqual(s["obs_slot_name"], "Cargo:0:0:0")
         self.assertEqual(sorted(res.payload["num"]), sorted([
             "pos_x_m", "pos_y_m", "pos_z_m", "yaw_deg", "pitch_deg", "roll_deg", "max_hp", "health_hp",
-            "child_count_n", "tick_ms", "frame",
+            "child_count_n", "tick_ms", "frame", "health_mark_b",
         ]))
         kids, _pages = self._children_of(target)
         self.assertEqual([k["net_id"] for k in kids], [s["net_id"]])
@@ -861,6 +861,21 @@ class CensusSpatialInProcess(unittest.TestCase):
         self.assertIn("High116", {r["class_name"] for r in _job_rows(jobs, "m0")})
 
 
+def _without_health_mark(payload):
+    """El payload sin lo que anade el arreglo de la marca de salud (columna health_mark_b y los escalares
+    health_mark_b / health_mark_pending_n, todos AL FINAL): lo demas tiene que seguir siendo identico al fake previo."""
+    out = dict(payload)
+    keep = [i for i, k in enumerate(out["nk"]) if k not in ("health_mark_b", "health_mark_pending_n")]
+    out["nk"] = [out["nk"][i] for i in keep]
+    out["nv"] = [out["nv"][i] for i in keep]
+    if "health_mark_b" in out["ncol"]:
+        width = len(out["ncol"])
+        drop = out["ncol"].index("health_mark_b")
+        out["ncell"] = [v for i, v in enumerate(out["ncell"]) if i % width != drop]
+        out["ncol"] = [c for c in out["ncol"] if c != "health_mark_b"]
+    return out
+
+
 class Mode0IdentityInProcess(unittest.TestCase):
     """Con select_all_entityai_b = 0 (o ausente), filas y columnas son identicas a las del fake anterior al PR."""
 
@@ -873,7 +888,7 @@ class Mode0IdentityInProcess(unittest.TestCase):
 
         def run(verb, strs=None, nums=None, rows=None, op_id="x"):
             res = _call(ext, verb, strs, nums, rows, op_id=op_id)
-            trace.append([verb, res[0], res[1], res[2]])
+            trace.append([verb, res[0], res[1], _without_health_mark(res[2])])
             return res
 
         rows = [
@@ -1318,6 +1333,175 @@ class StaticEEInitCoverageTests(unittest.TestCase):
         self.assertIn("mods de terceros", raw)
 
 
+class HealthMarkInProcess(unittest.TestCase):
+    """HasDamageSystem() dice «inicializado», no «tiene sistema de daño» (object.c:976): un objeto recien creado devuelve
+    salud -1/-1 y la marca no se puede aplicar todavia. La sonda no puede responder ok en silencio: error explicito
+    (health_mark_pending), reintento en los ticks siguientes y el campo health_mark_b, al final de las columnas."""
+
+    def setUp(self):
+        self.peer, self.jobs, self.ext = _make_ext()
+
+    def _row(self, lid, cname, ratio):
+        return {"logical_id": lid, "parent_id": "", "cat": "prop", "class_name": cname, "slot_name": "",
+                "req_x_m": 6120.0, "req_z_m": 7600.0, "req_yaw_deg": 0.0, "health_mark_ratio": ratio, "must_vanish_b": 1.0}
+
+    def _apply(self, rows, op="o1"):
+        status, reason, payload = _call(
+            self.ext, "per_apply_scene",
+            {"scene_id": "sc", "scene_op_id": op, "expect_epoch": self.peer.inst, "q9_pathway": "a"},
+            {"gen_n": 1.0}, rows, op_id="apply-" + op,
+        )
+        self.assertEqual((status, reason), ("done", ""))
+        return wire.unpack_payload(payload)
+
+    def _spawn(self, ratio, cname="WoodenCrate", op="sp"):
+        status, reason, payload = _call(
+            self.ext, "per_spawn_raw", {"tag": "t", "mode": "foreign_ground", "class_name": cname},
+            {"x_m": 6180.0, "z_m": 7650.0, "yaw_deg": 0.0, "health_mark_ratio": ratio}, op_id=op,
+        )
+        return status, reason, wire.unpack_payload(payload)
+
+    def _ticks(self, n):
+        _tick(self.peer, self.jobs, self.ext, n=n)
+
+    def test_default_fake_is_born_initialised_and_marks_at_once(self):
+        out = self._apply([self._row("a", "WoodenCrate", 0.5)])
+        self.assertEqual(out["str"]["apply_status"], "ok")
+        self.assertEqual(out["num"]["health_mark_pending_n"], 0.0)
+        row = out["rows"][0]
+        self.assertEqual((row["max_hp"], row["health_hp"], row["health_mark_b"]), (100.0, 50.0, 1.0))
+        status, reason, raw = self._spawn(0.25)
+        self.assertEqual((status, reason, raw["str"]["spawn_status"]), ("done", "", "ok"))
+        self.assertEqual((raw["num"]["max_hp"], raw["num"]["health_hp"], raw["num"]["health_mark_b"]), (100.0, 25.0, 1.0))
+
+    def test_health_mark_b_is_the_last_column_and_the_old_ones_keep_their_order(self):
+        out = self._apply([self._row("a", "WoodenCrate", 0.5)])
+        old = ["ok_b", "alive_b", "ai_agent_b", "req_y_m", "q9_x_m", "q9_y_m", "q9_z_m", "q9_dx_m", "q9_dy_m", "q9_dz_m",
+               "q9_err_3d_m", "q9_yaw_deg", "q9_pitch_deg", "q9_roll_deg", "max_hp", "health_hp", "spawn_tick_ms"]
+        self.assertEqual(out["ncol"], old + ["health_mark_b"])
+
+    def test_scene_pending_init_is_not_ok_then_the_mark_lands_and_a_repeat_is_ok(self):
+        self.ext.damage_init_delay_frames = 2
+        out = self._apply([self._row("a", "WoodenCrate", 0.5), self._row("b", "Barrel_Yellow", 0.0)])
+        self.assertEqual(out["str"]["apply_status"], "health_mark_pending")  # nunca ok con la marca sin aplicar
+        self.assertEqual(out["str"]["reason"], "health_mark_pending")
+        self.assertEqual(out["num"]["health_mark_pending_n"], 1.0)
+        a, b = out["rows"]
+        self.assertEqual((a["max_hp"], a["health_hp"], a["health_mark_b"]), (-1.0, -1.0, 0.0))  # salud no disponible
+        self.assertEqual((b["max_hp"], b["health_mark_b"]), (-1.0, 1.0))  # sin marca pedida: nada que aplicar
+        self._ticks(1)
+        mid = self._apply([self._row("a", "WoodenCrate", 0.5), self._row("b", "Barrel_Yellow", 0.0)])
+        self.assertEqual(mid["str"]["apply_status"], "health_mark_pending")  # aun sin inicializar
+        self._ticks(2)
+        late = self._apply([self._row("a", "WoodenCrate", 0.5), self._row("b", "Barrel_Yellow", 0.0)])
+        self.assertEqual(late["num"]["idempotent_hit_b"], 1.0)
+        self.assertEqual(late["str"]["apply_status"], "ok")
+        a, b = late["rows"]
+        self.assertEqual((a["max_hp"], a["health_hp"], a["health_mark_b"]), (100.0, 50.0, 1.0))
+        self.assertEqual((b["max_hp"], b["health_hp"], b["health_mark_b"]), (100.0, 100.0, 1.0))
+
+    def test_spawn_raw_pending_init_is_an_explicit_error_then_the_census_shows_the_mark(self):
+        self.ext.damage_init_delay_frames = 3
+        status, reason, raw = self._spawn(0.5)
+        self.assertEqual((status, reason), ("error", "health_mark_pending"))
+        self.assertEqual(raw["str"]["spawn_status"], "health_mark_pending")
+        self.assertEqual((raw["num"]["max_hp"], raw["num"]["health_hp"], raw["num"]["health_mark_b"]), (-1.0, -1.0, 0.0))
+        ent = self.ext.world[raw["str"]["net_id"]]
+        self.assertEqual(ent["health_hp"], -1.0)
+        self._ticks(3)
+        self.assertEqual((ent["max_hp"], ent["health_hp"]), (100.0, 50.0))  # el censo lee la salud viva
+        # sin marca pedida no hay nada que fallar, aunque la salud aun no este disponible
+        status0, reason0, raw0 = self._spawn(0.0, op="sp0")
+        self.assertEqual((status0, reason0, raw0["num"]["health_mark_b"]), ("done", "", 1.0))
+
+    def test_object_without_damage_system_never_marks_also_when_created(self):
+        # NO_DAMAGE_SYSTEM_CLASSES valia solo para el mapa precargado: un Land_Wreck_Uaz CREADO tampoco tiene salud.
+        out = self._apply([self._row("w", "Land_Wreck_Uaz", 0.5), self._row("z", "Land_Wreck_Uaz", 0.0)])
+        self.assertEqual(out["str"]["apply_status"], "health_mark_pending")
+        w, z = out["rows"]
+        self.assertEqual((w["max_hp"], w["health_hp"], w["health_mark_b"]), (-1.0, -1.0, 0.0))
+        self.assertEqual((z["max_hp"], z["health_hp"], z["health_mark_b"]), (-1.0, -1.0, 1.0))
+        self._ticks(200)
+        again = self._apply([self._row("w", "Land_Wreck_Uaz", 0.5), self._row("z", "Land_Wreck_Uaz", 0.0)])
+        self.assertEqual(again["str"]["apply_status"], "health_mark_pending")  # sigue fallando, no se inventa la salud
+        self.assertEqual(again["rows"][0]["health_hp"], -1.0)
+        status, reason, raw = self._spawn(0.5, cname="Land_Wreck_Uaz", op="spw")
+        self.assertEqual((status, reason, raw["num"]["health_mark_b"]), ("error", "health_mark_pending", 0.0))
+        self._ticks(200)
+        self.assertEqual(self.ext.world[raw["str"]["net_id"]]["health_hp"], -1.0)
+
+    def test_mark_after_the_deadline_is_abandoned_for_good(self):
+        self.ext.damage_init_delay_frames = 2
+        self._apply([self._row("a", "WoodenCrate", 0.5)])
+        self.peer.now += fake_ext_persist.HEALTH_PENDING_MAX_MS + 1.0
+        self._ticks(2)  # el sistema de daño se inicializa, pero fuera del tope: salud completa, marca no aplicada
+        late = self._apply([self._row("a", "WoodenCrate", 0.5)])
+        self.assertEqual(late["str"]["apply_status"], "health_mark_pending")
+        self.assertEqual((late["rows"][0]["health_hp"], late["rows"][0]["health_mark_b"]), (100.0, 0.0))
+
+
+class StaticHealthMarkTests(unittest.TestCase):
+    def setUp(self):
+        self.text, self.code = _code(PERSIST_C)
+
+    def test_apply_health_ratio_confirms_the_mark_behind_the_guard(self):
+        body = _block_after(self.code, r"protected\s+bool\s+ApplyHealthRatio\s*\(\s*Object\s+obj,\s*float\s+ratio\s*\)\s*\{")
+        self.assertIsNotNone(body)
+        self.assertIn("!obj.HasDamageSystem()", body)  # la guarda se conserva: GetMaxHealth lanza sin sistema de daño
+        self.assertRegex(body, r"if\s*\(\s*maxHp\s*<=\s*0\.0\s*\)\s*return\s+false;")  # -1 = salud no disponible
+        self.assertLess(body.index("HasDamageSystem()"), body.index("SetHealth("))
+        after = body[body.index("SetHealth("):]
+        self.assertIn("ReadHealth(obj, maxHp, healthHp)", after)  # relee tras aplicar
+        self.assertRegex(after, r"return\s+Math\.AbsFloat\(diff\)\s*<=\s*0\.01;")  # y confirma el valor
+        self.assertRegex(body, r"if\s*\(\s*ratio\s*<=\s*0\.0\s*\)\s*return\s+true;")
+
+    def test_a_missing_mark_is_never_a_silent_ok(self):
+        raw = _block_after(self.code, r"protected\s+void\s+HandleSpawnRaw\s*\([^)]*\)\s*\{")
+        self.assertIsNotNone(raw)
+        self.assertRegex(raw, r"bool\s+rawMarked\s*=\s*ApplyHealthRatio\(cEnt,\s*hRatio\);")
+        self.assertRegex(raw, r"if\s*\(\s*healthMarkB\s*==\s*0\s*\)\s*\{[^}]*res\.status\s*=\s*\"error\";[^}]*QueueHealthMark\(")
+        self.assertIn('res.reason = "health_mark_pending";', raw)
+        self.assertRegex(raw, r'PutNum\(res\.read,\s*"health_mark_b",\s*healthMarkB\);')
+        scene = _block_after(self.code, r"protected\s+void\s+HandleApplyScene\s*\([^)]*\)\s*\{")
+        self.assertRegex(scene, r"bool\s+marked\s*=\s*ApplyHealthRatio\(ent,\s*hRatio\);")
+        self.assertRegex(scene, r"if\s*\(\s*!marked\s*\)\s*\{[^}]*m_HealthMarkB\s*=\s*0;[^}]*QueueHealthMark\(")
+        emit = _block_after(self.code, r"protected\s+void\s+EmitApplyResponse\s*\([^)]*\)\s*\{")
+        self.assertRegex(emit, r'applyStatus\s*=\s*"health_mark_pending";')
+        self.assertNotRegex(emit, r'PutStr\(read,\s*"apply_status",\s*"ok"\)')
+
+    def test_health_mark_b_is_appended_after_the_old_apply_columns(self):
+        emit = _block_after(self.code, r"protected\s+void\s+EmitApplyResponse\s*\([^)]*\)\s*\{")
+        cols = _inserted(emit, "read.ncol")
+        self.assertEqual(cols[-1], "health_mark_b")
+        self.assertEqual(cols[-2], "spawn_tick_ms")
+        self.assertEqual(cols[:-1], fake_ext_persist_apply_ncol()[:-1])
+        self.assertEqual(cols, fake_ext_persist_apply_ncol())
+
+    def test_pending_marks_are_retried_each_tick_with_a_cap_and_dropped_on_shutdown(self):
+        tick = _block_after(self.code, r"override\s+void\s+OnTick\s*\([^)]*\)\s*\{")
+        self.assertTrue(tick.lstrip().startswith("TickHealthPending();"))
+        loop = _block_after(self.code, r"protected\s+void\s+TickHealthPending\s*\(\s*\)\s*\{")
+        self.assertIn("ApplyHealthRatio(pend.m_Obj, pend.m_Ratio)", loop)
+        self.assertIn("SettleHealthMark(pend.m_Obj)", loop)
+        self.assertIn("m_Probe.NowMs() >= pend.m_DeadlineMs", loop)
+        self.assertRegex(self.code, r"HEALTH_PENDING_MAX_MS\s*=\s*10000\.0")
+        self.assertEqual(fake_ext_persist.HEALTH_PENDING_MAX_MS, 10000.0)
+        shut = _block_after(self.code, r"override\s+void\s+OnShutdown\s*\(\s*\)\s*\{")
+        self.assertIn("m_HealthPending.Clear();", shut)
+
+
+def fake_ext_persist_apply_ncol():
+    """Las columnas numericas de per_apply_scene que emite el fake (en orden): el .c las tiene que repetir."""
+    peer, jobs, ext = _make_ext()
+    status, _reason, payload = _call(
+        ext, "per_apply_scene", {"scene_id": "s", "scene_op_id": "o", "expect_epoch": peer.inst, "q9_pathway": "a"},
+        {"gen_n": 1.0},
+        [{"logical_id": "a", "parent_id": "", "cat": "prop", "class_name": "Barrel_Yellow", "slot_name": "",
+          "req_x_m": 6120.0, "req_z_m": 7600.0, "req_yaw_deg": 0.0, "health_mark_ratio": 0.5, "must_vanish_b": 1.0}],
+    )
+    return wire.unpack_payload(payload)["ncol"]
+
+
 class StaticPersistExtensionTests(unittest.TestCase):
     def setUp(self):
         self.text, self.code = _code(PERSIST_C)
@@ -1402,7 +1586,7 @@ class StaticPersistExtensionTests(unittest.TestCase):
         code = self.code
         helpers = {}
         for name in ("ReadHealth", "ApplyHealthRatio"):
-            body = _block_after(code, r"protected\s+void\s+%s\s*\([^)]*\)\s*\{" % name)
+            body = _block_after(code, r"protected\s+(?:void|bool)\s+%s\s*\([^)]*\)\s*\{" % name)
             self.assertIsNotNone(body, name)
             self.assertIn("HasDamageSystem()", body)
             helpers[name] = body

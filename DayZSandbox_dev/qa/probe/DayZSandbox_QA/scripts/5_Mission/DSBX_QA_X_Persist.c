@@ -24,6 +24,7 @@ class DSBX_QA_PersistRecord : Managed
 	float m_SpawnTickMs;
 	float m_MaxHp;
 	float m_HealthHp;
+	int m_HealthMarkB;
 	int m_OkB;
 	int m_AliveB;
 	int m_AiAgentB;
@@ -65,6 +66,7 @@ class DSBX_QA_PersistRecord : Managed
 		m_SpawnTickMs = 0.0;
 		m_MaxHp = 100.0;
 		m_HealthHp = 100.0;
+		m_HealthMarkB = 1;
 		m_OkB = 0;
 		m_AliveB = 0;
 		m_AiAgentB = 0;
@@ -97,6 +99,7 @@ class DSBX_QA_PersistRawRecord : Managed
 	float m_SpawnTickMs;
 	float m_MaxHp;
 	float m_HealthHp;
+	int m_HealthMarkB;
 	Object m_RefEnt;
 	Object m_ChildEnt;
 
@@ -110,8 +113,24 @@ class DSBX_QA_PersistRawRecord : Managed
 		m_SpawnTickMs = 0.0;
 		m_MaxHp = 100.0;
 		m_HealthHp = 100.0;
+		m_HealthMarkB = 1;
 		m_RefEnt = null;
 		m_ChildEnt = null;
+	}
+}
+
+// Marca de salud que no se pudo aplicar al crear (sistema de daño aun sin inicializar): se reintenta en cada tick.
+class DSBX_QA_PersistHealthPending : Managed
+{
+	Object m_Obj;
+	float m_Ratio;
+	float m_DeadlineMs;
+
+	void DSBX_QA_PersistHealthPending()
+	{
+		m_Obj = null;
+		m_Ratio = 0.0;
+		m_DeadlineMs = 0.0;
 	}
 }
 
@@ -166,6 +185,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	static const float WITNESS_TAIL_MS = 5000.0;
 	static const int WITNESS_K_DEFAULT = 3;
 	static const int WITNESS_K_MAX = 5;
+	static const float HEALTH_PENDING_MAX_MS = 10000.0;
 
 	static const int FLAGS_STATIC = 29361188;
 	static const int FLAGS_AI_A = 29363236;
@@ -177,6 +197,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	protected ref array<int> m_SceneGen;
 	protected ref array<string> m_SceneLastOp;
 	protected ref array<ref DSBX_QA_PersistRawRecord> m_RawRecords;
+	protected ref array<ref DSBX_QA_PersistHealthPending> m_HealthPending;
 	protected ref array<string> m_SentinelClasses;
 	protected ref array<string> m_CensusNcol;
 	protected ref array<string> m_CensusScol;
@@ -197,6 +218,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_SceneGen = new array<int>();
 		m_SceneLastOp = new array<string>();
 		m_RawRecords = new array<ref DSBX_QA_PersistRawRecord>();
+		m_HealthPending = new array<ref DSBX_QA_PersistHealthPending>();
 		m_SentinelClasses = new array<string>();
 		m_CensusNcol = new array<string>();
 		m_CensusScol = new array<string>();
@@ -468,13 +490,89 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		healthHp = obj.GetHealth("", "");
 	}
 
-	// SetHealth con la misma guarda (y solo con vida maxima > 0 y ratio > 0).
-	protected void ApplyHealthRatio(Object obj, float maxHp, float ratio)
+	// Aplica la marca de salud y la CONFIRMA. true = no se pidio marca (ratio <= 0) o quedo aplicada y releida.
+	// false = no aplicada: HasDamageSystem() (object.c:976) no dice si el objeto tiene sistema de daño sino si ya esta
+	// INICIALIZADO (un objeto recien creado devuelve false y max_hp/health_hp = -1: «salud no disponible»). La guarda se
+	// conserva porque GetMaxHealth/SetHealth tiran una excepcion de la VM sin sistema de daño inicializado. Nunca
+	// se da por buena una marca que no se ha releido: el que llama tiene que tratar false como fallo explicito.
+	protected bool ApplyHealthRatio(Object obj, float ratio)
 	{
+		if (ratio <= 0.0)
+			return true;
 		if (!obj || !obj.HasDamageSystem())
-			return;
-		if (maxHp > 0.0 && ratio > 0.0)
-			obj.SetHealth("", "", maxHp * ratio);
+			return false;
+		float maxHp = -1.0;
+		float healthHp = -1.0;
+		ReadHealth(obj, maxHp, healthHp);
+		if (maxHp <= 0.0)
+			return false;
+		obj.SetHealth("", "", maxHp * ratio);
+		ReadHealth(obj, maxHp, healthHp);
+		float diff = healthHp - maxHp * ratio;
+		return Math.AbsFloat(diff) <= 0.01;
+	}
+
+	protected void QueueHealthMark(Object obj, float ratio)
+	{
+		DSBX_QA_PersistHealthPending pend = new DSBX_QA_PersistHealthPending();
+		pend.m_Obj = obj;
+		pend.m_Ratio = ratio;
+		pend.m_DeadlineMs = m_Probe.NowMs() + HEALTH_PENDING_MAX_MS;
+		m_HealthPending.Insert(pend);
+	}
+
+	// La marca aplicada en un tick posterior: se actualizan max_hp/health_hp y health_mark_b de los registros del objeto.
+	protected void SettleHealthMark(Object obj)
+	{
+		float maxHp = -1.0;
+		float healthHp = -1.0;
+		ReadHealth(obj, maxHp, healthHp);
+		for (int i = 0; i < m_Records.Count(); i++)
+		{
+			DSBX_QA_PersistRecord rec = m_Records.Get(i);
+			if (rec && rec.m_RefEnt == obj)
+			{
+				rec.m_MaxHp = maxHp;
+				rec.m_HealthHp = healthHp;
+				rec.m_HealthMarkB = 1;
+			}
+		}
+		for (int j = 0; j < m_RawRecords.Count(); j++)
+		{
+			DSBX_QA_PersistRawRecord raw = m_RawRecords.Get(j);
+			if (raw && raw.m_RefEnt == obj)
+			{
+				raw.m_MaxHp = maxHp;
+				raw.m_HealthHp = healthHp;
+				raw.m_HealthMarkB = 1;
+			}
+		}
+	}
+
+	// Reintenta las marcas pendientes hasta HEALTH_PENDING_MAX_MS desde la creacion; pasado el tope se abandonan y el
+	// registro sigue con health_mark_b = 0 (fallo explicito para siempre, nunca un ok tardio inventado).
+	protected void TickHealthPending()
+	{
+		for (int i = m_HealthPending.Count() - 1; i >= 0; i--)
+		{
+			DSBX_QA_PersistHealthPending pend = m_HealthPending.Get(i);
+			bool finished = false;
+			if (!pend || !IsObjectAlive(pend.m_Obj))
+			{
+				finished = true;
+			}
+			else if (ApplyHealthRatio(pend.m_Obj, pend.m_Ratio))
+			{
+				SettleHealthMark(pend.m_Obj);
+				finished = true;
+			}
+			else if (m_Probe.NowMs() >= pend.m_DeadlineMs)
+			{
+				finished = true;
+			}
+			if (finished)
+				m_HealthPending.RemoveOrdered(i);
+		}
 	}
 
 	protected string FormatNetId(Object obj)
@@ -840,7 +938,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		read.ncol.Insert("max_hp");
 		read.ncol.Insert("health_hp");
 		read.ncol.Insert("spawn_tick_ms");
+		read.ncol.Insert("health_mark_b");
 
+		int markPendingN = 0;
 		int rootsN = 0;
 		int childrenN = 0;
 		int rowCount = 0;
@@ -850,6 +950,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			if (!r || r.m_SceneId != sceneId || r.m_GenN != genN)
 				continue;
 			rowCount = rowCount + 1;
+			if (r.m_HealthMarkB == 0)
+				markPendingN = markPendingN + 1;
 			if (r.m_ParentId == "")
 				rootsN = rootsN + 1;
 			else
@@ -879,11 +981,21 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			read.ncell.Insert(r.m_MaxHp);
 			read.ncell.Insert(r.m_HealthHp);
 			read.ncell.Insert(r.m_SpawnTickMs);
+			read.ncell.Insert(r.m_HealthMarkB);
 		}
 		read.rows = rowCount;
 
-		PutStr(read, "apply_status", "ok");
-		PutStr(read, "reason", "");
+		// Con alguna marca de salud pedida y sin aplicar, la respuesta no es ok: se reintenta en los ticks siguientes y un
+		// scene_op_id repetido (camino idempotente) devuelve ok en cuanto todas las marcas han quedado aplicadas.
+		string applyStatus = "ok";
+		string applyReason = "";
+		if (markPendingN > 0)
+		{
+			applyStatus = "health_mark_pending";
+			applyReason = "health_mark_pending";
+		}
+		PutStr(read, "apply_status", applyStatus);
+		PutStr(read, "reason", applyReason);
 		PutStr(read, "server_epoch", m_Probe.GetInst());
 		PutStr(read, "scene_id", sceneId);
 		PutStr(read, "scene_op_id", sceneOpId);
@@ -895,6 +1007,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutNum(read, "idempotent_hit_b", idempotentHitB);
 		PutNum(read, "q9_tick_ms", m_Probe.NowMs());
 		PutNum(read, "q9_frame", m_Probe.m_Frame);
+		PutNum(read, "health_mark_pending_n", markPendingN);
 	}
 
 	protected void HandleApplyScene(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
@@ -1080,11 +1193,19 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				{
 					float maxHp = -1.0;
 					float healthNow = -1.0;
-					ReadHealth(ent, maxHp, healthNow);
-					ApplyHealthRatio(ent, maxHp, hRatio);
+					bool marked = ApplyHealthRatio(ent, hRatio);
 					ReadHealth(ent, maxHp, healthNow);
 					rec.m_MaxHp = maxHp;
 					rec.m_HealthHp = healthNow;
+					if (!marked)
+					{
+						rec.m_HealthMarkB = 0;
+						QueueHealthMark(createdObj, hRatio);
+					}
+				}
+				else if (hRatio > 0.0)
+				{
+					rec.m_HealthMarkB = 0;
 				}
 				if (createdObj.IsAlive())
 					rec.m_AliveB = 1;
@@ -1561,12 +1682,18 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 		float maxHp = 100.0;
 		float healthHp = 100.0;
+		int healthMarkB = 1;
 		EntityAI cEnt = EntityAI.Cast(createdObj);
 		if (cEnt)
 		{
+			bool rawMarked = ApplyHealthRatio(cEnt, hRatio);
 			ReadHealth(cEnt, maxHp, healthHp);
-			ApplyHealthRatio(cEnt, maxHp, hRatio);
-			ReadHealth(cEnt, maxHp, healthHp);
+			if (!rawMarked)
+				healthMarkB = 0;
+		}
+		else if (hRatio > 0.0)
+		{
+			healthMarkB = 0;
 		}
 
 		string directorUid = "";
@@ -1598,13 +1725,24 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		rawRec.m_SpawnTickMs = m_Probe.NowMs();
 		rawRec.m_MaxHp = maxHp;
 		rawRec.m_HealthHp = healthHp;
+		rawRec.m_HealthMarkB = healthMarkB;
 		rawRec.m_RefEnt = createdObj;
 		rawRec.m_ChildEnt = childObj;
 		m_RawRecords.Insert(rawRec);
 
+		// Marca pedida y no aplicada (sistema de daño sin inicializar): error explicito, nunca done/ok. El objeto queda
+		// registrado (cleanup lo borra) y la marca se reintenta en los ticks siguientes (el censo lee la salud viva).
+		string spawnStatus = "ok";
 		res.status = "done";
+		if (healthMarkB == 0)
+		{
+			spawnStatus = "health_mark_pending";
+			res.status = "error";
+			res.reason = "health_mark_pending";
+			QueueHealthMark(createdObj, hRatio);
+		}
 		EnsurePayloadHas(res.read);
-		PutStr(res.read, "spawn_status", "ok");
+		PutStr(res.read, "spawn_status", spawnStatus);
 		PutStr(res.read, "tag", tag);
 		PutStr(res.read, "class_name", className);
 		PutStr(res.read, "net_id", netId);
@@ -1624,6 +1762,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutNum(res.read, "child_count_n", invChildren);
 		PutNum(res.read, "tick_ms", m_Probe.NowMs());
 		PutNum(res.read, "frame", m_Probe.m_Frame);
+		PutNum(res.read, "health_mark_b", healthMarkB);
 	}
 
 	protected void AppendEntityCensusRow(string jobId, Object obj, int inRadiusB, Man director, string directorUid, array<Object> seen, bool withSurface)
@@ -2096,6 +2235,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 	override void OnTick(float timeslice)
 	{
+		TickHealthPending();
 		TickWitness();
 		if (m_PendingFinishJobId == "")
 			return;
@@ -2219,6 +2359,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 	override void OnShutdown()
 	{
+		m_HealthPending.Clear();
 		ResetWitness();
 		int cleanedOwnN = 0;
 		int cleanedRawN = 0;

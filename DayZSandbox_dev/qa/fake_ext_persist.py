@@ -149,6 +149,8 @@ BARRACKS_NET_ID = "-2147225600:847447385"
 GARAGE_NET_ID = "-2147225344:847447400"
 NO_DAMAGE_SYSTEM_CLASSES = frozenset({"Land_Wreck_Uaz"})
 NO_HEALTH = -1.0  # centinela de max_hp y health_hp sin sistema de daño (el cable no admite NaN)
+# Igual que HEALTH_PENDING_MAX_MS del .c: tope desde la creacion para aplicar la marca de salud pedida.
+HEALTH_PENDING_MAX_MS = 10000.0
 MAP_OBJECT_SPECS = (
     (BARRACKS_NET_ID, "Land_Mil_Barracks1", "", "", 6170.0, 7643.0, False),
     ("1:65", "Rag", BARRACKS_NET_ID, "Cargo:2:1:3", 6170.0, 7643.0, False),  # cargo proxy del edificio (PROXYCARGO)
@@ -254,6 +256,12 @@ class PersistFakeExt(FakeExt):
         self.director_uid = DIRECTOR_UID
         self.map_objects = []
         self.witness = None
+        # Frames que tarda un objeto CREADO en inicializar su sistema de daño. 0 = nace inicializado (el comportamiento
+        # historico del fake, que S-persist y las pruebas doradas esperan). En la partida real un objeto recien creado
+        # devuelve HasDamageSystem() = false y salud -1/-1 (object.c:976: la funcion dice «inicializado», no «tiene»);
+        # una prueba lo reproduce con damage_init_delay_frames > 0. Las clases de NO_DAMAGE_SYSTEM_CLASSES no lo
+        # inicializan nunca, tambien las creadas (no solo las del mapa precargado).
+        self.damage_init_delay_frames = 0
 
     def _state_file(self):
         cfg = getattr(self.peer, "config", None)
@@ -431,8 +439,60 @@ class PersistFakeExt(FakeExt):
             "own_b": int(kw.get("own_b", 0)),
             "scene_id": kw.get("scene_id", ""),
             "area_id": kw.get("area_id", ""),
+            # Inicializacion pendiente del sistema de daño (None = ya inicializado o sin sistema de daño).
+            "init_frame": kw.get("init_frame"),
+            "mark_ratio": float(kw.get("mark_ratio", 0.0)),
+            "mark_deadline_ms": float(kw.get("mark_deadline_ms", 0.0)),
         }
         return ent
+
+    def _health_at_creation(self, cname, ratio):
+        """(max_hp, health_hp, marked, init_frame) de un objeto recien creado, como lo lee la sonda justo despues de
+        crearlo y de intentar la marca: marked = no se pidio marca (ratio <= 0) o quedo aplicada y releida."""
+        if cname in NO_DAMAGE_SYSTEM_CLASSES:
+            return NO_HEALTH, NO_HEALTH, ratio <= 0.0, None
+        if self.damage_init_delay_frames > 0:
+            return NO_HEALTH, NO_HEALTH, ratio <= 0.0, int(self.peer.frame) + int(self.damage_init_delay_frames)
+        hp = DEFAULT_MAX_HP * ratio if ratio > 0.0 else DEFAULT_MAX_HP
+        return DEFAULT_MAX_HP, hp, True, None
+
+    def _tick_health(self):
+        """Reintento de las marcas pendientes (TickHealthPending del .c): al inicializarse el sistema de daño la salud
+        pasa a estar disponible; la marca solo se aplica si sigue dentro del tope desde la creacion."""
+        now_ms = float(self.peer.local_ms())
+        for ent in list(self.world.values()):
+            init_frame = ent.get("init_frame")
+            if init_frame is None or not ent["alive"] or int(self.peer.frame) < int(init_frame):
+                continue
+            ratio = ent["mark_ratio"]
+            ent["init_frame"] = None
+            ent["max_hp"] = DEFAULT_MAX_HP
+            ent["health_hp"] = DEFAULT_MAX_HP
+            marked = ratio <= 0.0
+            if ratio > 0.0 and now_ms <= ent["mark_deadline_ms"]:
+                ent["health_hp"] = DEFAULT_MAX_HP * ratio
+                marked = True
+            for rec in self.records:
+                if rec["ent"] is ent:
+                    rec["max_hp"] = ent["max_hp"]
+                    rec["health_hp"] = ent["health_hp"]
+                    rec["mark_b"] = 1.0 if marked else 0.0
+            self._refresh_scene_cache(ent, marked)
+
+    def _refresh_scene_cache(self, ent, marked):
+        for cached in self.scene_applied.values():
+            hit = False
+            for row in cached["rows"]:
+                if row["net_id"] == ent["net_id"]:
+                    row["max_hp"] = float(ent["max_hp"])
+                    row["health_hp"] = float(ent["health_hp"])
+                    row["health_mark_b"] = 1.0 if marked else 0.0
+                    hit = True
+            if hit:
+                pending = sum(1 for row in cached["rows"] if row.get("health_mark_b", 1.0) == 0.0)
+                cached["n"]["health_mark_pending_n"] = float(pending)
+                cached["s"]["apply_status"] = "health_mark_pending" if pending else "ok"
+                cached["s"]["reason"] = "health_mark_pending" if pending else ""
 
     def _add_entity(self, **kw):
         ent = self._make_entity(**kw)
@@ -721,8 +781,7 @@ class PersistFakeExt(FakeExt):
             rz = float(row.get("req_z_m", 0.0))
             ryaw = float(row.get("req_yaw_deg", 0.0))
             ratio = float(row.get("health_mark_ratio", 0.0))
-            max_hp = DEFAULT_MAX_HP
-            hp = max_hp * ratio if ratio > 0.0 else max_hp
+            max_hp, hp, mark_b, init_frame = self._health_at_creation(cname, ratio)
             ai_b = cat in ("infected", "animal")
             if pid == "":
                 gy = _surface_y(rx, rz)
@@ -780,6 +839,9 @@ class PersistFakeExt(FakeExt):
                 scene_id=scene_id,
                 area_id=area_id,
                 ai_agent=ai_b,
+                init_frame=init_frame,
+                mark_ratio=ratio,
+                mark_deadline_ms=now_ms + HEALTH_PENDING_MAX_MS,
             )
             self.records.append({
                 "server_epoch": self.epoch,
@@ -795,6 +857,7 @@ class PersistFakeExt(FakeExt):
                 "spawn_tick_ms": now_ms,
                 "max_hp": max_hp,
                 "health_hp": hp,
+                "mark_b": 1.0 if mark_b else 0.0,
             })
             if persistent:
                 self.qa_net_ids.add(net_id)
@@ -823,14 +886,16 @@ class PersistFakeExt(FakeExt):
                 "max_hp": max_hp,
                 "health_hp": hp,
                 "spawn_tick_ms": now_ms,
+                "health_mark_b": 1.0 if mark_b else 0.0,
             })
+        mark_pending = sum(1 for r in out_rows if r["health_mark_b"] == 0.0)
         if root_positions:
             cx = sum(p[0] for p in root_positions) / float(len(root_positions))
             cz = sum(p[1] for p in root_positions) / float(len(root_positions))
             self.scene_center[scene_id] = (cx, cz)
         s = {
-            "apply_status": "ok",
-            "reason": "",
+            "apply_status": "health_mark_pending" if mark_pending else "ok",
+            "reason": "health_mark_pending" if mark_pending else "",
             "server_epoch": self.epoch,
             "scene_id": scene_id,
             "scene_op_id": scene_op_id,
@@ -843,12 +908,13 @@ class PersistFakeExt(FakeExt):
             "idempotent_hit_b": 0.0,
             "q9_tick_ms": now_ms,
             "q9_frame": float(frame),
+            "health_mark_pending_n": float(mark_pending),
         }
         ncol = [
             "ok_b", "alive_b", "ai_agent_b", "req_y_m", "q9_x_m", "q9_y_m",
             "q9_z_m", "q9_dx_m", "q9_dy_m", "q9_dz_m", "q9_err_3d_m",
             "q9_yaw_deg", "q9_pitch_deg", "q9_roll_deg", "max_hp",
-            "health_hp", "spawn_tick_ms",
+            "health_hp", "spawn_tick_ms", "health_mark_b",
         ]
         scol = [
             "logical_id", "class_name", "net_id", "obs_loc_kind",
@@ -1081,8 +1147,7 @@ class PersistFakeExt(FakeExt):
         ratio = float(nums.get("health_mark_ratio", 0.0))
         if not tag or not cname:
             return ("rejected", "bad_args", wire.empty_payload())
-        max_hp = DEFAULT_MAX_HP
-        hp = max_hp * ratio if ratio > 0.0 else max_hp
+        max_hp, hp, mark_b, init_frame = self._health_at_creation(cname, ratio)
         now_ms = float(self.peer.local_ms())
         persistent = mode == "persistent_control"
         pers_id = ZERO_PERS_ID
@@ -1150,6 +1215,9 @@ class PersistFakeExt(FakeExt):
             own_logical_id="",
             own_b=0,
             area_id=area_id,
+            init_frame=init_frame,
+            mark_ratio=ratio,
+            mark_deadline_ms=now_ms + HEALTH_PENDING_MAX_MS,
         )
         self.raw_net_ids.add(net_id)
         child_count = 0
@@ -1178,7 +1246,7 @@ class PersistFakeExt(FakeExt):
             self.raw_net_ids.add(child_net)
             child_count = 1
         s = {
-            "spawn_status": "ok",
+            "spawn_status": "ok" if mark_b else "health_mark_pending",
             "tag": tag,
             "class_name": cname,
             "net_id": net_id,
@@ -1199,9 +1267,12 @@ class PersistFakeExt(FakeExt):
             "child_count_n": float(child_count),
             "tick_ms": now_ms,
             "frame": float(self.peer.frame),
+            "health_mark_b": 1.0 if mark_b else 0.0,
         }
         payload = wire.pack_payload(scalars_str=s, scalars_num=n)
         self._save_state()
+        if not mark_b:
+            return ("error", "health_mark_pending", payload)
         return ("done", "", payload)
 
 
@@ -1564,6 +1635,7 @@ class PersistFakeExt(FakeExt):
         self._save_state()
 
     def on_tick(self, timeslice_s):
+        self._tick_health()
         self._tick_witness()
         for job_id in list(self.pending_finish):
             left = int(self.pending_finish.get(job_id, 0)) - 1
