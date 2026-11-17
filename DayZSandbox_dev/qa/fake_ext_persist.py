@@ -1306,7 +1306,6 @@ class PersistFakeExt(FakeExt):
         max_hp, hp, mark_b = self._health_at_creation(cname, ratio)
         now_ms = float(self.peer.local_ms())
         persistent = mode == "persistent_control"
-        pers_id = self._alloc_pers_id()
         loc_kind = "ground"
         parent_net = ""
         parent_class = ""
@@ -1349,6 +1348,9 @@ class PersistFakeExt(FakeExt):
             pos = tgt_ent["pos"]
             ori = tgt_ent["ori"]
             area_id = tgt_ent["area_id"]
+        # Los identificadores se asignan despues de todas las validaciones: un rechazo no consume ni net_id ni pers_id
+        # (Sol sobre fb2dcb8: el pers_id se asignaba antes y el rechazo dejaba un efecto observable).
+        pers_id = self._alloc_pers_id()
         net_id = self._alloc_net_id()
         ent = self._add_entity(
             net_id=net_id,

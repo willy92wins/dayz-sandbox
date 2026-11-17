@@ -834,6 +834,55 @@ class CensusCapInProcess(unittest.TestCase):
         self.assertEqual(jobs.held_resources, {})
 
 
+class MergeInteractionsInProcess(unittest.TestCase):
+    """Interacciones de la fusion con S-persist que git no marco (Sol sobre fb2dcb8)."""
+
+    def test_inv_children_direct_in_mode0_and_all_descendants_in_mode1_on_the_same_tree(self):
+        # S-persist (modo 0) cuenta hijos directos; el censo select_all_entityai_b = 1 (contrato de F2), todos los
+        # descendientes. El mismo arbol anidado discrimina los dos conteos: WoodenCrate -> Pot -> Apple.
+        peer, jobs, ext = _make_ext()
+        pos = (CENTER[0] + 5.0, fake_ext_persist._surface_y(CENTER[0] + 5.0, CENTER[1]), CENTER[1])
+        ext._add_entity(net_id="9:1", class_name="WoodenCrate", cat="raw", pos=pos)
+        ext._add_entity(net_id="9:2", class_name="Pot", cat="raw", parent_net_id="9:1", parent_class="WoodenCrate",
+                        loc_kind="cargo", slot_name="Cargo:0:0:0", pos=pos)
+        ext._add_entity(net_id="9:3", class_name="Apple", cat="raw", parent_net_id="9:2", parent_class="Pot",
+                        loc_kind="cargo", slot_name="Cargo:0:0:0", pos=pos)
+        got = {}
+        for mode in (0, 1):
+            nums = {"center_x_m": CENTER[0], "center_z_m": CENTER[1], "radius_m": 60.0, "include_director_b": 0.0,
+                    "select_all_entityai_b": float(mode)}
+            status, reason, _p = _call(ext, "per_census_start", {"area_tag": "t"}, nums, op_id="m%d" % mode)
+            self.assertEqual((status, reason), ("done", ""), mode)
+            rows = {r["net_id"]: r for r in _job_rows(jobs, "m%d" % mode)}
+            got[mode] = tuple(rows[n]["inv_children_n"] for n in ("9:1", "9:2", "9:3"))
+            _tick(peer, jobs, ext, n=30)  # la retencion de S-persist cierra el censo (750 ms) antes del siguiente
+        self.assertEqual(got[0], (1.0, 1.0, 0.0))
+        self.assertEqual(got[1], (2.0, 1.0, 0.0))
+
+    def test_rejected_target_net_spawns_leave_identity_counters_untouched(self):
+        peer, jobs, ext = _make_ext()
+
+        def identity():
+            return sorted(ext.world), ext.next_net_low, ext.next_pers_seq
+
+        before = identity()
+        for target, want in (("abc", "bad_args"), ("1:9999", "target_not_found"), ("1:61", "no_cargo_space")):
+            status, reason, _p = _call(
+                ext, "per_spawn_raw",
+                {"tag": "r", "mode": "foreign_in_container", "class_name": "Rag", "target_net_id": target},
+                {"health_mark_ratio": 0.0}, op_id="r-" + target,
+            )
+            self.assertEqual((status, reason), ("rejected", want), target)
+        self.assertEqual(identity(), before)
+        # y la siguiente creacion recibe el mismo pers_id que sin los rechazos
+        _peer2, _jobs2, twin = _make_ext()
+        args = ({"tag": "g", "mode": "foreign_ground", "class_name": "Barrel_Yellow"},
+                {"x_m": 6180.0, "z_m": 7650.0, "yaw_deg": 0.0, "health_mark_ratio": 0.0})
+        a = wire.unpack_payload(_call(ext, "per_spawn_raw", *args, op_id="g1")[2])
+        b = wire.unpack_payload(_call(twin, "per_spawn_raw", *args, op_id="g1")[2])
+        self.assertEqual((a["str"]["pers_id"], a["str"]["net_id"]), (b["str"]["pers_id"], b["str"]["net_id"]))
+
+
 class CensusSpatialInProcess(unittest.TestCase):
     """Modo 1: la seleccion es la esfera de GetObjectsAtPosition3D centrada en (cx, SurfaceY(cx, cz), cz)."""
 
@@ -1568,6 +1617,26 @@ class StaticPersistExtensionTests(unittest.TestCase):
         row = _block_after(self.code, r"protected\s+bool\s+AppendEntityCensusRow\s*\([^)]*\)\s*\{")
         self.assertRegex(row, r"if\s*\(withSurface\)\s*\{[^}]*g_Game\.SurfaceY\(pos\[0\],\s*pos\[2\]\)")
         self.assertIn("ReadRealLocation(obj,", row)  # parent_net_id, parent_class, slot_name y loc_kind reales
+
+    def test_inv_children_counts_direct_children_except_in_select_all(self):
+        # Sol sobre fb2dcb8: S-persist paso a contar hijos directos (su oraculo) y git lo aplico tambien al modo 1, que
+        # el fake y F2 cuentan con todos los descendientes. El conteo depende ahora del modo.
+        self.assertRegex(
+            self.code,
+            r"protected\s+void\s+ReadRealLocation\s*\([^)]*bool\s+proxyAsCargo\s*=\s*false,\s*bool\s+allDescendants\s*=\s*false\)",
+        )
+        loc = _block_after(self.code, r"protected\s+void\s+ReadRealLocation\s*\([^)]*\)\s*\{")
+        self.assertRegex(
+            loc,
+            r"if\s*\(\s*chEnt\s*&&\s*chEnt\s*!=\s*ent\s*&&\s*\(\s*allDescendants\s*\|\|\s*chEnt\.GetHierarchyParent\(\)\s*==\s*ent\s*\)\s*\)",
+        )
+        row = _block_after(self.code, r"protected\s+bool\s+AppendEntityCensusRow\s*\([^)]*\)\s*\{")
+        self.assertIn("invChildrenN, withSurface, withSurface);", row)
+        calls = re.findall(r"ReadRealLocation\(([^;]*)\);", self.code)
+        self.assertGreaterEqual(len(calls), 4)
+        # solo el censo pasa el modo; las demas llamadas (apply, spawn raw, transiciones) cuentan hijos directos
+        self.assertEqual([c for c in calls if "withSurface" in c], [c for c in calls if c.rstrip().endswith("withSurface, withSurface")])
+        self.assertEqual(sum(1 for c in calls if "withSurface" in c), 1)
 
     def test_health_api_only_in_the_helpers_and_the_guard_for_the_world(self):
         # Object.GetMaxHealth/GetHealth/SetHealth: solo en ReadHealth (objetos del mundo, detras de HasDamageSystem: tiran

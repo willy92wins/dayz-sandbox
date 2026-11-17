@@ -603,7 +603,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		return dir;
 	}
 
-	protected void ReadRealLocation(Object obj, Man director, string directorUid, out string locKind, out string parentClass, out string parentNetId, out string slotName, out string ownerUid, out int invChildrenN, bool proxyAsCargo = false)
+	protected void ReadRealLocation(Object obj, Man director, string directorUid, out string locKind, out string parentClass, out string parentNetId, out string slotName, out string ownerUid, out int invChildrenN, bool proxyAsCargo = false, bool allDescendants = false)
 	{
 		locKind = "ground";
 		parentClass = "";
@@ -626,14 +626,16 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		{
 			array<EntityAI> children = new array<EntityAI>();
 			inv.EnumerateInventory(InventoryTraversalType.PREORDER, children);
-			// inv_children_n son los hijos directos, como cuenta el oraculo (filas con parent_net_id == net_id,
-			// s_persist_eval.py:2290-2306) y el fake; EnumerateInventory PREORDER trae ademas los nietos (la venda
-			// del kit dentro del cofre, partida 6). GetHierarchyParent: entityai.c:885.
+			// inv_children_n: por defecto, los hijos directos, como cuenta el oraculo de S-persist (filas con
+			// parent_net_id == net_id, s_persist_eval.py:2290-2306) y el fake; EnumerateInventory PREORDER trae ademas
+			// los nietos (la venda del kit dentro del cofre, partida 6). Con allDescendants (censo
+			// select_all_entityai_b = 1, contrato de F2) cuenta todos los descendientes, como el fake en ese modo.
+			// GetHierarchyParent: entityai.c:885.
 			int chCnt = 0;
 			for (int i = 0; i < children.Count(); i++)
 			{
 				EntityAI chEnt = children.Get(i);
-				if (chEnt && chEnt != ent && chEnt.GetHierarchyParent() == ent)
+				if (chEnt && chEnt != ent && (allDescendants || chEnt.GetHierarchyParent() == ent))
 					chCnt = chCnt + 1;
 			}
 			invChildrenN = chCnt;
@@ -2096,7 +2098,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		string slotName = "";
 		string ownerUid = "";
 		int invChildrenN = 0;
-		ReadRealLocation(obj, director, directorUid, locKind, parentClass, parentNetId, slotName, ownerUid, invChildrenN, withSurface);
+		ReadRealLocation(obj, director, directorUid, locKind, parentClass, parentNetId, slotName, ownerUid, invChildrenN, withSurface, withSurface);
 
 		int ownB = 0;
 		string ownLogicalId = "";
