@@ -1354,5 +1354,245 @@ class TestPoint5FakeProvenanceSurvivesRestart(_GuardedTestCase):
             self.assertNotIn(cont_net, ext2.world)
 
 
+class _RaisingPartContext:
+    calls = []
+
+    def __init__(self, *, base_dir, part_name, spike_id, args, argv):
+        self.base_dir = Path(base_dir)
+        self.part_name = part_name
+        self.part_dir = self.base_dir / part_name
+        self.build = args.build
+
+    def __enter__(self):
+        type(self).calls.append("open")
+        raise RuntimeError("open boom")
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FailFirstRecordContext(_FakePartContext):
+    def record_scenario(self, row):
+        if row.get("ev") == "probe_sources_at_commit" and not getattr(self, "_failed_once", False):
+            self._failed_once = True
+            raise RuntimeError("first record boom")
+        super().record_scenario(row)
+
+
+class _StubCtxRestore:
+    def __init__(self):
+        self.scenario = []
+
+    def record_scenario(self, row):
+        self.scenario.append(dict(row))
+
+
+class TestR26Point1RestoreOnEveryExit(_GuardedTestCase):
+    def setUp(self):
+        super().setUp()
+        _FakePartContext.calls = []
+        _FakePartContext.instances = []
+        _RaisingPartContext.calls = []
+
+    def _backup_and_mutate(self, tmp):
+        env, mission, storage, _backup = _make_env(tmp)
+        with mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]):
+            t0, slot = s_persist_run._backup_storage(env, tmp / "slot_backup", "t0")
+        (storage / "players.db").write_bytes(b"players-calentados")
+        return env, storage, t0, slot
+
+    def test_context_open_failure_attempts_restore_and_writes_receipt(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, storage, t0, slot = self._backup_and_mutate(tmp)
+            base_dir = tmp / "evidence"
+            backup_return = (env, t0, slot, None, "")
+            with mock.patch.object(s_persist_run, "_live_cold_backup_before_open", return_value=backup_return), mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]), mock.patch.object(f03_common, "PartContext", _RaisingPartContext):
+                with self.assertRaises(RuntimeError) as raised:
+                    s_persist_run.run_part(_live_args(), base_dir, [], "run")
+            self.assertEqual(str(raised.exception), "open boom")
+            self.assertEqual((storage / "players.db").read_bytes(), b"players-baseline")
+            self.assertTrue(slot.is_dir())
+            self.assertEqual((slot / "players.db").read_bytes(), b"players-baseline")
+            receipt_path = base_dir / "run" / "samples" / "scenario.jsonl"
+            self.assertTrue(receipt_path.is_file())
+            rows = [json.loads(l) for l in receipt_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            restores = [r for r in rows if r.get("ev") == "storage_restore_result"]
+            self.assertEqual(len(restores), 1)
+            self.assertEqual(restores[0].get("restore_ok_b"), 1)
+            self.assertEqual(restores[0].get("restore_incomplete_b"), 0)
+            self.assertIn("context_open_failed", str(restores[0].get("error") or ""))
+            self.assertIn("open boom", str(restores[0].get("error") or ""))
+
+    def test_first_body_record_failure_restores_without_unbound(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, storage, t0, slot = self._backup_and_mutate(tmp)
+            base_dir = tmp / "evidence"
+            _FakePartContext.next_startup_reason = None
+            backup_return = (env, t0, slot, None, "")
+            with mock.patch.object(s_persist_run, "_live_cold_backup_before_open", return_value=backup_return), mock.patch.object(s_persist_run, "_probe_sources_at_commit", return_value={}), mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]), mock.patch.object(f03_common, "PartContext", _FailFirstRecordContext):
+                with self.assertRaises(RuntimeError) as raised:
+                    s_persist_run.run_part(_live_args(), base_dir, [], "run")
+            self.assertEqual(str(raised.exception), "first record boom")
+            self.assertNotIsInstance(raised.exception, UnboundLocalError)
+            scenario = _FakePartContext.instances[0].scenario
+            restores = [r for r in scenario if r.get("ev") == "storage_restore_result"]
+            self.assertEqual(len(restores), 1)
+            self.assertEqual(restores[0].get("restore_ok_b"), 1)
+            self.assertEqual((storage / "players.db").read_bytes(), b"players-baseline")
+            self.assertTrue(slot.is_dir())
+
+    def test_operator_step_failure_still_attempts_restore_and_records_receipt(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, storage, t0, slot = self._backup_and_mutate(tmp)
+            ctx = _StubCtxRestore()
+            calls = {"n": 0}
+
+            def fake_list(_env):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return [{"name": "DayZServer_x64.exe", "pid": 81, "command_line": "DayZServer_x64.exe -server"}]
+                return []
+
+            with mock.patch.object(s_persist_run, "_list_server_processes", side_effect=fake_list), mock.patch.object(f03_common, "await_operator", side_effect=RuntimeError("operator boom")):
+                result = s_persist_run._cold_restore_live_storage(ctx, env, slot, t0, stop_step="post_backup_stop_server_for_cold_restore")
+            self.assertEqual(result, 1)
+            self.assertEqual(len(ctx.scenario), 1)
+            self.assertEqual(ctx.scenario[0].get("ev"), "storage_restore_result")
+            self.assertEqual(ctx.scenario[0].get("restore_ok_b"), 1)
+            self.assertEqual(ctx.scenario[0].get("restore_incomplete_b"), 0)
+            self.assertIn("operator_step_failed", str(ctx.scenario[0].get("error") or ""))
+            self.assertIn("operator boom", str(ctx.scenario[0].get("error") or ""))
+            self.assertEqual((storage / "players.db").read_bytes(), b"players-baseline")
+            self.assertTrue(slot.is_dir())
+
+    def test_operator_failure_with_server_still_running_records_incomplete(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, storage, t0, slot = self._backup_and_mutate(tmp)
+            ctx = _StubCtxRestore()
+            running = [{"name": "DayZServer_x64.exe", "pid": 82, "command_line": "DayZServer_x64.exe -server"}]
+            with mock.patch.object(s_persist_run, "_list_server_processes", return_value=running), mock.patch.object(f03_common, "await_operator", side_effect=RuntimeError("operator boom")):
+                result = s_persist_run._cold_restore_live_storage(ctx, env, slot, t0, stop_step="post_backup_stop_server_for_cold_restore")
+            self.assertEqual(result, 0)
+            self.assertEqual(len(ctx.scenario), 1)
+            self.assertEqual(ctx.scenario[0].get("restore_incomplete_b"), 1)
+            self.assertIn("operator_step_failed", str(ctx.scenario[0].get("error") or ""))
+            self.assertEqual((storage / "players.db").read_bytes(), b"players-calentados")
+            self.assertTrue(slot.is_dir())
+            self.assertEqual((slot / "players.db").read_bytes(), b"players-baseline")
+
+
+_OUR_SERVER_CMD = '"C:\\Program Files (x86)\\Steam\\steamapps\\common\\DayZ\\DayZDiag_x64.exe" -server "-config=C:\\tmp\\dsbx-f03b-work\\s-persist-diag\\run_20261117T065425Z\\b1\\server\\serverDZ.cfg" "-profiles=C:\\tmp\\dsbx-f03b-work\\s-persist-diag\\run_20261117T065425Z\\profiles\\server" "-mission=C:\\tmp\\dsbx-f03b-work\\s-persist-diag\\run_20261117T065425Z\\b1\\mpmissions\\dayzOffline.chernarusplus" "-mod=C:\\tmp\\dsbx-f03b-work\\s-persist-diag\\run_20261117T065425Z\\pbo\\@DayZSandbox_QA" -port=2702 -dologs -adminlog -freezecheck'
+_OTHER_SERVER_CMD = '"C:\\Program Files (x86)\\Steam\\steamapps\\common\\DayZ\\DayZDiag_x64.exe" -server -config=P:\\DayZ_MCP_dev\\_server\\serverDZ.cfg -profiles=P:\\DayZ_MCP_dev\\_server\\profiles "-mission=C:\\Program Files (x86)\\Steam\\steamapps\\common\\DayZServer\\mpmissions\\dayzOffline.chernarusplus" -mod=P:\\Mods\\@DayZ_MCP;P:\\Mods\\@CF -filePatching -port=2302'
+
+
+def _env_for_mission(mission_dir):
+    return {
+        "server_root_dir": "C:\\qa\\srv",
+        "mission_dir": mission_dir,
+        "storage_dir": mission_dir + "\\storage_1",
+        "storage_data_dir": mission_dir + "\\storage_1\\data",
+        "server_exe_names": ["DayZServer_x64.exe", "DayZDiag_x64.exe"],
+    }
+
+
+class TestR26MissionParsing(_GuardedTestCase):
+    def test_our_server_sample(self):
+        mission = "C:\\tmp\\dsbx-f03b-work\\s-persist-diag\\run_20261117T065425Z\\b1\\mpmissions\\dayzOffline.chernarusplus"
+        env = _env_for_mission(mission)
+        self.assertEqual(s_persist_run._mission_from_command_line(_OUR_SERVER_CMD), s_persist_run._resolve_abs(mission))
+        row = {"name": "DayZDiag_x64.exe", "pid": 91, "command_line": _OUR_SERVER_CMD}
+        self.assertEqual(s_persist_run._verify_storage_mission(env, rows=[row]), (True, ""))
+
+    def test_other_server_sample_with_spaces(self):
+        mission = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\DayZServer\\mpmissions\\dayzOffline.chernarusplus"
+        env = _env_for_mission(mission)
+        self.assertEqual(s_persist_run._mission_from_command_line(_OTHER_SERVER_CMD), s_persist_run._resolve_abs(mission))
+        row = {"name": "DayZDiag_x64.exe", "pid": 92, "command_line": _OTHER_SERVER_CMD}
+        self.assertEqual(s_persist_run._verify_storage_mission(env, rows=[row]), (True, ""))
+
+    def test_m_vs_m_b_does_not_accredit_wrong_mission(self):
+        declared = "C:\\qa\\srv\\mpmissions\\m"
+        running_mission = "C:\\qa\\srv\\mpmissions\\m B"
+        env = _env_for_mission(declared)
+        cmd = 'DayZServer_x64.exe -server "-mission=C:\\qa\\srv\\mpmissions\\m B"'
+        self.assertEqual(s_persist_run._mission_from_command_line(cmd), s_persist_run._resolve_abs(running_mission))
+        row = {"name": "DayZServer_x64.exe", "pid": 93, "command_line": cmd}
+        ok, err = s_persist_run._verify_storage_mission(env, rows=[row])
+        self.assertFalse(ok)
+        self.assertEqual(err, "storage_mission_mismatch")
+        env_b = _env_for_mission(running_mission)
+        self.assertEqual(s_persist_run._verify_storage_mission(env_b, rows=[row]), (True, ""))
+
+    def test_mission_equals_quoted_value(self):
+        running_mission = "C:\\qa\\srv\\mpmissions\\m B"
+        env = _env_for_mission(running_mission)
+        cmd = 'DayZServer_x64.exe -server -mission="C:\\qa\\srv\\mpmissions\\m B"'
+        self.assertEqual(s_persist_run._mission_from_command_line(cmd), s_persist_run._resolve_abs(running_mission))
+        row = {"name": "DayZServer_x64.exe", "pid": 94, "command_line": cmd}
+        self.assertEqual(s_persist_run._verify_storage_mission(env, rows=[row]), (True, ""))
+        env_m = _env_for_mission("C:\\qa\\srv\\mpmissions\\m")
+        ok, _err = s_persist_run._verify_storage_mission(env_m, rows=[row])
+        self.assertFalse(ok)
+
+    def test_two_mission_options_are_unverified(self):
+        mission = "C:\\qa\\srv\\mpmissions\\m"
+        env = _env_for_mission(mission)
+        cmd = 'DayZServer_x64.exe -server "-mission=C:\\qa\\srv\\mpmissions\\m" "-mission=C:\\qa\\srv\\mpmissions\\m"'
+        self.assertIsNone(s_persist_run._mission_from_command_line(cmd))
+        row = {"name": "DayZServer_x64.exe", "pid": 95, "command_line": cmd}
+        ok, err = s_persist_run._verify_storage_mission(env, rows=[row])
+        self.assertFalse(ok)
+        self.assertIn("storage_mission_unverified", err)
+
+    def test_unreadable_command_line_is_unverified(self):
+        mission = "C:\\qa\\srv\\mpmissions\\m"
+        env = _env_for_mission(mission)
+        cmd = 'DayZServer_x64.exe -server "-mission=C:\\qa\\srv\\mpmissions\\m'
+        self.assertIsNone(s_persist_run._mission_from_command_line(cmd))
+        row = {"name": "DayZServer_x64.exe", "pid": 96, "command_line": cmd}
+        ok, err = s_persist_run._verify_storage_mission(env, rows=[row])
+        self.assertFalse(ok)
+        self.assertIn("storage_mission_unverified", err)
+
+
+class TestR26RecreatedDest(_GuardedTestCase):
+    def test_recreated_dest_is_reported_and_preserved(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, backup = _make_env(tmp)
+            with mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]):
+                t0, slot = s_persist_run._backup_storage(env, backup, "t0")
+            (storage / "players.db").write_bytes(b"players-mutados")
+            mutated = _tree_bytes(storage)
+            calls = {"n": 0}
+
+            def fake_list(_env):
+                calls["n"] += 1
+                if calls["n"] <= 2:
+                    return []
+                if not storage.exists():
+                    storage.mkdir(parents=True)
+                    (storage / "recreated.bin").write_bytes(b"recreated-by-server")
+                return [{"name": "DayZServer_x64.exe", "pid": 97, "command_line": "DayZServer_x64.exe -server"}]
+
+            with mock.patch.object(s_persist_run, "_list_server_processes", side_effect=fake_list):
+                ok, _snap, err = s_persist_run._restore_storage(env, slot, t0)
+            self.assertEqual(ok, 0)
+            self.assertIn("storage_restore_dest_recreated", err)
+            rollbacks = sorted(mission.glob(".storage_1.r7rollback-*"))
+            self.assertEqual(len(rollbacks), 1)
+            self.assertIn(str(rollbacks[0]), err)
+            self.assertIn(str(slot), err)
+            self.assertTrue(storage.is_dir())
+            self.assertEqual((storage / "recreated.bin").read_bytes(), b"recreated-by-server")
+            self.assertEqual(_tree_bytes(rollbacks[0]), mutated)
+            self.assertTrue(slot.is_dir())
+            self.assertEqual((slot / "players.db").read_bytes(), b"players-baseline")
+
+
 if __name__ == "__main__":
     unittest.main()

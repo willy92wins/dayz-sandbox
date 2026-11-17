@@ -297,14 +297,85 @@ def _is_unknown_server_row(name_low, cmd):
     return False
 
 
-_MISSION_ARG_RE = re.compile(r"-mission\s*=\s*(\"[^\"]+\"|[^\s\"]+)", re.IGNORECASE)
+def _split_windows_command_line(command_line):
+    """Tokens segun las reglas de comillas de Windows (CommandLineToArgvW).
+
+    Devuelve la lista de argumentos, o None si las comillas no cierran.
+    Vale tanto para un argumento entero entrecomillado
+    ("-mission=C:\\a b") como para el valor entrecomillado
+    (-mission="C:\\a b"): en ambos casos el token resultante es
+    -mission=C:\\a b sin comillas.
+    """
+    text = str(command_line or "")
+    if not text.strip():
+        return []
+    args = []
+    cur = []
+    in_quotes = False
+    arg_active = False
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\":
+            j = i
+            while j < n and text[j] == "\\":
+                j += 1
+            count = j - i
+            if j < n and text[j] == '"':
+                cur.append("\\" * (count // 2))
+                if count % 2 == 0:
+                    in_quotes = not in_quotes
+                else:
+                    cur.append('"')
+                arg_active = True
+                i = j + 1
+                continue
+            cur.append("\\" * count)
+            arg_active = True
+            i = j
+            continue
+        if ch == '"':
+            in_quotes = not in_quotes
+            arg_active = True
+            i += 1
+            continue
+        if ch in (" ", "\t") and not in_quotes:
+            if arg_active:
+                args.append("".join(cur))
+                cur = []
+                arg_active = False
+            i += 1
+            continue
+        cur.append(ch)
+        arg_active = True
+        i += 1
+    if in_quotes:
+        return None
+    if arg_active:
+        args.append("".join(cur))
+    return args
+
+
+def _mission_values_from_command_line(cmd):
+    """Valores crudos de cada -mission=, o None si no se puede leer."""
+    tokens = _split_windows_command_line(cmd)
+    if tokens is None:
+        return None
+    values = []
+    for tok in tokens:
+        if tok.lower().startswith("-mission="):
+            values.append(tok[len("-mission="):])
+    return values
 
 
 def _mission_from_command_line(cmd):
-    match = _MISSION_ARG_RE.search(str(cmd or ""))
-    if not match:
+    values = _mission_values_from_command_line(cmd)
+    if values is None or len(values) != 1:
         return None
-    raw = match.group(1).strip().strip('"')
+    raw = values[0].strip()
+    if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
+        raw = raw[1:-1].strip()
     if not raw:
         return None
     return _resolve_abs(raw)
@@ -335,7 +406,13 @@ def _verify_storage_mission(storage_env, *, rows=None):
         return False, "server_state_unknown"
     if len(servers) != 1:
         return False, f"storage_mission_server_count:{len(servers)}"
-    mission = _mission_from_command_line(str(servers[0].get("command_line") or ""))
+    cmdline = str(servers[0].get("command_line") or "")
+    values = _mission_values_from_command_line(cmdline)
+    if values is None:
+        return False, "storage_mission_unverified"
+    if len(values) != 1:
+        return False, f"storage_mission_unverified:mission_count:{len(values)}"
+    mission = _mission_from_command_line(cmdline)
     expected = _resolve_abs(storage_env.get("mission_dir"))
     if mission is None or expected is None or mission != expected:
         return False, "storage_mission_mismatch"
@@ -567,6 +644,16 @@ def _restore_storage(storage_env, backup_dir, storage_t0):
                 moved_dest = True
             ok, err = _require_server_stopped(checked)
             if not ok:
+                if moved_dest and dest.exists() and rollback.exists():
+                    # Destino recreado por un servidor relanzado tras
+                    # dest -> rollback: no se mueve nada bajo un servidor
+                    # en marcha y no se borra ni el rollback ni el backup.
+                    if staged.exists():
+                        shutil.rmtree(staged, ignore_errors=True)
+                    return 0, _snapshot_dir(dest) or {}, (
+                        f"storage_restore_dest_recreated:rollback={rollback};"
+                        f"backup={actual_backup};error={err}"
+                    )
                 if moved_dest and not dest.exists() and rollback.exists():
                     os.rename(rollback, dest)
                 if staged.exists():
@@ -580,6 +667,12 @@ def _restore_storage(storage_env, backup_dir, storage_t0):
         # 3) Verificar el destino ya sustituido; si no, rollback.
         restored = _snapshot_dir(dest) or {}
         if _sha_map(restored) != _sha_map(expected):
+            ok, err = _require_server_stopped(checked)
+            if not ok:
+                return 0, restored, (
+                    f"storage_restore_recovery_blocked:rollback={rollback};"
+                    f"backup={actual_backup};error={err}"
+                )
             if dest.exists():
                 shutil.rmtree(dest, ignore_errors=True)
             if rollback.exists():
@@ -601,24 +694,44 @@ def _restore_storage(storage_env, backup_dir, storage_t0):
 
 
 def _cold_restore_live_storage(ctx, storage_env, backup_slot, storage_t0, *, stop_step):
-    """Restauracion en frio unica: parada pedida si hace falta y recibo."""
-    if _server_state(storage_env) != "stopped":
-        f03_common.await_operator(
-            ctx,
-            step=stop_step,
-            action="stop_server",
-            instructions="Para DayZServer para restaurar en frio $mission:storage_#.",
-            predicate=lambda _ev: _server_state(storage_env) == "stopped",
-            timeout_s=300.0,
-        )
+    """Restauracion en frio unica: parada pedida si hace falta y recibo.
+
+    Un fallo del paso de operador no impide intentar la restauracion:
+    _restore_storage vuelve a comprobar la parada y se niega si el
+    servidor sigue en marcha. Siempre queda el recibo
+    storage_restore_result (restore_ok_b=1 o restore_incomplete_b=1).
+    """
+    operator_error = ""
+    try:
+        state = _server_state(storage_env)
+    except Exception as exc:
+        state = "unknown"
+        operator_error = f"operator_step_failed:{type(exc).__name__}:{exc}"
+    if state != "stopped" and not operator_error:
+        try:
+            f03_common.await_operator(
+                ctx,
+                step=stop_step,
+                action="stop_server",
+                instructions="Para DayZServer para restaurar en frio $mission:storage_#.",
+                predicate=lambda _ev: _server_state(storage_env) == "stopped",
+                timeout_s=300.0,
+            )
+        except Exception as exc:
+            operator_error = f"operator_step_failed:{type(exc).__name__}:{exc}"
     try:
         restore_ok, restored_snapshot, restore_err = _restore_storage(
             storage_env, backup_slot, storage_t0
         )
     except Exception as exc:
         restore_ok = 0
-        restored_snapshot = _snapshot_dir(Path(storage_env["storage_dir"])) or {}
+        try:
+            restored_snapshot = _snapshot_dir(Path(storage_env["storage_dir"])) or {}
+        except Exception:
+            restored_snapshot = {}
         restore_err = f"storage_restore_incomplete:{type(exc).__name__}:{exc}"
+    if operator_error:
+        restore_err = f"{operator_error};{restore_err}" if restore_err else operator_error
     ctx.record_scenario({
         "ev": "storage_restore_result",
         "restore_ok_b": restore_ok,
@@ -626,6 +739,44 @@ def _cold_restore_live_storage(ctx, storage_env, backup_slot, storage_t0, *, sto
         "error": restore_err,
         "files": restored_snapshot,
     })
+    return restore_ok
+
+
+def _cold_restore_live_storage_no_ctx(storage_env, backup_slot, storage_t0, part_dir, *, reason=""):
+    """Restauracion sin contexto: intenta restaurar y deja el recibo en
+    <part_dir>/samples/scenario.jsonl, donde el gate lo lee.
+
+    Se usa cuando PartContext no llega a abrirse y no hay ctx donde
+    registrar. Nunca lanza: el llamador relanza el fallo original.
+    """
+    try:
+        restore_ok, restored_snapshot, restore_err = _restore_storage(
+            storage_env, backup_slot, storage_t0
+        )
+    except Exception as exc:
+        restore_ok = 0
+        try:
+            restored_snapshot = _snapshot_dir(Path(storage_env["storage_dir"])) or {}
+        except Exception:
+            restored_snapshot = {}
+        restore_err = f"storage_restore_incomplete:{type(exc).__name__}:{exc}"
+    error = restore_err
+    if reason:
+        error = f"{reason};{error}" if error else reason
+    event = {
+        "ev": "storage_restore_result",
+        "restore_ok_b": restore_ok,
+        "restore_incomplete_b": 0 if restore_ok == 1 else 1,
+        "error": error,
+        "files": restored_snapshot,
+    }
+    try:
+        samples = Path(part_dir) / "samples"
+        samples.mkdir(parents=True, exist_ok=True)
+        with (samples / "scenario.jsonl").open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(event, sort_keys=True, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
     return restore_ok
 
 
@@ -1327,13 +1478,32 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             pre_failure_event,
             pre_failure_error,
         ) = _live_cold_backup_before_open(base_dir, part_name)
-    with f03_common.PartContext(
+    # La obligacion de restaurar nace en cuanto existe el backup: cubre
+    # la apertura del PartContext y todo el cuerpo. Todos los nombres
+    # que usa el finally se inicializan aqui, antes de cualquier try,
+    # para que ningun fallo temprano lance UnboundLocalError ni deje
+    # la restauracion sin intentar.
+    has_live_backup = (
+        pre_storage_env is not None
+        and pre_storage_t0 is not None
+        and pre_backup_slot is not None
+    )
+    is_live = bool(is_live_build)
+    storage_env = pre_storage_env
+    storage_t0 = pre_storage_t0
+    backup_slot = pre_backup_slot
+    sim_storage = None
+    restore_stop_step = "post_backup_stop_server_for_cold_restore"
+    live_restore_attempted = False
+    ctx = None
+    try:
+      with f03_common.PartContext(
         base_dir=base_dir,
         part_name=part_name,
         spike_id=SPIKE_ID,
         args=args,
         argv=argv,
-    ) as ctx:
+      ) as ctx:
         if pre_failure_event is not None:
             # Sin backup acreditado no se juega: se deja la evidencia
             # equivalente a la de siempre y se aborta (INCONCLUSO en el
@@ -1341,7 +1511,8 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             ctx.record_scenario(pre_failure_event)
             raise RuntimeError(pre_failure_error)
         if ctx.startup_reason is not None:
-            if is_live_build and pre_storage_env is not None and pre_storage_t0 is not None and pre_backup_slot is not None:
+            if is_live_build and has_live_backup:
+                live_restore_attempted = True
                 _cold_restore_live_storage(ctx, pre_storage_env, pre_backup_slot, pre_storage_t0, stop_step="post_backup_stop_server_for_cold_restore")
             ctx.collect_probe_budget_logs()
             ctx.finalize_manifest()
@@ -1349,7 +1520,6 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             gate_core.write_json(ctx.part_dir / "verdict.json", verdict)
             return verdict
 
-        restore_stop_step = "post_backup_stop_server_for_cold_restore"
         try:
             git_head = ctx.git_head or ""
             expected_stamp = ctx.expected_stamp or ""
@@ -1880,9 +2050,10 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 )
 
         finally:
-            if is_live and storage_env is not None and storage_t0 is not None:
+            if is_live and storage_env is not None and storage_t0 is not None and backup_slot is not None:
+                live_restore_attempted = True
                 _cold_restore_live_storage(ctx, storage_env, backup_slot, storage_t0, stop_step=restore_stop_step)
-            elif not is_live and storage_t0 is not None and backup_slot is not None:
+            elif not is_live and storage_t0 is not None and backup_slot is not None and sim_storage is not None:
                 if sim_storage.exists():
                     shutil.rmtree(sim_storage, ignore_errors=True)
                 shutil.copytree(backup_slot, sim_storage)
@@ -1899,6 +2070,22 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
 
         ctx.collect_probe_budget_logs()
         ctx.finalize_manifest()
+    except Exception as exc:
+        # Si el contexto no llego a abrirse (o la restauracion con ctx
+        # no se intento), queda intentar la restauracion sin ctx y
+        # dejar el recibo en samples/scenario.jsonl, donde el gate
+        # lo ve. El backup nunca se borra en este camino.
+        if has_live_backup and not live_restore_attempted:
+            live_restore_attempted = True
+            try:
+                _cold_restore_live_storage_no_ctx(
+                    pre_storage_env, pre_backup_slot, pre_storage_t0,
+                    base_dir / part_name,
+                    reason=f"context_open_failed:{type(exc).__name__}:{exc}",
+                )
+            except Exception:
+                pass
+        raise
 
     verdict = s_persist_eval.evaluate(ctx.part_dir, repo_root=REPO_ROOT)
     gate_core.write_json(ctx.part_dir / "verdict.json", verdict)
