@@ -1,0 +1,42 @@
+{
+    "client":  {
+                   "dir":  "C:\\tmp\\dsbx-f1bpeers-work\\partida\\profiles_diag\\client",
+                   "files":  [
+                                 "DayZDiag_x64_2026-11-15_16-32-43.RPT",
+                                 "error_2026-11-15_16-32-43.log",
+                                 "script_2026-11-15_16-32-43.log"
+                             ]
+               },
+    "copies":  [
+                   {
+                       "dest":  "server_script.log",
+                       "peer":  "server",
+                       "src":  "script_2026-11-15_16-31-43.log"
+                   },
+                   {
+                       "dest":  "server.RPT",
+                       "peer":  "server",
+                       "src":  "DayZDiag_x64_2026-11-15_16-31-43.RPT"
+                   },
+                   {
+                       "dest":  "client_script.log",
+                       "peer":  "client",
+                       "src":  "script_2026-11-15_16-32-43.log"
+                   },
+                   {
+                       "dest":  "client.RPT",
+                       "peer":  "client",
+                       "src":  "DayZDiag_x64_2026-11-15_16-32-43.RPT"
+                   }
+               ],
+    "server":  {
+                   "dir":  "C:\\tmp\\dsbx-f1bpeers-work\\partida\\profiles_diag\\server",
+                   "files":  [
+                                 "DayZDiag_x64_2026-11-15_16-31-43.ADM",
+                                 "DayZDiag_x64_2026-11-15_16-31-43.RPT",
+                                 "error_2026-11-15_16-31-43.log",
+                                 "script_2026-11-15_16-31-43.log",
+                                 "scriptExt.log"
+                             ]
+               }
+}

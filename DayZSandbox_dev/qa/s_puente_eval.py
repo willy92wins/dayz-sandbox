@@ -478,9 +478,70 @@ def _n6(ctx):
         return "fail", "lease_age outside window", metrics
     if not order_ok:
         return "fail", "accepted after rejected_lease", metrics
-    if not pose_ok:
-        return "fail", "pose is not last accepted", metrics
-    return "pass", "", metrics
+    status, detail = _n6_pose_check(accepted, lease, seq0, p0, pose_read, pose_ok)
+    return status, detail, metrics
+
+
+_N6_APPLY_KEYS = ("apply_ms", "apply_lease_age_ms", "applied_b")
+
+
+def _n6_has_apply_record(entry):
+    applied = entry.get("applied_b")
+    return (
+        _finite(entry.get("apply_ms"))
+        and _finite(entry.get("apply_lease_age_ms"))
+        and not isinstance(applied, bool)
+        and applied in (0, 1)
+    )
+
+
+def _n6_pose_check(accepted, lease, seq0, p0, pose_read, pose_ok):
+    """Pose final de N6 alineada con F02-H3 (`plans/2026-11-14-m1-f0.3-0-brief.md:669-673`).
+
+    El peer aplica la pose aceptada en el frame siguiente y la descarta si en ese frame su lease ya no
+    vale (`fake_peer.py`, `_apply`). Solo el registro del propio peer acredita un descarte: en cada
+    aceptada del `rpc_log`, `apply_ms`, `apply_lease_age_ms` y `applied_b`, anotados al aplicar.
+    - **Cada registro presente se valida siempre,** aunque falten otros: un registro a medias o mal
+      formado es FALLA, y uno que contradiga el lease en ese instante (aplicada si y solo si
+      `apply_lease_age_ms <= lease`) tambien.
+    - **Con registro en todas las aceptadas:** la pose leida tiene que ser la de la ultima aplicada. Si no
+      se aplico ninguna, la pose de antes de la rafaga no esta en la evidencia: `missing`.
+    - **Sin registro completo** (la sonda real todavia no lo da): con la pose de la ultima aceptada,
+      `pass`, salvo que su propio registro diga que se descarto. Cualquier otra pose es `missing`, nunca
+      `pass` ni `fail`: sin identidad de frame ni de aplicacion no se puede acreditar que pose debia
+      quedar. Que el lease caducara antes de leer no acredita nada, porque en la rafaga todas las
+      aceptadas comparten caducidad.
+    """
+    ordered = sorted(accepted, key=lambda e: (e["recv_ms"], e["seq"]))
+    if not ordered:
+        return "missing", "no accepted entries"
+    for entry in ordered:
+        present = [key for key in _N6_APPLY_KEYS if key in entry]
+        if not present:
+            continue
+        if len(present) != len(_N6_APPLY_KEYS) or not _n6_has_apply_record(entry):
+            return "fail", "malformed apply record"
+        if entry["apply_ms"] < entry["recv_ms"]:
+            return "fail", "pose applied before received"
+        if bool(entry["applied_b"]) != (entry["apply_lease_age_ms"] <= lease):
+            return "fail", "pose apply contradicts lease"
+    if not all(_n6_has_apply_record(e) for e in ordered):
+        if pose_ok:
+            last_entry = ordered[-1]
+            if _n6_has_apply_record(last_entry) and last_entry["applied_b"] == 0:
+                return "fail", "pose contradicts apply record"
+            return "pass", ""
+        return "missing", "pose mismatch without apply evidence"
+    applied = [e for e in ordered if e["applied_b"] == 1]
+    if not applied:
+        return ("fail", "pose applied without apply record") if pose_ok else ("missing", "no burst pose applied")
+    last_applied = max(applied, key=lambda e: (e["apply_ms"], e["recv_ms"], e["seq"]))
+    expect_j = [p0[0] + (last_applied["seq"] - seq0), p0[1], p0[2]]
+    if not _pose_match(pose_read, expect_j, [90, 0, 0]):
+        return "fail", "pose is not last applied"
+    if last_applied is ordered[-1]:
+        return "pass", ""
+    return "pass", "pose discarded after lease expiry"
 
 
 def _n6_server(ctx):

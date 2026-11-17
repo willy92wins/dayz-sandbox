@@ -36,7 +36,9 @@ WITNESS_C = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "4_World" / "DSBX_
 WITNESS_W_C = WITNESS_C
 PROBE_SCRIPTS = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts"
 VANILLA_ROOTS = (Path("P:/scripts"), Path("C:/Users/guill/OneDrive/Documentos/DayZ Projects/scripts"))
-BASELINE_COMMIT = "6a7bd7a"  # implementacion de S-persist (rama claude/s-persist-impl-e9), de donde sale este PR
+# Implementacion de S-persist (rama claude/s-persist-impl-e9, PR #21) sobre la que va este PR: la cabeza que se fusiono
+# en el (antes, 6a7bd7a).
+BASELINE_COMMIT = "89c431e"
 
 CENTER = (6170.0, 7643.0)
 CENSUS_SCOL = ["class_name", "loc_kind", "parent_class", "parent_net_id", "slot_name", "owner_uid", "own_logical_id", "net_id", "pers_id"]
@@ -641,7 +643,12 @@ def _make_ext(module=fake_ext_persist):
 
 def _call(ext, verb, strs=None, nums=None, rows=None, op_id="op-1"):
     op = {"op_id": op_id, "verb": verb, "qa_fault": ""}
-    unpacked = {"str": dict(strs or {}), "num": dict(nums or {}), "rows": list(rows or [])}
+    rows = list(rows or [])
+    # Como llegan por el cable (wire.unpack_payload): con filas llegan tambien sus columnas, que el apply de S-persist
+    # exige (s_persist_run.py las manda siempre).
+    ncol = [k for k, v in rows[0].items() if not isinstance(v, str)] if rows else []
+    scol = [k for k, v in rows[0].items() if isinstance(v, str)] if rows else []
+    unpacked = {"str": dict(strs or {}), "num": dict(nums or {}), "rows": rows, "ncol": ncol, "scol": scol}
     return ext.on_start_op(op, unpacked, None)
 
 
@@ -814,7 +821,8 @@ class CensusCapInProcess(unittest.TestCase):
                 ext._add_entity(net_id="9:%d" % (1000 + i), class_name="Barrel_Yellow", cat="raw", pos=(6180.0, 100.0, 7650.0))
             status, _r, _p = self._census(ext, "cap")
             self.assertEqual(status, "done")
-            _tick(peer, jobs, ext, n=12)
+            # S-persist retiene el censo hasta CENSUS_HOLD_MAX_MS (750 ms) si nadie lo disputa: 30 ticks de 33 ms.
+            _tick(peer, jobs, ext, n=30)
             job = jobs.jobs_by_id["cap"]
             self.assertEqual((job["state"], job["reason"], job["rows_total"]), (want_state, want_reason, 4096), extra)
 
@@ -862,10 +870,10 @@ class CensusSpatialInProcess(unittest.TestCase):
 
 
 def _without_health_mark(payload):
-    """El payload sin lo que anade el arreglo de la marca de salud (columna health_mark_b y los escalares
-    health_mark_b / health_mark_pending_n, todos AL FINAL): lo demas tiene que seguir siendo identico al fake previo."""
+    """El payload sin lo que anade la marca de salud verificada (columna health_mark_b del apply y escalar
+    health_mark_b de per_spawn_raw, los dos AL FINAL): lo demas tiene que seguir siendo identico al fake previo."""
     out = dict(payload)
-    keep = [i for i, k in enumerate(out["nk"]) if k not in ("health_mark_b", "health_mark_pending_n")]
+    keep = [i for i, k in enumerate(out["nk"]) if k != "health_mark_b"]
     out["nk"] = [out["nk"][i] for i in keep]
     out["nv"] = [out["nv"][i] for i in keep]
     if "health_mark_b" in out["ncol"]:
@@ -879,7 +887,8 @@ def _without_health_mark(payload):
 class Mode0IdentityInProcess(unittest.TestCase):
     """Con select_all_entityai_b = 0 (o ausente), filas y columnas son identicas a las del fake anterior al PR."""
 
-    GOLDEN_SHA256 = "86b5638988c528a689396e1590f7d2885bea6449899dca2b9f2a1ede3b5c5b58"
+    # Huella del escenario con el fake de BASELINE_COMMIT (89c431e), sin lo que anade la marca de salud.
+    GOLDEN_SHA256 = "7befe73ed99917ebcee2b56fbef533f96a4bd19bcf94ce6072631f5a0c945a39"
 
     @staticmethod
     def _scenario(module, explicit_zero):
@@ -912,7 +921,8 @@ class Mode0IdentityInProcess(unittest.TestCase):
                 nums["select_all_entityai_b"] = 0.0
             op_id = "census%d" % i
             status, reason, payload = run("per_census_start", {"area_tag": "area_a"}, nums, op_id=op_id)
-            _tick(peer, jobs, ext, n=12)
+            # S-persist retiene el censo hasta CENSUS_HOLD_MAX_MS (750 ms) si nadie lo disputa: 30 ticks de 33 ms.
+            _tick(peer, jobs, ext, n=30)
             job = jobs.jobs_by_id[op_id]
             trace.append(["job", job["state"], job["reason"], job["ncol"], job["scol"], job["ncell"], job["scell"]])
             jobs.end_job(op_id, "done", "")
@@ -1334,16 +1344,17 @@ class StaticEEInitCoverageTests(unittest.TestCase):
 
 
 class HealthMarkInProcess(unittest.TestCase):
-    """HasDamageSystem() dice «inicializado», no «tiene sistema de daño» (object.c:976): un objeto recien creado devuelve
-    salud -1/-1 y la marca no se puede aplicar todavia. La sonda no puede responder ok en silencio: error explicito
-    (health_mark_pending), reintento en los ticks siguientes y el campo health_mark_b, al final de las columnas."""
+    """Marca de salud reconciliada con S-persist (16-nov): lo que crea el QA la lleva puesta al crear, directa y
+    verificada (SetHealth y relectura; health_mark_b = 1 si la relectura la confirma). health_mark_pending no existe y
+    -1/-1 queda para los objetos del mundo sin sistema de daño (HasDamageSystem() dice «inicializado», object.c:976)."""
 
     def setUp(self):
         self.peer, self.jobs, self.ext = _make_ext()
 
-    def _row(self, lid, cname, ratio):
-        return {"logical_id": lid, "parent_id": "", "cat": "prop", "class_name": cname, "slot_name": "",
-                "req_x_m": 6120.0, "req_z_m": 7600.0, "req_yaw_deg": 0.0, "health_mark_ratio": ratio, "must_vanish_b": 1.0}
+    def _row(self, lid, cname, ratio, parent=""):
+        return {"logical_id": lid, "parent_id": parent, "cat": "prop", "class_name": cname,
+                "slot_name": "Cargo" if parent else "", "req_x_m": 6120.0, "req_z_m": 7600.0, "req_yaw_deg": 0.0,
+                "health_mark_ratio": ratio, "must_vanish_b": 1.0}
 
     def _apply(self, rows, op="o1"):
         status, reason, payload = _call(
@@ -1361,15 +1372,13 @@ class HealthMarkInProcess(unittest.TestCase):
         )
         return status, reason, wire.unpack_payload(payload)
 
-    def _ticks(self, n):
-        _tick(self.peer, self.jobs, self.ext, n=n)
-
-    def test_default_fake_is_born_initialised_and_marks_at_once(self):
-        out = self._apply([self._row("a", "WoodenCrate", 0.5)])
-        self.assertEqual(out["str"]["apply_status"], "ok")
-        self.assertEqual(out["num"]["health_mark_pending_n"], 0.0)
-        row = out["rows"][0]
-        self.assertEqual((row["max_hp"], row["health_hp"], row["health_mark_b"]), (100.0, 50.0, 1.0))
+    def test_qa_creation_carries_the_verified_mark_at_once(self):
+        out = self._apply([self._row("a", "WoodenCrate", 0.5), self._row("b", "Barrel_Yellow", 0.0)])
+        self.assertEqual((out["str"]["apply_status"], out["str"]["reason"]), ("ok", ""))
+        self.assertNotIn("health_mark_pending_n", out["num"])
+        a, b = out["rows"]
+        self.assertEqual((a["max_hp"], a["health_hp"], a["health_mark_b"]), (100.0, 50.0, 1.0))
+        self.assertEqual((b["max_hp"], b["health_hp"], b["health_mark_b"]), (100.0, 100.0, 1.0))  # sin marca pedida
         status, reason, raw = self._spawn(0.25)
         self.assertEqual((status, reason, raw["str"]["spawn_status"]), ("done", "", "ok"))
         self.assertEqual((raw["num"]["max_hp"], raw["num"]["health_hp"], raw["num"]["health_mark_b"]), (100.0, 25.0, 1.0))
@@ -1380,94 +1389,80 @@ class HealthMarkInProcess(unittest.TestCase):
                "q9_err_3d_m", "q9_yaw_deg", "q9_pitch_deg", "q9_roll_deg", "max_hp", "health_hp", "spawn_tick_ms"]
         self.assertEqual(out["ncol"], old + ["health_mark_b"])
 
-    def test_scene_pending_init_is_not_ok_then_the_mark_lands_and_a_repeat_is_ok(self):
-        self.ext.damage_init_delay_frames = 2
-        out = self._apply([self._row("a", "WoodenCrate", 0.5), self._row("b", "Barrel_Yellow", 0.0)])
-        self.assertEqual(out["str"]["apply_status"], "health_mark_pending")  # nunca ok con la marca sin aplicar
-        self.assertEqual(out["str"]["reason"], "health_mark_pending")
-        self.assertEqual(out["num"]["health_mark_pending_n"], 1.0)
-        a, b = out["rows"]
-        self.assertEqual((a["max_hp"], a["health_hp"], a["health_mark_b"]), (-1.0, -1.0, 0.0))  # salud no disponible
-        self.assertEqual((b["max_hp"], b["health_mark_b"]), (-1.0, 1.0))  # sin marca pedida: nada que aplicar
-        self._ticks(1)
-        mid = self._apply([self._row("a", "WoodenCrate", 0.5), self._row("b", "Barrel_Yellow", 0.0)])
-        self.assertEqual(mid["str"]["apply_status"], "health_mark_pending")  # aun sin inicializar
-        self._ticks(2)
-        late = self._apply([self._row("a", "WoodenCrate", 0.5), self._row("b", "Barrel_Yellow", 0.0)])
-        self.assertEqual(late["num"]["idempotent_hit_b"], 1.0)
-        self.assertEqual(late["str"]["apply_status"], "ok")
-        a, b = late["rows"]
-        self.assertEqual((a["max_hp"], a["health_hp"], a["health_mark_b"]), (100.0, 50.0, 1.0))
-        self.assertEqual((b["max_hp"], b["health_hp"], b["health_mark_b"]), (100.0, 100.0, 1.0))
+    def test_failed_creation_confirms_no_mark(self):
+        # Hijo de un padre que no existe: fila fallida sin salud observada y sin marca confirmada (MEN de Sol sobre
+        # dcde8f3: la creacion fallida salia con health_mark_b = 1).
+        out = self._apply([self._row("a", "WoodenCrate", 0.5), self._row("c", "Rag", 0.5, parent="nope")])
+        self.assertEqual((out["str"]["apply_status"], out["str"]["reason"]), ("partial", "creation_failed"))
+        a, c = out["rows"]
+        self.assertEqual((a["ok_b"], a["health_mark_b"]), (1.0, 1.0))
+        self.assertEqual((c["ok_b"], c["max_hp"], c["health_hp"], c["health_mark_b"]), (0.0, 0.0, 0.0, 0.0))
 
-    def test_spawn_raw_pending_init_is_an_explicit_error_then_the_census_shows_the_mark(self):
-        self.ext.damage_init_delay_frames = 3
-        status, reason, raw = self._spawn(0.5)
-        self.assertEqual((status, reason), ("error", "health_mark_pending"))
-        self.assertEqual(raw["str"]["spawn_status"], "health_mark_pending")
-        self.assertEqual((raw["num"]["max_hp"], raw["num"]["health_hp"], raw["num"]["health_mark_b"]), (-1.0, -1.0, 0.0))
-        ent = self.ext.world[raw["str"]["net_id"]]
-        self.assertEqual(ent["health_hp"], -1.0)
-        self._ticks(3)
-        self.assertEqual((ent["max_hp"], ent["health_hp"]), (100.0, 50.0))  # el censo lee la salud viva
-        # sin marca pedida no hay nada que fallar, aunque la salud aun no este disponible
-        status0, reason0, raw0 = self._spawn(0.0, op="sp0")
-        self.assertEqual((status0, reason0, raw0["num"]["health_mark_b"]), ("done", "", 1.0))
-
-    def test_object_without_damage_system_never_marks_also_when_created(self):
-        # NO_DAMAGE_SYSTEM_CLASSES valia solo para el mapa precargado: un Land_Wreck_Uaz CREADO tampoco tiene salud.
+    def test_object_without_damage_system_gives_no_health_and_no_mark(self):
+        # Clase sin sistema de daño creada por el QA (en el motor no esta soportado: GetMaxHealth tira la excepcion):
+        # el fake no inventa la salud y la marca pedida sale sin confirmar en el recibo, sin estados nuevos.
         out = self._apply([self._row("w", "Land_Wreck_Uaz", 0.5), self._row("z", "Land_Wreck_Uaz", 0.0)])
-        self.assertEqual(out["str"]["apply_status"], "health_mark_pending")
+        self.assertEqual(out["str"]["apply_status"], "ok")
         w, z = out["rows"]
         self.assertEqual((w["max_hp"], w["health_hp"], w["health_mark_b"]), (-1.0, -1.0, 0.0))
         self.assertEqual((z["max_hp"], z["health_hp"], z["health_mark_b"]), (-1.0, -1.0, 1.0))
-        self._ticks(200)
-        again = self._apply([self._row("w", "Land_Wreck_Uaz", 0.5), self._row("z", "Land_Wreck_Uaz", 0.0)])
-        self.assertEqual(again["str"]["apply_status"], "health_mark_pending")  # sigue fallando, no se inventa la salud
-        self.assertEqual(again["rows"][0]["health_hp"], -1.0)
         status, reason, raw = self._spawn(0.5, cname="Land_Wreck_Uaz", op="spw")
-        self.assertEqual((status, reason, raw["num"]["health_mark_b"]), ("error", "health_mark_pending", 0.0))
-        self._ticks(200)
-        self.assertEqual(self.ext.world[raw["str"]["net_id"]]["health_hp"], -1.0)
+        self.assertEqual((status, reason, raw["str"]["spawn_status"]), ("done", "", "ok"))
+        self.assertEqual((raw["num"]["max_hp"], raw["num"]["health_hp"], raw["num"]["health_mark_b"]), (-1.0, -1.0, 0.0))
 
-    def test_mark_after_the_deadline_is_abandoned_for_good(self):
-        self.ext.damage_init_delay_frames = 2
-        self._apply([self._row("a", "WoodenCrate", 0.5)])
-        self.peer.now += fake_ext_persist.HEALTH_PENDING_MAX_MS + 1.0
-        self._ticks(2)  # el sistema de daño se inicializa, pero fuera del tope: salud completa, marca no aplicada
-        late = self._apply([self._row("a", "WoodenCrate", 0.5)])
-        self.assertEqual(late["str"]["apply_status"], "health_mark_pending")
-        self.assertEqual((late["rows"][0]["health_hp"], late["rows"][0]["health_mark_b"]), (100.0, 0.0))
+    def test_census_gives_qa_health_and_minus_one_only_for_world_objects_without_damage_system(self):
+        out = self._apply([self._row("a", "WoodenCrate", 0.5)])
+        crate_net = out["rows"][0]["net_id"]
+        nums = {"center_x_m": CENTER[0], "center_z_m": CENTER[1], "radius_m": 115.0, "select_all_entityai_b": 1.0}
+        status, reason, _p = _call(self.ext, "per_census_start", {"area_tag": "t"}, nums, op_id="c1")
+        self.assertEqual((status, reason), ("done", ""))
+        rows = {r["net_id"]: r for r in _job_rows(self.jobs, "c1")}
+        self.assertEqual((rows[crate_net]["max_hp"], rows[crate_net]["health_hp"]), (100.0, 50.0))
+        wreck = [r for r in rows.values() if r["class_name"] == "Land_Wreck_Uaz"]
+        self.assertEqual([(r["max_hp"], r["health_hp"]) for r in wreck], [(-1.0, -1.0)])
+        others = [r for r in rows.values() if r["class_name"] != "Land_Wreck_Uaz"]
+        self.assertTrue(others)
+        self.assertTrue(all(r["max_hp"] > 0.0 and r["health_hp"] > 0.0 for r in others))
+
+    def test_no_pending_state_anywhere(self):
+        self.assertFalse(hasattr(fake_ext_persist, "HEALTH_PENDING_MAX_MS"))
+        self.assertNotIn("health_mark_pending", Path(fake_ext_persist.__file__).read_text(encoding="utf-8"))
+        self.assertNotIn("health_mark_pending", PERSIST_C.read_text(encoding="utf-8"))
 
 
 class StaticHealthMarkTests(unittest.TestCase):
+    """La marca en lo que crea el QA es directa y verificada; la guarda HasDamageSystem queda para leer el mundo."""
+
     def setUp(self):
         self.text, self.code = _code(PERSIST_C)
 
-    def test_apply_health_ratio_confirms_the_mark_behind_the_guard(self):
-        body = _block_after(self.code, r"protected\s+bool\s+ApplyHealthRatio\s*\(\s*Object\s+obj,\s*float\s+ratio\s*\)\s*\{")
+    def test_apply_qa_health_mark_is_direct_and_verified(self):
+        body = _block_after(self.code, r"protected\s+int\s+ApplyQaHealthMark\s*\([^)]*\)\s*\{")
         self.assertIsNotNone(body)
-        self.assertIn("!obj.HasDamageSystem()", body)  # la guarda se conserva: GetMaxHealth lanza sin sistema de daño
-        self.assertRegex(body, r"if\s*\(\s*maxHp\s*<=\s*0\.0\s*\)\s*return\s+false;")  # -1 = salud no disponible
-        self.assertLess(body.index("HasDamageSystem()"), body.index("SetHealth("))
-        after = body[body.index("SetHealth("):]
-        self.assertIn("ReadHealth(obj, maxHp, healthHp)", after)  # relee tras aplicar
-        self.assertRegex(after, r"return\s+Math\.AbsFloat\(diff\)\s*<=\s*0\.01;")  # y confirma el valor
-        self.assertRegex(body, r"if\s*\(\s*ratio\s*<=\s*0\.0\s*\)\s*return\s+true;")
+        self.assertNotIn("HasDamageSystem", body)  # directa: al crear, HasDamageSystem() aun da false (object.c:976)
+        self.assertRegex(body, r"if\s*\(\s*ratio\s*<=\s*0\.0\s*\)\s*return\s+1;")
+        self.assertRegex(body, r"if\s*\(\s*!obj\s*\|\|\s*maxHp\s*<=\s*0\.0\s*\)\s*return\s+0;")
+        set_at = body.index("SetHealth(")
+        self.assertLess(body.index("ReadQaHealth(obj, maxHp, healthHp)"), set_at)
+        after = body[set_at:]
+        self.assertIn("ReadQaHealth(obj, maxHp, healthHp)", after)  # relee tras aplicar
+        self.assertRegex(after, r"if\s*\(\s*Math\.AbsFloat\(diff\)\s*<=\s*0\.01\s*\)\s*return\s+1;")
+        self.assertIn("return 0;", after)
 
-    def test_a_missing_mark_is_never_a_silent_ok(self):
+    def test_creation_paths_use_the_verified_mark_without_new_states(self):
         raw = _block_after(self.code, r"protected\s+void\s+HandleSpawnRaw\s*\([^)]*\)\s*\{")
         self.assertIsNotNone(raw)
-        self.assertRegex(raw, r"bool\s+rawMarked\s*=\s*ApplyHealthRatio\(cEnt,\s*hRatio\);")
-        self.assertRegex(raw, r"if\s*\(\s*healthMarkB\s*==\s*0\s*\)\s*\{[^}]*res\.status\s*=\s*\"error\";[^}]*QueueHealthMark\(")
-        self.assertIn('res.reason = "health_mark_pending";', raw)
+        self.assertRegex(raw, r"healthMarkB\s*=\s*ApplyQaHealthMark\(cEnt,\s*hRatio,\s*maxHp,\s*healthHp\);")
+        self.assertRegex(raw, r"ApplyQaHealthMark\(childEnt,\s*hRatio,")  # el hijo del control, por el mismo camino
+        self.assertIn('PutStr(res.read, "spawn_status", "ok");', raw)
         self.assertRegex(raw, r'PutNum\(res\.read,\s*"health_mark_b",\s*healthMarkB\);')
         scene = _block_after(self.code, r"protected\s+void\s+HandleApplyScene\s*\([^)]*\)\s*\{")
-        self.assertRegex(scene, r"bool\s+marked\s*=\s*ApplyHealthRatio\(ent,\s*hRatio\);")
-        self.assertRegex(scene, r"if\s*\(\s*!marked\s*\)\s*\{[^}]*m_HealthMarkB\s*=\s*0;[^}]*QueueHealthMark\(")
-        emit = _block_after(self.code, r"protected\s+void\s+EmitApplyResponse\s*\([^)]*\)\s*\{")
-        self.assertRegex(emit, r'applyStatus\s*=\s*"health_mark_pending";')
-        self.assertNotRegex(emit, r'PutStr\(read,\s*"apply_status",\s*"ok"\)')
+        self.assertRegex(scene, r"rec\.m_HealthMarkB\s*=\s*ApplyQaHealthMark\(ent,\s*hRatio,\s*maxHp,\s*healthNow\);")
+        # Creacion fallida: sin lectura de salud ni marca confirmada.
+        self.assertRegex(scene, r"rec\.m_MaxHp\s*=\s*0\.0;\s*rec\.m_HealthHp\s*=\s*0\.0;\s*rec\.m_HealthMarkB\s*=\s*0;")
+        for gone in ("health_mark_pending", "HealthPending", "QueueHealthMark", "SettleHealthMark", "ApplyHealthRatio",
+                     "HEALTH_PENDING_MAX_MS"):
+            self.assertNotIn(gone, self.code, gone)
 
     def test_health_mark_b_is_appended_after_the_old_apply_columns(self):
         emit = _block_after(self.code, r"protected\s+void\s+EmitApplyResponse\s*\([^)]*\)\s*\{")
@@ -1477,17 +1472,10 @@ class StaticHealthMarkTests(unittest.TestCase):
         self.assertEqual(cols[:-1], fake_ext_persist_apply_ncol()[:-1])
         self.assertEqual(cols, fake_ext_persist_apply_ncol())
 
-    def test_pending_marks_are_retried_each_tick_with_a_cap_and_dropped_on_shutdown(self):
+    def test_on_tick_has_no_pending_retry(self):
         tick = _block_after(self.code, r"override\s+void\s+OnTick\s*\([^)]*\)\s*\{")
-        self.assertTrue(tick.lstrip().startswith("TickHealthPending();"))
-        loop = _block_after(self.code, r"protected\s+void\s+TickHealthPending\s*\(\s*\)\s*\{")
-        self.assertIn("ApplyHealthRatio(pend.m_Obj, pend.m_Ratio)", loop)
-        self.assertIn("SettleHealthMark(pend.m_Obj)", loop)
-        self.assertIn("m_Probe.NowMs() >= pend.m_DeadlineMs", loop)
-        self.assertRegex(self.code, r"HEALTH_PENDING_MAX_MS\s*=\s*10000\.0")
-        self.assertEqual(fake_ext_persist.HEALTH_PENDING_MAX_MS, 10000.0)
-        shut = _block_after(self.code, r"override\s+void\s+OnShutdown\s*\(\s*\)\s*\{")
-        self.assertIn("m_HealthPending.Clear();", shut)
+        self.assertTrue(tick.lstrip().startswith("TickWitness();"))
+        self.assertNotIn("Health", tick)
 
 
 def fake_ext_persist_apply_ncol():
@@ -1576,30 +1564,44 @@ class StaticPersistExtensionTests(unittest.TestCase):
         self.assertIn("GetObjectsAtPosition3D(centerPos, radiusM, nearObjs, nearCargos)", start)
         self.assertIn("EnumerateInventory(InventoryTraversalType.PREORDER, subItems)", start)
         self.assertIn("EntityAI.Cast(obj) != null", start)
-        row = _block_after(self.code, r"protected\s+void\s+AppendEntityCensusRow\s*\([^)]*\)\s*\{")
+        self.assertEqual(start.count("seen, selectAllB == 1))"), 4)  # las cuatro llamadas, con corte (S-persist)
+        row = _block_after(self.code, r"protected\s+bool\s+AppendEntityCensusRow\s*\([^)]*\)\s*\{")
         self.assertRegex(row, r"if\s*\(withSurface\)\s*\{[^}]*g_Game\.SurfaceY\(pos\[0\],\s*pos\[2\]\)")
         self.assertIn("ReadRealLocation(obj,", row)  # parent_net_id, parent_class, slot_name y loc_kind reales
 
-    def test_health_is_only_read_behind_has_damage_system(self):
-        # Object.GetMaxHealth/GetHealth/SetHealth tiran una excepcion de la VM en objetos sin sistema de daño
-        # (Land_Wreck_Uaz): solo pueden aparecer en ReadHealth y ApplyHealthRatio, y detras de HasDamageSystem().
+    def test_health_api_only_in_the_helpers_and_the_guard_for_the_world(self):
+        # Object.GetMaxHealth/GetHealth/SetHealth: solo en ReadHealth (objetos del mundo, detras de HasDamageSystem: tiran
+        # una excepcion de la VM sin sistema de daño, p. ej. Land_Wreck_Uaz), ReadQaHealth (lo que crea el QA, directa)
+        # y ApplyQaHealthMark (SetHealth y relectura).
         code = self.code
         helpers = {}
-        for name in ("ReadHealth", "ApplyHealthRatio"):
-            body = _block_after(code, r"protected\s+(?:void|bool)\s+%s\s*\([^)]*\)\s*\{" % name)
+        for ret, name in (("void", "ReadHealth"), ("void", "ReadQaHealth"), ("int", "ApplyQaHealthMark")):
+            body = _block_after(code, r"protected\s+%s\s+%s\s*\([^)]*\)\s*\{" % (ret, name))
             self.assertIsNotNone(body, name)
-            self.assertIn("HasDamageSystem()", body)
             helpers[name] = body
         for call in ("GetMaxHealth(", "GetHealth(", "SetHealth("):
             total = code.count(call)
             inside = sum(b.count(call) for b in helpers.values())
             self.assertGreater(total, 0, call)
-            self.assertEqual(total, inside, call + " fuera de los ayudantes con guarda")
-            for b in helpers.values():
-                if call in b:
-                    self.assertLess(b.index("HasDamageSystem()"), b.index(call))
-        self.assertIn("maxHp = -1.0;", helpers["ReadHealth"])
-        self.assertIn("healthHp = -1.0;", helpers["ReadHealth"])
+            self.assertEqual(total, inside, call + " fuera de los ayudantes")
+        guarded = helpers["ReadHealth"]
+        self.assertIn("!obj.HasDamageSystem()", guarded)
+        self.assertLess(guarded.index("HasDamageSystem()"), guarded.index("GetMaxHealth("))
+        self.assertIn("maxHp = -1.0;", guarded)
+        self.assertIn("healthHp = -1.0;", guarded)
+        self.assertNotIn("SetHealth(", helpers["ReadQaHealth"] + guarded)
+        # La lectura directa, solo para lo que crea el QA: al crear, en el censo detras de IsQaCreated y en la marca de
+        # t6 (sus dos llamadas exigen antes la clase centinela).
+        row = _block_after(code, r"protected\s+bool\s+AppendEntityCensusRow\s*\([^)]*\)\s*\{")
+        self.assertRegex(
+            row,
+            r"if\s*\(\s*IsQaCreated\(obj\)\s*\)\s*ReadQaHealth\(obj,\s*maxHp,\s*healthHp\);\s*else\s*ReadHealth\(obj,\s*maxHp,\s*healthHp\);",
+        )
+        qa = _block_after(code, r"protected\s+bool\s+IsQaCreated\s*\(\s*Object\s+obj\s*\)\s*\{")
+        for needle in ("FindRecordByObject(obj) != null", "FindRawRecordByObject(obj) != null", "IsSentinelClass(obj.GetType())"):
+            self.assertIn(needle, qa)
+        self.assertEqual(code.count("ReadQaHealth("), 5)  # definicion, 2 en ApplyQaHealthMark, censo e IsQaHealthMark
+        self.assertEqual(len(re.findall(r"IsSentinelClass\([^;]*\)\s*&&\s*IsQaHealthMark\(", code)), 2)
         # y el testigo no lee salud.
         self.assertNotRegex(_code(WITNESS_C)[1], r"Get(Max)?Health\(")
 

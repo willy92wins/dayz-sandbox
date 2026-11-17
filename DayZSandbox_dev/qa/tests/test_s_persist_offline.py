@@ -226,6 +226,8 @@ class _SyntheticPartBuilder:
         self.old_keepalive_after_stop = old_keepalive_after_stop
         # radio de los discos del censo t5 (Sol delta r2 MEN: el alcance de la cobertura N49 depende de el)
         self.t5_radius_m = t5_radius_m
+        # discos de seguimiento t5 emitidos (etiqueta, x, z): cada uno lleva su censo de limpieza en t6, como el runner
+        self.t5_track_discs: list[tuple[str, float, float]] = []
         self.part_name = part_name
         self.nonce = nonce
         self.fault_code = fault_code
@@ -249,6 +251,7 @@ class _SyntheticPartBuilder:
         self.h_ms = 5000.0
         self.frame = 100
         self.next_net_low = 100
+        self.next_pers_k = 0
 
         self.bridge_events: list[dict[str, Any]] = []
         self.scenario_events: list[dict[str, Any]] = []
@@ -261,6 +264,13 @@ class _SyntheticPartBuilder:
     def _alloc_net_id(self) -> str:
         self.next_net_low += 1
         return f"1:{self.next_net_low}"
+
+    def _alloc_pers_id(self) -> str:
+        # Oraculo v2: como en DayZDiag, GetPersistentID da 4 enteros con signo, unicos y distintos de cero
+        # desde la creacion (tambien con ECE_NOPERSISTENCY_WORLD).
+        self.next_pers_k += 1
+        k = self.next_pers_k
+        return f"{1594376013 - 7919 * k}:{-1137025392 + 104729 * k}:{470150303 + 130363 * k}:{-806843468 - 154763 * k}"
 
     def _advance(self, dt_ms: float = 50.0, dframe: int = 3) -> None:
         self.tick_ms += dt_ms
@@ -395,7 +405,7 @@ class _SyntheticPartBuilder:
         area_tag = area_id if stage == "t5_post_restart_census" and area_id.startswith("t5_track_") else f"{stage}:{area_id}"
         if stage == "contention_probe":
             area_tag = f"contention_probe:{area_id}"
-        radius_m = self.t5_radius_m if stage == "t5_post_restart_census" else 60.0
+        radius_m = self.t5_radius_m if stage == "t5_post_restart_census" or area_id.startswith("t5_track_") else 60.0
         in_args = self._pack_ext_args(
             strings={"area_tag": area_tag},
             numbers={
@@ -635,7 +645,7 @@ class _SyntheticPartBuilder:
             "owner_uid": self.director_uid,
             "own_logical_id": "",
             "net_id": "1:10",
-            "pers_id": "0:0:0:0",
+            "pers_id": self._alloc_pers_id(),
             "own_b": 0.0,
             "in_radius_b": 1.0,
             "alive_b": 1.0,
@@ -660,7 +670,7 @@ class _SyntheticPartBuilder:
             "owner_uid": self.director_uid,
             "own_logical_id": "",
             "net_id": "1:11",
-            "pers_id": "0:0:0:0",
+            "pers_id": self._alloc_pers_id(),
             "own_b": 0.0,
             "in_radius_b": 1.0,
             "alive_b": 1.0,
@@ -789,6 +799,7 @@ class _SyntheticPartBuilder:
                 })
 
                 nid = self._alloc_net_id()
+                pers = self._alloc_pers_id()
                 local_nids[lid] = nid
                 max_hp = 100.0
                 hp = max_hp * ratio if ratio > 0.0 else max_hp
@@ -862,7 +873,7 @@ class _SyntheticPartBuilder:
                         "owner_uid": "",
                         "own_logical_id": lid,
                         "net_id": nid,
-                        "pers_id": "0:0:0:0",
+                        "pers_id": pers,
                         "own_b": 1.0,
                         "in_radius_b": 1.0,
                         "alive_b": 1.0,
@@ -975,7 +986,7 @@ class _SyntheticPartBuilder:
                     "ev": "ledger_spawn_recorded",
                     "logical_id": r["logical_id"],
                     "net_id_t1": r["net_id"],
-                    "pers_id_t1": "0:0:0:0",
+                    "pers_id_t1": self.entities_by_lid[r["logical_id"]]["pers_id"],
                     "init_max_hp": r["max_hp"],
                     "init_health_hp": r["health_hp"],
                 })
@@ -996,7 +1007,7 @@ class _SyntheticPartBuilder:
             ratio = float(rdef["health_mark_ratio"])
             max_hp = 100.0
             hp = max_hp * ratio
-            pers_id = "11:22:33:44" if mode == "persistent_control" else "0:0:0:0"
+            pers_id = "11:22:33:44" if mode == "persistent_control" else self._alloc_pers_id()
 
             if mode == "foreign_ground" or mode == "persistent_control":
                 px = float(rdef["x_m"])
@@ -1534,6 +1545,7 @@ class _SyntheticPartBuilder:
         if self.creature_far_move_m != 0.0 and self.include_t5_track_disks:
             b_inf_x = 4688.0 + self.creature_far_move_m
             b_inf_z = 10202.0
+            self.t5_track_discs.append(("t5_track_b_inf_1_t2", b_inf_x, b_inf_z))
             self._emit_census(
                 self.server_epoch_new,
                 "t5_post_restart_census",
@@ -1610,7 +1622,7 @@ class _SyntheticPartBuilder:
                 "owner_uid": "",
                 "own_logical_id": lid,
                 "net_id": nid,
-                "pers_id": "0:0:0:0",
+                "pers_id": self._alloc_pers_id(),
                 "own_b": 1.0,
                 "in_radius_b": 1.0,
                 "alive_b": 1.0,
@@ -1776,6 +1788,10 @@ class _SyntheticPartBuilder:
                 float(ainfo["center_z_m"]),
                 copy.deepcopy(baseline_dir_rows) if inc_d else [],
                 include_director_b=inc_d,
+            )
+        for disc, disc_x, disc_z in self.t5_track_discs:
+            self._emit_census(
+                self.server_epoch_new, "t6_post_cleanup_census", disc, disc_x, disc_z, [], include_director_b=0
             )
 
         self.scenario_events.append({
@@ -2220,7 +2236,9 @@ class TestSPersistOracleOffline(unittest.TestCase):
             self.assertEqual(_checks_by_id(verdict)["PER-01"]["status"], "fail")
 
     def test_neg_persistent_id_all_zero_or_constant(self) -> None:
-        # Case A: pers_id all "0:0:0:0" after restart
+        # Case A: pers_id all "0:0:0:0" in every census (t1, witness and after restart). Oraculo v2: el motor da
+        # pers_id != 0 desde la creacion, asi que en t1 y en el testigo es FALLA (PER-01, PER-09); tras el
+        # reinicio la identidad del control sigue sin poder verificarse (PER-06 missing).
         with tempfile.TemporaryDirectory() as tmp:
             builder = _SyntheticPartBuilder("run")
             part_dir = builder.build_into(Path(tmp) / "pers_zero")
@@ -2242,9 +2260,14 @@ class TestSPersistOracleOffline(unittest.TestCase):
                             )
             bpath.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
             verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
-            self.assertEqual(verdict["exit_code"], 2)
-            self.assertEqual(_checks_by_id(verdict)["PER-06"]["status"], "missing")
-            self.assertEqual(_checks_by_id(verdict)["PER-06"]["detail"], "identity_unverifiable")
+            self.assertEqual(verdict["exit_code"], 1)
+            c_map = _checks_by_id(verdict)
+            self.assertEqual(c_map["PER-01"]["status"], "fail")
+            self.assertIn("census_zero_or_invalid_pers_id", c_map["PER-01"]["detail"])
+            self.assertEqual(c_map["PER-09"]["status"], "fail")
+            self.assertIn("witness_census_row_invalid", c_map["PER-09"]["detail"])
+            self.assertEqual(c_map["PER-06"]["status"], "missing")
+            self.assertEqual(c_map["PER-06"]["detail"], "identity_unverifiable")
 
         # Case B: constant non-zero pers_id across distinct entities in area_c
         with tempfile.TemporaryDirectory() as tmp:
@@ -2271,6 +2294,462 @@ class TestSPersistOracleOffline(unittest.TestCase):
             verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
             self.assertEqual(verdict["exit_code"], 1)
             self.assertEqual(_checks_by_id(verdict)["PER-06"]["status"], "fail")
+
+    # Oraculo v2 (partida real del 2026-11-16): pers_id != "0:0:0:0" desde la creacion, en t1 y en el testigo.
+
+    def _set_census_pers_id(
+        self, part_dir: Path, builder: "_SyntheticPartBuilder", area_tag: str, lid: str, pers_id: str
+    ) -> None:
+        """Pone ``pers_id`` en la fila ``own_logical_id == lid`` del censo ``area_tag`` (solo en ese censo)."""
+        events = _read_events(part_dir)
+        jobs: set[str] = set()
+        hits = 0
+        for ev in events:
+            if ev.get("ev") != "result":
+                continue
+            for res in ev.get("results") or []:
+                if res.get("verb") == "per_census_start":
+                    u_s, _u_n, _u_r = _unpack(res["read"])
+                    if u_s.get("area_tag") == area_tag:
+                        jobs.add(u_s["job"])
+                elif res.get("verb") == "job_read":
+                    u_s, u_n, u_r = _unpack(res["read"])
+                    if u_s.get("job") not in jobs:
+                        continue
+                    for row in u_r:
+                        if row.get("own_logical_id") == lid:
+                            row["pers_id"] = pers_id
+                            hits += 1
+                    res["read"] = builder._pack_ext_read(
+                        strings=u_s, numbers=u_n, ncol=res["read"]["ncol"], scol=res["read"]["scol"], rows=u_r
+                    )
+        self.assertEqual(hits, 1, msg=f"{area_tag}:{lid}")
+        _write_events(part_dir, events)
+
+    def _add_apply_pers_column(
+        self, part_dir: Path, builder: "_SyntheticPartBuilder", override: dict[tuple[str, str], str]
+    ) -> int:
+        """Anade a las filas de ``per_apply_scene`` la columna opcional ``pers_id`` con el valor del censo de esa
+        entidad en su epoch (``override[(inst, logical_id)]`` lo sustituye). Devuelve cuantas filas la llevan."""
+        events = _read_events(part_dir)
+        census_pers: dict[tuple[str, str], str] = {}
+        for ev in events:
+            if ev.get("ev") != "result":
+                continue
+            for res in ev.get("results") or []:
+                if res.get("verb") == "job_read":
+                    _u_s, _u_n, u_r = _unpack(res["read"])
+                    for row in u_r:
+                        if row.get("own_logical_id"):
+                            census_pers.setdefault((ev["inst"], row["own_logical_id"]), row["pers_id"])
+        n = 0
+        for ev in events:
+            if ev.get("ev") != "result":
+                continue
+            for res in ev.get("results") or []:
+                if res.get("verb") != "per_apply_scene" or res.get("status") != "done":
+                    continue
+                u_s, u_n, u_r = _unpack(res["read"])
+                for row in u_r:
+                    key = (ev["inst"], row["logical_id"])
+                    row["pers_id"] = override.get(key, census_pers[key])
+                    n += 1
+                res["read"] = builder._pack_ext_read(
+                    strings=u_s,
+                    numbers=u_n,
+                    ncol=res["read"]["ncol"],
+                    scol=list(res["read"]["scol"]) + ["pers_id"],
+                    rows=u_r,
+                )
+        _write_events(part_dir, events)
+        return n
+
+    def test_v2_t1_scene_row_with_zero_or_malformed_pers_id_not_pasa(self) -> None:
+        """Oraculo v2/v2.1: una fila de t1 de una entidad de escena con pers_id cero o imposible -> FALLA/PER-01.
+
+        v2.1 (Sol r1 BLOQ 2): "-0", fuera de int32, ceros a la izquierda, no numerico y "\\n" final no son ids.
+        """
+        for bad in ("0:0:0:0", "1:2:3", "-0:0:0:0", "2147483648:0:0:0", "01:2:3:4", "1:2:3:x", "1:2:3:4\n"):
+            with tempfile.TemporaryDirectory() as tmp:
+                builder = _SyntheticPartBuilder("run")
+                part_dir = builder.build_into(Path(tmp) / "t1_bad_pers")
+                self._set_census_pers_id(part_dir, builder, "t1_pre_transition_census:area_a", "a_prop_1", bad)
+                verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                self.assertEqual(verdict["exit_code"], 1, msg=repr(bad))
+                self.assertEqual(_only_non_pass(verdict), {"PER-01": "fail"}, msg=repr(bad))
+                self.assertIn("a_prop_1:census_zero_or_invalid_pers_id", _checks_by_id(verdict)["PER-01"]["detail"])
+
+    def test_v2_witness_row_with_zero_pers_id_not_pasa(self) -> None:
+        """Oraculo v2/v2.1: una fila del testigo con pers_id "0:0:0:0" o "-0:0:0:0" -> FALLA/PER-09."""
+        for bad in ("0:0:0:0", "-0:0:0:0"):
+            with tempfile.TemporaryDirectory() as tmp:
+                builder = _SyntheticPartBuilder("run")
+                part_dir = builder.build_into(Path(tmp) / "witness_zero_pers")
+                self._set_census_pers_id(part_dir, builder, "t5_witness_pre_census:area_b", "b_prop_1", bad)
+                verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                self.assertEqual(verdict["exit_code"], 1, msg=bad)
+                self.assertEqual(_only_non_pass(verdict), {"PER-09": "fail"}, msg=bad)
+                self.assertIn("witness_census_row_invalid:b_prop_1", _checks_by_id(verdict)["PER-09"]["detail"])
+
+    def test_v2_pers_id_reported_by_spawn_must_match_census(self) -> None:
+        """Oraculo v2: si ``per_apply_scene`` reporta ``pers_id`` (columna opcional), el censo trae el mismo.
+
+        Columna igual al censo -> PASA; distinta en t1 -> FALLA/PER-01; distinta en el testigo -> FALLA/PER-09;
+        ``"0:0:0:0"`` en el recibo no es un id real y no se compara (como ``pers_id_t3`` en PER-06) -> PASA.
+        """
+        cases = (
+            ("matching", {}, {}),
+            ("t1_mismatch", {("old", "a_prop_1"): "7:7:7:7"}, {"PER-01": "fail"}),
+            ("witness_mismatch", {("new", "b_prop_1"): "7:7:7:7"}, {"PER-09": "fail"}),
+            ("spawn_reports_zero", {("old", "a_prop_1"): "0:0:0:0"}, {}),
+        )
+        for name, ovr, expected in cases:
+            with tempfile.TemporaryDirectory() as tmp:
+                builder = _SyntheticPartBuilder("run")
+                part_dir = builder.build_into(Path(tmp) / name)
+                epoch = {"old": builder.server_epoch_old, "new": builder.server_epoch_new}
+                n = self._add_apply_pers_column(part_dir, builder, {(epoch[e], lid): p for (e, lid), p in ovr.items()})
+                self.assertGreater(n, 0, msg=name)
+                verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                self.assertEqual(_only_non_pass(verdict), expected, msg=name)
+                self.assertEqual(verdict["exit_code"], 1 if expected else 0, msg=name)
+                if name == "t1_mismatch":
+                    self.assertIn(
+                        "a_prop_1:census_pers_id_differs_from_spawn", _checks_by_id(verdict)["PER-01"]["detail"]
+                    )
+                if name == "witness_mismatch":
+                    self.assertIn("witness_census_row_invalid:b_prop_1", _checks_by_id(verdict)["PER-09"]["detail"])
+
+    # Oraculo v2.1 (Sol r1 sobre v2): ids canonicos int32, unicos por etapa y epoch, y estables en el testigo.
+
+    def _census_pers_id(self, part_dir: Path, area_tag: str, lid: str) -> str:
+        """``pers_id`` de la fila ``own_logical_id == lid`` del censo ``area_tag``."""
+        jobs: set[str] = set()
+        found: list[str] = []
+        for ev in _read_events(part_dir):
+            if ev.get("ev") != "result":
+                continue
+            for res in ev.get("results") or []:
+                if res.get("verb") == "per_census_start":
+                    u_s, _u_n, _u_r = _unpack(res["read"])
+                    if u_s.get("area_tag") == area_tag:
+                        jobs.add(u_s["job"])
+                elif res.get("verb") == "job_read":
+                    u_s, _u_n, u_r = _unpack(res["read"])
+                    if u_s.get("job") in jobs:
+                        found += [r["pers_id"] for r in u_r if r.get("own_logical_id") == lid]
+        self.assertEqual(len(found), 1, msg=f"{area_tag}:{lid}")
+        return found[0]
+
+    def _set_all_own_census_pers_id(self, part_dir: Path, builder: "_SyntheticPartBuilder", pers_id: str) -> int:
+        """Pone ``pers_id`` en todas las filas QA propias (``own_logical_id``) de todos los censos; devuelve cuantas."""
+        events = _read_events(part_dir)
+        n = 0
+        for ev in events:
+            if ev.get("ev") != "result":
+                continue
+            for res in ev.get("results") or []:
+                if res.get("verb") != "job_read":
+                    continue
+                u_s, u_n, u_r = _unpack(res["read"])
+                for row in u_r:
+                    if row.get("own_logical_id"):
+                        row["pers_id"] = pers_id
+                        n += 1
+                res["read"] = builder._pack_ext_read(
+                    strings=u_s, numbers=u_n, ncol=res["read"]["ncol"], scol=res["read"]["scol"], rows=u_r
+                )
+        _write_events(part_dir, events)
+        return n
+
+    def test_v2_1_pers_id_validator_canonical_int32(self) -> None:
+        """Oraculo v2.1 (Sol r1 BLOQ 2): 4 enteros int32 en forma canonica; el cero se mide por valor."""
+        for ok in ("1:-2:3:4", "0:0:0:1", "-2147483648:2147483647:0:5", "1594376013:1497516033:-1137025392:470150303"):
+            self.assertTrue(s_persist_eval._is_nonzero_pers_id(ok), msg=ok)
+            self.assertEqual(s_persist_eval._pers_id_issue(ok), "", msg=ok)
+        self.assertTrue(s_persist_eval._valid_pers_id("0:0:0:0"))
+        self.assertFalse(s_persist_eval._is_nonzero_pers_id("0:0:0:0"))
+        for bad in (
+            "-0:0:0:0", "00:0:0:0", "01:2:3:4", "+1:2:3:4", "2147483648:0:0:0", "-2147483649:0:0:0", "1:2:3",
+            "1:2:3:4:5", "1:2:3:4\n", " 1:2:3:4", "a:b:c:d", "1:2:3:x", "١:2:3:4", "", None, 1234,
+        ):
+            self.assertFalse(s_persist_eval._valid_pers_id(bad), msg=repr(bad))
+            self.assertEqual(s_persist_eval._pers_id_issue(bad), "zero_or_invalid_pers_id", msg=repr(bad))
+
+    def test_v2_1_constant_or_copied_pers_id_not_pasa(self) -> None:
+        """Oraculo v2.1 (Sol r1 BLOQ 1): el mismo pers_id en entidades distintas de una etapa no da PASA.
+
+        (a) todas las filas QA con el id copiado del control (``area_c`` intacta), sin recibos, y (b) con recibos
+        de ``per_apply_scene`` que coinciden: FALLA en PER-01 y PER-09. (c) dos entidades distintas de t1 con el
+        mismo id: solo PER-01. (d) dos entidades distintas del testigo con el mismo id antes y despues: solo PER-09.
+        """
+        for with_receipts in (False, True):
+            with tempfile.TemporaryDirectory() as tmp:
+                builder = _SyntheticPartBuilder("run")
+                part_dir = builder.build_into(Path(tmp) / "copied_control_pers")
+                ctrl_pid = builder.entities_by_lid["c_persistent_control"]["pers_id"]
+                self.assertGreaterEqual(self._set_all_own_census_pers_id(part_dir, builder, ctrl_pid), 100)
+                if with_receipts:
+                    self.assertGreater(self._add_apply_pers_column(part_dir, builder, {}), 0)
+                verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                c_map = _checks_by_id(verdict)
+                self.assertEqual(verdict["exit_code"], 1, msg=f"receipts={with_receipts}")
+                self.assertEqual(_only_non_pass(verdict), {"PER-01": "fail", "PER-09": "fail"}, msg=f"receipts={with_receipts}")
+                self.assertIn(f"t1_pers_id_shared_by_distinct_entities:{ctrl_pid}", c_map["PER-01"]["detail"])
+                self.assertIn(f"witness_pers_id_shared_by_distinct_entities:{ctrl_pid}", c_map["PER-09"]["detail"])
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "t1_two_entities_same_pers")
+            pid = builder.entities_by_lid["a_prop_1"]["pers_id"]
+            self._set_census_pers_id(part_dir, builder, "t1_pre_transition_census:area_a", "a_prop_2", pid)
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 1)
+            self.assertEqual(_only_non_pass(verdict), {"PER-01": "fail"})
+            self.assertIn(f"t1_pers_id_shared_by_distinct_entities:{pid}", _checks_by_id(verdict)["PER-01"]["detail"])
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _SyntheticPartBuilder("run")
+            part_dir = builder.build_into(Path(tmp) / "witness_two_entities_same_pers")
+            pid = self._census_pers_id(part_dir, "t5_witness_pre_census:area_b", "b_prop_1")
+            for tag in ("t5_witness_pre_census:area_b", "t5_witness_post_census:area_b"):
+                self._set_census_pers_id(part_dir, builder, tag, "b_chest_own", pid)
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(verdict["exit_code"], 1)
+            self.assertEqual(_only_non_pass(verdict), {"PER-09": "fail"})
+            self.assertIn(f"witness_pers_id_shared_by_distinct_entities:{pid}", _checks_by_id(verdict)["PER-09"]["detail"])
+
+    def test_v2_1_witness_post_census_pers_id_changed_not_pasa(self) -> None:
+        """Oraculo v2.1 (Sol r1 MEN): si el pers_id de una entidad del testigo cambia del censo previo al
+        posterior (a cero o a otro id) -> FALLA/PER-09."""
+        for new_pid in ("0:0:0:0", "7:7:7:7"):
+            with tempfile.TemporaryDirectory() as tmp:
+                builder = _SyntheticPartBuilder("run")
+                part_dir = builder.build_into(Path(tmp) / "witness_post_pers_changed")
+                self._set_census_pers_id(part_dir, builder, "t5_witness_post_census:area_b", "b_prop_1", new_pid)
+                verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                self.assertEqual(verdict["exit_code"], 1, msg=new_pid)
+                self.assertEqual(_only_non_pass(verdict), {"PER-09": "fail"}, msg=new_pid)
+                self.assertIn("witness_entity_changed:", _checks_by_id(verdict)["PER-09"]["detail"])
+
+    # Oraculo v2.1 (autorizado por Guillermo): en t6 solo cuenta como superviviente lo que es del test.
+
+    @staticmethod
+    def _t6_row(**over: Any) -> dict[str, Any]:
+        """Fila completa de censo para inyectar en t6 (por defecto, un infectado del CE en area_c)."""
+        row: dict[str, Any] = {
+            "class_name": "ZmbM_PatrolNormal_Autumn", "loc_kind": "ground", "parent_class": "", "parent_net_id": "",
+            "slot_name": "", "owner_uid": "", "own_logical_id": "", "net_id": "1:8001",
+            "pers_id": "-1203338211:774601125:-98765431:1357913579", "own_b": 0.0, "in_radius_b": 1.0, "alive_b": 1.0,
+            "ai_agent_b": 1.0, "pos_x_m": 4862.0, "pos_y_m": _surface_y(4862.0, 10202.0), "pos_z_m": 10202.0,
+            "yaw_deg": 33.0, "pitch_deg": 0.0, "roll_deg": 0.0, "max_hp": 100.0, "health_hp": 41.0,
+            "inv_children_n": 0.0, "spawn_tick_ms": 0.0,
+        }
+        row.update(over)
+        return row
+
+    def _add_t6_rows(
+        self, part_dir: Path, builder: "_SyntheticPartBuilder", area_id: str, extra: list[dict[str, Any]]
+    ) -> None:
+        """Anade ``extra`` al censo t6 de ``area_id`` (area base, con el director si lo lleva, o disco ``t5_track_*``)
+        en su ultima pagina, con sus contadores coherentes."""
+        events = _read_events(part_dir)
+        tag = f"t6_post_cleanup_census:{area_id}"
+        jobs: set[str] = set()
+        appended = 0
+        for ev in events:
+            if ev.get("ev") != "result":
+                continue
+            for res in ev.get("results") or []:
+                if res.get("verb") == "per_census_start":
+                    u_s, u_n, u_r = _unpack(res["read"])
+                    if u_s.get("area_tag") == tag:
+                        jobs.add(u_s["job"])
+                        u_n["rows_captured_n"] = float(u_n["rows_captured_n"]) + len(extra)
+                        res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
+                elif res.get("verb") == "job_read":
+                    u_s, u_n, u_r = _unpack(res["read"])
+                    if u_s.get("job") in jobs:
+                        pages_n = max(1, int(round(u_n["pages_n"])))
+                        u_n["pages_n"] = float(pages_n)
+                        u_n["rows_total_n"] = float(u_n["rows_total_n"]) + len(extra)
+                        if int(round(u_n["page_n"])) == pages_n - 1:
+                            u_r.extend(copy.deepcopy(extra))
+                            appended += 1
+                        res["read"] = builder._pack_ext_read(
+                            strings=u_s, numbers=u_n, ncol=res["read"]["ncol"], scol=res["read"]["scol"], rows=u_r
+                        )
+        self.assertEqual(appended, 1, msg=tag)
+        _write_events(part_dir, events)
+
+    def _census_row(self, part_dir: Path, area_tag: str, lid: str) -> dict[str, Any]:
+        """Fila ``own_logical_id == lid`` del censo ``area_tag``."""
+        jobs: set[str] = set()
+        found: list[dict[str, Any]] = []
+        for ev in _read_events(part_dir):
+            if ev.get("ev") != "result":
+                continue
+            for res in ev.get("results") or []:
+                if res.get("verb") == "per_census_start":
+                    u_s, _u_n, _u_r = _unpack(res["read"])
+                    if u_s.get("area_tag") == area_tag:
+                        jobs.add(u_s["job"])
+                elif res.get("verb") == "job_read":
+                    u_s, _u_n, u_r = _unpack(res["read"])
+                    if u_s.get("job") in jobs:
+                        found += [r for r in u_r if r.get("own_logical_id") == lid]
+        self.assertEqual(len(found), 1, msg=f"{area_tag}:{lid}")
+        return found[0]
+
+    def test_v2_1_t6_only_test_entities_count_as_survivors(self) -> None:
+        """Oraculo v2.1 (brief :284, :189): tras ``per_cleanup_qa`` solo tumba PER-09 lo que es del test.
+
+        Un infectado del CE con su gorra en el area -> PASA. Un superviviente del QA ajeno por diseno
+        (``per_spawn_raw``, ``own_b=0``), por su ``pers_id`` o su marca de vida -> FALLA/PER-09. Una fila del CE que
+        se hace pasar por el QA (``pers_id`` o ``net_id`` de una entidad del test, o clase centinela con la marca
+        de vida del QA) -> FALLA/PER-09. Sol r2: el ``Fireplace`` hijo del control (sin recibo propio) que en t6
+        esta suelto o dentro de un ``WoodenCrate`` ajeno sigue siendo del test -> FALLA/PER-09.
+        """
+        cap = {
+            "class_name": "PilotkaCap", "loc_kind": "attachment", "parent_class": "ZmbM_PatrolNormal_Autumn",
+            "parent_net_id": "1:8001", "slot_name": "Headgear", "net_id": "1:8002", "ai_agent_b": 0.0,
+            "pers_id": "1471113377:-246813579:1029384756:-1122334455", "health_hp": 100.0,
+        }
+        crate = {
+            "class_name": "WoodenCrate", "net_id": "1:8010", "pers_id": "-1987654321:123456789:-24680:97531",
+            "ai_agent_b": 0.0, "max_hp": 400.0, "health_hp": 400.0, "inv_children_n": 1.0,
+        }
+        for name in ("ce_infected_with_cap", "qa_control_raw", "qa_foreign_raw_by_pers_id", "ce_with_qa_pers_id",
+                     "ce_with_qa_net_id", "ce_sentinel_with_qa_mark", "qa_raw_child_loose",
+                     "qa_raw_child_in_foreign_crate"):
+            with tempfile.TemporaryDirectory() as tmp:
+                builder = _SyntheticPartBuilder("run")
+                part_dir = builder.build_into(Path(tmp) / name)
+                wit = self._census_row(part_dir, "t5_witness_pre_census:area_b", "b_prop_1")
+                raw_wb = builder.entities_by_lid["a_foreign_ground"]
+                fp = dict(builder.entities_by_lid["c_persistent_control_child"], alive_b=1.0)
+                rows = {
+                    "ce_infected_with_cap": [self._t6_row(), self._t6_row(**cap)],
+                    "qa_control_raw": [dict(builder.entities_by_lid["c_persistent_control"], alive_b=1.0)],
+                    "qa_foreign_raw_by_pers_id": [
+                        self._t6_row(class_name="WaterBottle", net_id="1:8003", pers_id=raw_wb["pers_id"],
+                                     ai_agent_b=0.0, health_hp=100.0)
+                    ],
+                    "ce_with_qa_pers_id": [self._t6_row(pers_id=wit["pers_id"]), self._t6_row(**cap)],
+                    "ce_with_qa_net_id": [self._t6_row(net_id=wit["net_id"])],
+                    "ce_sentinel_with_qa_mark": [
+                        self._t6_row(class_name="Barrel_Yellow", ai_agent_b=0.0, max_hp=1300.0, health_hp=1300.0 * 0.845)
+                    ],
+                    "qa_raw_child_loose": [
+                        dict(fp, loc_kind="ground", parent_class="", parent_net_id="", slot_name="")
+                    ],
+                    "qa_raw_child_in_foreign_crate": [
+                        dict(fp, loc_kind="cargo", parent_class="WoodenCrate", parent_net_id="1:8010",
+                             slot_name="Cargo:0:0:0"),
+                        self._t6_row(**crate),
+                    ],
+                }[name]
+                self._add_t6_rows(part_dir, builder, "area_c", rows)
+                verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                if name == "ce_infected_with_cap":
+                    self.assertEqual(verdict["exit_code"], 0, msg=json.dumps(_only_non_pass(verdict)))
+                    continue
+                self.assertEqual(verdict["exit_code"], 1, msg=name)
+                self.assertEqual(_only_non_pass(verdict), {"PER-09": "fail"}, msg=name)
+                detail = _checks_by_id(verdict)["PER-09"]["detail"]
+                self.assertTrue(detail.startswith("t6_cleanup_survivors:"), msg=f"{name}: {detail}")
+                self.assertIn(f"{rows[0]['class_name']}:{rows[0]['net_id']}", detail, msg=name)
+                if name == "ce_with_qa_pers_id":
+                    self.assertIn("PilotkaCap:1:8002", detail, msg=name)
+                if name == "qa_raw_child_in_foreign_crate":
+                    self.assertNotIn("WoodenCrate", detail, msg=name)
+
+    def _t6_census_op_ids(self, events: list[dict[str, Any]], area_tag: str) -> set[str]:
+        """``op_id`` del censo ``area_tag`` (``per_census_start``) y de sus ``job_read`` / ``job_free``."""
+        starts: set[str] = set()
+        for ev in events:
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                if res.get("verb") == "per_census_start" and _unpack(res["read"])[0].get("area_tag") == area_tag:
+                    starts.add(res["op_id"])
+        ids = set(starts)
+        for ev in events:
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                if res.get("verb") in ("job_read", "job_free") and _unpack(res["read"])[0].get("job") in starts:
+                    ids.add(res["op_id"])
+        return ids
+
+    def _shift_census_center(
+        self, part_dir: Path, builder: "_SyntheticPartBuilder", area_tag: str, dx_m: float
+    ) -> None:
+        """Desplaza ``dx_m`` en x el centro que publica el censo ``area_tag``."""
+        events = _read_events(part_dir)
+        moved = 0
+        for ev in events:
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                if res.get("verb") == "per_census_start":
+                    u_s, u_n, u_r = _unpack(res["read"])
+                    if u_s.get("area_tag") == area_tag:
+                        u_n["center_x_m"] = float(u_n["center_x_m"]) + dx_m
+                        res["read"] = builder._pack_ext_read(strings=u_s, numbers=u_n, rows=u_r)
+                        moved += 1
+        self.assertEqual(moved, 1, msg=area_tag)
+        _write_events(part_dir, events)
+
+    def test_v2_1_t6_director_and_track_discs(self) -> None:
+        """Oraculo v2.1 (Sol, confirmacion de t6): la limpieza se verifica tambien en el director y en los discos
+        ``t5_track_*``.
+
+        a) Una prenda QA (``own_b=1``) dentro del director tras la limpieza -> FALLA/PER-09; una prenda de inicio del
+        director sin identidad QA (``BandageDressing`` centinela, vida completa) -> PASA. b) Con el disco t5
+        ``t5_track_b_inf_1_t2``: el ``Fireplace`` del control superviviente en su censo t6 -> FALLA/PER-09; un
+        ``Barrel_Yellow`` del mundo ahi -> PASA; sin su censo t6, o con el censo t6 en otro centro -> INCONCLUSO/PER-09.
+        """
+        disc = "t5_track_b_inf_1_t2"
+        for name in ("qa_garment_in_director", "director_start_item", "qa_survivor_in_track_disc",
+                     "ce_barrel_in_track_disc", "track_disc_without_t6", "track_disc_t6_elsewhere"):
+            with tempfile.TemporaryDirectory() as tmp:
+                builder = _SyntheticPartBuilder("run", creature_far_move_m=75.0, include_t5_track_disks=True)
+                part_dir = builder.build_into(Path(tmp) / name)
+                needle = ""
+                if name == "qa_garment_in_director":
+                    gloves = dict(builder.entities_by_lid["b_act_1_gloves_dir"], alive_b=1.0)
+                    self.assertEqual(gloves["owner_uid"], builder.director_uid)
+                    self._add_t6_rows(part_dir, builder, "area_a", [gloves])
+                    expected = {"PER-09": "fail"}
+                    needle = f"t6_cleanup_survivors:WorkingGloves_Yellow:{gloves['net_id']}"
+                elif name == "director_start_item":
+                    self._add_t6_rows(part_dir, builder, "area_a", [self._t6_row(
+                        class_name="BandageDressing", loc_kind="cargo", parent_class="Jeans_Blue", parent_net_id="1:10",
+                        slot_name="Cargo:0:2:0", owner_uid=builder.director_uid, net_id="1:8020", ai_agent_b=0.0,
+                        pers_id="1357924680:-1357924680:24681357:-97531", max_hp=50.0, health_hp=50.0,
+                    )])
+                    expected = {}
+                elif name == "qa_survivor_in_track_disc":
+                    fp = dict(builder.entities_by_lid["c_persistent_control_child"], alive_b=1.0, loc_kind="ground",
+                              parent_class="", parent_net_id="", slot_name="")
+                    self._add_t6_rows(part_dir, builder, disc, [fp])
+                    expected = {"PER-09": "fail"}
+                    needle = f"t6_cleanup_survivors:Fireplace:{fp['net_id']}"
+                elif name == "ce_barrel_in_track_disc":
+                    self._add_t6_rows(part_dir, builder, disc, [self._t6_row(
+                        class_name="Barrel_Yellow", net_id="1:8030", ai_agent_b=0.0, max_hp=1300.0, health_hp=384.9,
+                        pers_id="1780910942:-1857628348:2126480516:1419094472",
+                    )])
+                    expected = {}
+                elif name == "track_disc_without_t6":
+                    events = _read_events(part_dir)
+                    ops = self._t6_census_op_ids(events, f"t6_post_cleanup_census:{disc}")
+                    self.assertEqual(len(ops), 3, msg=name)
+                    _write_events(part_dir, _drop_ops(events, ops))
+                    expected = {"PER-09": "missing"}
+                    needle = f"t6_cleanup_census_absent:{disc}"
+                else:
+                    self._shift_census_center(part_dir, builder, f"t6_post_cleanup_census:{disc}", 5.0)
+                    expected = {"PER-09": "missing"}
+                    needle = f"t6_cleanup_census_absent:{disc}"
+                verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                self.assertEqual(_only_non_pass(verdict), expected, msg=name)
+                self.assertEqual(verdict["exit_code"], {"fail": 1, "missing": 2}.get(expected.get("PER-09", ""), 0), msg=name)
+                if needle:
+                    self.assertIn(needle, _checks_by_id(verdict)["PER-09"]["detail"], msg=name)
 
     def test_neg_foreign_pose_without_before_and_after_or_altered_pose(self) -> None:
         # Case A: missing t3_pre_reset_census
@@ -3034,7 +3513,7 @@ class TestSPersistOracleOffline(unittest.TestCase):
                                         "owner_uid": "",
                                         "own_logical_id": "",
                                         "net_id": "1:9999",
-                                        "pers_id": "0:0:0:0",
+                                        "pers_id": "-1311752381:996137005:-224557291:1468313449",
                                         "own_b": 0.0,
                                         "in_radius_b": 1.0,
                                         "alive_b": 1.0,
@@ -3716,7 +4195,7 @@ class TestSPersistOracleOffline(unittest.TestCase):
             "owner_uid": "",
             "own_logical_id": "b_prop_1",
             "net_id": b_prop_1_nid,
-            "pers_id": "0:0:0:0",
+            "pers_id": builder.entities_by_lid["b_prop_1"]["pers_id"],
             "own_b": 1.0,
             "in_radius_b": 1.0,
             "alive_b": 1.0,

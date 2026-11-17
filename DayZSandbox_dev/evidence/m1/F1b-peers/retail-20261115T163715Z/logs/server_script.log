@@ -1,0 +1,170 @@
+---------------------------------------------
+Log C:\tmp\dsbx-f1bpeers-work\partida\profiles_retail\server\script_2026-11-15_17-37-16.log started at 2026-11-15 17:37:20 (2026-11-15 16:37:20 UTC)
+
+17:37:20.377 SCRIPT       : Module: GameLib; loaded 13x files; 13x classes; used 7/2097 kB (0%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,RELEASE,NO_GUI,NO_GUI_INGAME,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: dd77776f
+17:37:20.396 SCRIPT       : Registered 314 temporary action enum(s), UAN==314
+17:37:20.752 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableCrouchCameraHorizontalRotation'
+17:37:20.752 SCRIPT    (W): @"scripts/3_Game/human.c,241": Method not linked 'HumanInputController.DisableCrouchCameratHorizontalRotation'
+17:37:20.752 SCRIPT    (W): @"scripts/3_Game/human.c,240": Method not linked 'HumanInputController.DisableErectCameratHorizontalRotation'
+17:37:20.752 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableErectHorizontalRotation'
+17:37:20.753 SCRIPT       : Module: Game; loaded 447x files; 1511x classes; used 4245/33554 kB (12%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,RELEASE,NO_GUI,NO_GUI_INGAME,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: 5d057844
+17:37:20.755 SCRIPT       : ... Backlit Effects Enabled
+17:37:21.817 SCRIPT    (W): @"scripts/4_World/entities/building/underground/entrance/land_underground_entrance.c,149": 'UpdatePathgraphDoorByAnimationSourceName' is obsolete: 1.30: Use UpdatePathgraphEntityState
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetActions'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.SetRoboRespawn'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.SetName'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetInitialState'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetEvents'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.SetRoboRespawnTime'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetName'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetFromStates'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetToStates'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetRoboRespawn'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetActive'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetRoboRespawnTime'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetGuards'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.GetDefaultRoboRespawn'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.ReadStateMachines'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.GetDefaultRoboRespawnTime'
+17:37:22.055 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.GetStateMachines'
+17:37:22.112 SCRIPT       : Module: World; loaded 2322x files; 6187x classes; used 9604/33554 kB (28%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,RELEASE,NO_GUI,NO_GUI_INGAME,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: 7f1b624f
+17:37:41.207  SCRIPT       : Module: Mission; loaded 220x files; 471x classes; used 3169/33554 kB (9%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,RELEASE,NO_GUI,NO_GUI_INGAME,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,ENABLE_CAROUSEL"; CRC32: ea554c11
+17:38:00.645 SCRIPT       : [DSBX] clock tick_ms=44112
+17:38:00.646 SCRIPT       : [DSBX] config status=ok
+17:38:00.646 SCRIPT       : [DSBX] state HELLO
+17:38:01.461 SCRIPT       : [DSBX] hello accepted session=24c213a8601e7334 conn=1
+17:38:03.515 SCRIPT       : [DSBX] catalog scan finished pages=35 skipped=0
+17:38:05.646 SCRIPT       : [DSBX] clock tick_ms=49112
+17:38:07.110 SCRIPT       : [DSBX] catalog complete pages=35
+17:38:10.645 SCRIPT       : [DSBX] clock tick_ms=54112
+17:38:15.645 SCRIPT       : [DSBX] clock tick_ms=59112
+17:38:20.646 SCRIPT       : [DSBX] clock tick_ms=64113
+17:38:25.646 SCRIPT       : [DSBX] clock tick_ms=69113
+17:38:30.646 SCRIPT       : [DSBX] clock tick_ms=74113
+17:38:35.646 SCRIPT       : [DSBX] clock tick_ms=79113
+17:38:40.646 SCRIPT       : [DSBX] clock tick_ms=84113
+17:38:45.646 SCRIPT       : [DSBX] clock tick_ms=89113
+17:38:50.648 SCRIPT       : [DSBX] clock tick_ms=94114
+17:38:55.647 SCRIPT       : [DSBX] clock tick_ms=99114
+17:39:00.646 SCRIPT       : [DSBX] clock tick_ms=104114
+17:39:05.647 SCRIPT       : [DSBX] clock tick_ms=109114
+17:39:10.647 SCRIPT       : [DSBX] clock tick_ms=114114
+17:39:15.647 SCRIPT       : [DSBX] clock tick_ms=119114
+17:39:20.656 SCRIPT       : [DSBX] clock tick_ms=124122
+17:39:25.655 SCRIPT       : [DSBX] clock tick_ms=129122
+17:39:30.655 SCRIPT       : [DSBX] clock tick_ms=134122
+17:39:35.654 SCRIPT       : [DSBX] clock tick_ms=139122
+17:39:41.744  SCRIPT       : ---- PlayerBase OnStoreLoad SUCCESS ----
+17:39:41.769 SCRIPT       : [DSBX] clock tick_ms=145236
+17:39:41.769 SCRIPT       : [DSBX] lease lost age_ms=3535 tick_ms=145236
+17:39:41.769 SCRIPT       : [DSBX] lease expired: returning to HELLO
+17:39:41.871 SCRIPT       : [DSBX] hello accepted session=24c213a8601e7334 conn=2
+17:39:46.769 SCRIPT       : [DSBX] clock tick_ms=150236
+17:39:51.769 SCRIPT       : [DSBX] clock tick_ms=155236
+17:39:56.770 SCRIPT       : [DSBX] clock tick_ms=160236
+17:40:01.769 SCRIPT       : [DSBX] clock tick_ms=165236
+17:40:06.769 SCRIPT       : [DSBX] clock tick_ms=170236
+17:40:11.769 SCRIPT       : [DSBX] clock tick_ms=175236
+17:40:16.769 SCRIPT       : [DSBX] clock tick_ms=180236
+17:40:21.787 SCRIPT       : [DSBX] clock tick_ms=185253
+17:40:26.786 SCRIPT       : [DSBX] clock tick_ms=190253
+17:40:31.786 SCRIPT       : [DSBX] clock tick_ms=195253
+17:40:36.786 SCRIPT       : [DSBX] clock tick_ms=200253
+17:40:41.786 SCRIPT       : [DSBX] clock tick_ms=205253
+17:40:46.786 SCRIPT       : [DSBX] clock tick_ms=210253
+17:40:51.787 SCRIPT       : [DSBX] clock tick_ms=215253
+17:40:56.786 SCRIPT       : [DSBX] clock tick_ms=220253
+17:41:01.787 SCRIPT       : [DSBX] clock tick_ms=225253
+17:41:06.786 SCRIPT       : [DSBX] clock tick_ms=230253
+17:41:11.786 SCRIPT       : [DSBX] clock tick_ms=235253
+17:41:16.786 SCRIPT       : [DSBX] clock tick_ms=240253
+17:41:21.785 SCRIPT       : [DSBX] clock tick_ms=245253
+17:41:26.787 SCRIPT       : [DSBX] clock tick_ms=250253
+17:41:31.785 SCRIPT       : [DSBX] clock tick_ms=255253
+17:41:36.786 SCRIPT       : [DSBX] clock tick_ms=260253
+17:41:41.786 SCRIPT       : [DSBX] clock tick_ms=265253
+17:41:46.786 SCRIPT       : [DSBX] clock tick_ms=270253
+17:41:51.786 SCRIPT       : [DSBX] clock tick_ms=275253
+17:41:56.785 SCRIPT       : [DSBX] clock tick_ms=280253
+17:42:01.786 SCRIPT       : [DSBX] clock tick_ms=285253
+17:42:06.786 SCRIPT       : [DSBX] clock tick_ms=290253
+17:42:07.981 SCRIPT       : [DSBX] rest error ch=P kind=2 state=7 tick_ms=291448
+17:42:08.287 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=291753
+17:42:08.287 SCRIPT       : [DSBX] state HELLO: client error on P
+17:42:08.686 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=292153
+17:42:09.194 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=292661
+17:42:10.549 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=294015
+17:42:11.786 SCRIPT       : [DSBX] clock tick_ms=295253
+17:42:12.563 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=296030
+17:42:14.644 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=298111
+17:42:16.759 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=300226
+17:42:16.806 SCRIPT       : [DSBX] clock tick_ms=300273
+17:42:18.891 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=302358
+17:42:20.943 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=304410
+17:42:21.806 SCRIPT       : [DSBX] clock tick_ms=305273
+17:42:23.155 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=306621
+17:42:25.209 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=308676
+17:42:26.807 SCRIPT       : [DSBX] clock tick_ms=310273
+17:42:27.310 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=310778
+17:42:29.416 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=312883
+17:42:31.536 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=315003
+17:42:31.805 SCRIPT       : [DSBX] clock tick_ms=315273
+17:42:33.651 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=317117
+17:42:35.757 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=319224
+17:42:36.806 SCRIPT       : [DSBX] clock tick_ms=320273
+17:42:37.786 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=321253
+17:42:39.818 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=323285
+17:42:41.806 SCRIPT       : [DSBX] clock tick_ms=325273
+17:42:41.967 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=325433
+17:42:44.071 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=327537
+17:42:46.080 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=329547
+17:42:46.806 SCRIPT       : [DSBX] clock tick_ms=330273
+17:42:48.130 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=331596
+17:42:50.155 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=333621
+17:42:51.806 SCRIPT       : [DSBX] clock tick_ms=335273
+17:42:52.223 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=335690
+17:42:54.325 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=337792
+17:42:56.427 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=339893
+17:42:56.806 SCRIPT       : [DSBX] clock tick_ms=340273
+17:42:58.527 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=341993
+17:43:00.628 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=344095
+17:43:01.806 SCRIPT       : [DSBX] clock tick_ms=345273
+17:43:02.728 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=346195
+17:43:04.829 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=348296
+17:43:06.806 SCRIPT       : [DSBX] clock tick_ms=350273
+17:43:06.930 SCRIPT       : [DSBX] rest error ch=P kind=1 state=5 tick_ms=350396
+17:43:08.935 SCRIPT       : [DSBX] hello accepted session=24c213a8601e7334 conn=4
+17:43:10.035 SCRIPT       : [DSBX] effect step=retirar session=24c213a8601e7334 op=op-2 tick_ms=353502
+17:43:10.035 SCRIPT       : [DSBX] effect step=anotar session=24c213a8601e7334 op=op-2 tick_ms=353502
+17:43:10.235 SCRIPT       : [DSBX] rest error ch=P kind=2 state=7 tick_ms=353702
+17:43:10.537 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=354003
+17:43:10.537 SCRIPT       : [DSBX] state HELLO: client error on P
+17:43:10.836 SCRIPT       : [DSBX] hello accepted session=ef768e5eeae4a613 conn=1
+17:43:11.806 SCRIPT       : [DSBX] clock tick_ms=355273
+17:43:11.950 SCRIPT       : [DSBX] effect step=retirar session=ef768e5eeae4a613 op=op-204 tick_ms=355416
+17:43:11.951 SCRIPT       : [DSBX] effect step=anotar session=ef768e5eeae4a613 op=op-204 tick_ms=355418
+17:43:14.360 SCRIPT       : [DSBX] rest error ch=R kind=4 state=5 tick_ms=357826
+17:43:14.760 SCRIPT       : [DSBX] rest error ch=R kind=4 state=5 tick_ms=358227
+17:43:15.360 SCRIPT       : [DSBX] rest error ch=R kind=4 state=5 tick_ms=358827
+17:43:16.460 SCRIPT       : [DSBX] rest error ch=R kind=4 state=5 tick_ms=359927
+17:43:16.460 SCRIPT       : [DSBX] result abandoned op_id=op-103
+17:43:16.562 SCRIPT       : [DSBX] effect step=retirar session=ef768e5eeae4a613 op=op-205 tick_ms=360028
+17:43:16.563 SCRIPT       : [DSBX] effect step=anotar session=ef768e5eeae4a613 op=op-205 tick_ms=360029
+17:43:16.806 SCRIPT       : [DSBX] clock tick_ms=360273
+17:43:16.860 SCRIPT       : [DSBX] rest error ch=P kind=2 state=7 tick_ms=360327
+17:43:16.960 SCRIPT       : [DSBX] catalog complete pages=35
+17:43:17.160 SCRIPT       : [DSBX] rest error ch=P kind=2 state=7 tick_ms=360627
+17:43:17.762 SCRIPT       : [DSBX] rest error ch=P kind=2 state=7 tick_ms=361229
+17:43:18.764 SCRIPT       : [DSBX] rest error ch=P kind=2 state=7 tick_ms=362231
+17:43:19.562 SCRIPT       : [DSBX] lease lost age_ms=3001 tick_ms=363029
+17:43:19.562 SCRIPT       : [DSBX] lease expired: returning to HELLO
+17:43:20.864 SCRIPT       : [DSBX] hello accepted session=ef768e5eeae4a613 conn=3
+17:43:20.964 SCRIPT       : [DSBX] rest error ch=P kind=2 state=7 tick_ms=364431
+17:43:21.271 SCRIPT       : [DSBX] rest error ch=P kind=2 state=7 tick_ms=364737
+17:43:21.806 SCRIPT       : [DSBX] clock tick_ms=365273
+17:43:22.483 SCRIPT       : [DSBX] effect step=retirar session=ef768e5eeae4a613 op=op-207 tick_ms=365949
+17:43:22.483 SCRIPT       : [DSBX] effect step=anotar session=ef768e5eeae4a613 op=op-207 tick_ms=365950
+17:43:23.381  SCRIPT       : [Logout]: New player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= with logout time 0
+17:43:23.922 SCRIPT       : [Logout]: Player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= finished
+17:43:25.500  SCRIPT       : [DSBX] shutdown role=server created_n=37 inflight_p=1 inflight_r=0
+17:43:25.527  SCRIPT       : ~DayZGame()

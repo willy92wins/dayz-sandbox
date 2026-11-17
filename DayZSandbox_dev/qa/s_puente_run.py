@@ -37,6 +37,10 @@ CLIENT_VAL = {
 }
 
 
+_CFG_REPLACE_TRIES = 40
+_CFG_REPLACE_PAUSE_S = 0.05
+
+
 def run(args, evidence, argv=None):
     evidence = Path(evidence)
     samples = evidence / "samples"
@@ -77,6 +81,7 @@ def run(args, evidence, argv=None):
         write_row(bridge_fp, row)
 
     ready = False
+
     try:
         bridge = QABridge(hold, lease, sink, port=0)
         bridge_port_box["port"] = None
@@ -140,9 +145,13 @@ def run(args, evidence, argv=None):
                     cmd.extend(["--fault", fault])
                 if clock_offset_ms != 0.0:
                     cmd.extend(["--clock-offset-ms", str(clock_offset_ms)])
-                procs.append(
-                    subprocess.Popen(cmd, cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT)
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(ROOT),
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
                 )
+                procs.append(proc)
 
         def prepare_live():
             for role, folder in (("server", Path(args.server_profile)), ("client", Path(args.client_profile))):
@@ -204,11 +213,20 @@ def run(args, evidence, argv=None):
             if bridge is not None:
                 bridge.stop()
         finally:
-            _stop_peers(procs)
-            for handle in files:
-                handle.close()
-            for folder in profiles:
-                shutil.rmtree(folder, ignore_errors=True)
+            try:
+                _stop_peers(procs)
+            finally:
+                close_error = None
+                for handle in files:
+                    try:
+                        handle.close()
+                    except Exception as exc:
+                        if close_error is None:
+                            close_error = exc
+                for folder in profiles:
+                    shutil.rmtree(folder, ignore_errors=True)
+                if close_error is not None:
+                    raise close_error
     if bridge is not None and bridge.failure is not None:
         _raise_if_bridge_failed(bridge)
     if ready:
@@ -558,7 +576,15 @@ def _write_cfg(path, port, key, retry):
     body = {"key": key, "retry_ms": int(retry), "url": f"http://127.0.0.1:{port}/"}
     tmp = Path(str(path) + ".tmp")
     tmp.write_bytes(json.dumps(body, separators=(",", ":")).encode("utf-8"))
-    tmp.replace(path)
+    for attempt in range(_CFG_REPLACE_TRIES):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            # Windows: el peer (o un antivirus) tiene dsbx_qa.json abierto un instante. Reintento corto y acotado.
+            if attempt == _CFG_REPLACE_TRIES - 1:
+                raise
+            time.sleep(_CFG_REPLACE_PAUSE_S)
 
 
 def _free_udp():

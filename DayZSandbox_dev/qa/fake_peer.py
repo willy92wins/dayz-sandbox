@@ -1065,7 +1065,9 @@ class Peer:
             read["pos"] = [float(v) for v in self.pose[0]]
             read["ypr"] = [float(v) for v in self.pose[1]]
         if "rpc_log" in has:
-            read["rpc_log"] = list(self.rpc_log)
+            # Copia de cada entrada: _apply anota despues el resultado en la entrada viva, y una lectura ya
+            # devuelta (o su duplicado cacheado) no puede cambiar a posteriori.
+            read["rpc_log"] = [dict(entry) for entry in self.rpc_log]
         return read
 
     def _done(self, op, read, job):
@@ -1136,9 +1138,19 @@ class Peer:
                     self.fog = item[2]
                 elif item[1] == "rpc_pose":
                     # Igual que DSBX_QA_Probe.ApplyPendingPose: sin lease vigente en este frame, la pose se descarta
-                    # (F02-H3; el registro P7 no cambia; H5 de Sol r1).
-                    if self.lease_valid():
+                    # (F02-H3; la decision P7 no cambia; H5 de Sol r1).
+                    # Una sola muestra de la edad del lease para decidir y para anotar (Sol, confirmacion de #18).
+                    apply_ms = self.local_ms()
+                    age = self.lease_age_ms()
+                    valid = (self.last_ok_ms is not None or self.last_ok is not None) and age <= float(self.lease_ms)
+                    if valid:
                         self.pose = item[2]
+                    # Evidencia del propio peer para N6: cuando aplico o descarto la pose diferida y con que edad
+                    # de lease. Se anota en la entrada del rpc_log de esa RPC, sin tocar su decision.
+                    if len(item) > 3 and isinstance(item[3], dict):
+                        item[3]["apply_ms"] = apply_ms
+                        item[3]["apply_lease_age_ms"] = age
+                        item[3]["applied_b"] = 1 if valid else 0
                 else:
                     self.pose = item[2]
             else:
@@ -1180,6 +1192,12 @@ class Peer:
 
     def _handle_cam_rpc(self, msg):
         lease_age = self.lease_age_ms()
+        entry = {
+            "decision": "",
+            "lease_age_ms": lease_age,
+            "recv_ms": self.local_ms(),
+            "seq": int(msg.get("seq") or 0),
+        }
         if msg.get("target_inst") != self.inst:
             decision = "rejected_inst"
         elif self.fault != "rpc_ignores_lease" and lease_age > self.lease_ms:
@@ -1192,15 +1210,10 @@ class Peer:
             pos = [float(v) for v in msg.get("pos") or [0, 0, 0]]
             ypr = [float(v) for v in msg.get("ypr") or [0, 0, 0]]
             # Pose diferida al frame siguiente, como m_HasPendingPose de la sonda: se vuelve a mirar el lease al aplicarla.
-            self.effects.append((self.frame + 1, "rpc_pose", (pos, ypr)))
-        self.rpc_log.append(
-            {
-                "decision": decision,
-                "lease_age_ms": lease_age,
-                "recv_ms": self.local_ms(),
-                "seq": int(msg.get("seq") or 0),
-            }
-        )
+            # La entrada del rpc_log viaja con el efecto para que _apply anote el resultado (evidencia de N6).
+            self.effects.append((self.frame + 1, "rpc_pose", (pos, ypr), entry))
+        entry["decision"] = decision
+        self.rpc_log.append(entry)
         while len(self.rpc_log) > LOG_CAP:
             self.rpc_log.pop(0)
 

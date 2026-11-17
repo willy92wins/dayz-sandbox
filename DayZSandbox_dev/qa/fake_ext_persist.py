@@ -149,8 +149,6 @@ BARRACKS_NET_ID = "-2147225600:847447385"
 GARAGE_NET_ID = "-2147225344:847447400"
 NO_DAMAGE_SYSTEM_CLASSES = frozenset({"Land_Wreck_Uaz"})
 NO_HEALTH = -1.0  # centinela de max_hp y health_hp sin sistema de daño (el cable no admite NaN)
-# Igual que HEALTH_PENDING_MAX_MS del .c: tope desde la creacion para aplicar la marca de salud pedida.
-HEALTH_PENDING_MAX_MS = 10000.0
 MAP_OBJECT_SPECS = (
     (BARRACKS_NET_ID, "Land_Mil_Barracks1", "", "", 6170.0, 7643.0, False),
     ("1:65", "Rag", BARRACKS_NET_ID, "Cargo:2:1:3", 6170.0, 7643.0, False),  # cargo proxy del edificio (PROXYCARGO)
@@ -222,8 +220,6 @@ DIRECTOR_UID = "dir-uid-778899"
 DIRECTOR_ROOT_NET = "1:2"
 DIRECTOR_JEANS_NET = "1:10"
 DIRECTOR_APPLE_NET = "1:11"
-PERSISTENT_CONTROL_PERS_ID = "11:22:33:44"
-PERSISTENT_CHILD_PERS_ID = "55:66:77:88"
 ZERO_PERS_ID = "0:0:0:0"
 NET_ID_RE = re.compile(r"-?[0-9]{1,10}:-?[0-9]{1,10}")
 
@@ -234,6 +230,60 @@ def _surface_y(x, z):
 
 def _dist2(x1, z1, x2, z2):
     return math.hypot(float(x1) - float(x2), float(z1) - float(z2))
+
+
+# Espejo de InitSentinelClasses de DSBX_QA_X_Persist.c (MEN-10).
+SENTINEL_CLASSES = frozenset({
+    "Barrel_Green", "Barrel_Blue", "Barrel_Red", "Barrel_Yellow",
+    "WoodenCrate", "SeaChest", "FirstAidKit", "StoneKnife", "SewingKit",
+    "OffroadHatchback", "HatchbackWheel", "HatchbackDoors_Driver",
+    "SurvivorM_Mirek", "SurvivorF_Eva", "RadarCap_Black", "RadarCap_Brown",
+    "Armband_Yellow", "Armband_Blue", "WorkingGloves_Beige",
+    "WorkingGloves_Yellow", "WaterBottle", "Compass", "BandageDressing",
+    "OrienteeringCompass", "Fireplace",
+})
+HEALTH_MARK_RATIOS = (0.7325, 0.6150, 0.8450)
+ZERO_NET_ID = "0:0"
+# Salida acotada de la ocupacion por contencion (BLOQ 6): A se retiene hasta
+# acreditar el intento de B o hasta este tope desde su inicio.
+CENSUS_HOLD_MAX_MS = 750.0
+CENSUS_FINISH_AFTER_ATTEMPT_TICKS = 2
+
+
+def _is_valid_identity(value, zero):
+    text = str(value or "")
+    return text != "" and text != zero
+
+
+def _is_nonzero_pers_id(value):
+    parts = str(value or "").split(":")
+    if len(parts) != 4:
+        return False
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return False
+    for p, n in zip(parts, nums):
+        if str(n) != p or n < -2147483648 or n > 2147483647:
+            return False
+    return any(n != 0 for n in nums)
+
+
+def _identity_matches(net_id, pers_id, qa_net_ids, qa_pers_ids):
+    """BLOQ 5: una identidad vacia o cero nunca es coincidencia."""
+    if _is_valid_identity(net_id, ZERO_NET_ID) and net_id in qa_net_ids:
+        return True
+    if _is_valid_identity(pers_id, ZERO_PERS_ID) and pers_id in qa_pers_ids:
+        return True
+    return False
+
+
+def _is_health_mark(ent):
+    max_hp = float(ent.get("max_hp", 0.0))
+    if max_hp <= 0.0:
+        return False
+    hp = float(ent.get("health_hp", 0.0))
+    return any(abs(hp - max_hp * r) <= 1e-2 for r in HEALTH_MARK_RATIOS)
 
 
 class PersistFakeExt(FakeExt):
@@ -252,16 +302,14 @@ class PersistFakeExt(FakeExt):
         self.raw_net_ids = set()
         self.qa_net_ids = set()
         self.pending_finish = {}
+        self.census_start_tick = {}
+        self.contention_seen_for = {}
+        self.census_failed = {}
         self.director_items = []
         self.director_uid = DIRECTOR_UID
         self.map_objects = []
         self.witness = None
-        # Frames que tarda un objeto CREADO en inicializar su sistema de daño. 0 = nace inicializado (el comportamiento
-        # historico del fake, que S-persist y las pruebas doradas esperan). En la partida real un objeto recien creado
-        # devuelve HasDamageSystem() = false y salud -1/-1 (object.c:976: la funcion dice «inicializado», no «tiene»);
-        # una prueba lo reproduce con damage_init_delay_frames > 0. Las clases de NO_DAMAGE_SYSTEM_CLASSES no lo
-        # inicializan nunca, tambien las creadas (no solo las del mapa precargado).
-        self.damage_init_delay_frames = 0
+        self.next_pers_seq = 1
 
     def _state_file(self):
         cfg = getattr(self.peer, "config", None)
@@ -303,9 +351,17 @@ class PersistFakeExt(FakeExt):
                 "scene_id": ent["scene_id"],
                 "area_id": ent["area_id"],
             })
+        qa_provenance = set(self.qa_net_ids) | set(self.raw_net_ids)
+        for rec in self.records:
+            ent = rec.get("ent")
+            if ent is not None and ent.get("net_id"):
+                qa_provenance.add(ent["net_id"])
         data = {
             "director_uid": self.director_uid,
             "next_net_low": self.next_net_low,
+            "next_pers_seq": self.next_pers_seq,
+            "qa_net_ids": sorted(qa_provenance),
+            "raw_net_ids": sorted(self.raw_net_ids),
             "entities": entities,
         }
         try:
@@ -325,15 +381,32 @@ class PersistFakeExt(FakeExt):
             self.next_net_low = max(int(data.get("next_net_low", 100)), 100)
         except (TypeError, ValueError):
             self.next_net_low = 100
+        try:
+            self.next_pers_seq = max(int(data.get("next_pers_seq", 1)), 1)
+        except (TypeError, ValueError):
+            self.next_pers_seq = 1
+        saved_qa = data.get("qa_net_ids")
+        saved_raw = data.get("raw_net_ids")
+        qa_provenance = set()
+        raw_provenance = set()
+        if isinstance(saved_qa, list):
+            qa_provenance = {str(v) for v in saved_qa if str(v or "")}
+        if isinstance(saved_raw, list):
+            raw_provenance = {str(v) for v in saved_raw if str(v or "")}
+        qa_provenance |= raw_provenance
         loaded = data.get("entities")
         if not isinstance(loaded, list):
             return False
         for raw in loaded:
             if not isinstance(raw, dict) or not raw.get("persistent"):
                 continue
+            saved_pers = str(raw.get("pers_id") or "")
+            used_pers = {e.get("pers_id") for e in self.world.values()}
+            if not _is_nonzero_pers_id(saved_pers) or saved_pers in used_pers:
+                saved_pers = self._alloc_pers_id()
             ent = self._add_entity(
                 net_id=str(raw.get("net_id") or ""),
-                pers_id=str(raw.get("pers_id") or ZERO_PERS_ID),
+                pers_id=saved_pers,
                 class_name=str(raw.get("class_name") or ""),
                 cat=str(raw.get("cat") or "raw"),
                 loc_kind=str(raw.get("loc_kind") or "ground"),
@@ -353,8 +426,10 @@ class PersistFakeExt(FakeExt):
             )
             ent["alive"] = bool(raw.get("alive", True))
             ent["ai_agent"] = bool(raw.get("ai_agent", False))
-            if ent["owner_uid"] != self.director_uid:
+            if ent["net_id"] in raw_provenance:
                 self.raw_net_ids.add(ent["net_id"])
+            if ent["net_id"] in qa_provenance:
+                self.qa_net_ids.add(ent["net_id"])
         return True
 
     def init(self, peer, jobs):
@@ -363,6 +438,8 @@ class PersistFakeExt(FakeExt):
         self.epoch = peer.inst
         self._build_director()
         self._build_map()
+        self.raw_net_ids.clear()
+        self.qa_net_ids.clear()
         if self._load_state():
             self.records = []
             self.scene_gen = {}
@@ -370,7 +447,9 @@ class PersistFakeExt(FakeExt):
             self.scene_applied = {}
             self.scene_center = {}
             self.pending_finish.clear()
-            self.qa_net_ids.clear()
+            self.census_start_tick.clear()
+            self.contention_seen_for.clear()
+            self.census_failed.clear()
 
     def handles(self, verb, role):
         return role == "server" and verb in SERVER_VERBS
@@ -378,7 +457,7 @@ class PersistFakeExt(FakeExt):
     def _build_director(self):
         jeans = self._add_entity(
             net_id=DIRECTOR_JEANS_NET,
-            pers_id=ZERO_PERS_ID,
+            pers_id=self._alloc_pers_id(),
             class_name="Jeans_Blue",
             cat="director",
             loc_kind="attachment",
@@ -395,7 +474,7 @@ class PersistFakeExt(FakeExt):
         )
         apple = self._add_entity(
             net_id=DIRECTOR_APPLE_NET,
-            pers_id=ZERO_PERS_ID,
+            pers_id=self._alloc_pers_id(),
             class_name="Apple",
             cat="director",
             loc_kind="cargo",
@@ -415,6 +494,16 @@ class PersistFakeExt(FakeExt):
     def _alloc_net_id(self):
         self.next_net_low += 1
         return "1:%d" % self.next_net_low
+
+    def _alloc_pers_id(self):
+        used = {ent.get("pers_id") for ent in self.world.values()}
+        seq = int(getattr(self, "next_pers_seq", 1) or 1)
+        if seq < 1:
+            seq = 1
+        while ("%d:0:0:0" % seq) in used:
+            seq += 1
+        self.next_pers_seq = seq + 1
+        return "%d:0:0:0" % seq
 
     def _make_entity(self, **kw):
         ent = {
@@ -439,60 +528,18 @@ class PersistFakeExt(FakeExt):
             "own_b": int(kw.get("own_b", 0)),
             "scene_id": kw.get("scene_id", ""),
             "area_id": kw.get("area_id", ""),
-            # Inicializacion pendiente del sistema de daño (None = ya inicializado o sin sistema de daño).
-            "init_frame": kw.get("init_frame"),
-            "mark_ratio": float(kw.get("mark_ratio", 0.0)),
-            "mark_deadline_ms": float(kw.get("mark_deadline_ms", 0.0)),
         }
         return ent
 
     def _health_at_creation(self, cname, ratio):
-        """(max_hp, health_hp, marked, init_frame) de un objeto recien creado, como lo lee la sonda justo despues de
-        crearlo y de intentar la marca: marked = no se pidio marca (ratio <= 0) o quedo aplicada y releida."""
+        """(max_hp, health_hp, mark_b) de lo que crea el QA, como lo lee la sonda justo despues de crearlo y marcarlo
+        (ApplyQaHealthMark del .c: SetHealth directo y relectura). mark_b = no se pidio marca o la relectura la
+        confirma. Una clase sin sistema de daño (NO_DAMAGE_SYSTEM_CLASSES) no tiene salud que leer: -1/-1 y, con marca
+        pedida, mark_b = False; en el motor crearla con el QA no esta soportado (GetMaxHealth tira la excepcion)."""
         if cname in NO_DAMAGE_SYSTEM_CLASSES:
-            return NO_HEALTH, NO_HEALTH, ratio <= 0.0, None
-        if self.damage_init_delay_frames > 0:
-            return NO_HEALTH, NO_HEALTH, ratio <= 0.0, int(self.peer.frame) + int(self.damage_init_delay_frames)
+            return NO_HEALTH, NO_HEALTH, ratio <= 0.0
         hp = DEFAULT_MAX_HP * ratio if ratio > 0.0 else DEFAULT_MAX_HP
-        return DEFAULT_MAX_HP, hp, True, None
-
-    def _tick_health(self):
-        """Reintento de las marcas pendientes (TickHealthPending del .c): al inicializarse el sistema de daño la salud
-        pasa a estar disponible; la marca solo se aplica si sigue dentro del tope desde la creacion."""
-        now_ms = float(self.peer.local_ms())
-        for ent in list(self.world.values()):
-            init_frame = ent.get("init_frame")
-            if init_frame is None or not ent["alive"] or int(self.peer.frame) < int(init_frame):
-                continue
-            ratio = ent["mark_ratio"]
-            ent["init_frame"] = None
-            ent["max_hp"] = DEFAULT_MAX_HP
-            ent["health_hp"] = DEFAULT_MAX_HP
-            marked = ratio <= 0.0
-            if ratio > 0.0 and now_ms <= ent["mark_deadline_ms"]:
-                ent["health_hp"] = DEFAULT_MAX_HP * ratio
-                marked = True
-            for rec in self.records:
-                if rec["ent"] is ent:
-                    rec["max_hp"] = ent["max_hp"]
-                    rec["health_hp"] = ent["health_hp"]
-                    rec["mark_b"] = 1.0 if marked else 0.0
-            self._refresh_scene_cache(ent, marked)
-
-    def _refresh_scene_cache(self, ent, marked):
-        for cached in self.scene_applied.values():
-            hit = False
-            for row in cached["rows"]:
-                if row["net_id"] == ent["net_id"]:
-                    row["max_hp"] = float(ent["max_hp"])
-                    row["health_hp"] = float(ent["health_hp"])
-                    row["health_mark_b"] = 1.0 if marked else 0.0
-                    hit = True
-            if hit:
-                pending = sum(1 for row in cached["rows"] if row.get("health_mark_b", 1.0) == 0.0)
-                cached["n"]["health_mark_pending_n"] = float(pending)
-                cached["s"]["apply_status"] = "health_mark_pending" if pending else "ok"
-                cached["s"]["reason"] = "health_mark_pending" if pending else ""
+        return DEFAULT_MAX_HP, hp, True
 
     def _add_entity(self, **kw):
         ent = self._make_entity(**kw)
@@ -587,13 +634,27 @@ class PersistFakeExt(FakeExt):
                 return cand, "Cargo:0:%d:%d" % fit
         return None
 
-    def _preorder_children(self, net_id):
-        # Hijos de net_id en PREORDER (mundo y mapa), como EnumerateInventory(PREORDER) menos la raiz.
-        out = []
+    def _children_index(self):
+        """parent_net_id -> hijos vivos, en el orden de recorrido de siempre (mundo y despues mapa)."""
+        index = {}
         for ent in list(self.world.values()) + self.map_objects:
-            if ent["alive"] and ent["parent_net_id"] == net_id and net_id != "":
-                out.append(ent)
-                out.extend(self._preorder_children(ent["net_id"]))
+            if ent["alive"] and ent["parent_net_id"] != "":
+                index.setdefault(ent["parent_net_id"], []).append(ent)
+        return index
+
+    def _preorder_children(self, net_id, index=None):
+        # Hijos de net_id en PREORDER (mundo y mapa), como EnumerateInventory(PREORDER) menos la raiz. El censo del
+        # modo 1 pasa un indice construido una vez: recorrer el mundo entero en cada nivel y en cada fila lo hacia
+        # cuadratico con miles de raices, y con la guarda de lease por fila de S-persist el reloj real del fake lo
+        # hacia caducar a mitad de la captura (en el motor la captura va en un frame, con GetTickTime constante).
+        if net_id == "":
+            return []
+        if index is None:
+            index = self._children_index()
+        out = []
+        for ent in index.get(net_id, []):
+            out.append(ent)
+            out.extend(self._preorder_children(ent["net_id"], index))
         return out
 
     def _record_by(self, scene_id, logical_id):
@@ -637,7 +698,49 @@ class PersistFakeExt(FakeExt):
             if rec in self.records:
                 self.records.remove(rec)
 
-    def _census_row(self, ent, in_radius, deep=False):
+    def _retained_net_ids(self, recs):
+        """Contenedores con descendientes ajenos/desconocidos + sus ancestros."""
+        deletable = {rec["ent"]["net_id"]: rec for rec in recs}
+        retain = {}
+        for rec in recs:
+            ent = rec["ent"]
+            foreign = False
+            for desc in self._descendants(ent["net_id"]):
+                if desc["net_id"] not in deletable:
+                    foreign = True
+                    break
+            if foreign:
+                retain[ent["net_id"]] = True
+                parent_nid = ent["parent_net_id"]
+                while parent_nid in deletable:
+                    retain[parent_nid] = True
+                    parent_nid = deletable[parent_nid]["ent"]["parent_net_id"]
+        return retain
+
+    def _reapply_reset_with_retention(self, scene_id):
+        """MEN 7/8: guarda de lease en cada borrado; False si caduca a mitad."""
+        old_recs = [
+            rec for rec in self.records
+            if rec["scene_id"] == scene_id and rec["server_epoch"] == self.epoch
+        ]
+        if not old_recs:
+            return True
+        retain = self._retained_net_ids(old_recs)
+        for rec in list(old_recs):
+            ent = rec["ent"]
+            if rec["parent_id"] != "" and not retain.get(ent["net_id"]):
+                if not self.peer.lease_valid():
+                    return False
+                self._drop_records([rec])
+        for rec in list(old_recs):
+            ent = rec["ent"]
+            if rec["parent_id"] == "" and not retain.get(ent["net_id"]):
+                if not self.peer.lease_valid():
+                    return False
+                self._drop_records([rec])
+        return True
+
+    def _census_row(self, ent, in_radius, deep=False, index=None):
         return {
             "class_name": ent["class_name"],
             "loc_kind": ent["loc_kind"],
@@ -662,7 +765,7 @@ class PersistFakeExt(FakeExt):
             "health_hp": float(ent["health_hp"]),
             # El .c cuenta con EnumerateInventory(PREORDER): todos los descendientes. El modo 0 del fake sigue
             # contando hijos directos (S-persist); el modo 1 cuenta como el .c.
-            "inv_children_n": float(len(self._preorder_children(ent["net_id"])) if deep else self._children_count(ent["net_id"])),
+            "inv_children_n": float(len(self._preorder_children(ent["net_id"], index)) if deep else self._children_count(ent["net_id"])),
             "spawn_tick_ms": float(ent["spawn_tick_ms"]),
             "surface_y_m": float(_surface_y(ent["pos"][0], ent["pos"][2])),
         }
@@ -762,6 +865,26 @@ class PersistFakeExt(FakeExt):
             )
             return ("done", "", payload)
 
+        ncol_in = list(args_unpacked.get("ncol") or [])
+        scol_in = list(args_unpacked.get("scol") or [])
+        required_s = {"logical_id", "parent_id", "cat", "class_name", "slot_name"}
+        required_n = {"req_x_m", "req_z_m", "req_yaw_deg", "health_mark_ratio", "must_vanish_b"}
+        if not required_s.issubset(set(scol_in)) or not required_n.issubset(set(ncol_in)):
+            return ("rejected", "bad_args", wire.empty_payload())
+        if len(rows_in) < 1 or len(rows_in) > 12:
+            return ("rejected", "bad_args", wire.empty_payload())
+
+        if not self._reapply_reset_with_retention(scene_id):
+            return ("error", "lease_expired", wire.empty_payload())
+        # MEN 7: lo retenido de la generacion anterior no se duplica: sus
+        # filas se saltan con resultado parcial explicito y los padres se
+        # resuelven contra la entidad retenida de su generacion.
+        retained_by_lid = {
+            rec["logical_id"]: rec["ent"]
+            for rec in self.records
+            if rec["scene_id"] == scene_id and rec["server_epoch"] == self.epoch
+        }
+        retained_skipped = 0
         persistent = fault == "omit_nopersistency_flag"
         area_id = SCENE_AREA.get(scene_id, "area_a")
         now_ms = float(self.peer.local_ms())
@@ -769,10 +892,27 @@ class PersistFakeExt(FakeExt):
         created_roots = 0
         created_children = 0
         out_rows = []
-        local = {}
+        local = dict(retained_by_lid)
         root_positions = []
         for row in rows_in:
+            if not self.peer.lease_valid():
+                return ("error", "lease_expired", wire.empty_payload())
             lid = str(row.get("logical_id", ""))
+            if lid in retained_by_lid:
+                # Fila retenida: no se crea duplicado ni registro nuevo.
+                retained_skipped += 1
+                rent = retained_by_lid[lid]
+                out_rows.append({
+                    "logical_id": lid, "class_name": rent["class_name"], "net_id": rent["net_id"],
+                    "obs_loc_kind": rent["loc_kind"], "obs_parent_net_id": rent["parent_net_id"], "obs_slot_name": rent["slot_name"],
+                    "ok_b": 0.0, "alive_b": 1.0 if rent["alive"] else 0.0, "ai_agent_b": 1.0 if rent["ai_agent"] else 0.0,
+                    "req_y_m": float(rent["pos"][1]), "q9_x_m": float(rent["pos"][0]), "q9_y_m": float(rent["pos"][1]), "q9_z_m": float(rent["pos"][2]),
+                    "q9_dx_m": 0.0, "q9_dy_m": 0.0, "q9_dz_m": 0.0, "q9_err_3d_m": 0.0,
+                    "q9_yaw_deg": float(rent["ori"][0]), "q9_pitch_deg": float(rent["ori"][1]), "q9_roll_deg": float(rent["ori"][2]),
+                    "max_hp": float(rent["max_hp"]), "health_hp": float(rent["health_hp"]), "spawn_tick_ms": float(rent["spawn_tick_ms"]),
+                    "health_mark_b": 0.0,
+                })
+                continue
             pid = str(row.get("parent_id", ""))
             cat = str(row.get("cat", ""))
             cname = str(row.get("class_name", ""))
@@ -781,7 +921,7 @@ class PersistFakeExt(FakeExt):
             rz = float(row.get("req_z_m", 0.0))
             ryaw = float(row.get("req_yaw_deg", 0.0))
             ratio = float(row.get("health_mark_ratio", 0.0))
-            max_hp, hp, mark_b, init_frame = self._health_at_creation(cname, ratio)
+            max_hp, hp, mark_b = self._health_at_creation(cname, ratio)
             ai_b = cat in ("infected", "animal")
             if pid == "":
                 gy = _surface_y(rx, rz)
@@ -800,7 +940,18 @@ class PersistFakeExt(FakeExt):
             else:
                 parent = local.get(pid)
                 if parent is None:
-                    return ("rejected", "bad_args", wire.empty_payload())
+                    # MEN-13 (espejo del .c): fila fallida sin creacion, sin salud observada.
+                    out_rows.append({
+                        "logical_id": lid, "class_name": cname, "net_id": "",
+                        "obs_loc_kind": "", "obs_parent_net_id": "", "obs_slot_name": "",
+                        "ok_b": 0.0, "alive_b": 0.0, "ai_agent_b": 0.0,
+                        "req_y_m": 0.0, "q9_x_m": 0.0, "q9_y_m": 0.0, "q9_z_m": 0.0,
+                        "q9_dx_m": 0.0, "q9_dy_m": 0.0, "q9_dz_m": 0.0, "q9_err_3d_m": 0.0,
+                        "q9_yaw_deg": 0.0, "q9_pitch_deg": 0.0, "q9_roll_deg": 0.0,
+                        "max_hp": 0.0, "health_hp": 0.0, "spawn_tick_ms": now_ms,
+                        "health_mark_b": 0.0,
+                    })
+                    continue
                 pos = parent["pos"]
                 ori = parent["ori"]
                 if sname == "Cargo":
@@ -820,7 +971,7 @@ class PersistFakeExt(FakeExt):
             net_id = self._alloc_net_id()
             ent = self._add_entity(
                 net_id=net_id,
-                pers_id=ZERO_PERS_ID,
+                pers_id=self._alloc_pers_id(),
                 class_name=cname,
                 cat=cat,
                 loc_kind=loc_kind,
@@ -839,9 +990,6 @@ class PersistFakeExt(FakeExt):
                 scene_id=scene_id,
                 area_id=area_id,
                 ai_agent=ai_b,
-                init_frame=init_frame,
-                mark_ratio=ratio,
-                mark_deadline_ms=now_ms + HEALTH_PENDING_MAX_MS,
             )
             self.records.append({
                 "server_epoch": self.epoch,
@@ -888,14 +1036,24 @@ class PersistFakeExt(FakeExt):
                 "spawn_tick_ms": now_ms,
                 "health_mark_b": 1.0 if mark_b else 0.0,
             })
-        mark_pending = sum(1 for r in out_rows if r["health_mark_b"] == 0.0)
         if root_positions:
             cx = sum(p[0] for p in root_positions) / float(len(root_positions))
             cz = sum(p[1] for p in root_positions) / float(len(root_positions))
             self.scene_center[scene_id] = (cx, cz)
+        ok_n = sum(1 for r in out_rows if float(r.get("ok_b", 0.0)) == 1.0)
+        if retained_skipped and ok_n < len(out_rows):
+            # MEN 7: parcial explicito por retencion, no fallo de creacion.
+            apply_status = "partial" if ok_n > 0 else "failed"
+            apply_reason = "retained_prior_generation"
+        elif ok_n == 0:
+            apply_status, apply_reason = "failed", "creation_failed"
+        elif ok_n < len(out_rows):
+            apply_status, apply_reason = "partial", "creation_failed"
+        else:
+            apply_status, apply_reason = "ok", ""
         s = {
-            "apply_status": "health_mark_pending" if mark_pending else "ok",
-            "reason": "health_mark_pending" if mark_pending else "",
+            "apply_status": apply_status,
+            "reason": apply_reason,
             "server_epoch": self.epoch,
             "scene_id": scene_id,
             "scene_op_id": scene_op_id,
@@ -908,7 +1066,6 @@ class PersistFakeExt(FakeExt):
             "idempotent_hit_b": 0.0,
             "q9_tick_ms": now_ms,
             "q9_frame": float(frame),
-            "health_mark_pending_n": float(mark_pending),
         }
         ncol = [
             "ok_b", "alive_b", "ai_agent_b", "req_y_m", "q9_x_m", "q9_y_m",
@@ -966,6 +1123,8 @@ class PersistFakeExt(FakeExt):
                 if ent["owner_uid"] == self.director_uid:
                     continue
                 if _dist2(ent["pos"][0], ent["pos"][2], center[0], center[1]) <= 25.0:
+                    if not self.peer.lease_valid():
+                        return ("error", "lease_expired", wire.empty_payload())
                     self._delete_entity(ent)
             deleted_n = len(scene_recs)
             self._drop_records(scene_recs)
@@ -992,31 +1151,23 @@ class PersistFakeExt(FakeExt):
             self._save_state()
             return ("done", "", payload)
 
-        deletable = {rec["ent"]["net_id"]: rec for rec in scene_recs}
-        retain = {}
-        for rec in scene_recs:
-            ent = rec["ent"]
-            foreign = False
-            for desc in self._descendants(ent["net_id"]):
-                if desc["net_id"] not in deletable:
-                    foreign = True
-                    break
-            if foreign:
-                retain[ent["net_id"]] = True
-                parent_nid = ent["parent_net_id"]
-                while parent_nid in deletable:
-                    retain[parent_nid] = True
-                    parent_nid = deletable[parent_nid]["ent"]["parent_net_id"]
+        retain = self._retained_net_ids(scene_recs)
 
+        # MEN 8: guarda en cada efecto; la caducidad se propaga como error,
+        # nunca como done/ok con las filas pendientes sin procesar.
         deleted = 0
         for rec in list(scene_recs):
             ent = rec["ent"]
             if rec["parent_id"] != "" and not retain.get(ent["net_id"]):
+                if not self.peer.lease_valid():
+                    return ("error", "lease_expired", wire.empty_payload())
                 self._drop_records([rec])
                 deleted += 1
         for rec in list(scene_recs):
             ent = rec["ent"]
             if rec["parent_id"] == "" and not retain.get(ent["net_id"]):
+                if not self.peer.lease_valid():
+                    return ("error", "lease_expired", wire.empty_payload())
                 self._drop_records([rec])
                 deleted += 1
 
@@ -1024,12 +1175,13 @@ class PersistFakeExt(FakeExt):
             rec for rec in scene_recs
             if retain.get(rec["ent"]["net_id"])
         ]
+        deletable_ids = {rec["ent"]["net_id"] for rec in scene_recs}
         for rec in retained_recs:
             ent = rec["ent"]
             survivors = 0
             for desc in self._descendants(ent["net_id"]):
                 dnid = desc["net_id"]
-                if dnid not in deletable:
+                if dnid not in deletable_ids:
                     survivors += 1
             retained_rows.append({
                 "logical_id": rec["logical_id"],
@@ -1075,6 +1227,8 @@ class PersistFakeExt(FakeExt):
         if rec is None:
             return ("rejected", "unknown_entity", wire.empty_payload())
         ent = rec["ent"]
+        if not self.peer.lease_valid():
+            return ("error", "lease_expired", wire.empty_payload())
         pre = {
             "pre_loc_kind": ent["loc_kind"],
             "pre_parent_net_id": ent["parent_net_id"],
@@ -1147,10 +1301,12 @@ class PersistFakeExt(FakeExt):
         ratio = float(nums.get("health_mark_ratio", 0.0))
         if not tag or not cname:
             return ("rejected", "bad_args", wire.empty_payload())
-        max_hp, hp, mark_b, init_frame = self._health_at_creation(cname, ratio)
+        if not self.peer.lease_valid():
+            return ("error", "lease_expired", wire.empty_payload())
+        max_hp, hp, mark_b = self._health_at_creation(cname, ratio)
         now_ms = float(self.peer.local_ms())
         persistent = mode == "persistent_control"
-        pers_id = ZERO_PERS_ID
+        pers_id = self._alloc_pers_id()
         loc_kind = "ground"
         parent_net = ""
         parent_class = ""
@@ -1193,8 +1349,6 @@ class PersistFakeExt(FakeExt):
             pos = tgt_ent["pos"]
             ori = tgt_ent["ori"]
             area_id = tgt_ent["area_id"]
-        elif mode == "persistent_control":
-            pers_id = PERSISTENT_CONTROL_PERS_ID
         net_id = self._alloc_net_id()
         ent = self._add_entity(
             net_id=net_id,
@@ -1215,9 +1369,6 @@ class PersistFakeExt(FakeExt):
             own_logical_id="",
             own_b=0,
             area_id=area_id,
-            init_frame=init_frame,
-            mark_ratio=ratio,
-            mark_deadline_ms=now_ms + HEALTH_PENDING_MAX_MS,
         )
         self.raw_net_ids.add(net_id)
         child_count = 0
@@ -1225,7 +1376,7 @@ class PersistFakeExt(FakeExt):
             child_net = self._alloc_net_id()
             self._add_entity(
                 net_id=child_net,
-                pers_id=PERSISTENT_CHILD_PERS_ID,
+                pers_id=self._alloc_pers_id(),
                 class_name=child_class,
                 cat="raw_child",
                 loc_kind="cargo",
@@ -1236,7 +1387,7 @@ class PersistFakeExt(FakeExt):
                 pos=pos,
                 ori=ori,
                 max_hp=DEFAULT_MAX_HP,
-                health_hp=DEFAULT_MAX_HP,
+                health_hp=DEFAULT_MAX_HP * ratio if ratio > 0.0 else DEFAULT_MAX_HP,
                 spawn_tick_ms=now_ms,
                 persistent=True,
                 own_logical_id="",
@@ -1246,7 +1397,7 @@ class PersistFakeExt(FakeExt):
             self.raw_net_ids.add(child_net)
             child_count = 1
         s = {
-            "spawn_status": "ok" if mark_b else "health_mark_pending",
+            "spawn_status": "ok",
             "tag": tag,
             "class_name": cname,
             "net_id": net_id,
@@ -1271,8 +1422,6 @@ class PersistFakeExt(FakeExt):
         }
         payload = wire.pack_payload(scalars_str=s, scalars_num=n)
         self._save_state()
-        if not mark_b:
-            return ("error", "health_mark_pending", payload)
         return ("done", "", payload)
 
 
@@ -1301,6 +1450,12 @@ class PersistFakeExt(FakeExt):
                 if ent["class_name"] == "Barrel_Yellow" and ent["area_id"] == "area_c":
                     self._delete_entity(ent)
         job_id = op["op_id"]
+        # BLOQ 6: acreditar el intento de B sobre el censo A que retiene el
+        # recurso (aceptado por bypass o rechazado busy): A no se libera
+        # hasta este intento o hasta la salida acotada CENSUS_HOLD_MAX_MS.
+        held_jid = self.jobs.held_resources.get("per_census")
+        if held_jid and held_jid != job_id:
+            self.contention_seen_for[held_jid] = float(self.peer.local_ms())
         # Mutante census_resource_bypass: el recurso per_census no protege; el segundo censo se
         # acepta aunque el primero siga activo. El runner pasa este qa_fault solo en esa parte.
         if fault == "census_resource_bypass":
@@ -1330,6 +1485,7 @@ class PersistFakeExt(FakeExt):
             # Seleccion como el .c: esfera de GetObjectsAtPosition3D centrada en (cx, SurfaceY(cx, cz), cz), sin filtro
             # horizontal (HandleCensusStart: centerPos). Una raiz 116 m por encima del centro queda fuera con r = 115.
             center_y = _surface_y(center_x, center_z)
+            index = self._children_index()
             for ent in list(self.world.values()) + self.map_objects:
                 if not ent["alive"] or ent["parent_net_id"] != "" or ent["owner_uid"] == self.director_uid:
                     continue
@@ -1340,13 +1496,13 @@ class PersistFakeExt(FakeExt):
                 )
                 if d3 > radius:
                     continue
-                rows.append(self._census_row(ent, 1, deep=True))
-                for sub in self._preorder_children(ent["net_id"]):
-                    rows.append(self._census_row(sub, 1, deep=True))
+                rows.append(self._census_row(ent, 1, deep=True, index=index))
+                for sub in self._preorder_children(ent["net_id"], index):
+                    rows.append(self._census_row(sub, 1, deep=True, index=index))
             if include_dir == 1:
                 for ent in self.world.values():
                     if ent["alive"] and ent["owner_uid"] == self.director_uid:
-                        rows.append(self._census_row(ent, 1, deep=True))
+                        rows.append(self._census_row(ent, 1, deep=True, index=index))
         else:
             for ent in self.world.values():
                 if not ent["alive"]:
@@ -1362,15 +1518,27 @@ class PersistFakeExt(FakeExt):
                     if ent["area_id"] == area_id:
                         rows.append(self._census_row(ent, 0))
         census_ncol = CENSUS_NCOL_ALL if select_all == 1 else CENSUS_NCOL
+        captured = 0
+        capture_failed = ""
         for row in rows:
+            # MEN 8/9 (espejo de AppendEntityCensusRow): guarda por fila.
+            if not self.peer.lease_valid():
+                capture_failed = "lease_expired"
+                break
             nvals = [row[c] for c in census_ncol]
             svals = [row[c] for c in CENSUS_SCOL]
             if not self.jobs.append_row(job_id, nvals, svals):
-                if select_all == 1 and self.jobs.get_state(job_id) == "failed":
-                    # Tope de filas: el JobMgr ya dejo el trabajo en failed/rows_cap; no se sigue ni se trunca en
-                    # silencio. Igual que el .c, el arranque responde done y el estado se lee con job_read.
-                    break
-                return ("rejected", "bad_args", wire.empty_payload())
+                # Con select_all_entityai_b = 1 y el tope de filas, el JobMgr ya dejo el trabajo en
+                # failed/rows_cap y ese final no cambia (end_job lo fija una sola vez, como EndJob en el .c):
+                # no se sigue ni se trunca en silencio; el arranque responde done y el estado se lee con job_read.
+                capture_failed = "capture_truncated"
+                break
+            captured += 1
+        if not capture_failed and captured < len(rows):
+            capture_failed = "capture_truncated"
+        if capture_failed:
+            # MEN 9: una captura truncada termina como trabajo fallido.
+            self.census_failed[job_id] = capture_failed
         s = {
             "job": job_id,
             "state": "running",
@@ -1381,8 +1549,9 @@ class PersistFakeExt(FakeExt):
         }
         n = {
             "snap_tick_ms": snap_ms,
+            "capture_wall_ms": 0.0,
             "snap_frame": float(snap_frame),
-            "rows_captured_n": float(len(rows)),
+            "rows_captured_n": float(captured),
             "center_x_m": center_x,
             "center_z_m": center_z,
             "radius_m": radius,
@@ -1392,7 +1561,8 @@ class PersistFakeExt(FakeExt):
             "director_inv_count_n": float(len(self.director_items)),
         }
         payload = wire.pack_payload(scalars_str=s, scalars_num=n)
-        self.pending_finish[job_id] = CENSUS_FINISH_DELAY_FRAMES
+        self.pending_finish[job_id] = CENSUS_FINISH_AFTER_ATTEMPT_TICKS
+        self.census_start_tick[job_id] = snap_ms
         return ("done", "", payload)
 
     # --------------------------------------------------------- testigo de creacion
@@ -1587,22 +1757,114 @@ class PersistFakeExt(FakeExt):
         if self.witness is not None and self.witness["job_id"] == job_id:
             self.witness = None
 
+    def _finish_pending_job(self, jid):
+        if self.jobs.get_state(jid) == "running":
+            reason = self.census_failed.get(jid, "")
+            if reason:
+                self.jobs.end_job(jid, "failed", reason)
+            elif self.jobs.is_deadman_tripped(jid):
+                self.jobs.end_job(jid, "failed", "lease_expired")
+            else:
+                self.jobs.end_job(jid, "done", "")
+        self.pending_finish.pop(jid, None)
+        self.census_start_tick.pop(jid, None)
+        self.contention_seen_for.pop(jid, None)
+        self.census_failed.pop(jid, None)
+
     def _op_cleanup(self, args_unpacked):
-        cleaned_own = len(self.records)
-        self._drop_records(list(self.records))
+        for jid in list(self.pending_finish):
+            self._finish_pending_job(jid)
+        self.pending_finish.clear()
+        self.census_start_tick.clear()
+        self.contention_seen_for.clear()
+        self.census_failed.clear()
+
+        # BLOQ 5 + MEN 10 (espejo de CleanupAllEntities): identidad valida
+        # (vacia/cero nunca coincide) o clase centinela + marca, solo dentro
+        # de discos validos; sin disco valido no hay barrido por marca.
+        qa_net_ids = set()
+        qa_pers_ids = set()
+        for rec in self.records:
+            ent = rec.get("ent")
+            if ent is not None:
+                if _is_valid_identity(ent["net_id"], ZERO_NET_ID):
+                    qa_net_ids.add(ent["net_id"])
+                if _is_valid_identity(ent["pers_id"], ZERO_PERS_ID):
+                    qa_pers_ids.add(ent["pers_id"])
+        for nid in list(self.raw_net_ids) + list(self.qa_net_ids):
+            if _is_valid_identity(nid, ZERO_NET_ID):
+                qa_net_ids.add(nid)
+        for ent in self.world.values():
+            if ent["net_id"] in qa_net_ids and _is_valid_identity(ent["pers_id"], ZERO_PERS_ID):
+                qa_pers_ids.add(ent["pers_id"])
+
+        discs = []
+        for row in args_unpacked.get("rows") or []:
+            try:
+                cx = float(row.get("center_x_m", 0.0))
+                cz = float(row.get("center_z_m", 0.0))
+                rad = float(row.get("radius_m", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if rad > 0.0 and math.isfinite(cx) and math.isfinite(cz):
+                discs.append((cx, cz, rad))
+
+        # Contenedores registrados con descendientes ajenos/desconocidos se
+        # protegen (y sus ancestros registrados), como al reaplicar.
+        retain = self._retained_net_ids(list(self.records))
+        cleaned_own = 0
+        kept_records = []
+        for rec in list(self.records):
+            ent = rec.get("ent")
+            if ent is not None and retain.get(ent["net_id"]):
+                kept_records.append(rec)
+                continue
+            if ent is not None:
+                cleaned_own += 1
+            self._drop_records([rec])
+
         cleaned_raw = 0
         for net_id in list(self.world.keys()):
-            ent = self.world[net_id]
-            if ent["owner_uid"] == self.director_uid:
+            ent = self.world.get(net_id)
+            if ent is None or ent["owner_uid"] == self.director_uid:
                 continue
-            cleaned_raw += 1
-            self._delete_entity(ent)
-        self.records = []
+            if retain.get(net_id):
+                continue
+            # Lo que cuelga de un contenedor protegido tampoco se borra.
+            ancestor_nid = ent["parent_net_id"]
+            protected_descendant = False
+            while ancestor_nid:
+                if retain.get(ancestor_nid):
+                    protected_descendant = True
+                    break
+                parent_ent = self.world.get(ancestor_nid)
+                ancestor_nid = parent_ent["parent_net_id"] if parent_ent else ""
+            if protected_descendant:
+                continue
+            by_identity = _identity_matches(ent["net_id"], ent["pers_id"], qa_net_ids, qa_pers_ids)
+            by_mark = (
+                bool(discs)
+                and ent["class_name"] in SENTINEL_CLASSES
+                and _is_health_mark(ent)
+                and any(_dist2(ent["pos"][0], ent["pos"][2], cx, cz) <= rad for cx, cz, rad in discs)
+            )
+            if by_identity or by_mark:
+                # Un contenedor con descendientes ajenos tampoco se borra
+                # por identidad/marca: se protege entero.
+                rec_net_ids = {r["ent"]["net_id"] for r in kept_records}
+                has_foreign_desc = any(
+                    d["net_id"] not in qa_net_ids and d["net_id"] not in rec_net_ids and not (d["class_name"] in SENTINEL_CLASSES and _is_health_mark(d))
+                    for d in self._descendants(net_id)
+                )
+                if has_foreign_desc:
+                    continue
+                cleaned_raw += 1
+                self._delete_entity(ent)
+        self.records = kept_records
         self.scene_gen = {}
         self.scene_last_op = {}
         self.scene_applied = {}
         self.scene_center = {}
-        self.pending_finish.clear()
         payload = wire.pack_payload(
             scalars_num={
                 "cleaned_own_n": float(cleaned_own),
@@ -1631,24 +1893,49 @@ class PersistFakeExt(FakeExt):
         self.scene_last_op = {}
         self.scene_applied = {}
         self.scene_center = {}
+        # MEN-12 tambien al reiniciar: ningun trabajo queda running reteniendo per_census.
+        for jid in list(self.pending_finish):
+            self._finish_pending_job(jid)
         self.pending_finish.clear()
+        self.census_start_tick.clear()
+        self.contention_seen_for.clear()
+        self.census_failed.clear()
         self._save_state()
 
     def on_tick(self, timeslice_s):
-        self._tick_health()
         self._tick_witness()
+        # BLOQ 6: A mantiene la ocupacion hasta acreditar el intento de B
+        # (entonces termina en pocos ticks, con released_tick posterior al
+        # snap de B) o hasta la salida acotada CENSUS_HOLD_MAX_MS.
         for job_id in list(self.pending_finish):
+            if self.jobs.get_state(job_id) != "running":
+                self.pending_finish.pop(job_id, None)
+                self.census_start_tick.pop(job_id, None)
+                self.contention_seen_for.pop(job_id, None)
+                self.census_failed.pop(job_id, None)
+                continue
+            seen = job_id in self.contention_seen_for
+            start_tick = float(self.census_start_tick.get(job_id, 0.0))
+            bounded_exit = (
+                start_tick > 0.0
+                and float(self.peer.local_ms()) - start_tick >= CENSUS_HOLD_MAX_MS
+            )
+            if not seen and not bounded_exit:
+                continue
             left = int(self.pending_finish.get(job_id, 0)) - 1
             if left > 0:
                 self.pending_finish[job_id] = left
                 continue
-            if self.jobs.get_state(job_id) == "running":
-                self.jobs.end_job(job_id, "done", "")
-            self.pending_finish.pop(job_id, None)
+            self._finish_pending_job(job_id)
 
     def on_shutdown(self):
+        for jid in list(self.pending_finish):
+            self._finish_pending_job(jid)
         self.pending_finish.clear()
         self.witness = None
+        self.census_start_tick.clear()
+        self.contention_seen_for.clear()
+        self.census_failed.clear()
 
 
 def create_ext(peer, jobs):

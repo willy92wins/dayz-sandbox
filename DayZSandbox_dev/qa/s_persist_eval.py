@@ -37,6 +37,8 @@ Evidence contract consumed by ``evaluate(part_dir)``
          produced from ``CreateObjectEx`` / ``LocationCreateEntity``,
          ``GetPosition()``, ``GetOrientation()``, ``IsAlive()``, ``GetAIAgent()``,
          ``GetMaxHealth("", "")``, ``GetHealth("", "")``, ``GetNetworkID()``.
+         Optional extra ``scol`` ``pers_id`` (``GetPersistentID``): when a row reports a non-zero one,
+         the t1 census row of that entity (or the witness census row) must carry the same value.
      * ``per_spawn_raw`` (instant on ``"server"``):
        - ``args`` strings: ``tag``, ``mode``, ``class_name``, ``child_cargo_class``,
          ``target_scene_id``, ``target_parent_id``;
@@ -79,8 +81,20 @@ Evidence contract consumed by ``evaluate(part_dir)``
          ``ncol = ["own_b", "in_radius_b", "alive_b", "ai_agent_b", "pos_x_m", "pos_y_m", "pos_z_m", "yaw_deg", "pitch_deg", "roll_deg", "max_hp", "health_hp", "inv_children_n", "spawn_tick_ms"]``
          captured via ``GetObjectsAtPosition3D``, ``EnumerateInventory``,
          ``GetCurrentInventoryLocation``, ``GetHierarchyRootPlayer``.
+         ``pers_id`` (``GetPersistentID``: 4 signed 32-bit ints in canonical ``int.ToString()`` form joined by
+         ``":"``) is non-zero from creation, also with ``ECE_NOPERSISTENCY_WORLD``, unique per entity and
+         stable (real DayZDiag run, 2026-11-16): the t1 rows of the scene entities (PER-01) and the witness rows
+         (PER-09) must carry a valid ``pers_id`` other than ``"0:0:0:0"`` (oracle v2; v1 demanded
+         ``"0:0:0:0"``); no two distinct entities of ``t1_pre_transition_census`` or ``t5_witness_pre_census``
+         (same stage and epoch) may share one, and the witness keeps it from pre to post census (v2.1).
      * ``per_cleanup_qa`` (instant on ``"server"``):
        - ``read`` numbers: ``cleaned_own_n``, ``cleaned_raw_n``, ``tick_ms``, ``frame``.
+       - In ``t6_post_cleanup_census`` only entities of the test count as survivors (oracle v2.1, brief :284,
+         :189): own rows, ``net_id`` (same epoch) or ``pers_id`` of a ``per_apply_scene`` / ``per_spawn_raw``
+         entity or of anything seen hanging from one in a complete t1..t5 census (kept even if it changes
+         parent), sentinel classes with a QA health mark, and their descendants; CE entities do not. It covers
+         the base areas, the director's inventory and every ``t5_track_*`` disc: each t5 disc needs its complete
+         ``t6_post_cleanup_census:<disc>`` (same center, radius not smaller) or PER-09 is missing.
 3. ``part_dir / "samples" / "scenario.jsonl"`` — structured runner observations:
    - ``probe_sources_at_commit``: ``git_head``, ``probe_stamp``, ``persist_files``
      (map ``rel_path -> content_str`` from ``git show <git_head>:<rel_path>``).
@@ -228,7 +242,10 @@ FORBIDDEN_ENFORCE_SUBSTRINGS = (
 )
 
 _NET_ID_RE = re.compile(r"^-?\d+:-?\d+$")
-_PERS_ID_RE = re.compile(r"^-?\d+:-?\d+:-?\d+:-?\d+$")
+# pers_id (N26): 4 enteros de 32 bits con signo de int.ToString(), forma canonica (sin "-0", "+" ni ceros a la izquierda)
+_PERS_ID_PART_RE = re.compile(r"0|-?[1-9][0-9]{0,9}")
+_INT32_MIN = -(2**31)
+_INT32_MAX = 2**31 - 1
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 _KNOWN_STAGES = (
@@ -444,11 +461,141 @@ def _valid_net_id(val: Any, logical_id: str = "") -> bool:
 
 
 def _valid_pers_id(val: Any) -> bool:
-    return isinstance(val, str) and bool(_PERS_ID_RE.match(val))
+    # Oraculo v2.1: rango int32 y forma canonica por componente (fullmatch: sin "\n" final ni digitos no ASCII)
+    if not isinstance(val, str):
+        return False
+    parts = val.split(":")
+    return len(parts) == 4 and all(
+        _PERS_ID_PART_RE.fullmatch(p) is not None and _INT32_MIN <= int(p) <= _INT32_MAX for p in parts
+    )
 
 
 def _is_nonzero_pers_id(val: Any) -> bool:
-    return _valid_pers_id(val) and val != "0:0:0:0"
+    return _valid_pers_id(val) and any(int(p) != 0 for p in val.split(":"))
+
+
+def _pers_ids_shared_by_distinct_entities(stage_censuses: list[dict[str, Any]]) -> list[str]:
+    """Unicidad de ``pers_id`` (oraculo v2.1) entre entidades distintas que coexisten en una etapa de censo.
+
+    Agrupa por epoch las filas de todos los discos completos de la etapa, deduplica por entidad
+    (``net_id``, ``class_name``, ``own_logical_id``: la misma entidad puede salir en varios discos) y devuelve
+    los ``pers_id`` validos y distintos de cero que comparten dos o mas entidades.
+    """
+    owners: dict[tuple[str, str], set[tuple[str, str, str]]] = {}
+    for c in stage_censuses:
+        if not c.get("job_complete"):
+            continue
+        for r in c.get("rows") or []:
+            pid = r.get("pers_id")
+            if _is_nonzero_pers_id(pid):
+                ent = (str(r.get("net_id") or ""), str(r.get("class_name") or ""), str(r.get("own_logical_id") or ""))
+                owners.setdefault((str(c.get("inst") or ""), pid), set()).add(ent)
+    return sorted({pid for (_inst, pid), ents in owners.items() if len(ents) > 1})
+
+
+def _pers_id_issue(census_pers: Any, spawn_pers: Any = None) -> str:
+    """Regla de ``pers_id`` (oraculo v2) en la fila de censo de una entidad recien creada (t1 y testigo).
+
+    En DayZDiag (partida real del 2026-11-16) ``GetPersistentID`` es distinto de cero desde la creacion,
+    tambien con ``ECE_NOPERSISTENCY_WORLD``, y estable: la fila trae un ``pers_id`` bien formado distinto
+    de ``"0:0:0:0"`` y, si el recibo de creacion reporta uno real, el mismo. Devuelve ``""`` o el motivo.
+    """
+    if not _is_nonzero_pers_id(census_pers):
+        return "zero_or_invalid_pers_id"
+    if _is_nonzero_pers_id(spawn_pers) and spawn_pers != census_pers:
+        return "pers_id_differs_from_spawn"
+    return ""
+
+
+# Censos completos anteriores a la limpieza: de ellos sale la procedencia QA de los descendientes (oraculo v2.1)
+_QA_PROVENANCE_STAGES = frozenset(_KNOWN_STAGES) - {"t0_baseline_census", "t6_post_cleanup_census"}
+
+
+def _qa_identities(
+    ordered_ops: list[Any], censuses: list[dict[str, Any]]
+) -> tuple[dict[str, set[str]], set[str]]:
+    """Identidades de lo que creo el QA (oraculo v2.1, como la limpieza del brief :189).
+
+    Semillas: ``net_id`` por epoch de los recibos de ``per_apply_scene`` y ``per_spawn_raw`` (el ``net_id`` se
+    reutiliza entre epochs), sus ``pers_id`` validos y distintos de cero, y las filas propias. Cierre transitivo en
+    los censos completos de t1 a t5: una fila con identidad QA, propia o que cuelga (``parent_net_id`` del mismo
+    epoch) de algo del QA aporta su ``net_id`` a su epoch y su ``pers_id`` (que sobrevive al reinicio), asi que un
+    descendiente QA conserva su procedencia aunque luego cambie de padre (Sol r2).
+    """
+    net_by_inst: dict[str, set[str]] = {}
+    pers: set[str] = set()
+    for op in ordered_ops:
+        if op.status != "done" or op.verb not in ("per_apply_scene", "per_spawn_raw"):
+            continue
+        u = _unpack_any_payload(op.read)
+        if not u:
+            continue
+        for rec in (u[2] if op.verb == "per_apply_scene" else [u[0]]):
+            nid = str(rec.get("net_id") or "")
+            if _valid_net_id(nid):
+                net_by_inst.setdefault(op.inst, set()).add(nid)
+            if _is_nonzero_pers_id(rec.get("pers_id")):
+                pers.add(rec["pers_id"])
+    eligible = [c for c in censuses if c.get("job_complete") and c.get("stage") in _QA_PROVENANCE_STAGES]
+    changed = True
+    while changed:
+        changed = False
+        for c in eligible:
+            qa_nids = net_by_inst.setdefault(str(c.get("inst") or ""), set())
+            for r in c.get("rows") or []:
+                nid = str(r.get("net_id") or "")
+                pid = r.get("pers_id")
+                if not (
+                    nid in qa_nids
+                    or (_is_nonzero_pers_id(pid) and pid in pers)
+                    or int(round(float(r.get("own_b", 0.0)))) == 1
+                    or str(r.get("own_logical_id") or "")
+                    or str(r.get("parent_net_id") or "") in qa_nids
+                ):
+                    continue
+                if _valid_net_id(nid) and nid not in qa_nids:
+                    qa_nids.add(nid)
+                    changed = True
+                if _is_nonzero_pers_id(pid) and pid not in pers:
+                    pers.add(pid)
+                    changed = True
+    return net_by_inst, pers
+
+
+def _is_qa_row(
+    row: dict[str, Any],
+    qa_net_ids: set[str],
+    qa_pers_ids: set[str],
+    rows_by_net_id: dict[str, dict[str, Any]],
+    sentinel_classes: set[str],
+    mark_ratios: set[float],
+) -> bool:
+    """Si la fila es del test (oraculo v2.1, brief :189 y :284): registro propio, identidad de un recibo del QA,
+    clase centinela con la marca de vida del QA, o descendiente de algo del test. No basta ``own_b == 0`` para
+    excluirla (los objetos ajenos de ``per_spawn_raw`` tambien son del test)."""
+    seen: set[str] = set()
+    cur: dict[str, Any] | None = row
+    while cur is not None:
+        if int(round(float(cur.get("own_b", 0.0)))) == 1 or str(cur.get("own_logical_id") or ""):
+            return True
+        nid = str(cur.get("net_id") or "")
+        if nid in qa_net_ids or str(cur.get("pers_id") or "") in qa_pers_ids:
+            return True
+        max_hp = float(cur.get("max_hp", 0.0))
+        hp = float(cur.get("health_hp", 0.0))
+        if cur.get("class_name") in sentinel_classes and max_hp > 0.0 and any(
+            abs(hp - max_hp * ratio) <= 1e-2 for ratio in mark_ratios
+        ):
+            return True
+        pnid = str(cur.get("parent_net_id") or "")
+        if not pnid or pnid in seen:
+            return False
+        if pnid in qa_net_ids:
+            return True
+        seen.add(nid)
+        seen.add(pnid)
+        cur = rows_by_net_id.get(pnid)
+    return False
 
 
 def _unpack_any_payload(obj: Any) -> tuple[dict[str, str], dict[str, float], list[dict[str, Any]]] | None:
@@ -511,6 +658,13 @@ def _infer_area_id(area_tag: str, cx: float | None, cz: float | None, fixture: d
             if math.hypot(cx - float(ainfo["center_x_m"]), cz - float(ainfo["center_z_m"])) <= 1.0:
                 return aid
     return area_tag
+
+
+def _track_disc_key(area_tag: Any) -> str:
+    """Disco de seguimiento de una etiqueta de censo (``t5_track_x`` o ``<etapa>:t5_track_x``); ``""`` si no lo es."""
+    tag = str(area_tag or "")
+    i = tag.lower().find("t5_track_")
+    return tag[i:] if i >= 0 else ""
 
 
 def _extract_stage_from_tag(area_tag: str, strings: dict[str, str]) -> str | None:
@@ -1563,8 +1717,10 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     per01_fail.append(f"{lid}:census_hp_mismatch")
                 elif ratio > 0.0 and abs(c_hp - c_max_hp * ratio) > 1e-2:
                     per01_fail.append(f"{lid}:census_health_mark_mismatch")
-                if str(crow.get("pers_id") or "") != "0:0:0:0":
-                    per01_fail.append(f"{lid}:census_nonzero_pers_id")
+                # Oraculo v2: el motor asigna pers_id al crear (ver _pers_id_issue); antes se exigia "0:0:0:0"
+                pers_issue = _pers_id_issue(crow.get("pers_id"), orow.get("pers_id"))
+                if pers_issue:
+                    per01_fail.append(f"{lid}:census_{pers_issue}")
                 o_spawn_t = float(orow.get("spawn_tick_ms", 0.0))
                 c_spawn_t = float(crow.get("spawn_tick_ms", -1.0))
                 if o_spawn_t <= 0.0 or (q9_tick_ms > 0.0 and abs(o_spawn_t - q9_tick_ms) > 50.0) or abs(c_spawn_t - o_spawn_t) > 1e-3:
@@ -1775,6 +1931,10 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 break
             if len(area_rows_all) != len(exp_nids) or actual_nids != exp_nids:
                 per01_fail.append(f"{aid}:unexpected_or_extra_census_rows:{len(area_rows_all)}!={len(exp_nids)}")
+
+        # Oraculo v2.1: pers_id unico entre entidades distintas de t1 (todos los discos de la etapa, por epoch)
+        for dup_pid in _pers_ids_shared_by_distinct_entities(censuses_by_stage.get("t1_pre_transition_census", [])):
+            per01_fail.append(f"t1_pers_id_shared_by_distinct_entities:{dup_pid}")
 
         # Check scene_op_id idempotency on retained_scene_id
         if idempotent_hits_by_scene.get(retained_scene_id, 0) < 1:
@@ -3172,7 +3332,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                             or int(round(float(wrow.get("ai_agent_b", -1.0)))) != exp_ai
                             or float(wrow.get("max_hp", 0.0)) <= 0.0
                             or float(wrow.get("health_hp", 0.0)) <= 0.0
-                            or str(wrow.get("pers_id") or "") != "0:0:0:0"
+                            or _pers_id_issue(wrow.get("pers_id"), (wit_out_by_lid.get(wlid) or {}).get("pers_id"))
                         ):
                             per09_fail.append(f"witness_census_row_invalid:{wlid}")
                             continue
@@ -3229,6 +3389,10 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         ):
                             per09_fail.append(f"witness_unexpected_entity:{wpre.get('class_name')}:{wnid}")
 
+                # Oraculo v2.1: pers_id unico entre entidades distintas del testigo (el posterior lo repite, abajo)
+                for dup_pid in _pers_ids_shared_by_distinct_entities(censuses_by_stage.get("t5_witness_pre_census", [])):
+                    per09_fail.append(f"witness_pers_id_shared_by_distinct_entities:{dup_pid}")
+
                 creature_classes_w = {"ZmbF_CitizenANormal_Beige", "Animal_BosTaurus_Brown"}
                 for wnid, wpre in pre_w_map.items():
                     wpost = post_w_map[wnid]
@@ -3246,6 +3410,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
 
                     if (
                         wpost.get("class_name") != wpre.get("class_name")
+                        or wpost.get("pers_id") != wpre.get("pers_id")  # oraculo v2.1: id estable pre/post
                         or wpost.get("loc_kind") != wpre.get("loc_kind")
                         or wpost.get("parent_class") != wpre.get("parent_class")
                         or wpost.get("parent_net_id") != wpre.get("parent_net_id")
@@ -3276,14 +3441,59 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     required_t6_areas = required_base_areas
                     t6_survivors: list[str] = []
                     t6_missing_areas: list[str] = []
+                    # Oraculo v2.1 (brief :284, :189): solo cuenta lo que es del test; lo del CE (un infectado y lo
+                    # que lleve encima) no, aunque este en el area o en el disco.
+                    qa_net_by_inst, qa_pers_ids = _qa_identities(ordered_ops, censuses)
+                    qa_mark_ratios = {
+                        float(e.get("health_mark_ratio", 0.0))
+                        for sc in fixture["scenes"].values()
+                        for e in sc.get("entities", [])
+                    } | {float(rs.get("health_mark_ratio", 0.0)) for rs in fixture.get("raw_spawns", {}).values()}
+                    qa_mark_ratios = {ratio for ratio in qa_mark_ratios if ratio > 0.0}
+                    t6_rows_by_nid = {str(r.get("net_id") or ""): r for c in t6_censuses for r in c["rows"]}
+                    t6_checked: list[dict[str, Any]] = []
                     for aid in required_t6_areas:
                         c_t6 = census_by_stage_area.get(("t6_post_cleanup_census", aid))
                         if c_t6 is None or not c_t6["job_complete"]:
                             t6_missing_areas.append(aid)
                             continue
-                        # Check for non-director survivors
+                        t6_checked.append(c_t6)
+                    # Oraculo v2.1 (Sol, confirmacion de t6, BLOQ b): tambien los discos de seguimiento t5_track_*. Cada
+                    # disco t5 necesita su censo t6 completo del mismo disco (mismo centro, radio no menor), como lo
+                    # registra el runner con center_override; si falta, INCONCLUSO. Todo disco t6 completo se revisa.
+                    t6_disc_censuses = [c for c in t6_censuses if _track_disc_key(c.get("raw_area_tag"))]
+                    for c5 in censuses_by_stage.get("t5_post_restart_census", []):
+                        disc = _track_disc_key(c5.get("raw_area_tag"))
+                        if not disc or c5.get("inst") != server_epoch_new:
+                            continue
+                        if not any(
+                            _track_disc_key(c6.get("raw_area_tag")) == disc
+                            and c6["job_complete"]
+                            and math.hypot(
+                                float(c6["center_x_m"]) - float(c5["center_x_m"]),
+                                float(c6["center_z_m"]) - float(c5["center_z_m"]),
+                            )
+                            <= 1e-3
+                            and float(c6["radius_m"]) >= float(c5["radius_m"]) - 1e-6
+                            for c6 in t6_disc_censuses
+                        ):
+                            t6_missing_areas.append(disc)
+                    t6_checked.extend(c for c in t6_disc_censuses if c["job_complete"])
+                    for c_t6 in t6_checked:
+                        # Oraculo v2.1 (BLOQ a): tambien dentro del director (brief :189, «en mundo y director»); sus
+                        # prendas de inicio no tienen identidad QA y no cuentan.
                         for r in c_t6["rows"]:
-                            if r.get("owner_uid") != director_uid_t0 and int(round(float(r.get("alive_b", 0.0)))) == 1:
+                            if (
+                                int(round(float(r.get("alive_b", 0.0)))) == 1
+                                and _is_qa_row(
+                                    r,
+                                    qa_net_by_inst.get(str(c_t6.get("inst") or ""), set()),
+                                    qa_pers_ids,
+                                    t6_rows_by_nid,
+                                    sentinel_classes,
+                                    qa_mark_ratios,
+                                )
+                            ):
                                 t6_survivors.append(f"{r.get('class_name')}:{r.get('net_id')}")
 
                     if t6_missing_areas:
