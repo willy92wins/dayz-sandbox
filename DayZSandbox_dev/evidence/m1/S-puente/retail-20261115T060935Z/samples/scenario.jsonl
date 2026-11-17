@@ -1,0 +1,150 @@
+{"ev": "step_start", "step": "S0", "t_ms": 9.401}
+{"ev": "step_end", "step": "S0", "t_ms": 10.594}
+{"ev": "step_start", "step": "S1", "t_ms": 10.632}
+{"ev": "step_end", "step": "S1", "t_ms": 124123.026}
+{"ev": "step_start", "step": "S2", "t_ms": 124123.11}
+{"ev": "step_end", "step": "S2", "t_ms": 130123.514}
+{"ev": "step_start", "step": "S3", "t_ms": 130123.601}
+{"ev": "mix_op", "op_id": "op-2e298949-1", "t_ms": 130194.32, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-2", "t_ms": 130392.831, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-3", "t_ms": 130593.179, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-4", "t_ms": 130646.908, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-5", "t_ms": 130848.818, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-6", "t_ms": 130992.704, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-7", "t_ms": 131056.936, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-8", "t_ms": 131192.89, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-9", "t_ms": 131393.402, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-10", "t_ms": 131592.627, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-11", "t_ms": 131792.652, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-12", "t_ms": 131992.778, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-13", "t_ms": 132192.73, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-14", "t_ms": 132392.587, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-15", "t_ms": 132592.566, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-16", "t_ms": 132694.065, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-17", "t_ms": 132854.019, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-18", "t_ms": 132892.621, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-19", "t_ms": 133092.778, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-20", "t_ms": 133292.643, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-21", "t_ms": 133492.624, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-22", "t_ms": 133693.403, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-23", "t_ms": 133892.699, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-24", "t_ms": 134093.321, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-25", "t_ms": 134293.707, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-26", "t_ms": 134492.845, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-27", "t_ms": 134631.336, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-28", "t_ms": 134694.221, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-29", "t_ms": 134893.313, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-30", "t_ms": 135093.057, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-31", "t_ms": 135128.701, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-32", "t_ms": 135331.947, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-33", "t_ms": 135393.242, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-34", "t_ms": 135593.487, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-35", "t_ms": 135793.906, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-36", "t_ms": 135962.397, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-37", "t_ms": 135993.746, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-38", "t_ms": 136192.725, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-39", "t_ms": 136295.679, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-40", "t_ms": 136392.484, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-41", "t_ms": 136592.735, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-42", "t_ms": 136716.841, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-43", "t_ms": 136792.347, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-44", "t_ms": 136993.063, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-45", "t_ms": 137020.687, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-46", "t_ms": 137193.025, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-47", "t_ms": 137392.705, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-48", "t_ms": 137422.628, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-49", "t_ms": 137593.141, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-50", "t_ms": 137634.302, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-51", "t_ms": 137792.666, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-52", "t_ms": 137993.722, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-53", "t_ms": 138193.426, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-54", "t_ms": 138393.033, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-55", "t_ms": 138593.686, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-56", "t_ms": 138637.943, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-57", "t_ms": 138794.629, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-58", "t_ms": 138992.826, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-59", "t_ms": 139192.436, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-60", "t_ms": 139241.086, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-61", "t_ms": 139439.896, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-62", "t_ms": 139493.821, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-63", "t_ms": 139693.675, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-64", "t_ms": 139895.589, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-65", "t_ms": 140092.878, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-66", "t_ms": 140155.742, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-67", "t_ms": 140351.374, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-68", "t_ms": 140554.258, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-69", "t_ms": 140593.712, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-70", "t_ms": 140792.718, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-71", "t_ms": 140860.794, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-72", "t_ms": 140993.107, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-73", "t_ms": 141192.524, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-74", "t_ms": 141392.605, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-75", "t_ms": 141593.076, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-76", "t_ms": 141792.626, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-77", "t_ms": 141992.565, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-78", "t_ms": 142192.899, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-79", "t_ms": 142393.236, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-80", "t_ms": 142593.156, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-81", "t_ms": 142793.34, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-82", "t_ms": 142874.016, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-83", "t_ms": 142993.163, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-84", "t_ms": 143193.137, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-85", "t_ms": 143392.864, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-86", "t_ms": 143592.555, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-87", "t_ms": 143792.539, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-88", "t_ms": 143992.688, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-89", "t_ms": 144192.936, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-90", "t_ms": 144299.715, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-91", "t_ms": 144393.891, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-92", "t_ms": 144593.085, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-93", "t_ms": 144793.035, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-94", "t_ms": 144911.33, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-95", "t_ms": 145115.805, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-96", "t_ms": 145314.385, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-97", "t_ms": 145393.048, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-2e298949-98", "t_ms": 145602.365, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-2e298949-99", "t_ms": 145793.364, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-2e298949-100", "t_ms": 145993.272, "verb": "srv_read"}
+{"ev": "step_end", "step": "S3", "t_ms": 145993.337}
+{"ev": "step_start", "peer": "server", "step": "N1", "t_ms": 145993.422}
+{"ev": "key_rotated", "peer": "server", "t_ms": 146193.003}
+{"ev": "config_restored", "peer": "server", "t_ms": 151797.389}
+{"ev": "expect", "peer": "server", "roles": {"B": "op-2e298949-101", "S": "op-2e298949-102", "read": "op-2e298949-103"}, "step": "N1", "t_ms": 152696.243}
+{"ev": "step_end", "peer": "server", "step": "N1", "t_ms": 152696.324}
+{"ev": "step_start", "peer": "server", "step": "N2", "t_ms": 152696.399}
+{"ev": "expect", "peer": "server", "roles": {"B": "op-2e298949-104", "S": "op-2e298949-105", "read": "op-2e298949-106"}, "step": "N2", "t_ms": 153295.1}
+{"ev": "step_end", "peer": "server", "step": "N2", "t_ms": 153295.144}
+{"ev": "step_start", "peer": "server", "step": "N3", "t_ms": 153295.204}
+{"ev": "expect", "peer": "server", "roles": {"B": "op-2e298949-107", "S": "op-2e298949-108", "read": "op-2e298949-109"}, "step": "N3", "t_ms": 153894.843}
+{"ev": "step_end", "peer": "server", "step": "N3", "t_ms": 153894.881}
+{"ev": "step_start", "peer": "server", "step": "N4", "t_ms": 153894.899}
+{"ev": "expect", "peer": "server", "roles": {"a": "op-2e298949-110", "b": "op-2e298949-111", "read": "op-2e298949-112", "repeat": "op-2e298949-110"}, "step": "N4", "t_ms": 158921.527}
+{"ev": "step_end", "peer": "server", "step": "N4", "t_ms": 158921.61}
+{"ev": "step_start", "peer": "server", "step": "N5", "t_ms": 158921.632}
+{"ev": "expect", "peer": "server", "roles": {"c": "n5-2e298949-server-c", "d": "op-2e298949-113", "read": "op-2e298949-114", "repeat": "n5-2e298949-server-c"}, "step": "N5", "t_ms": 165422.226}
+{"ev": "step_end", "peer": "server", "step": "N5", "t_ms": 165422.29}
+{"ev": "step_start", "peer": "client", "step": "N1", "t_ms": 165422.328}
+{"ev": "key_rotated", "peer": "client", "t_ms": 165458.693}
+{"ev": "config_restored", "peer": "client", "t_ms": 171050.233}
+{"ev": "expect", "peer": "client", "roles": {"B": "op-2e298949-115", "S": "op-2e298949-116", "read": "op-2e298949-117"}, "step": "N1", "t_ms": 171644.633}
+{"ev": "step_end", "peer": "client", "step": "N1", "t_ms": 171644.702}
+{"ev": "step_start", "peer": "client", "step": "N2", "t_ms": 171644.751}
+{"ev": "expect", "peer": "client", "roles": {"B": "op-2e298949-118", "S": "op-2e298949-119", "read": "op-2e298949-120"}, "step": "N2", "t_ms": 172255.812}
+{"ev": "step_end", "peer": "client", "step": "N2", "t_ms": 172255.892}
+{"ev": "step_start", "peer": "client", "step": "N3", "t_ms": 172255.975}
+{"ev": "expect", "peer": "client", "roles": {"B": "op-2e298949-121", "S": "op-2e298949-122", "read": "op-2e298949-123"}, "step": "N3", "t_ms": 172859.751}
+{"ev": "step_end", "peer": "client", "step": "N3", "t_ms": 172859.825}
+{"ev": "step_start", "peer": "client", "step": "N4", "t_ms": 172859.895}
+{"ev": "expect", "peer": "client", "roles": {"a": "op-2e298949-124", "b": "op-2e298949-125", "read": "op-2e298949-126", "repeat": "op-2e298949-124"}, "step": "N4", "t_ms": 179709.145}
+{"ev": "step_end", "peer": "client", "step": "N4", "t_ms": 179709.19}
+{"ev": "step_start", "peer": "client", "step": "N5", "t_ms": 179709.249}
+{"ev": "expect", "peer": "client", "roles": {"c": "n5-2e298949-client-c", "d": "op-2e298949-127", "read": "op-2e298949-128", "repeat": "n5-2e298949-client-c"}, "step": "N5", "t_ms": 186188.685}
+{"ev": "step_end", "peer": "client", "step": "N5", "t_ms": 186188.738}
+{"ev": "step_start", "peer": "client", "step": "N6", "t_ms": 186188.76}
+{"ev": "expect", "peer": "client", "roles": {"burst": "op-2e298949-131", "log": "op-2e298949-132", "pre_log": "op-2e298949-130", "read": "op-2e298949-133"}, "step": "N6", "t_ms": 205253.844}
+{"ev": "step_end", "peer": "client", "step": "N6", "t_ms": 205253.891}
+{"ev": "step_start", "peer": "server", "step": "N6", "t_ms": 205253.946}
+{"ev": "expect", "peer": "server", "roles": {"burst": "op-2e298949-134", "emit_pages": ["op-2e298949-135", "op-2e298949-136"]}, "step": "N6", "t_ms": 211973.5}
+{"ev": "step_end", "peer": "server", "step": "N6", "t_ms": 211973.561}
+{"ev": "step_start", "step": "S10", "t_ms": 211973.624}
+{"ev": "step_end", "step": "S10", "t_ms": 211973.651}

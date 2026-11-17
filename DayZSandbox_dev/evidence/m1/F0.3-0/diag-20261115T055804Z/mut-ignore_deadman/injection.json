@@ -1,0 +1,12 @@
+{
+  "applied": true,
+  "kind": "qa_fault",
+  "mutant": "ignore_deadman",
+  "observable_effect": {
+    "client_new_pings_n": 33,
+    "server_rows_sample_n": 20,
+    "server_state_at_reconnect": "running"
+  },
+  "target": "d9c2176bed5bef81-251",
+  "when_h_ms": 74868.152
+}

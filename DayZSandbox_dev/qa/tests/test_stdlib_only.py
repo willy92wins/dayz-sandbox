@@ -7,6 +7,11 @@ from pathlib import Path
 
 QA = Path(__file__).resolve().parents[1]
 
+# Excepcion cerrada (brief de partida de F1b-peers, §3): el orquestador de qa/live arranca en proceso el
+# backend real, el mod falso y peer_config, y su ensayo seco tambien. Solo esos dos ficheros pueden importar
+# el paquete app del repo; el evaluador (live/f1bp_eval.py) y el resto de qa siguen siendo solo stdlib.
+APP_IMPORTERS = {"live/f1bp_live.py", "tests/test_f1bp_dryrun.py"}
+
 
 def _local(name):
     top = name.split(".", 1)[0]
@@ -40,6 +45,8 @@ class StdlibOnlyTests(unittest.TestCase):
                         or (QA / "strack" / f"{top}.py").is_file()
                         or (QA / "strack" / top).is_dir()
                     ):
+                        continue
+                    if top == "app" and path.relative_to(QA).as_posix() in APP_IMPORTERS:
                         continue
                     offenders.append(f"{path.relative_to(QA)}:{node.lineno} {module}")
                 del level

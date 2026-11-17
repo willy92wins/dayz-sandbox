@@ -210,7 +210,7 @@ Problema
 Aplicar una escena con world_spawn uno a uno es lento y propenso a errores, y crear cientos de golpe puede congelar el servidor. Un modelo débil tampoco encadena bien muchas llamadas. En cine es el atrezo y el decorado de cada plano.
 
 Propuesta
-- Firma: world_spawn_batch(items, per_tick=10, scene_id='', timeout_s). Cada item: type, pos (y=null ajusta al suelo como surface_query), rotation o ypr, flags.
+- Firma: world_spawn_batch(items, per_tick=10, scene_id='', timeout_s). Cada item: type, pos (y=null posa el objeto en la primera superficie bajo (x, z), objetos como rocas incluidos; surface_query mide solo el terreno), rotation o ypr, flags.
 - Peer: servidor. Requiere lease.
 - Devuelve resultado por item (object_id o error) y estado global ok o partial.
 - Tope de items por llamada; los infectados se crean con las flags que los inicializan.
@@ -221,8 +221,8 @@ Evidencia
 - dayz-mcp ya midió que un modelo de 27B llama mejor una operación con nombre que una cadena de tools.
 
 Criterios de aceptación (R26)
-- POS: 100 items con per_tick=10: se crean los 100 y la duración máxima de tick del servidor no supera un umbral fijado tras medir sin carga.
-- POS: Items con y=null quedan a menos de 0,2 m del suelo según surface_query.
+- POS: 100 items con per_tick=10: se crean los 100, ningún tick del servidor pasa de 16,7 ms (un fotograma a 60 fps) y la media de tick bajo carga es como mucho el doble que en reposo.
+- POS: En suelo despejado, items con y=null quedan a menos de 0,2 m del suelo según surface_query; sobre una roca u otro objeto quedan encima de él, no a la altura del terreno.
 - NEG: 1 clase desconocida entre 10: 9 creados, 1 error con la clase; estado partial.
 - NEG: items por encima del tope: bad_args antes de crear nada.
 

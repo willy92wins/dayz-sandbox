@@ -1,21 +1,21 @@
-"""Evaluador puro de S-puente (brief F0.1 §9).
+"""Evaluador puro de S-puente (brief F0.1 §9 y F0.3-0 §14 F02-H1/F02-H3).
 
 Lee manifest.json, samples/bridge.jsonl y samples/scenario.jsonl.
 No abre red, no mira el reloj y no usa azar.
 
-Contrato que escribe el escenario (F0.1b) y que este modulo lee:
+Contrato que escribe el escenario y que este modulo lee:
 scenario.jsonl, un objeto por linea, con t_ms y ev:
   step_start|step_end: step
   mix_op: op_id, verb
-  expect: step, peer, roles (B, S, read | a, b, repeat, read | c, d, repeat, read | burst, log, read)
+  expect: step, peer, roles
   key_rotated|config_restored|resume_timeout: peer
-bridge.jsonl (campos del §6, solo los que apliquen):
-  hello: peer, args.proto, args.build
+bridge.jsonl:
+  hello: peer, http, args.proto, args.build
   poll: peer, http, held_ms, n_ops, frame
   auth_reject, o http 401: peer
   enq: op_id, verb, args
   deliver|result_drop: op_id
-  result: op_id, result (RESULT del §5.2)
+  result: op_id, result
   cut_start|cut_end: peer
 """
 
@@ -23,12 +23,14 @@ import json
 import math
 from pathlib import Path
 
+import wire
+
 PEERS = ("server", "client")
 MIX_VERBS = ("srv_read", "ground_query", "cam_pose_set", "ambient_set")
 CHECK_IDS = (
     ["C0", "H1.server", "H1.client", "M1", "M2"]
     + [f"N{n}.{peer}" for n in range(1, 6) for peer in PEERS]
-    + ["N6"]
+    + ["N6", "N6.server"]
 )
 
 
@@ -95,6 +97,8 @@ def _run_check(cid, ctx):
         return _m2(ctx)
     if cid == "N6":
         return _n6(ctx)
+    if cid == "N6.server":
+        return _n6_server(ctx)
     step, peer = cid.split(".")
     if step in ctx["skipped"].get(peer, ()):
         return "missing", "resume_timeout", None
@@ -122,7 +126,14 @@ def _skipped(scenario):
 
 def _c0(ctx):
     for peer in PEERS:
-        hellos = [e for e in ctx["bridge"] if e["ev"] == "hello" and e.get("peer") == peer]
+        hellos = [
+            e
+            for e in ctx["bridge"]
+            if e["ev"] == "hello"
+            and e.get("peer") == peer
+            and e.get("http", 200) == 200
+            and e.get("ok", True) is True
+        ]
         if not hellos:
             return "missing", f"no hello from {peer}", None
         args = hellos[0].get("args")
@@ -237,7 +248,7 @@ def _mix_ok(verb, enq, res, last_srv):
     body = res.get("result")
     if not isinstance(body, dict):
         raise EvidenceError("result missing result")
-    if body.get("status") != "done":
+    if body.get("status") != "done" or body.get("dup") is not False:
         return False
     read = body.get("read")
     if not isinstance(read, dict):
@@ -358,27 +369,61 @@ def _n6(ctx):
     roles = _roles(ctx, "N6", "client")
     if roles is None:
         return "missing", "no expect", None
+    if "pre_log" not in roles:
+        return "missing", "no pre_log", None
+    pre_res = _in_step(ctx, "N6", "client", "result", roles["pre_log"])
+    if pre_res is None:
+        return "missing", "no pre_log result", None
+    pre_body = _body(pre_res)
+    pre_read = pre_body.get("read") if isinstance(pre_body.get("read"), dict) else {}
+    if pre_body.get("status") != "done" or "rpc_log" not in (pre_read.get("has") or []):
+        return "missing", "pre_log not done", None
+    boundary_ms = pre_body.get("done_ms")
+    if not _finite(boundary_ms):
+        raise EvidenceError("pre_log invalid done_ms")
+
     burst = _in_step(ctx, "N6", "client", "enq", roles["burst"])
     log_res = _in_step(ctx, "N6", "client", "result", roles["log"])
     if burst is None or log_res is None:
         return "missing", "no burst or log", None
+    args = _args(burst)
+    seq0 = args.get("seq0")
+    count = args.get("count")
+    if (
+        isinstance(seq0, bool)
+        or not isinstance(seq0, int)
+        or isinstance(count, bool)
+        or not isinstance(count, int)
+        or count <= 0
+    ):
+        raise EvidenceError("rpc_burst invalid seq0/count")
+
     log_body = _body(log_res)
     read = log_body.get("read") if isinstance(log_body.get("read"), dict) else {}
     if log_body.get("status") != "done" or "rpc_log" not in (read.get("has") or []):
         return "missing", "rpc_log absent", None
-    log = read.get("rpc_log")
-    if not isinstance(log, list):
+    raw_log = read.get("rpc_log")
+    if not isinstance(raw_log, list):
         raise EvidenceError("rpc_log is not a list")
-    seqs = []
-    for entry in log:
-        if "seq" not in entry or "decision" not in entry:
+    for entry in raw_log:
+        if not isinstance(entry, dict) or "seq" not in entry or "decision" not in entry:
             raise EvidenceError("rpc_log entry missing seq/decision")
-        seqs.append(entry["seq"])
-    if any(s not in seqs for s in range(1000, 1040)):
-        return "missing", "seq missing", None
-    for entry in log:
         if "lease_age_ms" not in entry or "recv_ms" not in entry:
             raise EvidenceError("rpc_log entry missing lease_age_ms/recv_ms")
+
+    expected_seqs = range(seq0, seq0 + count)
+    log = [
+        entry
+        for entry in raw_log
+        if entry["seq"] in expected_seqs
+        and (not _finite(entry["recv_ms"]) or entry["recv_ms"] > boundary_ms)
+    ]
+    if not log and raw_log:
+        return "fail", "stale rpc_log from previous burst", None
+    seqs = [entry["seq"] for entry in log]
+    if any(s not in seqs for s in expected_seqs):
+        return "missing", "seq missing", None
+
     decisions = {e["decision"] for e in log}
     accepted = [e for e in log if e["decision"] == "accepted"]
     rejected = [e for e in log if e["decision"] == "rejected_lease"]
@@ -391,8 +436,6 @@ def _n6(ctx):
         return age > lease if over else age <= lease
 
     finite_ages = [e["lease_age_ms"] for e in accepted if _finite(e.get("lease_age_ms"))]
-    # Un accepted cumple la ventana solo si su lease_age es finito y <= L
-    # (rpc_ignores_lease, y tambien un NaN, que una comparacion cruda deja pasar).
     if accepted and not all(_age_holds(e, False) for e in accepted):
         metrics = {}
         if finite_ages:
@@ -418,11 +461,10 @@ def _n6(ctx):
         order_ok = False
         last = None
     k = last["seq"] if last is not None else None
-    args = _args(burst)
     p0 = args.get("pos")
     if not isinstance(p0, list) or len(p0) != 3 or not all(_finite(v) for v in p0):
         raise EvidenceError("rpc_burst missing pos")
-    expect = [p0[0] + (k - 1000), p0[1], p0[2]] if k is not None and _finite(k) else None
+    expect = [p0[0] + (k - seq0), p0[1], p0[2]] if k is not None and _finite(k) else None
     pose_res = _in_step(ctx, "N6", "client", "result", roles["read"])
     if pose_res is None:
         return "missing", "no pose read", metrics
@@ -436,8 +478,190 @@ def _n6(ctx):
         return "fail", "lease_age outside window", metrics
     if not order_ok:
         return "fail", "accepted after rejected_lease", metrics
-    if not pose_ok:
-        return "fail", "pose is not last accepted", metrics
+    status, detail = _n6_pose_check(accepted, lease, seq0, p0, pose_read, pose_ok)
+    return status, detail, metrics
+
+
+_N6_APPLY_KEYS = ("apply_ms", "apply_lease_age_ms", "applied_b")
+
+
+def _n6_has_apply_record(entry):
+    applied = entry.get("applied_b")
+    return (
+        _finite(entry.get("apply_ms"))
+        and _finite(entry.get("apply_lease_age_ms"))
+        and not isinstance(applied, bool)
+        and applied in (0, 1)
+    )
+
+
+def _n6_pose_check(accepted, lease, seq0, p0, pose_read, pose_ok):
+    """Pose final de N6 alineada con F02-H3 (`plans/2026-11-14-m1-f0.3-0-brief.md:669-673`).
+
+    El peer aplica la pose aceptada en el frame siguiente y la descarta si en ese frame su lease ya no
+    vale (`fake_peer.py`, `_apply`). Solo el registro del propio peer acredita un descarte: en cada
+    aceptada del `rpc_log`, `apply_ms`, `apply_lease_age_ms` y `applied_b`, anotados al aplicar.
+    - **Cada registro presente se valida siempre,** aunque falten otros: un registro a medias o mal
+      formado es FALLA, y uno que contradiga el lease en ese instante (aplicada si y solo si
+      `apply_lease_age_ms <= lease`) tambien.
+    - **Con registro en todas las aceptadas:** la pose leida tiene que ser la de la ultima aplicada. Si no
+      se aplico ninguna, la pose de antes de la rafaga no esta en la evidencia: `missing`.
+    - **Sin registro completo** (la sonda real todavia no lo da): con la pose de la ultima aceptada,
+      `pass`, salvo que su propio registro diga que se descarto. Cualquier otra pose es `missing`, nunca
+      `pass` ni `fail`: sin identidad de frame ni de aplicacion no se puede acreditar que pose debia
+      quedar. Que el lease caducara antes de leer no acredita nada, porque en la rafaga todas las
+      aceptadas comparten caducidad.
+    """
+    ordered = sorted(accepted, key=lambda e: (e["recv_ms"], e["seq"]))
+    if not ordered:
+        return "missing", "no accepted entries"
+    for entry in ordered:
+        present = [key for key in _N6_APPLY_KEYS if key in entry]
+        if not present:
+            continue
+        if len(present) != len(_N6_APPLY_KEYS) or not _n6_has_apply_record(entry):
+            return "fail", "malformed apply record"
+        if entry["apply_ms"] < entry["recv_ms"]:
+            return "fail", "pose applied before received"
+        if bool(entry["applied_b"]) != (entry["apply_lease_age_ms"] <= lease):
+            return "fail", "pose apply contradicts lease"
+    if not all(_n6_has_apply_record(e) for e in ordered):
+        if pose_ok:
+            last_entry = ordered[-1]
+            if _n6_has_apply_record(last_entry) and last_entry["applied_b"] == 0:
+                return "fail", "pose contradicts apply record"
+            return "pass", ""
+        return "missing", "pose mismatch without apply evidence"
+    applied = [e for e in ordered if e["applied_b"] == 1]
+    if not applied:
+        return ("fail", "pose applied without apply record") if pose_ok else ("missing", "no burst pose applied")
+    last_applied = max(applied, key=lambda e: (e["apply_ms"], e["recv_ms"], e["seq"]))
+    expect_j = [p0[0] + (last_applied["seq"] - seq0), p0[1], p0[2]]
+    if not _pose_match(pose_read, expect_j, [90, 0, 0]):
+        return "fail", "pose is not last applied"
+    if last_applied is ordered[-1]:
+        return "pass", ""
+    return "pass", "pose discarded after lease expiry"
+
+
+def _n6_server(ctx):
+    if ctx["skipped"].get("__n6__"):
+        return "missing", "resume_timeout", None
+    roles = _roles(ctx, "N6", "server")
+    if roles is None:
+        return "missing", "no expect", None
+    burst_id = roles.get("burst")
+    emit_pages = roles.get("emit_pages")
+    if not isinstance(burst_id, str) or not isinstance(emit_pages, list) or not emit_pages:
+        return "missing", "missing burst or emit_pages", None
+
+    burst_enq = _in_step(ctx, "N6", "server", "enq", burst_id)
+    burst_res = _in_step(ctx, "N6", "server", "result", burst_id)
+    if burst_enq is None or burst_res is None:
+        return "missing", "no server burst or result", None
+    if not _cut_then_poll(ctx, "N6", "server"):
+        return "missing", "no server cut", None
+
+    burst_body = _body(burst_res)
+    burst_ok = (
+        burst_body.get("status") == "error"
+        and burst_body.get("reason") == "lease_expired"
+        and burst_body.get("dup") is False
+    )
+
+    all_rows = []
+    expected_pages = None
+    expected_total = None
+    for idx, pid in enumerate(emit_pages):
+        pres = _in_step(ctx, "N6", "server", "result", pid)
+        if pres is None:
+            if not burst_ok:
+                return "fail", "burst not error/lease_expired", None
+            return "missing", "missing emitlog page result", None
+        pbody = _body(pres)
+        pread = pbody.get("read") if isinstance(pbody.get("read"), dict) else {}
+        if (
+            pbody.get("status") != "done"
+            or pbody.get("dup") is not False
+            or "payload" not in (pread.get("has") or [])
+        ):
+            if not burst_ok:
+                return "fail", "burst not error/lease_expired", None
+            return "missing", "emitlog page not done", None
+        try:
+            unpacked = wire.unpack_payload(pread)
+        except ValueError as exc:
+            raise EvidenceError(f"invalid emitlog payload: {exc}") from exc
+        nums = unpacked["num"]
+        if "page_n" not in nums or "pages_n" not in nums or "rows_total_n" not in nums:
+            raise EvidenceError("emitlog page missing pagination scalars")
+        if int(nums["page_n"]) != idx:
+            return "missing", "emitlog page_n mismatch", None
+        p_n = int(nums["pages_n"])
+        tot_n = int(nums["rows_total_n"])
+        if expected_pages is None:
+            expected_pages = p_n
+            expected_total = tot_n
+        elif p_n != expected_pages or tot_n != expected_total:
+            return "missing", "emitlog pagination changed across pages", None
+        all_rows.extend(unpacked["rows"])
+
+    if expected_pages is not None and expected_pages > 0 and len(emit_pages) != expected_pages:
+        if not burst_ok:
+            return "fail", "burst not error/lease_expired", None
+        return "missing", "incomplete emitlog pages", None
+    if expected_total is not None and len(all_rows) != expected_total:
+        if not burst_ok:
+            return "fail", "burst not error/lease_expired", None
+        return "missing", "emitlog rows_total_n mismatch", None
+
+    required_cols = ("seq_n", "tick_ms", "lease_age_ms", "idx_n", "op_id", "outcome")
+    for row in all_rows:
+        if any(col not in row for col in required_cols):
+            raise EvidenceError("emitlog row missing required columns")
+
+    own_rows = [row for row in all_rows if row["op_id"] == burst_id]
+    if not own_rows:
+        return "fail", "no emit rows for current burst", None
+
+    if not all(
+        _finite(r["seq_n"]) and _finite(r["tick_ms"]) and _finite(r["lease_age_ms"]) and _finite(r["idx_n"])
+        for r in own_rows
+    ):
+        return "fail", "non-finite emitlog fields", None
+
+    outcomes = {r["outcome"] for r in own_rows}
+    if outcomes - {"sent", "blocked_lease"}:
+        return "fail", "unexpected emit outcome", None
+
+    sent = [r for r in own_rows if r["outcome"] == "sent"]
+    blocked = [r for r in own_rows if r["outcome"] == "blocked_lease"]
+    lease = ctx["lease"]
+
+    metrics = {}
+    if sent:
+        metrics["server_window_accept_max_ms"] = max(r["lease_age_ms"] for r in sent)
+    if blocked:
+        metrics["server_window_reject_min_ms"] = min(r["lease_age_ms"] for r in blocked)
+
+    if not sent:
+        return "fail", "no sent rows for current burst", metrics or None
+    if not all(r["lease_age_ms"] <= lease for r in sent):
+        return "fail", "sent lease_age outside window", metrics or None
+    if not blocked or not all(r["lease_age_ms"] > lease for r in blocked):
+        return "fail", "missing or invalid blocked_lease", metrics or None
+
+    first_blk_idx = min(r["idx_n"] for r in blocked)
+    first_blk_stamp = min((r["tick_ms"], r["seq_n"]) for r in blocked)
+    if any(
+        r["idx_n"] > first_blk_idx or (r["tick_ms"], r["seq_n"]) > first_blk_stamp
+        for r in sent
+    ):
+        return "fail", "sent after blocked_lease", metrics
+
+    if not burst_ok:
+        return "fail", "burst did not end with error/lease_expired", metrics
+
     return "pass", "", metrics
 
 
@@ -500,7 +724,13 @@ def _auth_between(ctx, peer, rotated, restored):
 def _hello_after(ctx, peer, restored):
     t0 = restored["t_ms"]
     for ev in ctx["bridge"]:
-        if ev["ev"] == "hello" and ev.get("peer") == peer and ev["t_ms"] > t0:
+        if (
+            ev["ev"] == "hello"
+            and ev.get("peer") == peer
+            and ev.get("http", 200) == 200
+            and ev.get("ok", True) is True
+            and ev["t_ms"] > t0
+        ):
             return True
     return False
 

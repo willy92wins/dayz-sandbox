@@ -1,14 +1,37 @@
-"""Bridge QA v0 (brief F0.1 §5-§6). Solo escucha en 127.0.0.1."""
+"""Bridge QA v0 (brief F0.1 §5-§6, F0.3-0 §2.2, §5.4, §13 A4, §14). Solo escucha en 127.0.0.1."""
 
-import json
 import hmac
+import json
+import math
+import secrets
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-ARG_KEYS = ("x", "z", "fog", "pos", "ypr", "count", "interval_ms", "seq0", "client_inst")
+import wire
+
+ARG_KEYS = (
+    "x",
+    "z",
+    "fog",
+    "pos",
+    "ypr",
+    "count",
+    "interval_ms",
+    "seq0",
+    "client_inst",
+    "sk",
+    "sv",
+    "nk",
+    "nv",
+    "ncol",
+    "ncell",
+    "scol",
+    "scell",
+    "rows",
+)
 
 
 def full_args(args):
@@ -17,8 +40,17 @@ def full_args(args):
         "count": 0,
         "fog": 0.0,
         "interval_ms": 0,
+        "ncell": [],
+        "ncol": [],
+        "nk": [],
+        "nv": [],
         "pos": [0, 0, 0],
+        "rows": 0,
+        "scell": [],
+        "scol": [],
         "seq0": 0,
+        "sk": [],
+        "sv": [],
         "x": 0.0,
         "ypr": [0, 0, 0],
         "z": 0.0,
@@ -27,34 +59,47 @@ def full_args(args):
         if key not in base:
             continue
         base[key] = list(value) if isinstance(value, list) else value
+    wire.validate_payload(base)
+    # D10 (§15): toda orden pasa por aqui (enqueue y las medidas de BASE-01); una cadena de args de mas de 1000
+    # caracteres se rechaza antes de salir, porque la sonda la leeria cortada en 1023.
+    wire.check_arg_strings(base)
     return base
 
 
-class QABridge:
-    def __init__(self, hold_ms, lease_ms, sink, port=0):
-        self.hold_ms = hold_ms
-        self.lease_ms = lease_ms
-        self.sink = sink
-        self.t0 = time.monotonic_ns()
-        self.cv = threading.Condition()
-        self.keys = {}
-        self.inst = {}
-        self.queue = []
-        self.results = {}
-        self.events = []
-        self.cut_until = {}
-        self.drop = set()
-        self.force = set()
-        self._seq = 0
-        self.failure = None
-        self._stopping = False
-        self._sink_closed = False
-        self._live = 0
-        self.STOP_JOIN_S = 5.0
-        handler = self._handler()
-        self.httpd = _Server(("127.0.0.1", port), handler)
-        self.httpd.qa_bridge = self
-        self._thread = None
+def _strip_qa_fault(args):
+    copied = {}
+    for k, v in args.items():
+        copied[k] = list(v) if isinstance(v, list) else v
+    sk = copied.get("sk")
+    sv = copied.get("sv")
+    if isinstance(sk, list) and isinstance(sv, list) and "qa_fault" in sk:
+        idx = sk.index("qa_fault")
+        sk.pop(idx)
+        if idx < len(sv):
+            sv.pop(idx)
+    return copied
+
+
+def _mode_active(val):
+    if isinstance(val, bool):
+        return bool(val)
+    if isinstance(val, float) and math.isinf(val) and val > 0:
+        return True
+    if isinstance(val, (int, float)):
+        return val > 0 or val < 0
+    return False
+
+
+def _mode_decrement(val):
+    if isinstance(val, bool):
+        return 0
+    if isinstance(val, float) and math.isinf(val):
+        return val
+    if isinstance(val, (int, float)) and val < 0:
+        return val
+    if isinstance(val, (int, float)) and val > 0:
+        return val - 1
+    return 0
 
 
 class _Server(ThreadingHTTPServer):
@@ -117,7 +162,89 @@ class _Server(ThreadingHTTPServer):
             raise
 
 
-class QABridge(QABridge):
+class QABridge:
+    def __init__(self, hold_ms, lease_ms, sink, port=0, *, test_mode_sink=None):
+        self.hold_ms = hold_ms
+        self.lease_ms = lease_ms
+        self.sink = sink
+        self.run_id = secrets.token_hex(4)
+        self.t0 = time.monotonic_ns()
+        self.cv = threading.Condition()
+        self.keys = {}
+        self.inst = {}
+        self.queue = []
+        self.delivered = {}
+        self.results = {}
+        self.events = []
+        self.cut_until = {}
+        self.drop = set()
+        self.force = set()
+        self._seq = 0
+        self.failure = None
+        self._stopping = False
+        self._sink_closed = False
+        self._live = 0
+        self._timers = set()
+        self._hello_503 = 0
+        self._hello_ok_false = 0
+        self._ack_ok_false = 0
+        self.test_mode_events = []
+        self.test_mode_sink = test_mode_sink
+        self.STOP_JOIN_S = 5.0
+        handler = self._handler()
+        self.httpd = _Server(("127.0.0.1", port), handler)
+        self.httpd.qa_bridge = self
+        self._thread = None
+
+    def _record_test_mode(self, mode, action, **extra):
+        val = extra.get("count")
+        if isinstance(val, float) and math.isinf(val):
+            extra["count"] = "inf"
+        row = {"t_ms": self.now_ms(), "ev": "test_mode", "mode": mode, "action": action}
+        row.update({k: v for k, v in extra.items() if v is not None})
+        self.test_mode_events.append(row)
+        if self.test_mode_sink is not None:
+            self.test_mode_sink(row)
+
+    @property
+    def hello_503(self):
+        return self._hello_503
+
+    @hello_503.setter
+    def hello_503(self, value):
+        with self.cv:
+            self._hello_503 = value
+            self._record_test_mode("hello_503", "set", count=value)
+
+    @property
+    def hello_ok_false(self):
+        return self._hello_ok_false
+
+    @hello_ok_false.setter
+    def hello_ok_false(self, value):
+        with self.cv:
+            self._hello_ok_false = value
+            self._record_test_mode("hello_ok_false", "set", count=value)
+
+    @property
+    def ack_ok_false(self):
+        return self._ack_ok_false
+
+    @ack_ok_false.setter
+    def ack_ok_false(self, value):
+        with self.cv:
+            self._ack_ok_false = value
+            self._record_test_mode("ack_ok_false", "set", count=value)
+
+    def _consume_mode(self, attr_name, mode_name, **extra):
+        cur = getattr(self, attr_name)
+        if not _mode_active(cur):
+            return False
+        nxt = _mode_decrement(cur)
+        setattr(self, attr_name, nxt)
+        self._record_test_mode(mode_name, "intercept", remaining=nxt, **extra)
+        return True
+
     def _handler(self):
         bridge = self
 
@@ -149,20 +276,42 @@ class QABridge(QABridge):
             return
         self.failure = exc
 
+    def _spawn_timer(self, delay_s, fn, args):
+        timer = None
+
+        def _wrapper():
+            with self.cv:
+                self._timers.discard(timer)
+            fn(*args)
+
+        timer = threading.Timer(max(0.0, delay_s), _wrapper)
+        timer.daemon = True
+        self._timers.add(timer)
+        timer.start()
+        return timer
+
     def stop(self):
         self._stopping = True
         deadline = time.monotonic() + self.STOP_JOIN_S
         if self.cv.acquire(timeout=max(0.0, deadline - time.monotonic())):
             try:
+                timers = list(self._timers)
+                self._timers.clear()
                 self.cv.notify_all()
             finally:
                 self.cv.release()
-        self.httpd.shutdown()
+            for t in timers:
+                t.cancel()
+        # shutdown() espera a que salga serve_forever(): sin start() no vuelve nunca (R2-1).
+        if self._thread is not None:
+            self.httpd.shutdown()
         self.httpd.server_close()
         if self._thread is not None:
             self._thread.join(timeout=max(0.0, deadline - time.monotonic()))
         while time.monotonic() < deadline:
             left = deadline - time.monotonic()
+            if left <= 0:
+                break
             if not self.cv.acquire(timeout=min(0.05, left)):
                 continue
             try:
@@ -190,34 +339,47 @@ class QABridge(QABridge):
     def enqueue(self, peer, verb, args, target_inst, ttl_ms, op_id=None, issued_ms=None):
         args = full_args(args)
         with self.cv:
-            if op_id is None:
-                self._seq += 1
-                op_id = f"op-{self._seq}"
+            auto_id = op_id is None
+            cand_id = f"op-{self.run_id}-{self._seq + 1}" if auto_id else op_id
             issued = self.now_ms() if issued_ms is None else issued_ms
+            ttl_int = int(ttl_ms)
+            wire_order = {
+                "args": args,
+                "inst": target_inst,
+                "issued_ms": issued,
+                "op_id": cand_id,
+                "ttl_ms": ttl_int,
+                "verb": verb,
+            }
+            probe_now = max(float(issued), 99999999.999)
+            if len(wire.poll_wire_bytes(wire_order, now_ms=probe_now)) > wire.WIRE_CAP:
+                raise ValueError("poll body exceeds WIRE_CAP")
+            if auto_id:
+                self._seq += 1
             self.queue.append(
                 {
                     "args": args,
-                    "force": op_id in self.force,
+                    "force": cand_id in self.force,
                     "inst": target_inst,
                     "issued_ms": issued,
-                    "op_id": op_id,
+                    "op_id": cand_id,
                     "peer": peer,
-                    "ttl_ms": int(ttl_ms),
+                    "ttl_ms": ttl_int,
                     "verb": verb,
                 }
             )
             self._emit(
                 {
-                    "args": args,
+                    "args": _strip_qa_fault(args),
                     "ev": "enq",
                     "inst": target_inst,
-                    "op_id": op_id,
+                    "op_id": cand_id,
                     "peer": peer,
                     "verb": verb,
                 }
             )
             self.cv.notify_all()
-            return op_id
+            return cand_id
 
     def force_deliver(self, op_id):
         with self.cv:
@@ -233,15 +395,38 @@ class QABridge(QABridge):
             self.cut_until[peer] = time.monotonic() + ms / 1000.0
             self._emit({"ev": "cut_start", "peer": peer})
             self.cv.notify_all()
-        timer = threading.Timer(ms / 1000.0, self._cut_end, args=(peer,))
-        timer.daemon = True
-        timer.start()
+            if not self._stopping:
+                self._spawn_timer(ms / 1000.0, self._cut_end, (peer,))
 
     def _cut_end(self, peer):
         with self.cv:
             self.cut_until.pop(peer, None)
+            if self._stopping or self._sink_closed:
+                return
             self._emit({"ev": "cut_end", "peer": peer})
             self.cv.notify_all()
+
+    def _on_lost_timer(self, _op_id):
+        with self.cv:
+            if self._stopping or self._sink_closed:
+                return
+            if self.delivered:
+                self._expire_delivered(self.now_ms())
+
+    def _expire_delivered(self, now):
+        for oid, rec in list(self.delivered.items()):
+            if now >= rec["deadline_ms"]:
+                self.delivered.pop(oid, None)
+                self._emit(
+                    {
+                        "ev": "lost",
+                        "inst": rec["inst"],
+                        "op_id": oid,
+                        "peer": rec["peer"],
+                        "reason": "result_lost",
+                        "verb": rec["verb"],
+                    }
+                )
 
     def drop_results(self, op_id, on):
         with self.cv:
@@ -254,6 +439,8 @@ class QABridge(QABridge):
         deadline = time.monotonic() + timeout_ms / 1000.0
         with self.cv:
             while True:
+                if self.delivered:
+                    self._expire_delivered(self.now_ms())
                 for rec in self.results.get(op_id, ()):
                     if rec["t_ms"] >= after_t_ms:
                         return rec["result"]
@@ -268,6 +455,8 @@ class QABridge(QABridge):
         with self.cv:
             index = 0
             while True:
+                if self.delivered:
+                    self._expire_delivered(self.now_ms())
                 while index < len(self.events):
                     ev = self.events[index]
                     index += 1
@@ -312,8 +501,23 @@ class QABridge(QABridge):
         if raw:
             try:
                 body = json.loads(raw.decode("utf-8"))
-            except (UnicodeError, json.JSONDecodeError):
-                self._send(handler, 400, {"error": "bad_json"})
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                if isinstance(exc, json.JSONDecodeError):
+                    err = f"{exc.msg} at {exc.pos}"
+                else:
+                    err = f"{exc.reason} at {exc.start}"
+                with self.cv:
+                    self._emit(
+                        {
+                            "ev": "bad_body",
+                            "http": 400,
+                            "peer": query.get("peer") or "",
+                            "path": parts.path,
+                            "len": len(raw),
+                            "err": err,
+                        }
+                    )
+                    self._send(handler, 400, {"error": "bad_json"})
                 return
         path = parts.path
         key = query.get("key", "")
@@ -340,7 +544,7 @@ class QABridge(QABridge):
             if path == "/poll" and handler.command == "GET":
                 self._poll(handler, query)
             elif path == "/result" and handler.command == "POST":
-                self._result(handler, query, body)
+                self._result(handler, query, body, len(raw))
             else:
                 self._send(handler, 404, {"error": "not_found"})
 
@@ -352,30 +556,60 @@ class QABridge(QABridge):
 
     def _hello(self, handler, body):
         peer = body.get("peer")
+        inst = body.get("inst")
+        hello_args = {
+            "build": body.get("build"),
+            "inst": inst,
+            "peer": peer,
+            "probe_ver": body.get("probe_ver"),
+            "proto": body.get("proto"),
+        }
+        if self._consume_mode("_hello_503", "hello_503", peer=peer, inst=inst):
+            self._emit(
+                {
+                    "args": hello_args,
+                    "ev": "hello",
+                    "http": 503,
+                    "inst": inst,
+                    "peer": peer,
+                }
+            )
+            self._send(handler, 503, {"error": "unavailable"})
+            return
         if body.get("proto") != "qa0":
             self._emit({"ev": "inst_reject", "http": 409, "peer": peer, "reason": "proto_mismatch"})
             self._send(handler, 409, {"error": "proto_mismatch"})
             return
-        inst = body.get("inst")
+        if self._consume_mode("_hello_ok_false", "hello_ok_false", peer=peer, inst=inst):
+            self.inst.pop(peer, None)
+            self._emit(
+                {
+                    "args": hello_args,
+                    "ev": "hello",
+                    "http": 200,
+                    "inst": inst,
+                    "ok": False,
+                    "peer": peer,
+                }
+            )
+            self._send(handler, 200, {"lease_ms": self.lease_ms, "ok": False})
+            return
         self.inst[peer] = inst
         self._emit(
             {
-                "args": {
-                    "build": body.get("build"),
-                    "inst": inst,
-                    "peer": peer,
-                    "probe_ver": body.get("probe_ver"),
-                    "proto": body.get("proto"),
-                },
+                "args": hello_args,
                 "ev": "hello",
                 "http": 200,
                 "inst": inst,
+                "ok": True,
                 "peer": peer,
             }
         )
         self._send(handler, 200, {"lease_ms": self.lease_ms, "ok": True})
 
     def _poll(self, handler, query):
+        if self.delivered:
+            self._expire_delivered(self.now_ms())
         peer = query.get("peer")
         inst = query.get("inst")
         if self.inst.get(peer) != inst:
@@ -390,9 +624,30 @@ class QABridge(QABridge):
             tick_s = float(query.get("tick_s", "0"))
         except ValueError:
             tick_s = 0.0
+        if query.get("deliver") == "0":
+            now = self.now_ms()
+            resp_raw = json.dumps({"now_ms": now, "ops": []}, allow_nan=False, separators=(",", ":")).encode("utf-8")
+            self._emit(
+                {
+                    "body_len": len(resp_raw),
+                    "ev": "keepalive",
+                    "frame": frame,
+                    "http": 200,
+                    "inst": inst,
+                    "n_ops": 0,
+                    "now_ms": now,
+                    "peer": peer,
+                    "tick_s": tick_s,
+                }
+            )
+            self._send_raw(handler, 200, resp_raw)
+            return
+
         start = time.monotonic()
         deadline = start + self.hold_ms / 1000.0
         ops = []
+        take_now = None
+        overflow = None
         while True:
             if self._stopping:
                 break
@@ -403,24 +658,92 @@ class QABridge(QABridge):
             if self._cut_active(peer):
                 self._send(handler, 503, {"error": "cut"})
                 return
-            ops = self._take(peer, inst)
-            if ops or time.monotonic() >= deadline:
+            ops, take_now, overflow = self._take(peer, inst)
+            if overflow is not None or ops or time.monotonic() >= deadline:
                 break
             self.cv.wait(max(0.0, deadline - time.monotonic()))
+        if overflow is not None:
+            ov_op, ov_len, ov_now = overflow
+            self._emit(
+                {
+                    "body_len": ov_len,
+                    "ev": "wire_cap_exceeded",
+                    "http": 500,
+                    "inst": inst,
+                    "n_ops": 1,
+                    "now_ms": ov_now,
+                    "op_ids": [ov_op["op_id"]],
+                    "peer": peer,
+                    "wire_cap": wire.WIRE_CAP,
+                }
+            )
+            self._send(handler, 500, {"error": "wire_cap_exceeded"})
+            return
         if self.inst.get(peer) != inst:
+            if ops:
+                restored = [
+                    {
+                        "args": op["args"],
+                        "force": False,
+                        "inst": op["inst"],
+                        "issued_ms": op["issued_ms"],
+                        "op_id": op["op_id"],
+                        "peer": peer,
+                        "ttl_ms": op["ttl_ms"],
+                        "verb": op["verb"],
+                    }
+                    for op in ops
+                ]
+                self.queue = restored + self.queue
             self._emit({"ev": "inst_reject", "http": 409, "peer": peer, "inst": inst, "reason": "hello_required"})
             self._send(handler, 409, {"error": "hello_required"})
             return
         held = round((time.monotonic() - start) * 1000.0, 3)
-        now = self.now_ms()
+        now = take_now if ops and take_now is not None else self.now_ms()
+        resp_obj = {"now_ms": now, "ops": ops}
+        resp_raw = json.dumps(resp_obj, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        if len(resp_raw) > wire.WIRE_CAP:
+            if ops:
+                restored = [
+                    {
+                        "args": op["args"],
+                        "force": False,
+                        "inst": op["inst"],
+                        "issued_ms": op["issued_ms"],
+                        "op_id": op["op_id"],
+                        "peer": peer,
+                        "ttl_ms": op["ttl_ms"],
+                        "verb": op["verb"],
+                    }
+                    for op in ops
+                ]
+                self.queue = restored + self.queue
+            self._emit(
+                {
+                    "body_len": len(resp_raw),
+                    "ev": "wire_cap_exceeded",
+                    "http": 500,
+                    "inst": inst,
+                    "n_ops": len(ops),
+                    "now_ms": now,
+                    "op_ids": [op["op_id"] for op in ops],
+                    "peer": peer,
+                    "wire_cap": wire.WIRE_CAP,
+                }
+            )
+            self._send(handler, 500, {"error": "wire_cap_exceeded"})
+            return
         self._emit(
             {
+                "body_len": len(resp_raw),
                 "ev": "poll",
                 "frame": frame,
                 "held_ms": held,
                 "http": 200,
                 "inst": inst,
                 "n_ops": len(ops),
+                "now_ms": now,
+                "op_ids": [op["op_id"] for op in ops],
                 "peer": peer,
                 "tick_s": tick_s,
             }
@@ -428,7 +751,7 @@ class QABridge(QABridge):
         for op in ops:
             self._emit(
                 {
-                    "args": op["args"],
+                    "args": _strip_qa_fault(op["args"]),
                     "ev": "deliver",
                     "inst": op["inst"],
                     "op_id": op["op_id"],
@@ -436,13 +759,27 @@ class QABridge(QABridge):
                     "verb": op["verb"],
                 }
             )
-        self._send(handler, 200, {"now_ms": now, "ops": ops})
+            lost_delay_ms = float(op["ttl_ms"]) + 1750.0 + 2000.0
+            self.delivered[op["op_id"]] = {
+                "deadline_ms": now + lost_delay_ms,
+                "delivered_ms": now,
+                "inst": inst,
+                "op_id": op["op_id"],
+                "peer": peer,
+                "verb": op["verb"],
+            }
+            if not self._stopping:
+                self._spawn_timer(lost_delay_ms / 1000.0, self._on_lost_timer, (op["op_id"],))
+        self._send_raw(handler, 200, resp_raw)
 
     def _take(self, peer, inst):
         now = self.now_ms()
+        if self.delivered:
+            self._expire_delivered(now)
         kept = []
         ops = []
-        for order in self.queue:
+        stop_adding = False
+        for idx, order in enumerate(self.queue):
             if order["peer"] != peer:
                 kept.append(order)
                 continue
@@ -460,24 +797,38 @@ class QABridge(QABridge):
                 )
                 continue
             deliver = forced or (order["inst"] == inst and age < order["ttl_ms"])
-            if deliver and len(ops) < 16:
-                ops.append(
-                    {
-                        "args": order["args"],
-                        "inst": order["inst"],
-                        "issued_ms": order["issued_ms"],
-                        "op_id": order["op_id"],
-                        "ttl_ms": order["ttl_ms"],
-                        "verb": order["verb"],
-                    }
-                )
-                self.force.discard(order["op_id"])
-            else:
+            if not deliver or stop_adding or len(ops) >= 16:
                 kept.append(order)
+                continue
+            wire_op = {
+                "args": order["args"],
+                "inst": order["inst"],
+                "issued_ms": order["issued_ms"],
+                "op_id": order["op_id"],
+                "ttl_ms": order["ttl_ms"],
+                "verb": order["verb"],
+            }
+            cand_raw = json.dumps(
+                {"now_ms": now, "ops": ops + [wire_op]},
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            if len(cand_raw) <= wire.WIRE_CAP:
+                ops.append(wire_op)
+                self.force.discard(order["op_id"])
+            elif ops:
+                stop_adding = True
+                kept.append(order)
+            else:
+                kept.extend(self.queue[idx:])
+                self.queue = kept
+                return [], now, (wire_op, len(cand_raw), now)
         self.queue = kept
-        return ops
+        return ops, now, None
 
-    def _result(self, handler, query, body):
+    def _result(self, handler, query, body, body_len=0):
+        if self.delivered:
+            self._expire_delivered(self.now_ms())
         peer = query.get("peer")
         inst = query.get("inst")
         if self.inst.get(peer) != inst:
@@ -489,14 +840,40 @@ class QABridge(QABridge):
             self._emit({"ev": "result_drop", "http": 503, "op_id": op_id, "peer": peer})
             self._send(handler, 503, {"error": "drop"})
             return
+        if self._consume_mode("_ack_ok_false", "ack_ok_false", peer=peer, inst=inst, op_id=op_id):
+            self._emit(
+                {
+                    "body_len": body_len,
+                    "ev": "ack_reject",
+                    "http": 200,
+                    "ok": False,
+                    "op_id": op_id,
+                    "peer": peer,
+                }
+            )
+            self._send(handler, 200, {"ok": False})
+            return
+        self.delivered.pop(op_id, None)
         self.results.setdefault(op_id, []).append({"result": body, "t_ms": self.now_ms()})
-        self._emit({"ev": "result", "http": 200, "op_id": op_id, "peer": peer, "result": body})
+        self._emit(
+            {
+                "body_len": body_len,
+                "ev": "result",
+                "http": 200,
+                "op_id": op_id,
+                "peer": peer,
+                "result": body,
+            }
+        )
         self._send(handler, 200, {"ok": True})
 
-    def _send(self, handler, code, obj):
-        raw = json.dumps(obj, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    def _send_raw(self, handler, code, raw):
         handler.send_response(code)
         handler.send_header("Content-Type", "application/json")
         handler.send_header("Content-Length", str(len(raw)))
         handler.end_headers()
         handler.wfile.write(raw)
+
+    def _send(self, handler, code, obj):
+        raw = json.dumps(obj, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        self._send_raw(handler, code, raw)

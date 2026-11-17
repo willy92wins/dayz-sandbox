@@ -17,8 +17,9 @@ DayZ Sandbox es un estudio local de escenas para DayZ: desde el navegador, un cr
   2. Rodaje: cámaras guardadas y caminos de cámara con claves (posición, orientación, FOV y enfoque), sin HUD. Una toma lanza a la vez cámara y actores, y se puede parar.
   3. Web: mapa 2D, árbol de escena, inspector, biblioteca de plantillas (objetos, vestuario, gestos), cola con estados observados y layouts personalizables.
   4. Todo local y funcionando con el MCP apagado.
+  5. Co-edición en vivo (decidido el 2026-11-10): la persona y una IA editan el mismo borrador a la vez, cada una ve los cambios de la otra al momento y la IA nunca pisa un cambio humano. La IA entra por la fachada MCP sobre la misma API y solo toca el documento: aplicar, rodar, parar y quitar del juego siguen siendo de la persona (H1).
 - **M2 — Standalone:** IA propia de cine en lugar de Expansion: una "marioneta de ruta" (el actor recorre una ruta con tiempos, trazada en el mapa o grabada del pase del creador, igual en cada toma), más ir a marca y gesto, con las mismas escenas guardadas; cambio de mapa con reinicio de sesión entre los mapas instalados.
-- **M3 — IA opcional:** fachada MCP sobre la misma API, para que una IA proponga y coordine piezas y escenas siempre con aprobación humana.
+- **M3 — IA opcional:** la IA que propone y coordina escenas enteras (H2), siempre con aprobación humana. La fachada MCP y la co-edición se adelantan a M1 (bloque I).
 
 Supuestos confirmados el 2026-10-24: M1 es para uso propio (sin instalador); las tomas se graban con OBS u otra herramienta externa; eventos/RP queda fuera de esta versión.
 
@@ -45,7 +46,7 @@ estás **obligado** a surfacearlo en el **Grill de plan (Modo B)** ANTES de impl
 |---|----------|------------------|--------|
 | A1 | Documento de escena versionado con JSON Schema publicado; 5 fixtures inválidas (clase desconocida, fuera del mapa, presupuesto excedido, campo extra, versión errónea) se rechazan con la ruta JSON del error | Test del backend con fixtures pos y neg (exit 0); el log del bridge no recibe ninguna orden de las inválidas | ❓ |
 | A2 | Aplicar `escena-basica-cine.json` (20 objetos, 10 infectados, 3 animales, 2 actores NPC con vestuario) da conteos exactos por clase y error de posición < 0,5 m | Lectura en servidor de las entidades registradas en la escena; infectados y animales, en un checkpoint al crearlos y antes de soltar su IA | ❓ |
-| A3 | Reset: borra el 100 % de lo suyo y nada ajeno; nunca toca la persistencia `[intent: el riesgo crítico del research es borrar lo ajeno]` | Fixture negativa: un objeto colocado a mano sobrevive; conteos antes y después | ❓ |
+| A3 | Reset: borra el 100 % de lo suyo y nada ajeno; nunca mueve lo ajeno ni toca la persistencia. Si un contenedor suyo guarda algo ajeno, el contenedor se queda con ese contenido, lo ajeno conserva su clase, pose e inventario y el reset termina `parcial` con su motivo `[intent: el riesgo crítico del research es borrar lo ajeno]` | Fixture negativa: un objeto colocado a mano sobrevive; un objeto ajeno dentro de un contenedor suyo sigue dentro, con su pose, el contenedor sigue en pie y el reset sale `parcial` con su motivo; conteos antes y después | ❓ |
 | A4 | Recargar: guardar, cerrar, cargar y aplicar repite los conteos y las posiciones (< 0,5 m); sin cambios, el documento guardado conserva el hash | Test E2E de ida y vuelta | ❓ |
 | A5 | Deshacer y rehacer del documento como transacciones con nombre: deshacer 20 operaciones devuelve el hash inicial y rehacerlas, el final | Test del backend | ❓ |
 | A6 | Presupuestos con tope duro: una escena que lo excede se rechaza antes de llegar al juego y la web muestra el uso frente al tope | Fixture negativa; los topes salen de medir E5 | ❓ |
@@ -57,10 +58,10 @@ estás **obligado** a surfacearlo en el **Grill de plan (Modo B)** ANTES de impl
 | # | Criterio | Cómo se verifica | Estado |
 |---|----------|------------------|--------|
 | B1 | La pose sale de una cámara libre mínima dentro del juego (mover, mirar y velocidad; sin cámara editorial completa). Guardar esa pose y volver a ella: error < 0,05 m y < 0,5° | Lectura de la cámara en el cliente | ❓ |
-| B2 | Camino de 3 claves en 6 s: posiciones muestreadas a < 0,5 m de las esperadas; termina entre 6,0 y 6,3 s; pose final igual a la última clave (< 0,05 m, < 0,5°); sin saltos: ningún paso entre frames consecutivos supera 3 veces la mediana | Muestreo de la pose en el cliente; misma prueba contra la cámara de COT (referencia de paridad) | ❓ |
+| B2 | Camino de 3 claves en 6 s: posiciones muestreadas a < 0,5 m de las esperadas; termina entre 6,0 y 6,3 s; pose final igual a la última clave (< 0,05 m, < 0,5°); sin saltos: ningún paso entre frames consecutivos supera 3 veces la mediana | Muestreo de la pose en el cliente | ❓ |
 | B3 | Enfoque por cámara y por clave: con el actor a 2 m y el fondo a 50 m, el desenfoque del fondo baja al menos un 30 % la varianza del laplaciano frente a sin desenfoque | Captura y medida sobre un recorte del fondo, con la opción de vídeo de profundidad de campo activada; la web avisa si está apagada `[verify]`: si ni con la opción activada el juego desenfoca, B3 sale de M1 con una entrada en el Changelog | ❓ |
 | B4 | Sin HUD durante toda la toma | Estado del HUD leído en el cliente y capturas sin barra rápida | ❓ |
-| B5 | Una toma arranca cámara y actores a la vez y se puede parar: parar devuelve el control en < 1 s y deja la escena coherente. "A la vez" quiere decir que cámara y actores reciben su orden en el mismo tick del servidor; el desfase real de cada actor se mide, se muestra en la web y varía ≤ 100 ms entre las tomas de B6 | Test en partida con parada a mitad; desfase de cada actor medido en cada toma | ❓ |
+| B5 | Una toma arranca cámara y actores a la vez y se puede parar, desde la web o con una tecla dentro del juego: parar devuelve el control en < 1 s y deja la escena coherente. "A la vez" quiere decir que cámara y actores reciben su orden en el mismo tick del servidor; el desfase real de cada actor se mide, se muestra en la web y varía ≤ 100 ms entre las tomas de B6 | Test en partida con parada a mitad desde la web y con la tecla; desfase de cada actor medido en cada toma | ❓ |
 | B6 | Repetibilidad: 3 tomas con reset entre ellas dan los mismos conteos, el mismo personaje en cada actor, actores en su marca (< 1,5 m), vestuario idéntico y camino a < 0,5 m en los mismos instantes | Test en partida con las 3 tomas; infectados y animales se cuentan en un checkpoint al crearlos y no se les exige repetir trayectoria | ❓ |
 | B7 | Cada toma arranca con la hora y el clima del documento (hora leída ±1 min; cada valor de clima leído a ±0,01 del pedido) | Lectura en servidor al empezar la toma, del valor actual del clima y no del previsto | ❓ |
 
@@ -128,6 +129,18 @@ estás **obligado** a surfacearlo en el **Grill de plan (Modo B)** ANTES de impl
 | H1 | Fachada MCP sobre la misma API (validar, planificar, enviar, aplicar, estado); aplicar exige aprobación en la web ligada al hash del plan | Fixture negativa: una propuesta sin aprobar no llega al juego | ❓ |
 | H2 | Primera IA útil: "prepara una escena con dos supervivientes y una cámara al amanecer" produce un borrador válido y editable, sin ejecutarlo | Test con el borrador validado por A1 | ❓ |
 
+### I — Co-edición en vivo persona + IA (M1, decidido el 2026-11-10)
+
+> **Intent**: la persona y la IA trabajan a la vez sobre la misma escena y cada una ve al momento lo que hace la otra, sin que la IA pise lo humano ni ejecute en el juego. Diseño: `plans/2026-11-10-coedicion-ia-plan.md`.
+
+| # | Criterio | Cómo se verifica | Estado |
+|---|----------|------------------|--------|
+| I1 | Los cambios de los dos autores llegan a todos los clientes en el mismo orden y con el mismo hash; del envío al evento en el otro cliente, p95 < 200 ms en local | 100 operaciones cruzadas; negativa: un cliente que pinta lo que mandó y no lo que llegó acaba con otro hash (CO-1) | ❓ |
+| I2 | La IA nunca pisa un cambio humano: conflicto por campo y entidad en uso por la persona → rechazo con el valor actual | Fixtures `conflict` y `busy_human` con 0 cambios (CO-2, CO-3) | ❓ |
+| I3 | Deshacer por autor y «Deshacer tanda» de la IA, sin pérdida silenciosa de lo retocado después | CO-4 positiva y negativa | ❓ |
+| I4 | La credencial de la IA no puede aplicar, rodar, parar ni quitar del juego; «Pausar IA» corta al momento; con la toma armada no edita nadie | 403 y 0 órdenes en el bridge; `take_locked` (CO-5, CO-7, CO-8) | ❓ |
+| I5 | Reconexión sin estado parcial: se repite lo que falta o llega una instantánea con aviso | Corte corto y corte más largo que el registro (CO-6) | ❓ |
+
 ## Fuera de alcance (explícito) — R25
 
 - Replay completo con cámara libre a posteriori: es otro proyecto.
@@ -145,16 +158,16 @@ estás **obligado** a surfacearlo en el **Grill de plan (Modo B)** ANTES de impl
 ## Referencia de paridad (PREREQUISITO si existe referente) — LL-030
 
 - Referencia:
-  - **Cámara de cine:** cámara cinematográfica de COT (CC BY-SA 4.0) y PCT (solo cliente). Son dos referentes, así que B1-B3 se miden contra los dos.
+  - **Cámara de cine:** las cámaras cinematográficas de COT (CC BY-SA 4.0), VPPAdminTools y PCT (solo cliente) son referentes de funciones, no de paridad medida. El estudio S-cot compara sus funciones con B1-B5, sin partida, y de ahí salen ideas para F4 y F6. B1-B3 se aprueban con los números de Sandbox (cambio del 2026-11-15).
   - **Editor de escena:** Eden de Arma 3 y DayZ Editor, más la tabla "se da por hecho" del research (consolidado §2).
   - **NPC:** Expansion AI, que además es el motor de M1.
   - **Bridge:** dayz-mcp (bridge pull, lease, allowlist en la entrada, deadman con TTL, verbos medidos).
 - Anatomía extraída:
-  - Cámara (COT y PCT): waypoints con posición, orientación y FOV; duración o velocidad por tramo; easing; Catmull-Rom; shake; rutas guardadas en JSON; reproducir y parar; DOF (PCT: focal 8-400 mm y apertura). Medible en B1-B3.
+  - Cámara (COT, VPP y PCT): waypoints con posición, orientación y FOV; duración o velocidad por tramo; easing; Catmull-Rom; shake; rutas guardadas en JSON; reproducir y parar; DOF (PCT: focal 8-400 mm y apertura). La matriz completa, con una cita por fila, sale del estudio S-cot; no se mide en partida.
   - Editor (Eden y §2): catálogo buscable, selección múltiple, mover y rotar con rejilla y ajuste al suelo, plantillas que guardan atributos e inventario, deshacer como transacciones, hora y clima en vivo, presupuestos con tope duro, probar y volver al estado inicial, guardar, versionar y exportar, espacio de trabajo personalizable. Medible en A y D.
   - NPC (Expansion): facciones, 12 formaciones, waypoints con comportamiento, loadouts en JSON y emotes que esperan a la FSM. Rendimiento: FPS de servidor > 60 máx. y > 35 medio; más de 30 IA degradan. Medible en C y E5.
   - Bridge (dayz-mcp): error de posición 0,0313 m frente a una marca independiente (umbral < 0,5 m); /poll retenido 600 ms con 4741 ticks en vuelo. Base de A2 y E2.
-- Estado de extracción: hecha a nivel de funciones el 2026-10-23 (research §2 y anexos B y C). **Pendiente y gate de arranque:** medir en partida la cámara de COT (B2) y verificar la API de Expansion en la versión fijada (spike S3). Se puede hacer ya: no necesita que Sandbox exista.
+- Estado de extracción: hecha a nivel de funciones el 2026-10-23 (research §2 y anexos B y C). **Pendiente y gate de arranque:** verificar la API de Expansion en la versión fijada (spike S3). La medida en partida de la cámara de COT (B2) se retiró el 2026-11-15 (ver el Changelog). Se puede hacer ya: no necesita que Sandbox exista.
 
 ## Changelog de alcance
 
@@ -162,3 +175,6 @@ estás **obligado** a surfacearlo en el **Grill de plan (Modo B)** ANTES de impl
 - 2026-10-24 — **confirmado con Guillermo** sin cambios (tarjeta del Grill Modo A, opción "Ciérralo así"), con sus tres supuestos: uso propio sin instalador, grabación con OBS fuera del producto y eventos/RP fuera de esta versión.
 - 2026-10-26 — **Grill Modo B del plan de M1** con Guillermo (tarjeta "Ciérralo así"; preguntas y porqués en `plans/2026-10-24-m1-cine-v1.md` §5 y §6). No entra ni sale ningún criterio. Cambian estos textos: B1 dice de dónde sale la pose, una cámara libre mínima dentro del juego (Q2); B6 y C1 piden el mismo personaje en cada toma (Q3); B5 define "a la vez" (Q4); B3 se mide con la profundidad de campo activada y sale de M1 si ni así desenfoca (Q5); y A2, B6, B7, C4, D5, E2 y E5 aclaran cómo se miden (Q9).
 - 2026-10-27 — **C6 reorientado a "marioneta de ruta"** con el visto bueno de Guillermo en el hilo del council post-v1 (`backlog-post-v1.md`, T17; votos en `reviews/2026-10-27-council-post-v1/`). Cambian el texto de M2 y C6: la IA propia de M2 es una ruta con tiempos repetible (trazada o grabada del pase del creador), con los probes de las fichas 14 y 15 como puerta; la IA autónoma pasa a Fuera de alcance. C4 no cambia: el vocabulario HOLD, ONCE, LOOP y ROAM debe dar lo mismo con los dos motores. No afecta a M1 ni a F0.
+- 2026-11-05 — **Parada desde el juego** con el visto bueno de Guillermo (tarjeta del hilo de UI, punto abierto C-16 de `ui/2026-10-28-ui-m1-consolidado.md`). Entra en M1: B5 se puede parar también con una tecla del mod de cliente, con el mismo < 1 s y la escena coherente. Cambian el texto de B5 y, en el plan v2, #33, F5, S-toma y la fila B5 de §4. No sale ningún criterio.
+- 2026-11-14 — **A3: el reset deja el contenedor propio que guarda algo ajeno**, decisión de Guillermo al preparar F0.3 (pregunta: «if something of yours is inside a Sandbox container, does the reset take it out to the ground or leave the container?»; respuesta: «Leave the container»). El reset nunca mueve lo ajeno: ese contenedor no se borra, lo ajeno conserva su clase, pose e inventario y la operación termina `parcial` con su motivo. Sustituye la extracción al suelo de #10 del plan v2, que chocaba con conservar la pose (hallazgo H11 de la revisión de Sol del brief de F0.3). Cambian el texto de A3 y, en el plan v2, #10 y la fila A3 de §4. No entra ni sale ningún criterio.
+- 2026-11-15 — **S-cot pasa a ser un estudio de funciones, sin partida**, por decisión de Guillermo al preparar F0.3. Eligió «Sin partida, coger ideas (Recomendado)» y preguntó: «aparte de COT no puedes usar VPP?». COT y PCT dejan de ser referentes medidos en partida, y B1-B3 no exigen paridad en el juego: se aprueban con los números de Sandbox. COT, VPPAdminTools y PCT pasan a ser una fuente de ideas. Un estudio compara sus funciones de cámara con B1-B5, con una cita por fila y sin copiar código, y propone qué adoptar y en qué fase (F4, F6 o backlog). Cambian el texto de B2 (sale la prueba contra COT) y la referencia de paridad de la cámara. En el plan v2 cambian la fila de S-cot, la dependencia de F4 (ahora solo F1 y S-cam), la fila B2 de §4, Q8, la trazabilidad de CX-10 y GK-06 y la lista de lo pendiente de verificar. No entra ni sale ningún criterio.

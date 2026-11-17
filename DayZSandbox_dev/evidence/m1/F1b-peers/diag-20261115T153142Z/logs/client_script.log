@@ -1,0 +1,256 @@
+---------------------------------------------
+Log C:\tmp\dsbx-f1bpeers-work\partida\profiles_diag\client\script_2026-11-15_16-32-43.log started at 2026-11-15 16:32:48 (2026-11-15 15:32:48 UTC)
+
+16:32:48.699 SCRIPT       : Module: GameLib; loaded 13x files; 13x classes; used 8/2097 kB (0%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: dd77776f
+16:32:48.751 SCRIPT       : Registered 324 temporary action enum(s), UAN==324
+16:32:49.279 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableCrouchCameraHorizontalRotation'
+16:32:49.279 SCRIPT    (W): @"scripts/3_Game/human.c,241": Method not linked 'HumanInputController.DisableCrouchCameratHorizontalRotation'
+16:32:49.279 SCRIPT    (W): @"scripts/3_Game/human.c,240": Method not linked 'HumanInputController.DisableErectCameratHorizontalRotation'
+16:32:49.279 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableErectHorizontalRotation'
+16:32:49.279 SCRIPT       : Module: Game; loaded 447x files; 1533x classes; used 5411/33554 kB (16%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: 5d057844
+16:32:49.366 SCRIPT       : ... Backlit Effects Enabled
+16:32:50.916 SCRIPT    (W): @"scripts/4_World/entities/building/underground/entrance/land_underground_entrance.c,149": 'UpdatePathgraphDoorByAnimationSourceName' is obsolete: 1.30: Use UpdatePathgraphEntityState
+16:32:51.426 SCRIPT       : Module: World; loaded 2322x files; 6324x classes; used 12625/33554 kB (37%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: 7f1b624f
+16:33:22.281  SCRIPT       : Module: Mission; loaded 220x files; 488x classes; used 3961/33554 kB (11%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,ENABLE_CAROUSEL,BROADCAST_BUNKER_SP_VIS_ENABLED"; CRC32: ea554c11
+16:33:22.287  SCRIPT       : Creating Mission: mpmissions\__cur_mp.chernarusplus\mission.c
+16:33:22.445  SCRIPT       : string s =    'Module PluginConfigDebugProfile is not Registred in PluginManager.c!'
+16:33:22.445  SCRIPT    (E):    -- Stack trace --
+16:33:22.445  SCRIPT    (E):    GetPlugin() scripts/4_World/plugins/pluginmanager.c : 341
+16:33:22.445  SCRIPT    (E):    OnInit() scripts/4_World/plugins/pluginbase/pluginitemdiagnostic.c : 94
+16:33:22.445  SCRIPT    (E):    PluginsInit() scripts/4_World/plugins/pluginmanager.c : 136
+16:33:22.445  SCRIPT    (E):    PluginManagerInit() scripts/4_World/plugins/pluginmanager.c : 304
+16:33:22.445  SCRIPT    (E):    MissionBase() scripts/5_Mission/mission/missionbase.c : 21
+16:33:22.445  SCRIPT    (E):    CreateMission() scripts/5_Mission/somemission.c : 23
+16:33:22.445  SCRIPT    (E):    -----------------
+16:33:22.466  SCRIPT       : SyncEvents -> RegisterEvents
+16:33:22.737 SCRIPT       : [DSBX] clock tick_ms=39534
+16:33:22.737 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:33:22.737 SCRIPT       : [DSBX] config status=ok
+16:33:22.907  SCRIPT       : [DSBX] client epoch received
+16:33:22.908 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:33:22.908 SCRIPT       : [DSBX] state HELLO
+16:33:22.916 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:33:23.015 SCRIPT       : [DSBX] hello accepted session=900f45ba3d3a92e8 conn=1
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_grass_dry_drop_Soundset".
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "asphalt_int_drop_Soundset".
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "dirt_int_drop_Soundset".
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_int_drop_Soundset".
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_ext_drop_Soundset".
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "cp_grass_tall_drop_Soundset".
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_soil_drop_Soundset".
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_forest_pine_drop_Soundset".
+16:33:28.732   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_ext_drop_Soundset".
+16:33:28.733   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_int_drop_Soundset".
+16:33:28.733   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_stony_drop_Soundset".
+16:33:28.733   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_grass_dry_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "asphalt_int_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "dirt_int_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_int_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_ext_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "cp_grass_tall_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_soil_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_forest_pine_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_ext_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_int_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_stony_drop_Soundset".
+16:33:28.735   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_grass_dry_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "asphalt_int_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "dirt_int_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_int_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_ext_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "cp_grass_tall_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_soil_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_forest_pine_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_ext_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_int_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_stony_drop_Soundset".
+16:33:28.739   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.740   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.740   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.740   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_grass_dry_drop_Soundset".
+16:33:28.740   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.740   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "asphalt_int_drop_Soundset".
+16:33:28.741   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "dirt_int_drop_Soundset".
+16:33:28.741   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_int_drop_Soundset".
+16:33:28.741   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_ext_drop_Soundset".
+16:33:28.741   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "cp_grass_tall_drop_Soundset".
+16:33:28.741   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_soil_drop_Soundset".
+16:33:28.741   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_forest_pine_drop_Soundset".
+16:33:28.741   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_ext_drop_Soundset".
+16:33:28.741   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_int_drop_Soundset".
+16:33:28.741   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_stony_drop_Soundset".
+16:33:28.741   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_grass_dry_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "asphalt_int_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "dirt_int_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_int_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_ext_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "cp_grass_tall_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_soil_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_forest_pine_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_ext_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_int_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_stony_drop_Soundset".
+16:33:28.743   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_desert_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_grass_dry_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "asphalt_int_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "dirt_int_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_int_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "wood_planks_ext_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "cp_grass_tall_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_soil_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_forest_pine_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_ext_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "building_dirt_int_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_stony_drop_Soundset".
+16:33:28.744   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "nasdara_mud_drop_Soundset".
+16:33:28.754   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "walkProne_building_dirt_ext_Zmb_Soundset".
+16:33:28.754   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "walkProne_building_dirt_int_Zmb_Soundset".
+16:33:28.757   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "runProne_building_dirt_ext_Zmb_Soundset".
+16:33:28.757   SCRIPT       : AnimSoundObjectBuilderBank: Invalid sound set "runProne_building_dirt_int_Zmb_Soundset".
+16:33:28.845 SCRIPT       : [DSBX] clock tick_ms=45643
+16:33:28.845 SCRIPT       : [DSBX] lease lost age_ms=3688 tick_ms=45644
+16:33:28.845 SCRIPT       : [DSBX] lease expired: returning to HELLO
+16:33:28.914 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:33:28.997 SCRIPT       : [DSBX] hello accepted session=900f45ba3d3a92e8 conn=2
+16:33:33.882 SCRIPT       : [DSBX] clock tick_ms=50680
+16:33:38.912 SCRIPT       : [DSBX] clock tick_ms=55711
+16:33:43.951 SCRIPT       : [DSBX] clock tick_ms=60749
+16:33:48.956 SCRIPT       : [DSBX] clock tick_ms=65754
+16:33:53.966 SCRIPT       : [DSBX] clock tick_ms=70763
+16:33:58.997 SCRIPT       : [DSBX] clock tick_ms=75795
+16:34:04.045 SCRIPT       : [DSBX] clock tick_ms=80843
+16:34:09.057 SCRIPT       : [DSBX] clock tick_ms=85856
+16:34:14.097 SCRIPT       : [DSBX] clock tick_ms=90895
+16:34:19.096 SCRIPT       : [DSBX] clock tick_ms=95895
+16:34:24.118 SCRIPT       : [DSBX] clock tick_ms=100917
+16:34:29.124 SCRIPT       : [DSBX] clock tick_ms=105921
+16:34:34.164 SCRIPT       : [DSBX] clock tick_ms=110963
+16:34:39.172 SCRIPT       : [DSBX] clock tick_ms=115970
+16:34:44.198 SCRIPT       : [DSBX] clock tick_ms=120996
+16:34:49.247 SCRIPT       : [DSBX] clock tick_ms=126045
+16:34:54.256 SCRIPT       : [DSBX] clock tick_ms=131054
+16:34:59.260 SCRIPT       : [DSBX] clock tick_ms=136058
+16:35:04.276 SCRIPT       : [DSBX] clock tick_ms=141075
+16:35:09.319 SCRIPT       : [DSBX] clock tick_ms=146117
+16:35:14.321 SCRIPT       : [DSBX] clock tick_ms=151118
+16:35:19.367 SCRIPT       : [DSBX] clock tick_ms=156165
+16:35:24.413 SCRIPT       : [DSBX] clock tick_ms=161211
+16:35:29.463 SCRIPT       : [DSBX] clock tick_ms=166261
+16:35:34.497 SCRIPT       : [DSBX] clock tick_ms=171296
+16:35:39.497 SCRIPT       : [DSBX] clock tick_ms=176296
+16:35:44.552 SCRIPT       : [DSBX] clock tick_ms=181350
+16:35:49.552 SCRIPT       : [DSBX] clock tick_ms=186350
+16:35:54.597 SCRIPT       : [DSBX] clock tick_ms=191395
+16:35:59.600 SCRIPT       : [DSBX] clock tick_ms=196398
+16:36:04.612 SCRIPT       : [DSBX] clock tick_ms=201410
+16:36:09.662 SCRIPT       : [DSBX] clock tick_ms=206459
+16:36:14.695 SCRIPT       : [DSBX] clock tick_ms=211494
+16:36:19.736 SCRIPT       : [DSBX] clock tick_ms=216534
+16:36:24.763 SCRIPT       : [DSBX] clock tick_ms=221561
+16:36:29.784 SCRIPT       : [DSBX] clock tick_ms=226581
+16:36:34.814 SCRIPT       : [DSBX] clock tick_ms=231611
+16:36:39.841 SCRIPT       : [DSBX] clock tick_ms=236640
+16:36:44.844 SCRIPT       : [DSBX] clock tick_ms=241642
+16:36:49.889 SCRIPT       : [DSBX] clock tick_ms=246687
+16:36:54.924 SCRIPT       : [DSBX] clock tick_ms=251722
+16:36:59.926 SCRIPT       : [DSBX] clock tick_ms=256724
+16:37:04.937 SCRIPT       : [DSBX] clock tick_ms=261735
+16:37:09.975 SCRIPT       : [DSBX] clock tick_ms=266773
+16:37:15.006 SCRIPT       : [DSBX] clock tick_ms=271804
+16:37:20.040 SCRIPT       : [DSBX] clock tick_ms=276837
+16:37:25.075 SCRIPT       : [DSBX] clock tick_ms=281873
+16:37:30.125 SCRIPT       : [DSBX] clock tick_ms=286923
+16:37:35.148 SCRIPT       : [DSBX] clock tick_ms=291946
+16:37:40.195 SCRIPT       : [DSBX] clock tick_ms=296993
+16:37:45.239 SCRIPT       : [DSBX] clock tick_ms=302037
+16:37:50.273 SCRIPT       : [DSBX] clock tick_ms=307071
+16:37:55.292 SCRIPT       : [DSBX] clock tick_ms=312090
+16:38:00.320 SCRIPT       : [DSBX] clock tick_ms=317118
+16:38:05.349 SCRIPT       : [DSBX] clock tick_ms=322147
+16:38:10.381 SCRIPT       : [DSBX] clock tick_ms=327179
+16:38:15.411 SCRIPT       : [DSBX] clock tick_ms=332209
+16:38:20.450 SCRIPT       : [DSBX] clock tick_ms=337248
+16:38:25.450 SCRIPT       : [DSBX] clock tick_ms=342248
+16:38:30.452 SCRIPT       : [DSBX] clock tick_ms=347250
+16:38:35.485 SCRIPT       : [DSBX] clock tick_ms=352283
+16:38:40.507 SCRIPT       : [DSBX] clock tick_ms=357305
+16:38:45.555 SCRIPT       : [DSBX] clock tick_ms=362353
+16:38:50.582 SCRIPT       : [DSBX] clock tick_ms=367380
+16:38:55.603 SCRIPT       : [DSBX] clock tick_ms=372401
+16:39:00.615 SCRIPT       : [DSBX] clock tick_ms=377413
+16:39:05.665 SCRIPT       : [DSBX] clock tick_ms=382463
+16:39:10.695 SCRIPT       : [DSBX] clock tick_ms=387493
+16:39:15.729 SCRIPT       : [DSBX] clock tick_ms=392526
+16:39:20.772 SCRIPT       : [DSBX] clock tick_ms=397570
+16:39:25.804 SCRIPT       : [DSBX] clock tick_ms=402602
+16:39:30.838 SCRIPT       : [DSBX] clock tick_ms=407636
+16:39:35.840 SCRIPT       : [DSBX] clock tick_ms=412637
+16:39:40.860 SCRIPT       : [DSBX] clock tick_ms=417658
+16:39:45.877 SCRIPT       : [DSBX] clock tick_ms=422675
+16:39:50.919 SCRIPT       : [DSBX] clock tick_ms=427717
+16:39:55.955 SCRIPT       : [DSBX] clock tick_ms=432754
+16:40:00.993 SCRIPT       : [DSBX] clock tick_ms=437791
+16:40:06.042 SCRIPT       : [DSBX] clock tick_ms=442841
+16:40:11.090 SCRIPT       : [DSBX] clock tick_ms=447888
+16:40:16.118 SCRIPT       : [DSBX] clock tick_ms=452916
+16:40:21.147 SCRIPT       : [DSBX] clock tick_ms=457944
+16:40:26.180 SCRIPT       : [DSBX] clock tick_ms=462978
+16:40:31.192 SCRIPT       : [DSBX] clock tick_ms=467990
+16:40:36.221 SCRIPT       : [DSBX] clock tick_ms=473019
+16:40:41.221 SCRIPT       : [DSBX] clock tick_ms=478019
+16:40:46.234 SCRIPT       : [DSBX] clock tick_ms=483032
+16:40:51.271 SCRIPT       : [DSBX] clock tick_ms=488069
+16:40:56.314 SCRIPT       : [DSBX] clock tick_ms=493111
+16:41:01.341 SCRIPT       : [DSBX] clock tick_ms=498139
+16:41:06.389 SCRIPT       : [DSBX] clock tick_ms=503187
+16:41:11.399 SCRIPT       : [DSBX] clock tick_ms=508197
+16:41:16.401 SCRIPT       : [DSBX] clock tick_ms=513199
+16:41:21.436 SCRIPT       : [DSBX] clock tick_ms=518234
+16:41:26.444 SCRIPT       : [DSBX] clock tick_ms=523242
+16:41:31.491 SCRIPT       : [DSBX] clock tick_ms=528289
+16:41:36.538 SCRIPT       : [DSBX] clock tick_ms=533336
+16:41:41.546 SCRIPT       : [DSBX] clock tick_ms=538344
+16:41:46.579 SCRIPT       : [DSBX] clock tick_ms=543378
+16:41:51.633 SCRIPT       : [DSBX] clock tick_ms=548431
+16:41:56.646 SCRIPT       : [DSBX] clock tick_ms=553444
+16:42:01.680 SCRIPT       : [DSBX] clock tick_ms=558477
+16:42:06.719 SCRIPT       : [DSBX] clock tick_ms=563517
+16:42:11.750 SCRIPT       : [DSBX] clock tick_ms=568547
+16:42:16.781 SCRIPT       : [DSBX] clock tick_ms=573579
+16:42:21.826 SCRIPT       : [DSBX] clock tick_ms=578624
+16:42:26.829 SCRIPT       : [DSBX] clock tick_ms=583626
+16:42:31.862 SCRIPT       : [DSBX] clock tick_ms=588659
+16:42:36.900 SCRIPT       : [DSBX] clock tick_ms=593697
+16:42:41.916 SCRIPT       : [DSBX] clock tick_ms=598714
+16:42:46.935 SCRIPT       : [DSBX] clock tick_ms=603734
+16:42:51.983 SCRIPT       : [DSBX] clock tick_ms=608780
+16:42:56.994 SCRIPT       : [DSBX] clock tick_ms=613792
+16:43:02.042 SCRIPT       : [DSBX] clock tick_ms=618840
+16:43:07.050 SCRIPT       : [DSBX] clock tick_ms=623848
+16:43:12.092 SCRIPT       : [DSBX] clock tick_ms=628889
+16:43:17.137 SCRIPT       : [DSBX] clock tick_ms=633935
+16:43:22.175 SCRIPT       : [DSBX] clock tick_ms=638974
+16:43:29.568  SCRIPT       : [DSBX] shutdown role=client created_n=1 inflight_p=1 inflight_r=0
+16:43:29.606  SCRIPT       : ~DayZGame()
+16:43:30.394  SCRIPT       : Cleaning up script module globals 'Game'
+16:43:30.394   SCRIPT    (E): Leaked 'BunkerBroadcastManager' script instance (1x)!
+16:43:30.394   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (1x)!
+16:43:30.394   SCRIPT    (E): ==== Total Leaks (2x)! ====

@@ -1,0 +1,298 @@
+{
+  "checks": [
+    {
+      "detail": "ok",
+      "id": "BASE-01",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-02",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-03",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-04",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-05",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-06",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-07",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-08",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-09",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-10",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-11",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-12",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "BASE-13",
+      "status": "pass"
+    }
+  ],
+  "error": null,
+  "exit_code": 0,
+  "id": "F0.3-0",
+  "members": [
+    {
+      "exit_code": 0,
+      "id": "run",
+      "reasons": [],
+      "verdict": "PASA"
+    },
+    {
+      "exit_code": 1,
+      "id": "mut-ignore_stop",
+      "reasons": [
+        "BASE-03"
+      ],
+      "verdict": "FALLA"
+    },
+    {
+      "exit_code": 1,
+      "id": "mut-freeze_on_wait",
+      "reasons": [
+        "BASE-08"
+      ],
+      "verdict": "FALLA"
+    },
+    {
+      "exit_code": 1,
+      "id": "mut-defer_cleanup",
+      "reasons": [
+        "BASE-08"
+      ],
+      "verdict": "FALLA"
+    },
+    {
+      "exit_code": 1,
+      "id": "mut-early_end",
+      "reasons": [
+        "BASE-08"
+      ],
+      "verdict": "FALLA"
+    },
+    {
+      "exit_code": 1,
+      "id": "mut-ignore_deadman",
+      "reasons": [
+        "BASE-11"
+      ],
+      "verdict": "FALLA"
+    },
+    {
+      "exit_code": 1,
+      "id": "mut-skip_send",
+      "reasons": [
+        "BASE-11"
+      ],
+      "verdict": "FALLA"
+    },
+    {
+      "exit_code": 2,
+      "id": "probe-budget",
+      "reasons": [
+        "callback_budget_exhausted"
+      ],
+      "verdict": "INCONCLUSO"
+    }
+  ],
+  "metrics": {
+    "drift_client": 0.00010153204038788363,
+    "drift_server": 0.000103125,
+    "execution_identities": {
+      "mut-defer_cleanup": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "95fc538832add10c",
+          "server": "23d661fb1832709f"
+        },
+        "peer_insts": {
+          "client": [
+            "ed709505769a4de8879067947c4c71ef"
+          ],
+          "server": [
+            "1adab49411c44afda06afeb14635610c"
+          ]
+        },
+        "port": 51913
+      },
+      "mut-early_end": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "759a04a18a781869",
+          "server": "3aa2756f2f99c102"
+        },
+        "peer_insts": {
+          "client": [
+            "ed709505769a4de8879067947c4c71ef"
+          ],
+          "server": [
+            "1adab49411c44afda06afeb14635610c"
+          ]
+        },
+        "port": 52310
+      },
+      "mut-freeze_on_wait": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "8eeb516b88112ead",
+          "server": "d22bac8a9c890c59"
+        },
+        "peer_insts": {
+          "client": [
+            "ed709505769a4de8879067947c4c71ef"
+          ],
+          "server": [
+            "1adab49411c44afda06afeb14635610c"
+          ]
+        },
+        "port": 64618
+      },
+      "mut-ignore_deadman": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "7cb6eba548d11ec2",
+          "server": "3e0523fe84f9a852"
+        },
+        "peer_insts": {
+          "client": [
+            "ed709505769a4de8879067947c4c71ef"
+          ],
+          "server": [
+            "1adab49411c44afda06afeb14635610c"
+          ]
+        },
+        "port": 60812
+      },
+      "mut-ignore_stop": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "3114b9c51cbcb860",
+          "server": "03573ccfee6dc98a"
+        },
+        "peer_insts": {
+          "client": [
+            "ed709505769a4de8879067947c4c71ef"
+          ],
+          "server": [
+            "1adab49411c44afda06afeb14635610c"
+          ]
+        },
+        "port": 50127
+      },
+      "mut-skip_send": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "eb44c8baf4b53abd",
+          "server": "05c761d47a5eac7a"
+        },
+        "peer_insts": {
+          "client": [
+            "ed709505769a4de8879067947c4c71ef"
+          ],
+          "server": [
+            "1adab49411c44afda06afeb14635610c"
+          ]
+        },
+        "port": 62813
+      },
+      "probe-budget": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "9e178aef42a55f5f",
+          "server": "c74850dc104609d6"
+        },
+        "peer_insts": {
+          "client": [
+            "ed709505769a4de8879067947c4c71ef"
+          ],
+          "server": [
+            "1adab49411c44afda06afeb14635610c"
+          ]
+        },
+        "port": 53790
+      },
+      "run": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "86d566a6389c6cb9",
+          "server": "80e118eb29d32fff"
+        },
+        "peer_insts": {
+          "client": [
+            "ed709505769a4de8879067947c4c71ef"
+          ],
+          "server": [
+            "1adab49411c44afda06afeb14635610c"
+          ]
+        },
+        "port": 56937
+      }
+    },
+    "wire_cap": 3500
+  },
+  "reasons": [],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "PASA"
+}
