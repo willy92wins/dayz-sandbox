@@ -1717,5 +1717,18 @@ class TestCensusLeaseSnapshot(_GuardedTestCase):
         self.assertEqual(job["reason"], "capture_budget_exceeded")
 
 
+class TestActorGlovesBornInInventory(_GuardedTestCase):
+    """Punto 2a (lease22): pin estatico de los guantes nacidos en inventario."""
+
+    def test_c_births_actor_gloves_in_inventory(self):
+        src = (
+            QA_DIR
+            / "probe/DayZSandbox_QA/scripts/5_Mission/DSBX_QA_X_Persist.c"
+        ).read_text(encoding="utf-8", errors="replace")
+        self.assertIn("bornInInventory", src)
+        self.assertIn("LocationCreateEntity", src)
+        self.assertIn("CreateObjectEx", src)  # la via staged sigue para el resto
+
+
 if __name__ == "__main__":
     unittest.main()

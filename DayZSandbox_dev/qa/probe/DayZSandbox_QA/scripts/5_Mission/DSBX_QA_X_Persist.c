@@ -1329,12 +1329,47 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 					EntityAI parentEnt = EntityAI.Cast(parentRec.m_RefEnt);
 					if (parentEnt && parentEnt.GetInventory())
 					{
-						// Partidas 5 y 6: los hijos creados con LocationCreateEntity y FLAGS_INV_OWN volvian tras el
-						// reinicio cuando salian del padre (el brazalete al suelo, los guantes al director). Ahora se
-						// crean como las raices, con CreateObjectEx (game.c:703) junto al padre, y se mueven a su sitio
-						// con LocationCanMoveEntity + LocationSyncMoveEntity, como vanilla (dayzplayerinventory.c:1377-1395).
-						// El destino lleva el objeto: FindFreeLocationFor (inventory.c:276) o SetAttachment con la
-						// entidad (inventorylocation.c:131). Si no entra, se borra y la fila sale fallida.
+						// La prenda de la ranura Gloves de un actor es la que per_child_transition lleva despues al
+						// inventario de un jugador real (move_to_director): nace dentro del inventario, como todo
+						// lo que vanilla mete en un inventario (LocationCreateEntity, inventory.c:333; CreateInInventory,
+						// inventory.c:876). Un objeto nacido en el suelo con CreateObjectEx y movido despues al
+						// director deja su personaje imposible de cargar (KILLING CORRUPTED CHAR, expulsion 64).
+						// El resto de hijos se crean como las raices, con CreateObjectEx (game.c:703) junto al padre, y
+						// se mueven a su sitio con LocationCanMoveEntity + LocationSyncMoveEntity, como vanilla
+						// (dayzplayerinventory.c:1377-1395): asi el brazalete que cae al suelo no vuelve tras el
+						// reinicio. El destino lleva el objeto: FindFreeLocationFor (inventory.c:276) o SetAttachment
+						// con la entidad (inventorylocation.c:131). Si no entra, se borra y la fila sale fallida.
+						bool bornInInventory = false;
+						if (parentRec.m_Cat == "actor" && slotName == "Gloves")
+							bornInInventory = true;
+						if (bornInInventory)
+						{
+							int invFlags = FLAGS_INV_OWN;
+							if (omitNoPersist)
+							{
+								invFlags = invFlags & (~FLAG_ECE_NOPERSISTENCY_WORLD);
+							}
+							InventoryLocation bornLoc = new InventoryLocation();
+							bool bornLocOk = false;
+							if (slotName == "Cargo")
+							{
+								if (parentEnt.GetInventory().FindFirstFreeLocationForNewEntity(className, FindInventoryLocationType.CARGO, bornLoc))
+									bornLocOk = true;
+							}
+							else
+							{
+								int bornSlotId = InventorySlots.GetSlotIdFromString(slotName);
+								if (InventorySlots.IsSlotIdValid(bornSlotId) && parentEnt.GetInventory().HasAttachmentSlot(bornSlotId) && parentEnt.GetInventory().FindAttachment(bornSlotId) == null)
+								{
+									bornLoc.SetAttachment(parentEnt, null, bornSlotId);
+									bornLocOk = true;
+								}
+							}
+							if (bornLocOk)
+								createdObj = GameInventory.LocationCreateEntity(bornLoc, className, invFlags, FLAG_RF_DEFAULT);
+						}
+						else
+						{
 						int childFlags = FLAGS_STATIC;
 						if (omitNoPersist)
 						{
@@ -1374,6 +1409,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 						else if (stagedObj)
 						{
 							g_Game.ObjectDelete(stagedObj);
+						}
 						}
 					}
 				}
