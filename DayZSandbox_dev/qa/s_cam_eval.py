@@ -734,6 +734,194 @@ def mad(gray_a: list[list[float]], gray_b: list[list[float]], roi: list) -> floa
     return sum(abs(a - b) for a, b in zip(pa, pb)) / len(pa)
 
 
+def _capture_event(samples: dict, name: str) -> dict | None:
+    for row in samples.get("scenario") or []:
+        if row.get("ev") == "capture" and row.get("file") == name:
+            return row
+    return None
+
+
+def _capture_gray(samples: dict, name: str):
+    cache = samples.setdefault("_gray_cache", {})
+    if name in cache:
+        return cache[name]
+    path = (samples.get("captures") or {}).get(name)
+    gray = None
+    if path is not None:
+        try:
+            gray = read_bmp_gray(path)
+        except (OSError, ValueError, struct.error):
+            gray = None
+    cache[name] = gray
+    return gray
+
+
+def _window_ok(gray, rois: dict) -> bool:
+    if not gray or not gray[0]:
+        return False
+    min_w = int(rois.get("min_window_w", 1280))
+    min_h = int(rois.get("min_window_h", 720))
+    return len(gray[0]) >= min_w and len(gray) >= min_h
+
+
+def _capture_window_ok(event: dict | None, rois: dict) -> bool:
+    if event is None:
+        return True
+    try:
+        return (
+            float(event.get("window_w")) >= float(rois.get("min_window_w", 1280))
+            and float(event.get("window_h")) >= float(rois.get("min_window_h", 720))
+        )
+    except (TypeError, ValueError):
+        return True
+
+
+def _state_indexed(scenario: list, phase: str, prefix: str, idx: int) -> dict | None:
+    for name in (
+        f"{prefix}_{idx}",
+        f"{prefix}{idx}",
+        f"dof_{prefix}_{idx}",
+        f"{idx}_{prefix}",
+        f"{idx}{prefix}",
+    ):
+        row = _state(scenario, phase, name)
+        if row is not None:
+            return row
+    patterns = (
+        f"{prefix}_{idx}",
+        f"{prefix}{idx}",
+        f"_{idx}_{prefix}",
+        f"_{idx}{prefix}",
+        f"{idx}_{prefix}",
+        f"{idx}{prefix}",
+    )
+    for cand in scenario:
+        if cand.get("ev") != "state" or cand.get("phase") != phase:
+            continue
+        step = str(cand.get("step") or "").lower()
+        if any(pattern in step for pattern in patterns):
+            return cand
+    return None
+
+
+_STATIC_RESET_STEPS = (
+    "post_reset",
+    "reset",
+    "dof_reset",
+    "post_dof_reset",
+    "post_static",
+    "post_static_reset",
+    "post_ctrl",
+)
+_STATIC_RESET_HINTS = ("reset", "static", "ctrl")
+_PATH_RESET_STEPS = (
+    "post_dof_var",
+    "post_var",
+    "after_dof_var",
+    "dof_var_end",
+    "post_path_var",
+    "post_var_path",
+    "post_job_var",
+    "post_dof",
+    "post_path",
+    "after_path",
+    "job_end",
+    "post_job",
+)
+_PATH_RESET_HINTS = (
+    "post_dof_var",
+    "post_var",
+    "after_dof_var",
+    "dof_var_end",
+    "post_path",
+    "after_path",
+    "post_dof",
+    "job_end",
+    "post_job",
+)
+
+
+def _static_reset_fields(samples: dict, phase: str):
+    scenario = samples.get("scenario") or []
+    for step in _STATIC_RESET_STEPS:
+        row = _state(scenario, phase, step)
+        if row is not None:
+            dist = _num(row, "sent_focus_dist_m")
+            blur = _num(row, "sent_focus_blur")
+            if dist is not None and blur is not None:
+                return dist, blur
+    for row in scenario:
+        if row.get("ev") != "state" or row.get("phase") != phase:
+            continue
+        step = str(row.get("step") or "").lower()
+        if any(hint in step for hint in _STATIC_RESET_HINTS):
+            dist = _num(row, "sent_focus_dist_m")
+            blur = _num(row, "sent_focus_blur")
+            if dist is not None and blur is not None:
+                return dist, blur
+    for row in reversed(scenario):
+        if (
+            row.get("ev") == "op"
+            and row.get("phase") == phase
+            and row.get("verb") == "scam_dof_set"
+            and row.get("status") == "ok"
+        ):
+            nk = _nk(row)
+            try:
+                return float(nk["sent_focus_dist_m"]), float(nk["sent_focus_blur"])
+            except (KeyError, TypeError, ValueError):
+                continue
+    return None
+
+
+def _path_reset_fields(samples: dict, phase: str):
+    scenario = samples.get("scenario") or []
+    for step in _PATH_RESET_STEPS:
+        row = _state(scenario, phase, step)
+        if row is not None:
+            dist = _num(row, "sent_focus_dist_m")
+            blur = _num(row, "sent_focus_blur")
+            if dist is not None and blur is not None:
+                return dist, blur
+    for row in scenario:
+        if row.get("ev") != "state" or row.get("phase") != phase:
+            continue
+        step = str(row.get("step") or "").lower()
+        if not any(hint in step for hint in _PATH_RESET_HINTS):
+            continue
+        marker = any(word in step for word in ("post", "after", "end", "job", "done"))
+        target = "var" in step or "dof" in step
+        if not (marker and target):
+            continue
+        dist = _num(row, "sent_focus_dist_m")
+        blur = _num(row, "sent_focus_blur")
+        if dist is not None and blur is not None:
+            return dist, blur
+    return None
+
+
+def _dof_config_accredited(samples: dict):
+    rows = [
+        row
+        for row in samples.get("scenario") or []
+        if row.get("ev") == "dof_config" and str(row.get("phase")) == "SCAM-S0"
+    ]
+    if not rows:
+        return None
+    return any(row.get("accredited_b") is True for row in rows)
+
+
+def _capture_ready(samples: dict, name: str, rois: dict, missing: list):
+    gray = _capture_gray(samples, name)
+    if gray is None:
+        missing.append(f"no_bmp:{name}")
+        return None
+    if not _window_ok(gray, rois):
+        missing.append(f"window:{name}")
+        return None
+    return gray
+
+
 # CAM-01: rechazos de frontera de poses, cámara cerrada, caminos inválidos y
 # camino ocupado, observados uno a uno con 0 efectos sobre las celdas crudas.
 # PASS exige: rechazo de NaN/Inf en wire sin líneas nuevas en el bridge; la
@@ -1200,7 +1388,121 @@ def _check_cam_05(samples: dict) -> dict:
 # intactos, pose_cells_equal y mad < 1.0, y active_b == 1.0 con FOV 0.70 en los
 # controles estáticos. FAIL en caso contrario.
 def _check_cam_06(samples: dict) -> dict:
-    return _not_implemented("CAM-06")
+    scenario = samples.get("scenario") or []
+    rois = samples.get("fixtures_rois") or {}
+    phase = "SCAM-S4"
+    roi_bg = rois.get("roi_bg_50m")
+    roi_subj = rois.get("roi_subject_2m")
+    missing = []
+    if roi_bg is None or roi_subj is None:
+        return _chk("CAM-06", "missing", "no_rois")
+
+    for j in range(1, 5):
+        op = _event(scenario, "op", phase, f"neg_{j}")
+        if op is None:
+            missing.append(f"no_neg_{j}")
+            continue
+        if op.get("status") != "rejected" or op.get("reason") != "bad_args":
+            return _chk("CAM-06", "fail", f"neg_{j}_not_rejected")
+        pre = _state_indexed(scenario, phase, "pre", j)
+        post = _state_indexed(scenario, phase, "post", j)
+        if pre is None or post is None:
+            missing.append(f"no_state_neg_{j}")
+            continue
+        try:
+            pre_nk = _nk(pre)
+            post_nk = _nk(post)
+            pre_tuple = (
+                float(pre_nk["enable_b"]),
+                float(pre_nk["sent_focus_dist_m"]),
+                float(pre_nk["sent_focus_blur"]),
+            )
+            post_tuple = (
+                float(post_nk["enable_b"]),
+                float(post_nk["sent_focus_dist_m"]),
+                float(post_nk["sent_focus_blur"]),
+            )
+            pre_calls = float(pre_nk["set_focus_calls_n"])
+            post_calls = float(post_nk["set_focus_calls_n"])
+        except (KeyError, TypeError, ValueError):
+            missing.append(f"bad_state_neg_{j}")
+            continue
+        expected = (1.0, 3.5, 0.6)
+        if any(abs(a - b) > 1e-6 for a, b in zip(pre_tuple, expected)):
+            return _chk("CAM-06", "fail", f"neg_{j}_pre_focus")
+        if any(abs(a - b) > 1e-6 for a, b in zip(post_tuple, expected)):
+            return _chk("CAM-06", "fail", f"neg_{j}_focus_changed")
+        if pre_calls != post_calls:
+            return _chk("CAM-06", "fail", f"neg_{j}_calls_changed")
+        if not pose_cells_equal(pre_nk, post_nk):
+            return _chk("CAM-06", "fail", f"neg_{j}_pose_effect")
+        gray_before = _capture_ready(samples, "dof_before_reject.bmp", rois, missing)
+        gray_after = _capture_ready(samples, f"dof_after_reject_{j}.bmp", rois, missing)
+        if gray_before is not None and gray_after is not None:
+            if mad(gray_before, gray_after, roi_bg) >= 1.0:
+                return _chk("CAM-06", "fail", f"neg_{j}_image_changed")
+
+    anchor = (samples.get("fixtures_paths") or {}).get("anchor_pose") or {}
+    controls = ("dof_ctrl_noblur.bmp", "dof_ctrl_near2m.bmp", "dof_ctrl_far50m.bmp")
+    for name in controls:
+        event = _capture_event(samples, name)
+        if event is None:
+            missing.append(f"no_capture:{name}")
+            continue
+        if not _capture_window_ok(event, rois):
+            missing.append(f"window:{name}")
+        states = []
+        for key in ("pre_step", "post_step"):
+            step = event.get(key)
+            if isinstance(step, str) and step:
+                row = _state(scenario, phase, step)
+                if row is not None:
+                    states.append(row)
+        if not states:
+            missing.append(f"no_state:{name}")
+            continue
+        for row in states:
+            try:
+                active = float(_nk(row)["active_b"])
+                fov = float(_nk(row)["fov_rad"])
+                pos = _row_pos(_nk(row))
+                yaw = float(_nk(row)["yaw_deg"])
+                pitch = float(_nk(row)["pitch_deg"])
+                roll = float(_nk(row)["roll_deg"])
+            except (KeyError, TypeError, ValueError):
+                missing.append(f"bad_state:{name}")
+                continue
+            if active != 1.0:
+                return _chk("CAM-06", "fail", f"{name}_inactive")
+            if abs(fov - 0.70) >= 0.001:
+                return _chk("CAM-06", "fail", f"{name}_fov")
+            if anchor:
+                if (
+                    abs(pos[0] - float(anchor["anchor_x_m"])) >= 0.05
+                    or abs(pos[2] - float(anchor["anchor_z_m"])) >= 0.05
+                ):
+                    return _chk("CAM-06", "fail", f"{name}_pose")
+                ref = {
+                    "yaw_deg": float(anchor["yaw_deg"]),
+                    "pitch_deg": float(anchor["pitch_deg"]),
+                    "roll_deg": float(anchor["roll_deg"]),
+                }
+                if _theta3d_euler(_nk(row), ref) >= 0.5:
+                    return _chk("CAM-06", "fail", f"{name}_orientation")
+
+    gray_noblur = _capture_ready(samples, "dof_ctrl_noblur.bmp", rois, missing)
+    gray_repeat = _capture_ready(samples, "dof_ctrl_noblur_repeat.bmp", rois, missing)
+    for j in range(1, 5):
+        _capture_ready(samples, f"dof_after_reject_{j}.bmp", rois, missing)
+    if gray_noblur is not None:
+        if var_lap(gray_noblur, roi_bg) < 25.0 or var_lap(gray_noblur, roi_subj) < 25.0:
+            missing.append("texture:noblur")
+        if gray_repeat is not None and mad(gray_noblur, gray_repeat, roi_bg) >= 1.0:
+            missing.append("noise:noblur")
+
+    if missing:
+        return _chk("CAM-06", "missing", missing[0])
+    return _chk("CAM-06", "pass", "ok")
 
 
 # CAM-07: efecto óptico de DOF estático a 2 m y clasificación de DOF apagado o
@@ -1209,7 +1511,61 @@ def _check_cam_06(samples: dict) -> dict:
 # fail con detail dof_not_supported_or_identical_frames. PASS exige fondo
 # <= 0.70, sujeto >= 0.85, far50m con mad >= 0.5 y fondo > 0.70, y reset a 0.
 def _check_cam_07(samples: dict) -> dict:
-    return _not_implemented("CAM-07")
+    rois = samples.get("fixtures_rois") or {}
+    roi_bg = rois.get("roi_bg_50m")
+    roi_subj = rois.get("roi_subject_2m")
+    if roi_bg is None or roi_subj is None:
+        return _chk("CAM-07", "missing", "no_rois")
+
+    cam06 = _check_cam_06(samples)
+    if cam06["status"] == "missing":
+        return _chk("CAM-07", "missing", "cam06_missing")
+    accredited = _dof_config_accredited(samples)
+    if accredited is None:
+        return _chk("CAM-07", "missing", "no_dof_config")
+    if not accredited:
+        return _chk("CAM-07", "missing", "dof_config_unaccredited")
+
+    missing = []
+    gray_noblur = _capture_ready(samples, "dof_ctrl_noblur.bmp", rois, missing)
+    gray_near = _capture_ready(samples, "dof_ctrl_near2m.bmp", rois, missing)
+    gray_far = _capture_ready(samples, "dof_ctrl_far50m.bmp", rois, missing)
+
+    vn = var_lap(gray_noblur, roi_bg) if gray_noblur is not None else None
+    vs = var_lap(gray_noblur, roi_subj) if gray_noblur is not None else None
+    if vn is not None and vn <= 0.0:
+        missing.append("texture:noblur_bg")
+        vn = None
+    if vs is not None and vs <= 0.0:
+        missing.append("texture:noblur_subject")
+        vs = None
+
+    if gray_noblur is not None and gray_near is not None:
+        if mad(gray_noblur, gray_near, roi_bg) < 0.5:
+            return _chk("CAM-07", "fail", "dof_not_supported_or_identical_frames")
+        if vn is not None:
+            if var_lap(gray_near, roi_bg) / vn > 0.70:
+                return _chk("CAM-07", "fail", "bg_not_blurred_near2m")
+        if vs is not None:
+            if var_lap(gray_near, roi_subj) / vs < 0.85:
+                return _chk("CAM-07", "fail", "subject_not_sharp_near2m")
+
+    if gray_near is not None and gray_far is not None:
+        if mad(gray_near, gray_far, roi_bg) < 0.5:
+            return _chk("CAM-07", "fail", "far50m_no_optical_change")
+    if gray_noblur is not None and gray_far is not None and vn is not None:
+        if var_lap(gray_far, roi_bg) / vn <= 0.70:
+            return _chk("CAM-07", "fail", "bg_still_blurred_far50m")
+
+    reset = _static_reset_fields(samples, "SCAM-S4")
+    if reset is None:
+        missing.append("no_reset_state")
+    elif reset[0] != 0.0 or reset[1] != 0.0:
+        return _chk("CAM-07", "fail", "reset_focus_not_zero")
+
+    if missing:
+        return _chk("CAM-07", "missing", missing[0])
+    return _chk("CAM-07", "pass", "ok")
 
 
 # CAM-08: foco cambiando entre claves de un camino 2 m -> 50 m -> 2 m, con
@@ -1218,8 +1574,174 @@ def _check_cam_07(samples: dict) -> dict:
 # missing capture_phase_unaccredited. PASS exige foco enviado < 0.25 m y blur
 # 1.0 +-0.02, set_focus_calls_n creciente de uno en uno, fondo <= 0.70 en t1 y
 # t4, sujeto >= 0.85 en t1, fondo > 0.70 y mad >= 0.5 en t3, y reset al salir.
+def _phase_event_map(samples: dict, path: str) -> dict:
+    out = {}
+    for row in samples.get("scenario") or []:
+        if (
+            row.get("ev") != "phase"
+            or row.get("phase") != "SCAM-S4"
+            or row.get("path") != path
+        ):
+            continue
+        try:
+            k = int(row.get("phase_k"))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= k <= 4:
+            out[k] = row
+    return out
+
+
+def _phase_mid(event: dict):
+    try:
+        pre = float(event["pre_dtsum_ms"])
+        post = float(event["post_dtsum_ms"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return pre, post, (pre + post) / 2.0
+
+
 def _check_cam_08(samples: dict) -> dict:
-    return _not_implemented("CAM-08")
+    rois = samples.get("fixtures_rois") or {}
+    roi_bg = rois.get("roi_bg_50m")
+    roi_subj = rois.get("roi_subject_2m")
+    if roi_bg is None or roi_subj is None:
+        return _chk("CAM-08", "missing", "no_rois")
+
+    cam06 = _check_cam_06(samples)
+    if cam06["status"] == "missing":
+        return _chk("CAM-08", "missing", "cam06_missing")
+    accredited = _dof_config_accredited(samples)
+    if accredited is None:
+        return _chk("CAM-08", "missing", "no_dof_config")
+    if not accredited:
+        return _chk("CAM-08", "missing", "dof_config_unaccredited")
+
+    fixtures = (samples.get("fixtures_paths") or {}).get("paths") or {}
+    fpath = fixtures.get("dof_var_6s")
+    rows = samples.get("paths", {}).get("path_dof_var") or []
+    missing = []
+
+    keys = None
+    if not rows:
+        missing.append("no_path_dof_var")
+    elif not isinstance(fpath, dict):
+        missing.append("no_dof_var_fixture")
+    else:
+        try:
+            keys = _key_table(fpath)
+        except (KeyError, TypeError, ValueError):
+            missing.append("bad_dof_var_fixture")
+        if keys is not None and not keys:
+            missing.append("no_dof_var_keys")
+            keys = None
+
+    if keys is not None:
+        t_end = keys[-1]["t_s"]
+        prev_calls = None
+        for i, row in enumerate(rows):
+            t = _row_time(row, t_end)
+            if t is None:
+                missing.append("bad_dtsum")
+                break
+            try:
+                sent_dist = float(row["sent_focus_dist_m"])
+                sent_blur = float(row["sent_focus_blur"])
+                calls = float(row["set_focus_calls_n"])
+            except (KeyError, TypeError, ValueError):
+                missing.append("bad_columns")
+                break
+            ref_dist, _ = _ref_focus(keys, t)
+            if abs(sent_dist - ref_dist) >= 0.25:
+                return _chk("CAM-08", "fail", f"sent_dist_row_{i}")
+            if abs(sent_blur - 1.0) >= 0.02:
+                return _chk("CAM-08", "fail", f"sent_blur_row_{i}")
+            if prev_calls is not None and abs(calls - prev_calls - 1.0) > 1e-6:
+                return _chk("CAM-08", "fail", f"focus_calls_row_{i}")
+            prev_calls = calls
+
+    gray = {}
+    for k in (1, 3, 4):
+        gray[f"var_t{k}"] = _capture_ready(samples, f"var_t{k}.bmp", rois, missing)
+        gray[f"fix_t{k}"] = _capture_ready(samples, f"fix_t{k}.bmp", rois, missing)
+
+    def ratio(name_a: str, name_b: str, roi: list):
+        ga = gray.get(name_a)
+        gb = gray.get(name_b)
+        if ga is None or gb is None:
+            return None
+        denom = var_lap(gb, roi)
+        if denom <= 0.0:
+            return None
+        return var_lap(ga, roi) / denom
+
+    if gray["var_t1"] is not None and gray["fix_t1"] is not None:
+        bg_ratio = ratio("var_t1", "fix_t1", roi_bg)
+        subj_ratio = ratio("var_t1", "fix_t1", roi_subj)
+        if bg_ratio is None or subj_ratio is None:
+            missing.append("texture:t1")
+        else:
+            if bg_ratio > 0.70:
+                return _chk("CAM-08", "fail", "bg_not_blurred_t1")
+            if subj_ratio < 0.85:
+                return _chk("CAM-08", "fail", "subject_not_sharp_t1")
+
+    if gray["var_t3"] is not None and gray["fix_t3"] is not None:
+        bg_ratio = ratio("var_t3", "fix_t3", roi_bg)
+        if bg_ratio is None:
+            missing.append("texture:t3")
+        elif bg_ratio <= 0.70:
+            return _chk("CAM-08", "fail", "bg_still_blurred_t3")
+    if gray["var_t3"] is not None and gray["var_t1"] is not None:
+        if mad(gray["var_t3"], gray["var_t1"], roi_bg) < 0.5:
+            return _chk("CAM-08", "fail", "t3_no_optical_change")
+
+    if gray["var_t4"] is not None and gray["fix_t4"] is not None:
+        bg_ratio = ratio("var_t4", "fix_t4", roi_bg)
+        if bg_ratio is None:
+            missing.append("texture:t4")
+        elif bg_ratio > 0.70:
+            return _chk("CAM-08", "fail", "bg_not_blurred_t4")
+
+    reset = _path_reset_fields(samples, "SCAM-S4")
+    if reset is None:
+        missing.append("no_reset_state")
+    elif reset[0] != 0.0 or reset[1] != 0.0:
+        return _chk("CAM-08", "fail", "reset_focus_not_zero")
+
+    windows = rois.get("phase_windows_ms") or {}
+    span_max = float(rois.get("max_bracket_span_ms", 150.0))
+    skew_max = float(rois.get("max_pair_skew_ms", 150.0))
+    var_phases = _phase_event_map(samples, "dof_var_6s")
+    fix_phases = _phase_event_map(samples, "dof_fixed_6s")
+    for k in (1, 2, 3, 4):
+        var_event = var_phases.get(k)
+        fix_event = fix_phases.get(k)
+        if var_event is None or fix_event is None:
+            missing.append("capture_phase_unaccredited")
+            continue
+        var_mid = _phase_mid(var_event)
+        fix_mid = _phase_mid(fix_event)
+        if var_mid is None or fix_mid is None:
+            missing.append("capture_phase_unaccredited")
+            continue
+        window = windows.get(f"t{k}")
+        if not isinstance(window, (list, tuple)) or len(window) != 2:
+            missing.append("capture_phase_unaccredited")
+            continue
+        for pre, post, mid in (var_mid, fix_mid):
+            if post < pre or post - pre > span_max:
+                missing.append("capture_phase_unaccredited")
+                break
+            if mid < float(window[0]) or mid > float(window[1]):
+                missing.append("capture_phase_unaccredited")
+                break
+        if abs(var_mid[2] - fix_mid[2]) > skew_max:
+            missing.append("capture_phase_unaccredited")
+
+    if missing:
+        return _chk("CAM-08", "missing", missing[0])
+    return _chk("CAM-08", "pass", "ok")
 
 
 # CAM-09: HUD, quickbar y auxiliares ocultos en todo el recorrido, comparación
