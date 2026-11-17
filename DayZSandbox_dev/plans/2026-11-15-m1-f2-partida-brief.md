@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3.13, **congelada.** La v1.3.13 corrige §5.2: P4c resetea solo la escena 1, y la escena 2 sigue aplicada en el backend (X-03 de la pasada de Claude sobre T2f-5, decisión de la principal; §5.2, §10, §12). La v1.3.12 recoge el cierre de Sol r4 y la pasada de Claude sobre T2f-4: en una etapa positiva, `observado` es exactamente `("observado", "")`; el `server_epoch` de la parte deja de ser obligatorio; y T2f-5, antes de congelar (§6, §6.1, §12). La v1.3.11 recoge el arbitraje de Sol r4: el oráculo se ajusta al cable real de la sonda (las páginas no llevan `server_epoch` y el `result` no lleva `inst`) y cierra los PASA falsos y el FALLA espurio que encontró Sol (§6.1, §12). La v1.3.9 corrige lo que pasa al reiniciar el backend: sesión nueva, ids que se repiten y la op cortada de P5 sin terminal (§6.1, puntos 2, 5 y 6, y F2P-09). La v1.3.10 recoge el contrato de salud del censo de F0.3 (§5.3). Ver §12. Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
+- **Versión:** v1.3.14, **congelada.** La v1.3.14 añade el `req_id` del `tap`: cada petición y su respuesta llevan el mismo, la traza se empareja solo por él y, sin él, da INCONCLUSO. También fija las anclas de identidad de la traza: la conexión registrada de cada peer, y que una `inst` o un `epoch` vacíos no casan con nada. Y escribe el alcance de la excepción del corte de P5, que exime todas las reentregas de la op cortada hasta el `cut` (§5.4, §6.1 punto 5, §12). La v1.3.13 corrige §5.2: P4c resetea solo la escena 1, y la escena 2 sigue aplicada en el backend (X-03 de la pasada de Claude sobre T2f-5, decisión de la principal; §5.2, §10, §12). La v1.3.12 recoge el cierre de Sol r4 y la pasada de Claude sobre T2f-4: en una etapa positiva, `observado` es exactamente `("observado", "")`; el `server_epoch` de la parte deja de ser obligatorio; y T2f-5, antes de congelar (§6, §6.1, §12). La v1.3.11 recoge el arbitraje de Sol r4: el oráculo se ajusta al cable real de la sonda (las páginas no llevan `server_epoch` y el `result` no lleva `inst`) y cierra los PASA falsos y el FALLA espurio que encontró Sol (§6.1, §12). La v1.3.9 corrige lo que pasa al reiniciar el backend: sesión nueva, ids que se repiten y la op cortada de P5 sin terminal (§6.1, puntos 2, 5 y 6, y F2P-09). La v1.3.10 recoge el contrato de salud del censo de F0.3 (§5.3). Ver §12. Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -326,6 +326,11 @@ Todas van por el bridge de la sonda (`qa0`), así que quedan en la evidencia.
 - **Del bridge del producto, la traza completa** (P-08, Q-04): las entregas por `(session, op_id)` con su `conn`, los resultados recibidos con su `dup`, los acuses y las lecturas de reconciliación con su orden temporal.
   - **La captura la hace el runner con un proxy HTTP** (`tap`) entre el mod y el puerto del bridge del backend. El mod apunta al `tap`, y el `tap` reenvía al backend.
   - El `tap` registra en `samples/bridge_tap.jsonl` los cuerpos crudos de cada petición y respuesta (`/hello`, `/poll`, `/result` con `dup` y `/catalog`), con marca de tiempo, **antes** de que el backend descarte duplicados.
+  - **La identidad de cada petición (v1.3.14), obligatoria para T4:**
+    - el `tap` numera cada petición al llegar con un `req_id` entero, único en la partida, y escribe el **mismo** `req_id` en el registro de su respuesta;
+    - es lo que hace el proxy de F1b-peers: un contador desde 0, asignado bajo lock al llegar, y el mismo número en la línea del final (`qa/live/fault_proxy.py:255`, `:434-438` y `:893-906`);
+    - una petición sin respuesta (la conexión se cortó) se queda solo con su registro de petición;
+    - el orden de los `req_id` no tiene por qué ser el de llegada. El proxy toma la hora antes de leer el cuerpo y de tomar el lock (`fault_proxy.py:413`). En cada una de las dos partidas retail de F1b-peers del 15-nov hay una pareja con el orden cambiado (16 ms y 1 ms). Se empareja solo por igualdad.
   - El backend no cambia: no hay ganchos de observación.
 - **Del backend:** los eventos `op.state`, `GET /api/ops` y `GET /api/observation` (metros).
 - **De la sonda:** las respuestas crudas de `QABridge`, cada página del censo y del testigo con su trabajo, página, epoch, sello de sonda y marca de tiempo (P-10).
@@ -540,11 +545,23 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
      - cada resultado va después de una entrega de la misma identidad y conexión;
      - cada acuse va después de su resultado;
      - en P2, la segunda respuesta va después de la segunda entrega.
+   - **Emparejamiento por `req_id` (v1.3.14):**
+     - cada respuesta del `tap` se empareja con la petición de su mismo `req_id` (§5.4); nunca por orden de llegada, por antigüedad ni por contenido;
+     - un registro de `/hello`, `/poll` o `/result` sin `req_id`, una respuesta cuyo `req_id` no tiene petición y dos peticiones o dos respuestas con el mismo `req_id` dan **INCONCLUSO** (`missing`) en el check de su parte: esa traza no se puede juzgar;
+     - una petición sin respuesta no se juzga.
    - **Identidad completa (v1.3.11, F-04):**
      - la sesión del query de una petición es la misma que la de su cuerpo;
      - la instancia y el epoch de cada resultado son los de su entrega;
      - la sesión vale solo si su `/hello` del producto fue **aceptado**: HTTP 200 con la sesión en la respuesta. Un `/hello` rechazado no abre sesión;
      - un desacuerdo en cualquiera de estas cosas rompe la traza.
+   - **La conexión registrada (v1.3.14).** Cada `/hello` aceptado registra a su peer con la `inst` de la petición y la `conn` de la respuesta (`bridge.py:443-448` y `:470`). El registro de un peer en un momento dado es su último `/hello` aceptado de ese tramo. Rompen la traza:
+     - un 200 de `/poll` a una petición cuya `inst` o cuya `conn` no son las del registro de su peer. El backend contesta 409 a esa petición, también si estaba retenida (`bridge.py:484-497` y `:520-523`);
+     - una op entregada cuya `inst` o cuya `conn` no son las del registro del servidor. El backend solo entrega órdenes de la conexión registrada, con su `inst` (`bridge.py:536-537`, `:563-564` y `:575`);
+     - un 200 con ops a una petición que no es del servidor: solo el servidor recibe órdenes (`bridge.py:557-559`).
+   - **Las anclas de identidad (v1.3.14).** Una `inst` o un `epoch` vacíos no casan con nada, en ninguna comparación de la traza:
+     - el backend rechaza con 400 un `/hello` cuya `inst` o cuyo `epoch` no son hex de 32 (`bridge.py:425-427`), y cada evento del `tap` lleva la `inst` y el `epoch` (§5.4);
+     - un `/hello` aceptado sin `inst` no abre sesión ni registra a su peer;
+     - una entrega, un resultado o una petición sin `inst` no casan con ningún `/hello`.
    - **Una sola resolución por entrega (S-07, V-15):** cada entrega tiene **una** resolución: su resultado y un acuse **aceptado**, HTTP 2xx con `ok` igual al booleano `true` (una cadena `"false"` o `"true"` no vale; v1.3.11, F-04). La excepción es el corte de P5. En P2, la segunda entrega tiene su resultado con `dup: true`.
    - **Rompen la traza:**
      - una respuesta de otra sesión o de otra conexión;
@@ -553,6 +570,7 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
      - una entrega sin resolución;
      - un `op.state` sin su `/result` recibido.
    - **La única excepción es el corte de P5:** hay entrega y no hay resultado, por diseño.
+     - **Las reentregas (v1.3.14, z91).** La excepción vale para **todas** las entregas de la identidad cortada que estén en P5, lleven el verbo del apply cortado y lleguen antes del `cut` o en el mismo instante. El backend reentrega a la misma conexión una op en curso sin resultado cada `retry_ms`, 2 s por defecto, mientras vive (`bridge.py:88` y `:563-568`). Una entrega de esa identidad después del `cut`, fuera de P5 o con otro verbo no queda exenta.
      - Si el producto reenvía el resultado de la op cortada al backend nuevo, el backend lo rechaza con `409 hello_required` o `400 bad_request`, porque la sesión ya no es la vigente (`bridge.py:592-593` y `:610-611`). Ese reenvío y su rechazo tampoco rompen la traza, y no cuentan como resolución.
      - **Alcance de la excepción (v1.3.11, F-04):** vale solo para el `(sesión, op_id)` de la op cortada, después del `cut`, en el tramo del backend nuevo y con el rechazo. Un resultado rechazado con otra identidad, en otro momento o en otro tramo rompe la traza. Por ejemplo, uno de una sesión desconocida en P2 cuyo `op_id` coincide con el de la futura op cortada.
    - **Sesiones (v1.3.9):** la traza se correlaciona dentro de cada sesión del backend (punto 2). Tras cada reinicio del backend, el peer recibe `409 hello_required` con la sesión vieja y repite `/hello`, que le da la sesión nueva. Ese `409` en un `/poll` no rompe la traza.
@@ -1124,3 +1142,17 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
     - tras el reinicio de P4c, la misma reaparición no se juzga: es la limitación de §10.
   - **El oráculo** juzga el terminal de cada reset de P4c que aparezca (T2f-6): un reset `fallido` en P4c nunca da PASA.
   - **Cambios:** en §5.2, la fila de P4c y su estado final; en §10, la limitación. Nada de §3, §4 ni §6.1 cambia. El runner de T4 sigue el §5.2 corregido.
+- v1.3.14 (2026-11-17): **el `req_id` del `tap`, las anclas de identidad y el alcance de las reentregas del corte.** Lo decide la principal tras el cierre acotado que aprobó Guillermo.
+  - **De dónde viene:**
+    - de T2f-12 a T2f-15, el emparejamiento de peticiones y respuestas por orden o por contenido dio un PASA falso o un FALLA falso tras otro (D-02, G-01, G-04 y H-01 a H-05);
+    - sin identidad de petición, un backend que cruzara las respuestas de la sesión vieja y la nueva deja el mismo `tap` que una partida válida;
+    - la regla de la principal: un PASA falso por falta de ancla de identidad bloquea el congelado, aunque esté fuera del delta.
+  - **Cambios:**
+    - **§5.4:** el `req_id` de cada petición y de su respuesta, obligatorio para T4. El mecanismo ya existe en el proxy de F1b-peers, y la fixture se contrasta con sus partidas reales del 15-nov.
+    - **§6.1, punto 5:**
+      - el emparejamiento por `req_id`; sin él, INCONCLUSO;
+      - la conexión registrada de cada peer (G-04 y H-01);
+      - el 200 con ops solo para el servidor (G-01 y H-02);
+      - las anclas de identidad (E-04: una `inst` vacía hacía pasar en vacío la comprobación del `/hello` de la misma instancia);
+      - el alcance de la excepción del corte para las reentregas (z91 y H-04).
+  - **Nada de §3, §4 ni §5.2 cambia.** El runner de T4 estampa el `req_id` en su `tap`.
