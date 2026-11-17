@@ -148,8 +148,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	protected string m_CaptureFailReason;
 	protected string m_CaptureFailJobId;
 	protected int m_LastApplyRetainedSkipped;
-	protected ref array<string> m_DurablePersIds;
-	protected bool m_DurableLoaded;
 	// Presupuesto verificable de captura del censo (MEN-14); el cupo de filas llega por StartJob.
 	static const float CENSUS_CAPTURE_BUDGET_MS = 120000.0;
 	// BLOQ 6: A retiene per_census hasta acreditar el intento de B; salida acotada.
@@ -175,8 +173,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_CaptureFailReason = "";
 		m_CaptureFailJobId = "";
 		m_LastApplyRetainedSkipped = 0;
-		m_DurablePersIds = new array<string>();
-		m_DurableLoaded = false;
 
 		InitSentinelClasses();
 		InitCensusColumns();
@@ -561,84 +557,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		return null;
 	}
 
-	protected void EnsureDurablePersLoaded()
-	{
-		if (m_DurableLoaded)
-			return;
-		m_DurableLoaded = true;
-		m_DurablePersIds.Clear();
-		if (!FileExist("$profile:dsbx_qa_persist_pers.txt"))
-			return;
-		FileHandle dh = OpenFile("$profile:dsbx_qa_persist_pers.txt", FileMode.READ);
-		if (!dh)
-			return;
-		string line = "";
-		while (FGets(dh, line) > 0)
-		{
-			if (IsValidIdentity(line, "0:0:0:0"))
-				m_DurablePersIds.Insert(line);
-		}
-		CloseFile(dh);
-	}
-
-	protected void SaveDurablePers()
-	{
-		if (m_DurablePersIds.Count() == 0)
-		{
-			if (FileExist("$profile:dsbx_qa_persist_pers.txt"))
-				DeleteFile("$profile:dsbx_qa_persist_pers.txt");
-			return;
-		}
-		FileHandle wh = OpenFile("$profile:dsbx_qa_persist_pers.txt", FileMode.WRITE);
-		if (!wh)
-			return;
-		for (int di = 0; di < m_DurablePersIds.Count(); di++)
-		{
-			FPrintln(wh, m_DurablePersIds.Get(di));
-		}
-		CloseFile(wh);
-	}
-
-	protected void RegisterDurablePers(string persId)
-	{
-		if (!IsValidIdentity(persId, "0:0:0:0"))
-			return;
-		EnsureDurablePersLoaded();
-		for (int ri = 0; ri < m_DurablePersIds.Count(); ri++)
-		{
-			if (m_DurablePersIds.Get(ri) == persId)
-				return;
-		}
-		m_DurablePersIds.Insert(persId);
-		SaveDurablePers();
-	}
-
-	protected void RemoveDurablePers(string persId)
-	{
-		if (!IsValidIdentity(persId, "0:0:0:0"))
-			return;
-		EnsureDurablePersLoaded();
-		for (int mi = m_DurablePersIds.Count() - 1; mi >= 0; mi--)
-		{
-			if (m_DurablePersIds.Get(mi) == persId)
-				m_DurablePersIds.RemoveOrdered(mi);
-		}
-		SaveDurablePers();
-	}
-
-	protected bool IsDurableQaPers(string persId)
-	{
-		if (!IsValidIdentity(persId, "0:0:0:0"))
-			return false;
-		EnsureDurablePersLoaded();
-		for (int si = 0; si < m_DurablePersIds.Count(); si++)
-		{
-			if (m_DurablePersIds.Get(si) == persId)
-				return true;
-		}
-		return false;
-	}
-
 	// BLOQ 5: descendientes que la limpieza no conoce (ni registro de escena
 	// ni registro raw): su presencia protege al contenedor que los lleva.
 	protected int CountCleanupForeignDescendants(Object obj)
@@ -654,7 +572,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			EntityAI child = items.Get(i);
 			if (!child || child == ent)
 				continue;
-			if (!FindRecordByObject(child) && !FindRawRecordByObject(child) && !IsDurableQaPers(FormatPersId(child)))
+			if (!FindRecordByObject(child) && !FindRawRecordByObject(child))
 				foreignCount = foreignCount + 1;
 		}
 		return foreignCount;
@@ -1318,8 +1236,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				rec.m_AiAgentB = 0;
 			}
 			m_Records.Insert(rec);
-			if (createdObj)
-				RegisterDurablePers(rec.m_PersId);
 		}
 
 		res.status = "done";
@@ -1853,9 +1769,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		rawRec.m_RefEnt = createdObj;
 		rawRec.m_ChildEnt = childObj;
 		m_RawRecords.Insert(rawRec);
-		RegisterDurablePers(persId);
-		if (childObj)
-			RegisterDurablePers(FormatPersId(childObj));
 
 		res.status = "done";
 		EnsurePayloadHas(res.read);
@@ -2314,16 +2227,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				string childNet = FormatNetId(qraw.m_ChildEnt);
 				if (IsValidIdentity(childNet, "0:0"))
 					qaNetIds.Insert(childNet);
-				string childPers = FormatPersId(qraw.m_ChildEnt);
-				if (IsValidIdentity(childPers, "0:0:0:0"))
-					qaPersIds.Insert(childPers);
 			}
-		}
-		EnsureDurablePersLoaded();
-		for (int qd = 0; qd < m_DurablePersIds.Count(); qd++)
-		{
-			if (IsValidIdentity(m_DurablePersIds.Get(qd), "0:0:0:0"))
-				qaPersIds.Insert(m_DurablePersIds.Get(qd));
 		}
 
 		for (int i = m_Records.Count() - 1; i >= 0; i--)
@@ -2335,7 +2239,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				continue;
 			if (rec && IsObjectAlive(rec.m_RefEnt))
 			{
-				RemoveDurablePers(FormatPersId(rec.m_RefEnt));
 				g_Game.ObjectDelete(rec.m_RefEnt);
 				cleanedOwnN = cleanedOwnN + 1;
 			}
@@ -2360,13 +2263,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				if (IsObjectAlive(raw.m_RefEnt) && CountCleanupForeignDescendants(raw.m_RefEnt) > 0)
 					continue;
 				if (IsObjectAlive(raw.m_ChildEnt))
-				{
-					RemoveDurablePers(FormatPersId(raw.m_ChildEnt));
 					g_Game.ObjectDelete(raw.m_ChildEnt);
-				}
 				if (IsObjectAlive(raw.m_RefEnt))
 				{
-					RemoveDurablePers(FormatPersId(raw.m_RefEnt));
 					g_Game.ObjectDelete(raw.m_RefEnt);
 					cleanedRawN = cleanedRawN + 1;
 				}
@@ -2404,17 +2303,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 					bool byMark = IsSentinelClass(cand.GetType()) && IsQaHealthMark(cand);
 					if ((byIdentity || byMark) && CountCleanupForeignDescendants(cand) == 0)
 					{
-						array<EntityAI> candItems = new array<EntityAI>();
-						EntityAI candEnt = EntityAI.Cast(cand);
-						if (candEnt && candEnt.GetInventory())
-							candEnt.GetInventory().EnumerateInventory(InventoryTraversalType.PREORDER, candItems);
-						for (int ci = 0; ci < candItems.Count(); ci++)
-						{
-							EntityAI candChild = candItems.Get(ci);
-							if (candChild && candChild != candEnt)
-								RemoveDurablePers(FormatPersId(candChild));
-						}
-						RemoveDurablePers(FormatPersId(cand));
 						g_Game.ObjectDelete(cand);
 						cleanedRawN = cleanedRawN + 1;
 					}
