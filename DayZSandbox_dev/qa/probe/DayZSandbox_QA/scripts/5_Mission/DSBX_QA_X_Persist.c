@@ -24,6 +24,7 @@ class DSBX_QA_PersistRecord : Managed
 	float m_SpawnTickMs;
 	float m_MaxHp;
 	float m_HealthHp;
+	int m_HealthMarkB;
 	int m_OkB;
 	int m_AliveB;
 	int m_AiAgentB;
@@ -65,6 +66,7 @@ class DSBX_QA_PersistRecord : Managed
 		m_SpawnTickMs = 0.0;
 		m_MaxHp = 100.0;
 		m_HealthHp = 100.0;
+		m_HealthMarkB = 1;
 		m_OkB = 0;
 		m_AliveB = 0;
 		m_AiAgentB = 0;
@@ -97,6 +99,7 @@ class DSBX_QA_PersistRawRecord : Managed
 	float m_SpawnTickMs;
 	float m_MaxHp;
 	float m_HealthHp;
+	int m_HealthMarkB;
 	Object m_RefEnt;
 	Object m_ChildEnt;
 
@@ -110,8 +113,43 @@ class DSBX_QA_PersistRawRecord : Managed
 		m_SpawnTickMs = 0.0;
 		m_MaxHp = 100.0;
 		m_HealthHp = 100.0;
+		m_HealthMarkB = 1;
 		m_RefEnt = null;
 		m_ChildEnt = null;
+	}
+}
+
+class DSBX_QA_PersistWitnessFollow : Managed
+{
+	Object m_Ent;
+	string m_ClassName;
+	string m_NetId;
+	string m_ParentNetId;
+	float m_LastX;
+	float m_LastY;
+	float m_LastZ;
+	float m_LastYawDeg;
+	float m_EEInitTickMs;
+	int m_EEInitFrame;
+	int m_AiAgentB;
+	bool m_PendingSample0;
+	int m_NextSample;
+
+	void DSBX_QA_PersistWitnessFollow()
+	{
+		m_Ent = null;
+		m_ClassName = "";
+		m_NetId = "0:0";
+		m_ParentNetId = "";
+		m_LastX = 0.0;
+		m_LastY = 0.0;
+		m_LastZ = 0.0;
+		m_LastYawDeg = 0.0;
+		m_EEInitTickMs = 0.0;
+		m_EEInitFrame = 0;
+		m_AiAgentB = 0;
+		m_PendingSample0 = false;
+		m_NextSample = 1;
 	}
 }
 
@@ -125,6 +163,13 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	static const int FLAG_ECE_IN_INVENTORY = 787456;
 	static const int FLAG_ECE_PLACE_ON_SURFACE = 1060;
 	static const int FLAG_RF_DEFAULT = 512;
+
+	static const float CENSUS_ALL_RADIUS_MAX = 120.0;
+	static const float WITNESS_RADIUS_MAX = 120.0;
+	static const float WITNESS_WINDOW_MAX_MS = 600000.0;
+	static const float WITNESS_TAIL_MS = 5000.0;
+	static const int WITNESS_K_DEFAULT = 3;
+	static const int WITNESS_K_MAX = 5;
 
 	static const int FLAGS_STATIC = 29361188;
 	static const int FLAGS_AI_A = 29363236;
@@ -140,6 +185,14 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	protected ref array<string> m_SentinelClasses;
 	protected ref array<string> m_CensusNcol;
 	protected ref array<string> m_CensusScol;
+	protected ref array<string> m_CensusNcolAll;
+	protected ref array<string> m_WitnessNcol;
+	protected ref array<string> m_WitnessScol;
+	protected ref array<ref DSBX_QA_PersistWitnessFollow> m_WitnessFollow;
+	protected string m_WitnessJobId;
+	protected float m_WitnessEndMs;
+	protected int m_WitnessK;
+	protected bool m_WitnessWindowClosed;
 	protected ref array<string> m_PendingFinishIds;
 	protected ref array<int> m_PendingFinishTicks;
 	protected ref array<int> m_PendingFinishSeen;
@@ -166,6 +219,14 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_SentinelClasses = new array<string>();
 		m_CensusNcol = new array<string>();
 		m_CensusScol = new array<string>();
+		m_CensusNcolAll = new array<string>();
+		m_WitnessNcol = new array<string>();
+		m_WitnessScol = new array<string>();
+		m_WitnessFollow = new array<ref DSBX_QA_PersistWitnessFollow>();
+		m_WitnessJobId = "";
+		m_WitnessEndMs = 0.0;
+		m_WitnessK = 0;
+		m_WitnessWindowClosed = false;
 		m_PendingFinishIds = new array<string>();
 		m_PendingFinishTicks = new array<int>();
 		m_PendingFinishSeen = new array<int>();
@@ -235,6 +296,30 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_CensusNcol.Insert("health_hp");
 		m_CensusNcol.Insert("inv_children_n");
 		m_CensusNcol.Insert("spawn_tick_ms");
+
+		// Modo select_all_entityai_b = 1: las mismas columnas mas surface_y_m, la ultima. m_CensusNcol no se toca.
+		int ci = 0;
+		while (ci < m_CensusNcol.Count())
+		{
+			m_CensusNcolAll.Insert(m_CensusNcol.Get(ci));
+			ci = ci + 1;
+		}
+		m_CensusNcolAll.Insert("surface_y_m");
+
+		m_WitnessScol.Insert("class_name");
+		m_WitnessScol.Insert("net_id");
+		m_WitnessScol.Insert("parent_net_id");
+
+		m_WitnessNcol.Insert("sample_idx");
+		m_WitnessNcol.Insert("pos_x_m");
+		m_WitnessNcol.Insert("pos_y_m");
+		m_WitnessNcol.Insert("pos_z_m");
+		m_WitnessNcol.Insert("yaw_deg");
+		m_WitnessNcol.Insert("tick_ms");
+		m_WitnessNcol.Insert("frame");
+		m_WitnessNcol.Insert("ai_agent_b");
+		m_WitnessNcol.Insert("alive_b");
+		m_WitnessNcol.Insert("surface_y_m");
 	}
 
 	override void Init(DSBX_QA_Probe probe)
@@ -259,6 +344,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		if (verb == "per_census_start")
 			return true;
 		if (verb == "per_cleanup_qa")
+			return true;
+		if (verb == "per_witness_start")
 			return true;
 		return false;
 	}
@@ -314,6 +401,63 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		read.nv.Insert(v);
 	}
 
+	protected bool HasNumArg(DSBX_QA_Args args, string key)
+	{
+		if (!args || !args.nk || !args.nv)
+			return false;
+		int n = args.nk.Count();
+		for (int i = 0; i < n; i++)
+		{
+			if (args.nk.Get(i) == key && i < args.nv.Count())
+				return true;
+		}
+		return false;
+	}
+
+	// Entero con signo opcional y de 1 a 10 cifras (ToInt() devuelve 0 con basura y no sirve para validar).
+	// string.Get: 1_core/proto/enstring.c:448; ToAscii: enstring.c:86.
+	protected bool IsIntStr(string s)
+	{
+		int n = s.Length();
+		if (n < 1)
+			return false;
+		if (s.Get(0) == "-")
+		{
+			if (n < 2 || n > 11)
+				return false;
+		}
+		else if (n > 10)
+		{
+			return false;
+		}
+		for (int i = 0; i < n; i++)
+		{
+			int a = s.Get(i).ToAscii();
+			if (i == 0 && a == 45 && n > 1)
+				continue;
+			if (a < 48 || a > 57)
+				return false;
+		}
+		return true;
+	}
+
+	// "<high>:<low>", el formato de FormatNetId. IndexOf/Substring: enstring.c:240 y :113.
+	protected bool ParseNetIdStr(string s, out int high, out int low)
+	{
+		high = 0;
+		low = 0;
+		int sep = s.IndexOf(":");
+		if (sep <= 0 || sep >= s.Length() - 1)
+			return false;
+		string hs = s.Substring(0, sep);
+		string ls = s.Substring(sep + 1, s.Length() - sep - 1);
+		if (!IsIntStr(hs) || !IsIntStr(ls))
+			return false;
+		high = hs.ToInt();
+		low = ls.ToInt();
+		return true;
+	}
+
 	protected void EnsurePayloadHas(DSBX_QA_Read read)
 	{
 		int n = read.has.Count();
@@ -335,6 +479,66 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		if (ent && ent.IsSetForDeletion())
 			return false;
 		return true;
+	}
+
+	// Salud de los objetos del mundo, sin excepciones. Object.GetMaxHealth/GetHealth tiran una Virtual Machine Exception
+	// en objetos sin sistema de daño (restos de vehiculo del mapa, p. ej. Land_Wreck_Uaz): "No DamageSystemData or not
+	// initialized yet". Object.HasDamageSystem() (P:/scripts/3_game/entities/object.c:976) dice si el sistema de daño
+	// esta INICIALIZADO, no si el objeto lo tiene. Sin el, max_hp y health_hp valen -1 (centinela: el cable no admite
+	// NaN). Lo que crea el QA no pasa por aqui, sino por ReadQaHealth.
+	protected void ReadHealth(Object obj, out float maxHp, out float healthHp)
+	{
+		maxHp = -1.0;
+		healthHp = -1.0;
+		if (!obj || !obj.HasDamageSystem())
+			return;
+		maxHp = obj.GetMaxHealth("", "");
+		healthHp = obj.GetHealth("", "");
+	}
+
+	// Salud de lo que crea el QA: lectura directa, sin la guarda. Sus clases tienen sistema de daño, y GetMaxHealth,
+	// GetHealth y SetHealth funcionan ya al crear aunque HasDamageSystem() aun de false: la diag 7 de #22 vio false al
+	// crear, y la partida real de S-persist, que lee sin la guarda, dio el control Barrel_Yellow a 1300/1098,5 sin
+	// excepciones. Crear con el QA una clase sin sistema de daño no esta soportado (GetMaxHealth tira la excepcion).
+	protected void ReadQaHealth(Object obj, out float maxHp, out float healthHp)
+	{
+		maxHp = -1.0;
+		healthHp = -1.0;
+		if (!obj)
+			return;
+		maxHp = obj.GetMaxHealth("", "");
+		healthHp = obj.GetHealth("", "");
+	}
+
+	// Marca de salud al crear, directa y verificada: SetHealth sin la guarda y relectura. Devuelve 1 si no se pidio marca
+	// (ratio <= 0) o si la relectura coincide con max_hp * ratio a 0,01 HP; si no, 0, que el recibo da en health_mark_b:
+	// nunca se da por buena una marca sin releerla. maxHp y healthHp salen con la ultima lectura.
+	protected int ApplyQaHealthMark(Object obj, float ratio, out float maxHp, out float healthHp)
+	{
+		ReadQaHealth(obj, maxHp, healthHp);
+		if (ratio <= 0.0)
+			return 1;
+		if (!obj || maxHp <= 0.0)
+			return 0;
+		obj.SetHealth("", "", maxHp * ratio);
+		ReadQaHealth(obj, maxHp, healthHp);
+		float diff = healthHp - maxHp * ratio;
+		if (Math.AbsFloat(diff) <= 0.01)
+			return 1;
+		return 0;
+	}
+
+	// Lo que crea el QA: lo registrado en esta sesion (escena y raw, con el hijo del control) y las clases centinela, que
+	// son las que crea el QA y las que vuelven tras el reinicio sin registro. Su salud se lee directa (ReadQaHealth).
+	protected bool IsQaCreated(Object obj)
+	{
+		if (!obj)
+			return false;
+		if (FindRecordByObject(obj) != null)
+			return true;
+		if (FindRawRecordByObject(obj) != null)
+			return true;
+		return IsSentinelClass(obj.GetType());
 	}
 
 	protected string FormatNetId(Object obj)
@@ -399,7 +603,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		return dir;
 	}
 
-	protected void ReadRealLocation(Object obj, Man director, string directorUid, out string locKind, out string parentClass, out string parentNetId, out string slotName, out string ownerUid, out int invChildrenN)
+	protected void ReadRealLocation(Object obj, Man director, string directorUid, out string locKind, out string parentClass, out string parentNetId, out string slotName, out string ownerUid, out int invChildrenN, bool proxyAsCargo = false, bool allDescendants = false)
 	{
 		locKind = "ground";
 		parentClass = "";
@@ -422,14 +626,16 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		{
 			array<EntityAI> children = new array<EntityAI>();
 			inv.EnumerateInventory(InventoryTraversalType.PREORDER, children);
-			// inv_children_n son los hijos directos, como cuenta el oraculo (filas con parent_net_id == net_id,
-			// s_persist_eval.py:2290-2306) y el fake; EnumerateInventory PREORDER trae ademas los nietos (la venda
-			// del kit dentro del cofre, partida 6). GetHierarchyParent: entityai.c:885.
+			// inv_children_n: por defecto, los hijos directos, como cuenta el oraculo de S-persist (filas con
+			// parent_net_id == net_id, s_persist_eval.py:2290-2306) y el fake; EnumerateInventory PREORDER trae ademas
+			// los nietos (la venda del kit dentro del cofre, partida 6). Con allDescendants (censo
+			// select_all_entityai_b = 1, contrato de F2) cuenta todos los descendientes, como el fake en ese modo.
+			// GetHierarchyParent: entityai.c:885.
 			int chCnt = 0;
 			for (int i = 0; i < children.Count(); i++)
 			{
 				EntityAI chEnt = children.Get(i);
-				if (chEnt && chEnt != ent && chEnt.GetHierarchyParent() == ent)
+				if (chEnt && chEnt != ent && (allDescendants || chEnt.GetHierarchyParent() == ent))
 					chCnt = chCnt + 1;
 			}
 			invChildrenN = chCnt;
@@ -448,6 +654,15 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				}
 				else if (locType == InventoryLocationType.CARGO && parObj)
 				{
+					locKind = "cargo";
+					parentClass = parObj.GetType();
+					parentNetId = FormatNetId(parObj);
+					slotName = "Cargo:" + curLoc.GetIdx().ToString() + ":" + curLoc.GetRow().ToString() + ":" + curLoc.GetCol().ToString();
+				}
+				else if (proxyAsCargo && locType == InventoryLocationType.PROXYCARGO && parObj)
+				{
+					// Cargo de un objeto grande (edificio): inventorylocation.c:10. Solo en el modo select_all_entityai_b;
+					// el modo de S-persist lo sigue viendo como antes. Idx/Row/Col valen tambien en PROXYCARGO (:61-:78).
 					locKind = "cargo";
 					parentClass = parObj.GetType();
 					parentNetId = FormatNetId(parObj);
@@ -774,6 +989,11 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			HandleCensusStart(op, args, res);
 			return;
 		}
+		if (verb == "per_witness_start")
+		{
+			HandleWitnessStart(op, args, res);
+			return;
+		}
 
 		res.status = "error";
 		res.reason = "unknown_verb";
@@ -857,6 +1077,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		read.ncol.Insert("max_hp");
 		read.ncol.Insert("health_hp");
 		read.ncol.Insert("spawn_tick_ms");
+		read.ncol.Insert("health_mark_b");
 
 		int rootsN = 0;
 		int childrenN = 0;
@@ -901,6 +1122,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			read.ncell.Insert(r.m_MaxHp);
 			read.ncell.Insert(r.m_HealthHp);
 			read.ncell.Insert(r.m_SpawnTickMs);
+			read.ncell.Insert(r.m_HealthMarkB);
 		}
 		read.rows = rowCount;
 
@@ -1179,13 +1401,15 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				EntityAI ent = EntityAI.Cast(createdObj);
 				if (ent)
 				{
-					float maxHp = ent.GetMaxHealth("", "");
-					if (maxHp > 0.0 && hRatio > 0.0)
-					{
-						ent.SetHealth("", "", maxHp * hRatio);
-					}
+					float maxHp = -1.0;
+					float healthNow = -1.0;
+					rec.m_HealthMarkB = ApplyQaHealthMark(ent, hRatio, maxHp, healthNow);
 					rec.m_MaxHp = maxHp;
-					rec.m_HealthHp = ent.GetHealth("", "");
+					rec.m_HealthHp = healthNow;
+				}
+				else if (hRatio > 0.0)
+				{
+					rec.m_HealthMarkB = 0;
 				}
 				if (createdObj.IsAlive())
 					rec.m_AliveB = 1;
@@ -1232,9 +1456,10 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			}
 			else
 			{
-				// Datos ausentes distinguibles de valores observados: no hay lectura de salud.
+				// Datos ausentes distinguibles de valores observados: no hay lectura de salud ni marca confirmada.
 				rec.m_MaxHp = 0.0;
 				rec.m_HealthHp = 0.0;
+				rec.m_HealthMarkB = 0;
 				rec.m_AliveB = 0;
 				rec.m_AiAgentB = 0;
 			}
@@ -1608,6 +1833,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		string childCargoClass = GetStrArg(args, "child_cargo_class", "");
 		string targetSceneId = GetStrArg(args, "target_scene_id", "");
 		string targetParentId = GetStrArg(args, "target_parent_id", "");
+		string targetNetId = GetStrArg(args, "target_net_id", "");
 
 		float xm = GetNumArg(args, "x_m", 0.0);
 		float zm = GetNumArg(args, "z_m", 0.0);
@@ -1638,6 +1864,44 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				createdObj.SetPosition(targetPos);
 				createdObj.SetOrientation(Vector(yawDeg, 0.0, 0.0));
 			}
+		}
+		else if (mode == "foreign_in_container" && targetNetId != "")
+		{
+			// Padre por net_id del censo. Los dos rechazos salen antes de crear nada (sin efectos).
+			int tHigh = 0;
+			int tLow = 0;
+			if (!ParseNetIdStr(targetNetId, tHigh, tLow))
+			{
+				res.status = "rejected";
+				res.reason = "bad_args";
+				return;
+			}
+			// GetObjectByNetworkId(low, high): P:/scripts/3_game/global/game.c:356
+			EntityAI netParEnt = EntityAI.Cast(g_Game.GetObjectByNetworkId(tLow, tHigh));
+			if (!netParEnt || !IsObjectAlive(netParEnt))
+			{
+				res.status = "rejected";
+				res.reason = "target_not_found";
+				return;
+			}
+			// FindFirstFreeLocationForNewEntity: inventory.c:291; LocationCreateEntity: inventory.c:333
+			InventoryLocation netLoc = new InventoryLocation();
+			if (!netParEnt.GetInventory() || !netParEnt.GetInventory().FindFirstFreeLocationForNewEntity(className, FindInventoryLocationType.CARGO, netLoc))
+			{
+				res.status = "rejected";
+				res.reason = "no_cargo_space";
+				return;
+			}
+			// La busqueda puede dar hueco en el cargo de un descendiente (vanilla usa el padre devuelto, inventory.c:879):
+			// el hueco tiene que ser CARGO y el padre de la ubicacion exactamente el objetivo; si no, sin efectos.
+			// InventoryLocation.GetType/GetParent: inventorylocation.c:43 y :52.
+			if (netLoc.GetType() != InventoryLocationType.CARGO || netLoc.GetParent() != netParEnt)
+			{
+				res.status = "rejected";
+				res.reason = "no_cargo_space";
+				return;
+			}
+			createdObj = GameInventory.LocationCreateEntity(netLoc, className, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
 		}
 		else if (mode == "foreign_in_container")
 		{
@@ -1705,7 +1969,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 							if (childObj)
 								childCountN = 1;
 							EntityAI childEnt = EntityAI.Cast(childObj);
-							if (childEnt && hRatio > 0.0 && childEnt.GetMaxHealth("", "") > 0.0) childEnt.SetHealth("", "", childEnt.GetMaxHealth("", "") * hRatio);
+							float chMaxHp = -1.0;
+							float chHealthHp = -1.0;
+							if (childEnt) ApplyQaHealthMark(childEnt, hRatio, chMaxHp, chHealthHp);
 						}
 					}
 				}
@@ -1721,16 +1987,12 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 		float maxHp = 100.0;
 		float healthHp = 100.0;
+		int healthMarkB = 1;
 		EntityAI cEnt = EntityAI.Cast(createdObj);
 		if (cEnt)
-		{
-			maxHp = cEnt.GetMaxHealth("", "");
-			if (maxHp > 0.0 && hRatio > 0.0)
-			{
-				cEnt.SetHealth("", "", maxHp * hRatio);
-			}
-			healthHp = cEnt.GetHealth("", "");
-		}
+			healthMarkB = ApplyQaHealthMark(cEnt, hRatio, maxHp, healthHp);
+		else if (hRatio > 0.0)
+			healthMarkB = 0;
 
 		string directorUid = "";
 		int presentB = 0;
@@ -1774,6 +2036,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		rawRec.m_SpawnTickMs = m_Probe.NowMs();
 		rawRec.m_MaxHp = maxHp;
 		rawRec.m_HealthHp = healthHp;
+		rawRec.m_HealthMarkB = healthMarkB;
 		rawRec.m_RefEnt = createdObj;
 		rawRec.m_ChildEnt = childObj;
 		m_RawRecords.Insert(rawRec);
@@ -1800,9 +2063,10 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutNum(res.read, "child_count_n", invChildren);
 		PutNum(res.read, "tick_ms", m_Probe.NowMs());
 		PutNum(res.read, "frame", m_Probe.m_Frame);
+		PutNum(res.read, "health_mark_b", healthMarkB);
 	}
 
-	protected bool AppendEntityCensusRow(string jobId, Object obj, int inRadiusB, Man director, string directorUid, array<Object> seen)
+	protected bool AppendEntityCensusRow(string jobId, Object obj, int inRadiusB, Man director, string directorUid, array<Object> seen, bool withSurface)
 	{
 		// E1 + MEN 9/14: sin lease o sin presupuesto, la captura queda fallida
 		// (no un censo done truncado). LeaseOk: DSBX_QA_Probe.c:447.
@@ -1834,7 +2098,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		string slotName = "";
 		string ownerUid = "";
 		int invChildrenN = 0;
-		ReadRealLocation(obj, director, directorUid, locKind, parentClass, parentNetId, slotName, ownerUid, invChildrenN);
+		ReadRealLocation(obj, director, directorUid, locKind, parentClass, parentNetId, slotName, ownerUid, invChildrenN, withSurface, withSurface);
 
 		int ownB = 0;
 		string ownLogicalId = "";
@@ -1857,13 +2121,17 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 		vector pos = obj.GetPosition();
 		vector ori = obj.GetOrientation();
+		// Salud: lo que crea el QA, directa (ReadQaHealth); los objetos del mundo, con la guarda (ReadHealth: -1/-1 sin
+		// sistema de daño inicializado, p. ej. restos de vehiculo del mapa). Todos los valores de la fila se calculan
+		// antes de insertarla (AppendRow al final), asi una excepcion no deja una fila a medias.
 		float maxHp = 0.0;
 		float healthHp = 0.0;
-		EntityAI ent = EntityAI.Cast(obj);
-		if (ent)
+		if (EntityAI.Cast(obj))
 		{
-			maxHp = ent.GetMaxHealth("", "");
-			healthHp = ent.GetHealth("", "");
+			if (IsQaCreated(obj))
+				ReadQaHealth(obj, maxHp, healthHp);
+			else
+				ReadHealth(obj, maxHp, healthHp);
 		}
 
 		array<string> svals = new array<string>();
@@ -1892,6 +2160,11 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		nvals.Insert(healthHp);
 		nvals.Insert(invChildrenN);
 		nvals.Insert(spawnTickMs);
+		if (withSurface)
+		{
+			// surface_y_m, la ultima columna y solo con select_all_entityai_b = 1: SurfaceY (game.c:1176)
+			nvals.Insert(g_Game.SurfaceY(pos[0], pos[2]));
+		}
 
 		bool appended = m_Jobs.AppendRow(jobId, nvals, svals);
 		if (appended)
@@ -1912,6 +2185,27 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		float centerZ = GetNumArg(args, "center_z_m", 0.0);
 		float radiusM = GetNumArg(args, "radius_m", 60.0);
 		int includeDirectorB = (int)GetNumArg(args, "include_director_b", 0.0);
+
+		// Modo opt-in select_all_entityai_b (0 o 1, por defecto 0). Con 0 nada de lo de abajo cambia: ni filas, ni columnas,
+		// ni tope de radio (S-persist usa discos grandes). Con 1 el radio tiene que estar en (0, 120]; los rechazos salen
+		// antes de StartJob y de cualquier efecto.
+		float selectAllRaw = GetNumArg(args, "select_all_entityai_b", 0.0);
+		if (selectAllRaw != 0.0 && selectAllRaw != 1.0)
+		{
+			res.status = "rejected";
+			res.reason = "bad_args";
+			return;
+		}
+		int selectAllB = (int)selectAllRaw;
+		if (selectAllB == 1 && (radiusM <= 0.0 || radiusM > CENSUS_ALL_RADIUS_MAX))
+		{
+			res.status = "rejected";
+			res.reason = "bad_args";
+			return;
+		}
+		array<string> censusNcol = m_CensusNcol;
+		if (selectAllB == 1)
+			censusNcol = m_CensusNcolAll;
 
 		// BLOQ 6: este arranque acredita el intento de B sobre cada censo
 		// retenido; A solo se libera tras este intento o la salida acotada.
@@ -1937,7 +2231,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				}
 			}
 		}
-		string err = m_Jobs.StartJob(this, op.op_id, "per_census", m_CensusNcol, m_CensusScol, 5, 4096, 900000.0, "stop");
+		string err = m_Jobs.StartJob(this, op.op_id, "per_census", censusNcol, m_CensusScol, 5, 4096, 900000.0, "stop");
 		for (int hr = 0; hr < heldJobs.Count(); hr++)
 		{
 			DSBX_QA_Job heldBack = heldJobs.Get(hr);
@@ -2000,7 +2294,16 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				continue;
 			string cname = obj.GetType();
 			bool includeObj = false;
-			if (FindRecordByObject(obj) != null)
+			if (selectAllB == 1)
+			{
+				// Todo EntityAI del disco; lo que no es EntityAI (arboles, rocas) queda fuera.
+				if (EntityAI.Cast(obj) != null)
+					includeObj = true;
+				// Con el tope de filas ya cumplido el trabajo esta en failed/rows_cap: no se sigue recorriendo.
+				if (m_Jobs.GetState(op.op_id) != "running")
+					break;
+			}
+			else if (FindRecordByObject(obj) != null)
 				includeObj = true;
 			else if (IsSentinelClass(cname))
 				includeObj = true;
@@ -2010,7 +2313,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			if (!includeObj)
 				continue;
 
-			if (!AppendEntityCensusRow(op.op_id, obj, 1, director, directorUid, seen))
+			if (!AppendEntityCensusRow(op.op_id, obj, 1, director, directorUid, seen, selectAllB == 1))
 				break;
 			EntityAI ent = EntityAI.Cast(obj);
 			if (ent && ent.GetInventory())
@@ -2023,7 +2326,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 					EntityAI subEnt = subItems.Get(sub);
 					if (subEnt && subEnt != ent)
 					{
-						if (!AppendEntityCensusRow(op.op_id, subEnt, 1, director, directorUid, seen))
+						if (!AppendEntityCensusRow(op.op_id, subEnt, 1, director, directorUid, seen, selectAllB == 1))
 						{
 							subOk = false;
 							break;
@@ -2035,7 +2338,12 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			}
 		}
 
-		for (int r = 0; r < m_Records.Count(); r++)
+		// Las criaturas propias que salieron del disco solo cuentan en el modo de S-persist (m_Records no pinta nada
+		// en el modo select_all_entityai_b).
+		int recLimit = m_Records.Count();
+		if (selectAllB == 1)
+			recLimit = 0;
+		for (int r = 0; r < recLimit; r++)
 		{
 			DSBX_QA_PersistRecord rec = m_Records.Get(r);
 			if (!rec || !IsObjectAlive(rec.m_RefEnt))
@@ -2046,7 +2354,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			float dz = rec.m_ReqZM - centerZ;
 			if ((dx * dx + dz * dz) <= (radiusM * radiusM))
 			{
-				if (!AppendEntityCensusRow(op.op_id, rec.m_RefEnt, 0, director, directorUid, seen))
+				if (!AppendEntityCensusRow(op.op_id, rec.m_RefEnt, 0, director, directorUid, seen, selectAllB == 1))
 					break;
 			}
 		}
@@ -2063,7 +2371,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 					EntityAI dItem = dirItems.Get(di);
 					if (dItem && dItem != dirEnt)
 					{
-						if (!AppendEntityCensusRow(op.op_id, dItem, 1, director, directorUid, seen))
+						if (!AppendEntityCensusRow(op.op_id, dItem, 1, director, directorUid, seen, selectAllB == 1))
 							break;
 					}
 				}
@@ -2094,8 +2402,220 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutNum(res.read, "director_inv_count_n", invCountN);
 	}
 
+	// ---------------------------------------------------------------- creation witness (per_witness_start)
+	protected void ResetWitness()
+	{
+		DSBX_QA_Witness.Disable();
+		m_WitnessJobId = "";
+		m_WitnessEndMs = 0.0;
+		m_WitnessK = 0;
+		m_WitnessWindowClosed = false;
+		m_WitnessFollow.Clear();
+	}
+
+	protected void HandleWitnessStart(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
+	{
+		string witnessTag = GetStrArg(args, "witness_tag", "");
+		if (!HasNumArg(args, "center_x_m") || !HasNumArg(args, "center_z_m") || !HasNumArg(args, "radius_m") || !HasNumArg(args, "window_ms"))
+		{
+			res.status = "rejected";
+			res.reason = "bad_args";
+			return;
+		}
+		float centerX = GetNumArg(args, "center_x_m", 0.0);
+		float centerZ = GetNumArg(args, "center_z_m", 0.0);
+		float radiusM = GetNumArg(args, "radius_m", 0.0);
+		float windowMs = GetNumArg(args, "window_ms", 0.0);
+		float kRaw = GetNumArg(args, "witness_follow_ticks", WITNESS_K_DEFAULT);
+		int followK = (int)kRaw;
+		// Los rechazos salen antes de StartJob y de encender el gancho: sin efectos.
+		if (radiusM <= 0.0 || radiusM > WITNESS_RADIUS_MAX || windowMs <= 0.0 || windowMs > WITNESS_WINDOW_MAX_MS)
+		{
+			res.status = "rejected";
+			res.reason = "bad_args";
+			return;
+		}
+		float kBack = followK;
+		if (kRaw != kBack || followK < 1 || followK > WITNESS_K_MAX)
+		{
+			res.status = "rejected";
+			res.reason = "bad_args";
+			return;
+		}
+
+		string err = m_Jobs.StartJob(this, op.op_id, "per_witness", m_WitnessNcol, m_WitnessScol, 5, 4096, windowMs + WITNESS_TAIL_MS, "stop");
+		if (err != "")
+		{
+			res.status = "rejected";
+			res.reason = err;
+			return;
+		}
+
+		float startMs = m_Probe.NowMs();
+		m_WitnessJobId = op.op_id;
+		m_WitnessEndMs = startMs + windowMs;
+		m_WitnessK = followK;
+		m_WitnessWindowClosed = false;
+		m_WitnessFollow.Clear();
+		DSBX_QA_Witness.Enable(centerX, centerZ, radiusM, m_WitnessEndMs, m_Probe.m_Frame);
+
+		res.status = "done";
+		m_Jobs.FillStartRead(res.read, op.op_id, "per_witness");
+		PutStr(res.read, "witness_tag", witnessTag);
+		PutStr(res.read, "server_epoch", m_Probe.GetInst());
+
+		PutNum(res.read, "start_tick_ms", startMs);
+		PutNum(res.read, "start_frame", m_Probe.m_Frame);
+		PutNum(res.read, "center_x_m", centerX);
+		PutNum(res.read, "center_z_m", centerZ);
+		PutNum(res.read, "radius_m", radiusM);
+		PutNum(res.read, "window_ms", windowMs);
+		PutNum(res.read, "witness_follow_ticks", followK);
+	}
+
+	// Una fila del testigo. false si el JobMgr la rechazo (tope de filas: el trabajo ya esta en failed).
+	protected bool AppendWitnessRow(string jobId, int sampleIdx, string className, string netId, string parentNetId, float x, float y, float z, float yawDeg, float tickMs, int frame, int aiAgentB, int aliveB)
+	{
+		array<string> svals = new array<string>();
+		svals.Insert(className);
+		svals.Insert(netId);
+		svals.Insert(parentNetId);
+
+		array<float> nvals = new array<float>();
+		nvals.Insert(sampleIdx);
+		nvals.Insert(x);
+		nvals.Insert(y);
+		nvals.Insert(z);
+		nvals.Insert(yawDeg);
+		nvals.Insert(tickMs);
+		nvals.Insert(frame);
+		nvals.Insert(aiAgentB);
+		nvals.Insert(aliveB);
+		// surface_y_m, la ultima columna: SurfaceY(x, z) (game.c:1176; la misma API que el censo, :1705) con la x y la z
+		// de ESTA fila, calculada al emitirla (muestra 0: la x y la z de EEInit, en el primer tick; no se consulta el motor
+		// en EEInit). Si la entidad ya no existe, la fila lleva su ultima posicion conocida (la de EEInit si no hubo otra)
+		// y surface_y_m se calcula con esa posicion.
+		nvals.Insert(g_Game.SurfaceY(x, z));
+		return m_Jobs.AppendRow(jobId, nvals, svals);
+	}
+
+	protected void TickWitness()
+	{
+		if (m_WitnessJobId == "")
+			return;
+		string jid = m_WitnessJobId;
+		float now = m_Probe.NowMs();
+		int frame = m_Probe.m_Frame;
+		// Frame que se apunta en las capturas de EEInit del proximo intervalo.
+		DSBX_QA_Witness.s_Frame = frame;
+
+		// 1) Capturas de EEInit acumuladas desde el tick anterior. Se incorporan ANTES del seguimiento: su sample_idx 1 sale
+		//    en este mismo tick, el frame siguiente al de EEInit (frames consecutivos 0, 1, ..., K). La fila sample_idx 0 se
+		//    emite en este primer tick con la posicion, la orientacion, el tick_ms y el frame de EEInit, pero con el net_id y
+		//    el parent_net_id leidos AHORA: en EEInit el motor aun no ha asignado el net_id (sale 0:0).
+		int capN = DSBX_QA_Witness.s_Buf.Count();
+		for (int c = 0; c < capN; c++)
+		{
+			DSBX_QA_WitnessCapture cap = DSBX_QA_Witness.s_Buf.Get(c);
+			if (!cap)
+				continue;
+			DSBX_QA_PersistWitnessFollow nf = new DSBX_QA_PersistWitnessFollow();
+			nf.m_Ent = cap.m_Ent;
+			nf.m_ClassName = cap.m_ClassName;
+			nf.m_NetId = cap.m_NetId;
+			nf.m_ParentNetId = cap.m_ParentNetId;
+			nf.m_LastX = cap.m_PosX;
+			nf.m_LastY = cap.m_PosY;
+			nf.m_LastZ = cap.m_PosZ;
+			nf.m_LastYawDeg = cap.m_YawDeg;
+			nf.m_EEInitTickMs = cap.m_TickMs;
+			nf.m_EEInitFrame = cap.m_Frame;
+			nf.m_AiAgentB = cap.m_AiAgentB;
+			nf.m_PendingSample0 = true;
+			nf.m_NextSample = 1;
+			m_WitnessFollow.Insert(nf);
+		}
+		DSBX_QA_Witness.s_Buf.Clear();
+
+		// 1b) Filas sample_idx 0 (antes que ninguna muestra de seguimiento: el orden de las filas no cambia).
+		int s0Count = m_WitnessFollow.Count();
+		for (int z = 0; z < s0Count; z++)
+		{
+			DSBX_QA_PersistWitnessFollow s0 = m_WitnessFollow.Get(z);
+			if (!s0 || !s0.m_PendingSample0)
+				continue;
+			string s0Net = "0:0";
+			string s0Parent = "";
+			int s0Alive = 0;
+			if (IsObjectAlive(s0.m_Ent))
+			{
+				s0Alive = 1;
+				s0Net = FormatNetId(s0.m_Ent);
+				EntityAI s0Ent = EntityAI.Cast(s0.m_Ent);
+				if (s0Ent && s0Ent.GetHierarchyParent())
+					s0Parent = FormatNetId(s0Ent.GetHierarchyParent());
+			}
+			s0.m_NetId = s0Net;
+			s0.m_ParentNetId = s0Parent;
+			s0.m_PendingSample0 = false;
+			if (!AppendWitnessRow(jid, 0, s0.m_ClassName, s0Net, s0Parent, s0.m_LastX, s0.m_LastY, s0.m_LastZ, s0.m_LastYawDeg, s0.m_EEInitTickMs, s0.m_EEInitFrame, s0.m_AiAgentB, s0Alive))
+				return;
+		}
+
+		// 2) Muestras de seguimiento (sample_idx 1..K), incluidas las recien capturadas.
+		//    Si un AppendRow falla, el trabajo ya acabo (failed/rows_cap) y OnJobEnd limpio el estado: salir sin tocar nada.
+		array<ref DSBX_QA_PersistWitnessFollow> keep = new array<ref DSBX_QA_PersistWitnessFollow>();
+		int fCount = m_WitnessFollow.Count();
+		for (int f = 0; f < fCount; f++)
+		{
+			DSBX_QA_PersistWitnessFollow fol = m_WitnessFollow.Get(f);
+			if (!fol)
+				continue;
+			int aliveB = 0;
+			int aiB = 0;
+			string parentNetId = fol.m_ParentNetId;
+			string netId = fol.m_NetId;
+			if (IsObjectAlive(fol.m_Ent))
+			{
+				aliveB = 1;
+				vector fpos = fol.m_Ent.GetPosition();
+				vector fori = fol.m_Ent.GetOrientation();
+				fol.m_LastX = fpos[0];
+				fol.m_LastY = fpos[1];
+				fol.m_LastZ = fpos[2];
+				fol.m_LastYawDeg = fori[0];
+				netId = FormatNetId(fol.m_Ent);
+				EntityAI fEnt = EntityAI.Cast(fol.m_Ent);
+				parentNetId = "";
+				if (fEnt && fEnt.GetHierarchyParent())
+					parentNetId = FormatNetId(fEnt.GetHierarchyParent());
+				DayZCreatureAI fCreature = DayZCreatureAI.Cast(fol.m_Ent);
+				if (fCreature && fCreature.GetAIAgent() != null)
+					aiB = 1;
+			}
+			if (!AppendWitnessRow(jid, fol.m_NextSample, fol.m_ClassName, netId, parentNetId, fol.m_LastX, fol.m_LastY, fol.m_LastZ, fol.m_LastYawDeg, now, frame, aiB, aliveB))
+				return;
+			fol.m_NextSample = fol.m_NextSample + 1;
+			if (fol.m_NextSample <= m_WitnessK)
+				keep.Insert(fol);
+		}
+		m_WitnessFollow = keep;
+
+		// 3) Vencida la ventana se deja de capturar; el trabajo acaba cuando ya no queda seguimiento pendiente.
+		if (!m_WitnessWindowClosed && now >= m_WitnessEndMs)
+		{
+			m_WitnessWindowClosed = true;
+			DSBX_QA_Witness.Disable();
+		}
+		if (m_WitnessWindowClosed && m_WitnessFollow.Count() == 0)
+		{
+			m_Jobs.EndJob(jid, "done", "");
+		}
+	}
+
 	override void OnTick(float timeslice)
 	{
+		TickWitness();
 		// BLOQ 6: la ocupacion se mantiene hasta acreditar el intento de B
 		// (m_PendingFinishSeen) o hasta CENSUS_HOLD_MAX_MS desde el inicio;
 		// el solapamiento se acredita con snap_tick de B < released_tick de A.
@@ -2141,6 +2661,11 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 	override void OnJobEnd(string job_id, string state, string reason)
 	{
+		// Cualquier final del trabajo (done, rows_cap, lease_expired, job_timeout, shutdown) apaga el gancho.
+		if (m_WitnessJobId == job_id)
+		{
+			ResetWitness();
+		}
 		int i = 0;
 		while (i < m_PendingFinishIds.Count())
 		{
@@ -2184,10 +2709,11 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		EntityAI ent = EntityAI.Cast(obj);
 		if (!ent)
 			return false;
-		float maxHp = ent.GetMaxHealth("", "");
+		float maxHp = -1.0;
+		float hp = -1.0;
+		ReadQaHealth(ent, maxHp, hp);
 		if (maxHp <= 0.0)
 			return false;
-		float hp = ent.GetHealth("", "");
 		float d1 = hp - maxHp * 0.7325;
 		if (d1 < 0.0)
 			d1 = -d1;
@@ -2340,6 +2866,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 	override void OnShutdown()
 	{
+		// Cualquier final apaga el testigo, tambien el apagado del servidor.
+		ResetWitness();
 		// La base tiene que sobrevivir al reinicio de t4, y la limpieza la hacen t6 y la restauracion en frio.
 	}
 }

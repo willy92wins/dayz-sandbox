@@ -5,10 +5,19 @@ propias creadas con ECE_NOPERSISTENCY_WORLD, objetos ajenos y un control persist
 reseteo por escena con retencion de descendientes ajenos o de otra escena, censos por
 disco con trabajo protegido (resource per_census, deadman stop) y reinicio de mundo que
 solo conserva lo creado sin ECE_NOPERSISTENCY_WORLD.
+
+Extensiones para F2 (PR "sonda: extensiones para F2"), con la misma forma de cable que el .c:
+  * per_census_start con nk select_all_entityai_b = 1: todo lo del disco (mundo S-persist mas los objetos del
+    mapa simulado: edificios, contenedores con inventario anidado, una criatura), inventario recorrido en
+    PREORDER, radio en (0, 120] y columna surface_y_m (la ultima, solo en este modo);
+  * per_spawn_raw foreign_in_container con sk target_net_id "<high>:<low>" (rechazos target_not_found y
+    no_cargo_space, sin efectos);
+  * per_witness_start: testigo de creacion (resource per_witness) con muestras sample_idx 0 (EEInit) y 1..K.
 """
 
 import json
 import math
+import re
 import secrets
 from pathlib import Path
 
@@ -26,6 +35,7 @@ SERVER_VERBS = frozenset({
     "per_spawn_raw",
     "per_census_start",
     "per_cleanup_qa",
+    "per_witness_start",
 })
 
 AREA_CENTERS = {
@@ -72,6 +82,134 @@ CENSUS_NCOL = [
     "spawn_tick_ms",
 ]
 
+CENSUS_NCOL_ALL = CENSUS_NCOL + ["surface_y_m"]
+CENSUS_ALL_RADIUS_MAX = 120.0
+
+WITNESS_SCOL = ["class_name", "net_id", "parent_net_id"]
+WITNESS_NCOL = [
+    "sample_idx",
+    "pos_x_m",
+    "pos_y_m",
+    "pos_z_m",
+    "yaw_deg",
+    "tick_ms",
+    "frame",
+    "ai_agent_b",
+    "alive_b",
+    "surface_y_m",
+]
+WITNESS_PAGE_SIZE = 5
+WITNESS_MAX_ROWS = 4096
+WITNESS_RADIUS_MAX = 120.0
+WITNESS_WINDOW_MAX_MS = 600000.0
+WITNESS_TAIL_MS = 5000.0
+WITNESS_K_DEFAULT = 3
+WITNESS_K_MAX = 5
+
+# Dimensiones (ancho, alto) de cada clase segun su config vanilla (DZ/...): itemSize[] y itemsCargoSize[].
+#   WoodenCrate  DZ/gear/camping/config.cpp:10074 (itemSize 10,5; cargo :10180 = 10,5)
+#   SeaChest     DZ/gear/camping/config.cpp:9820  (itemSize 10,10; cargo :9846 = 10,10)
+#   Barrel_*     DZ/gear/containers/config.cpp:19 Barrel_ColorBase (itemSize 10,15; cargo :95 = 10,15)
+#   FirstAidKit  DZ/gear/containers/config.cpp:454 (itemSize 3,3; cargo 3,3)
+#   Pot          DZ/gear/cooking/config.cpp:1106 (itemSize 4,3; cargo 4,3)
+#   Rag          DZ/gear/consumables/config.cpp:494 (itemSize 1,3; sin cargo)
+#   Apple        DZ/gear/food/config.cpp:4302 (itemSize 1,1; sin cargo: ni Edible_Base ni Inventory_Base, DZ/data/config.cpp:3332 y :3145, lo declaran)
+#   OffroadHatchback DZ/vehicles/wheeled/config.cpp:1242 (cargo 10,30, :1495)
+# Lo que no esta en CARGO_SIZE no tiene cargo; lo que no esta en ITEM_SIZE ocupa 1x1.
+ITEM_SIZE = {
+    "WoodenCrate": (10, 5),
+    "SeaChest": (10, 10),
+    "Barrel_Blue": (10, 15),
+    "Barrel_Green": (10, 15),
+    "Barrel_Red": (10, 15),
+    "Barrel_Yellow": (10, 15),
+    "FirstAidKit": (3, 3),
+    "Pot": (4, 3),
+    "Rag": (1, 3),
+    "Apple": (1, 1),
+}
+CARGO_SIZE = {
+    "WoodenCrate": (10, 5),
+    "SeaChest": (10, 10),
+    "Barrel_Blue": (10, 15),
+    "Barrel_Green": (10, 15),
+    "Barrel_Red": (10, 15),
+    "Barrel_Yellow": (10, 15),
+    "FirstAidKit": (3, 3),
+    "Pot": (4, 3),
+    "OffroadHatchback": (10, 30),
+}
+
+# Objetos del mapa simulado (no los crea S-persist ni los toca cleanup/reinicio): solo los ve el censo con
+# select_all_entityai_b = 1. Los edificios tienen net_id real (medido en partida: parte alta negativa, p. ej.
+# -2147225600:847447385), nunca 0:0.
+# El slot "Cargo:idx:fila:col" coloca el hijo en la rejilla del padre (fila y columna de su esquina).
+# (net_id, class_name, parent_net_id, slot_name, x, z, ai_agent)
+BARRACKS_NET_ID = "-2147225600:847447385"
+GARAGE_NET_ID = "-2147225344:847447400"
+NO_DAMAGE_SYSTEM_CLASSES = frozenset({"Land_Wreck_Uaz"})
+NO_HEALTH = -1.0  # centinela de max_hp y health_hp sin sistema de daño (el cable no admite NaN)
+MAP_OBJECT_SPECS = (
+    (BARRACKS_NET_ID, "Land_Mil_Barracks1", "", "", 6170.0, 7643.0, False),
+    ("1:65", "Rag", BARRACKS_NET_ID, "Cargo:2:1:3", 6170.0, 7643.0, False),  # cargo proxy del edificio (PROXYCARGO)
+    (GARAGE_NET_ID, "Land_Garage_Row", "", "", 6120.0, 7600.0, False),
+    ("1:50", "Barrel_Blue", "", "", 6190.0, 7650.0, False),
+    ("1:51", "Rag", "1:50", "Cargo:0:0:0", 6190.0, 7650.0, False),
+    ("1:52", "WoodenCrate", "", "", 6150.0, 7620.0, False),
+    ("1:53", "Pot", "1:52", "Cargo:0:0:0", 6150.0, 7620.0, False),
+    ("1:54", "Apple", "1:53", "Cargo:0:0:0", 6150.0, 7620.0, False),
+    ("1:55", "OffroadHatchback", "", "", 6200.0, 7700.0, False),
+    ("1:56", "HatchbackWheel", "1:55", "Wheel_1_1", 6200.0, 7700.0, False),
+    ("1:57", "Zmbf_PoliceCopBlue", "", "", 6140.0, 7680.0, True),
+    ("1:58", "Barrel_Green", "", "", 6288.0, 7643.0, False),
+    ("1:59", "Barrel_Red", "", "", 6500.0, 7643.0, False),
+    # Resto de vehiculo del mapa, sin sistema de daño (Object.HasDamageSystem() = false): en el motor GetMaxHealth y
+    # GetHealth tiran una excepcion de la VM ("No DamageSystemData"); la sonda lo lee como max_hp = health_hp = -1.
+    ("1:68", "Land_Wreck_Uaz", "", "", 6200.0, 7650.0, False),
+    # Pot lleno de verdad para un Rag (1x3): la manzana ocupa (0,0) y el botiquin 3x3 las columnas 1-3; el botiquin
+    # tiene hueco libre, pero no es el objetivo (el padre de la ubicacion encontrada no seria el Pot).
+    ("1:66", "Pot", "", "", 6160.0, 7640.0, False),
+    ("1:67", "Apple", "1:66", "Cargo:0:0:0", 6160.0, 7640.0, False),
+    ("1:60", "FirstAidKit", "1:66", "Cargo:0:0:1", 6160.0, 7640.0, False),
+    # Botiquin 3x3 lleno con tres Rag 1x3 y sin subcontenedores.
+    ("1:61", "FirstAidKit", "", "", 6165.0, 7635.0, False),
+    ("1:62", "Rag", "1:61", "Cargo:0:0:0", 6165.0, 7635.0, False),
+    ("1:63", "Rag", "1:61", "Cargo:0:0:1", 6165.0, 7635.0, False),
+    ("1:64", "Rag", "1:61", "Cargo:0:0:2", 6165.0, 7635.0, False),
+)
+
+# El testigo del .c se engancha en EEInit de RAICES DE SCRIPT (EntityAI es del motor y no se puede modar): ItemBase,
+# ZombieBase, AnimalBase, CarScript y BuildingBase (+ 4 clases vanilla que cortan la cadena por debajo de una raiz).
+# El fake solo captura lo que en el .c derivaria de una de ellas; lo demas (jugadores, barcos, clases desconocidas)
+# no se ve, como en el motor. Prefijos y clases tomados de la config vanilla (DZ/...) y de los scripts.
+HOOK_ROOT_PREFIX = (
+    ("Land_", "BuildingBase"),   # House > BuildingBase
+    ("Zmb", "ZombieBase"),
+    ("Animal_", "AnimalBase"),
+    ("Offroad", "CarScript"),
+    ("Barrel_", "ItemBase"),
+)
+HOOK_ROOT_CLASSES = {
+    "WoodenCrate": "ItemBase", "SeaChest": "ItemBase", "FirstAidKit": "ItemBase", "Pot": "ItemBase",
+    "Rag": "ItemBase", "Apple": "ItemBase", "HatchbackWheel": "ItemBase", "LargeTent": "ItemBase",
+    "MediumTent": "ItemBase", "CarTent": "ItemBase", "CamoNet": "ItemBase", "Fireplace": "ItemBase",
+    "Spotlight": "ItemBase", "PowerGenerator": "ItemBase", "Jeans_Blue": "ItemBase",
+    "ChristmasTree": "ChristmasTree",  # vanilla corta la cadena: lo cubre su propio modded class
+}
+
+
+def hook_root(class_name):
+    """Raiz enganchada que cubre esta clase en el .c, o None si el testigo no la ve."""
+    root = HOOK_ROOT_CLASSES.get(class_name)
+    if root is not None:
+        return root
+    low = class_name.lower()
+    for prefix, root in HOOK_ROOT_PREFIX:
+        if low.startswith(prefix.lower()):
+            return root
+    return None
+
+
 CENSUS_PAGE_SIZE = 5
 CENSUS_MAX_ROWS = 4096
 CENSUS_MAX_MS = 900000.0
@@ -83,6 +221,7 @@ DIRECTOR_ROOT_NET = "1:2"
 DIRECTOR_JEANS_NET = "1:10"
 DIRECTOR_APPLE_NET = "1:11"
 ZERO_PERS_ID = "0:0:0:0"
+NET_ID_RE = re.compile(r"-?[0-9]{1,10}:-?[0-9]{1,10}")
 
 
 def _surface_y(x, z):
@@ -168,6 +307,8 @@ class PersistFakeExt(FakeExt):
         self.census_failed = {}
         self.director_items = []
         self.director_uid = DIRECTOR_UID
+        self.map_objects = []
+        self.witness = None
         self.next_pers_seq = 1
 
     def _state_file(self):
@@ -296,6 +437,7 @@ class PersistFakeExt(FakeExt):
         self.jobs = jobs
         self.epoch = peer.inst
         self._build_director()
+        self._build_map()
         self.raw_net_ids.clear()
         self.qa_net_ids.clear()
         if self._load_state():
@@ -363,7 +505,7 @@ class PersistFakeExt(FakeExt):
         self.next_pers_seq = seq + 1
         return "%d:0:0:0" % seq
 
-    def _add_entity(self, **kw):
+    def _make_entity(self, **kw):
         ent = {
             "net_id": kw["net_id"],
             "pers_id": kw.get("pers_id", ZERO_PERS_ID),
@@ -387,8 +529,133 @@ class PersistFakeExt(FakeExt):
             "scene_id": kw.get("scene_id", ""),
             "area_id": kw.get("area_id", ""),
         }
-        self.world[ent["net_id"]] = ent
         return ent
+
+    def _health_at_creation(self, cname, ratio):
+        """(max_hp, health_hp, mark_b) de lo que crea el QA, como lo lee la sonda justo despues de crearlo y marcarlo
+        (ApplyQaHealthMark del .c: SetHealth directo y relectura). mark_b = no se pidio marca o la relectura la
+        confirma. Una clase sin sistema de daño (NO_DAMAGE_SYSTEM_CLASSES) no tiene salud que leer: -1/-1 y, con marca
+        pedida, mark_b = False; en el motor crearla con el QA no esta soportado (GetMaxHealth tira la excepcion)."""
+        if cname in NO_DAMAGE_SYSTEM_CLASSES:
+            return NO_HEALTH, NO_HEALTH, ratio <= 0.0
+        hp = DEFAULT_MAX_HP * ratio if ratio > 0.0 else DEFAULT_MAX_HP
+        return DEFAULT_MAX_HP, hp, True
+
+    def _add_entity(self, **kw):
+        ent = self._make_entity(**kw)
+        self.world[ent["net_id"]] = ent
+        self._witness_capture(ent)
+        return ent
+
+    def _build_map(self):
+        self.map_objects = []
+        for net_id, cname, parent_net, slot, x, z, ai in MAP_OBJECT_SPECS:
+            parent_class = ""
+            if parent_net:
+                for prev in self.map_objects:
+                    if prev["net_id"] == parent_net:
+                        parent_class = prev["class_name"]
+            self.map_objects.append(self._make_entity(
+                net_id=net_id,
+                pers_id=ZERO_PERS_ID,
+                class_name=cname,
+                cat="map",
+                loc_kind="cargo" if (parent_net and slot.startswith("Cargo")) else ("attachment" if parent_net else "ground"),
+                parent_net_id=parent_net,
+                parent_class=parent_class,
+                slot_name=slot,
+                owner_uid="",
+                pos=(x, _surface_y(x, z), z),
+                ori=(0.0, 0.0, 0.0),
+                max_hp=NO_HEALTH if cname in NO_DAMAGE_SYSTEM_CLASSES else DEFAULT_MAX_HP,
+                health_hp=NO_HEALTH if cname in NO_DAMAGE_SYSTEM_CLASSES else DEFAULT_MAX_HP,
+                spawn_tick_ms=0.0,
+                persistent=False,
+                ai_agent=ai,
+            ))
+
+    def _find_by_net_id(self, net_id):
+        # GetObjectByNetworkId: 0:0 es "sin id de red asignado", no resuelve nada.
+        if net_id == "0:0":
+            return None
+        ent = self.world.get(net_id)
+        if ent is not None and ent["alive"]:
+            return ent
+        for obj in self.map_objects:
+            if obj["net_id"] == net_id and obj["alive"]:
+                return obj
+        return None
+
+    def _cargo_children(self, net_id):
+        out = []
+        for ent in list(self.world.values()) + self.map_objects:
+            if ent["alive"] and ent["parent_net_id"] == net_id and ent["loc_kind"] == "cargo":
+                out.append(ent)
+        return out
+
+    @staticmethod
+    def _slot_rc(slot_name):
+        parts = str(slot_name).split(":")
+        if len(parts) == 4 and parts[0] == "Cargo":
+            try:
+                return int(parts[2]), int(parts[3])
+            except ValueError:
+                return None
+        return None
+
+    def _first_fit(self, parent, item_class):
+        """Primer hueco (fila y columna de la esquina) en la rejilla de cargo de parent, o None."""
+        dims = CARGO_SIZE.get(parent["class_name"])
+        if dims is None:
+            return None
+        cols, rows = dims
+        iw, ih = ITEM_SIZE.get(item_class, (1, 1))
+        used = set()
+        for child in self._cargo_children(parent["net_id"]):
+            rc = self._slot_rc(child["slot_name"])
+            if rc is None:
+                continue
+            cw, ch = ITEM_SIZE.get(child["class_name"], (1, 1))
+            for r in range(rc[0], rc[0] + ch):
+                for c in range(rc[1], rc[1] + cw):
+                    used.add((r, c))
+        for r in range(0, rows - ih + 1):
+            for c in range(0, cols - iw + 1):
+                if all((rr, cc) not in used for rr in range(r, r + ih) for cc in range(c, c + iw)):
+                    return r, c
+        return None
+
+    def _find_free_location(self, target, item_class):
+        """FindFirstFreeLocationForNewEntity(CARGO): primero el cargo del objetivo y despues el de sus descendientes
+        en PREORDER (vanilla puede devolver el hueco de un subcontenedor, inventory.c:879). Devuelve (padre, slot)."""
+        for cand in [target] + self._preorder_children(target["net_id"]):
+            fit = self._first_fit(cand, item_class)
+            if fit is not None:
+                return cand, "Cargo:0:%d:%d" % fit
+        return None
+
+    def _children_index(self):
+        """parent_net_id -> hijos vivos, en el orden de recorrido de siempre (mundo y despues mapa)."""
+        index = {}
+        for ent in list(self.world.values()) + self.map_objects:
+            if ent["alive"] and ent["parent_net_id"] != "":
+                index.setdefault(ent["parent_net_id"], []).append(ent)
+        return index
+
+    def _preorder_children(self, net_id, index=None):
+        # Hijos de net_id en PREORDER (mundo y mapa), como EnumerateInventory(PREORDER) menos la raiz. El censo del
+        # modo 1 pasa un indice construido una vez: recorrer el mundo entero en cada nivel y en cada fila lo hacia
+        # cuadratico con miles de raices, y con la guarda de lease por fila de S-persist el reloj real del fake lo
+        # hacia caducar a mitad de la captura (en el motor la captura va en un frame, con GetTickTime constante).
+        if net_id == "":
+            return []
+        if index is None:
+            index = self._children_index()
+        out = []
+        for ent in index.get(net_id, []):
+            out.append(ent)
+            out.extend(self._preorder_children(ent["net_id"], index))
+        return out
 
     def _record_by(self, scene_id, logical_id):
         for rec in self.records:
@@ -398,7 +665,7 @@ class PersistFakeExt(FakeExt):
 
     def _children_count(self, net_id):
         n = 0
-        for ent in self.world.values():
+        for ent in list(self.world.values()) + self.map_objects:
             if ent["alive"] and ent["parent_net_id"] == net_id:
                 n += 1
         return n
@@ -473,7 +740,7 @@ class PersistFakeExt(FakeExt):
                 self._drop_records([rec])
         return True
 
-    def _census_row(self, ent, in_radius):
+    def _census_row(self, ent, in_radius, deep=False, index=None):
         return {
             "class_name": ent["class_name"],
             "loc_kind": ent["loc_kind"],
@@ -496,8 +763,11 @@ class PersistFakeExt(FakeExt):
             "roll_deg": float(ent["ori"][2]),
             "max_hp": float(ent["max_hp"]),
             "health_hp": float(ent["health_hp"]),
-            "inv_children_n": float(self._children_count(ent["net_id"])),
+            # El .c cuenta con EnumerateInventory(PREORDER): todos los descendientes. El modo 0 del fake sigue
+            # contando hijos directos (S-persist); el modo 1 cuenta como el .c.
+            "inv_children_n": float(len(self._preorder_children(ent["net_id"], index)) if deep else self._children_count(ent["net_id"])),
             "spawn_tick_ms": float(ent["spawn_tick_ms"]),
+            "surface_y_m": float(_surface_y(ent["pos"][0], ent["pos"][2])),
         }
 
     # ------------------------------------------------------------------ verbs
@@ -520,6 +790,8 @@ class PersistFakeExt(FakeExt):
             return self._op_spawn_raw(args_unpacked)
         if verb == "per_census_start":
             return self._op_census_start(op, args_unpacked, fault)
+        if verb == "per_witness_start":
+            return self._op_witness_start(op, args_unpacked)
         return ("rejected", "unknown_verb", wire.empty_payload())
 
     def _op_status(self, args_unpacked):
@@ -638,6 +910,7 @@ class PersistFakeExt(FakeExt):
                     "q9_dx_m": 0.0, "q9_dy_m": 0.0, "q9_dz_m": 0.0, "q9_err_3d_m": 0.0,
                     "q9_yaw_deg": float(rent["ori"][0]), "q9_pitch_deg": float(rent["ori"][1]), "q9_roll_deg": float(rent["ori"][2]),
                     "max_hp": float(rent["max_hp"]), "health_hp": float(rent["health_hp"]), "spawn_tick_ms": float(rent["spawn_tick_ms"]),
+                    "health_mark_b": 0.0,
                 })
                 continue
             pid = str(row.get("parent_id", ""))
@@ -648,8 +921,7 @@ class PersistFakeExt(FakeExt):
             rz = float(row.get("req_z_m", 0.0))
             ryaw = float(row.get("req_yaw_deg", 0.0))
             ratio = float(row.get("health_mark_ratio", 0.0))
-            max_hp = DEFAULT_MAX_HP
-            hp = max_hp * ratio if ratio > 0.0 else max_hp
+            max_hp, hp, mark_b = self._health_at_creation(cname, ratio)
             ai_b = cat in ("infected", "animal")
             if pid == "":
                 gy = _surface_y(rx, rz)
@@ -677,6 +949,7 @@ class PersistFakeExt(FakeExt):
                         "q9_dx_m": 0.0, "q9_dy_m": 0.0, "q9_dz_m": 0.0, "q9_err_3d_m": 0.0,
                         "q9_yaw_deg": 0.0, "q9_pitch_deg": 0.0, "q9_roll_deg": 0.0,
                         "max_hp": 0.0, "health_hp": 0.0, "spawn_tick_ms": now_ms,
+                        "health_mark_b": 0.0,
                     })
                     continue
                 pos = parent["pos"]
@@ -732,6 +1005,7 @@ class PersistFakeExt(FakeExt):
                 "spawn_tick_ms": now_ms,
                 "max_hp": max_hp,
                 "health_hp": hp,
+                "mark_b": 1.0 if mark_b else 0.0,
             })
             if persistent:
                 self.qa_net_ids.add(net_id)
@@ -760,6 +1034,7 @@ class PersistFakeExt(FakeExt):
                 "max_hp": max_hp,
                 "health_hp": hp,
                 "spawn_tick_ms": now_ms,
+                "health_mark_b": 1.0 if mark_b else 0.0,
             })
         if root_positions:
             cx = sum(p[0] for p in root_positions) / float(len(root_positions))
@@ -796,7 +1071,7 @@ class PersistFakeExt(FakeExt):
             "ok_b", "alive_b", "ai_agent_b", "req_y_m", "q9_x_m", "q9_y_m",
             "q9_z_m", "q9_dx_m", "q9_dy_m", "q9_dz_m", "q9_err_3d_m",
             "q9_yaw_deg", "q9_pitch_deg", "q9_roll_deg", "max_hp",
-            "health_hp", "spawn_tick_ms",
+            "health_hp", "spawn_tick_ms", "health_mark_b",
         ]
         scol = [
             "logical_id", "class_name", "net_id", "obs_loc_kind",
@@ -1019,6 +1294,7 @@ class PersistFakeExt(FakeExt):
         child_class = strs.get("child_cargo_class", "")
         target_scene = strs.get("target_scene_id", "")
         target_parent = strs.get("target_parent_id", "")
+        target_net = strs.get("target_net_id", "")
         x_m = float(nums.get("x_m", 0.0))
         z_m = float(nums.get("z_m", 0.0))
         yaw = float(nums.get("yaw_deg", 0.0))
@@ -1027,11 +1303,9 @@ class PersistFakeExt(FakeExt):
             return ("rejected", "bad_args", wire.empty_payload())
         if not self.peer.lease_valid():
             return ("error", "lease_expired", wire.empty_payload())
-        max_hp = DEFAULT_MAX_HP
-        hp = max_hp * ratio if ratio > 0.0 else max_hp
+        max_hp, hp, mark_b = self._health_at_creation(cname, ratio)
         now_ms = float(self.peer.local_ms())
         persistent = mode == "persistent_control"
-        pers_id = self._alloc_pers_id()
         loc_kind = "ground"
         parent_net = ""
         parent_class = ""
@@ -1043,7 +1317,26 @@ class PersistFakeExt(FakeExt):
             if _dist2(x_m, z_m, cx, cz) <= 60.0:
                 area_id = aid
                 break
-        if mode == "foreign_in_container":
+        if mode == "foreign_in_container" and target_net != "":
+            # Padre por net_id (GetObjectByNetworkId). Los rechazos salen antes de crear nada: sin efectos.
+            if not NET_ID_RE.fullmatch(target_net):
+                return ("rejected", "bad_args", wire.empty_payload())
+            tgt_ent = self._find_by_net_id(target_net)
+            if tgt_ent is None:
+                return ("rejected", "target_not_found", wire.empty_payload())
+            # El hueco tiene que ser CARGO y su padre exactamente el objetivo (como el .c con GetParent()); si el
+            # unico hueco esta en un subcontenedor, rechazo sin efectos.
+            found = self._find_free_location(tgt_ent, cname)
+            if found is None or found[0] is not tgt_ent:
+                return ("rejected", "no_cargo_space", wire.empty_payload())
+            loc_kind = "cargo"
+            parent_net = tgt_ent["net_id"]
+            parent_class = tgt_ent["class_name"]
+            slot_name = found[1]
+            pos = tgt_ent["pos"]
+            ori = tgt_ent["ori"]
+            area_id = tgt_ent["area_id"]
+        elif mode == "foreign_in_container":
             tgt = self._record_by(target_scene, target_parent)
             if tgt is None:
                 return ("rejected", "unknown_entity", wire.empty_payload())
@@ -1055,6 +1348,9 @@ class PersistFakeExt(FakeExt):
             pos = tgt_ent["pos"]
             ori = tgt_ent["ori"]
             area_id = tgt_ent["area_id"]
+        # Los identificadores se asignan despues de todas las validaciones: un rechazo no consume ni net_id ni pers_id
+        # (Sol sobre fb2dcb8: el pers_id se asignaba antes y el rechazo dejaba un efecto observable).
+        pers_id = self._alloc_pers_id()
         net_id = self._alloc_net_id()
         ent = self._add_entity(
             net_id=net_id,
@@ -1124,6 +1420,7 @@ class PersistFakeExt(FakeExt):
             "child_count_n": float(child_count),
             "tick_ms": now_ms,
             "frame": float(self.peer.frame),
+            "health_mark_b": 1.0 if mark_b else 0.0,
         }
         payload = wire.pack_payload(scalars_str=s, scalars_num=n)
         self._save_state()
@@ -1139,7 +1436,15 @@ class PersistFakeExt(FakeExt):
         center_z = float(nums.get("center_z_m", 0.0))
         radius = float(nums.get("radius_m", 60.0))
         include_dir = int(round(float(nums.get("include_director_b", 0.0))))
+        select_all_raw = float(nums.get("select_all_entityai_b", 0.0))
         if not area_tag:
+            return ("rejected", "bad_args", wire.empty_payload())
+        # Modo opt-in select_all_entityai_b: con 0 nada cambia (ni filas, ni columnas, ni tope de radio);
+        # con 1 el radio va en (0, 120]. Los rechazos salen antes de cualquier efecto.
+        if select_all_raw not in (0.0, 1.0):
+            return ("rejected", "bad_args", wire.empty_payload())
+        select_all = int(select_all_raw)
+        if select_all == 1 and not (0.0 < radius <= CENSUS_ALL_RADIUS_MAX):
             return ("rejected", "bad_args", wire.empty_payload())
         if fault == "drop_ctrl_pre_restart":
             for net_id in list(self.world.keys()):
@@ -1161,7 +1466,7 @@ class PersistFakeExt(FakeExt):
             self,
             job_id,
             "per_census",
-            list(CENSUS_NCOL),
+            list(CENSUS_NCOL_ALL if select_all == 1 else CENSUS_NCOL),
             list(CENSUS_SCOL),
             CENSUS_PAGE_SIZE,
             CENSUS_MAX_ROWS,
@@ -1176,19 +1481,45 @@ class PersistFakeExt(FakeExt):
         snap_ms = float(self.peer.local_ms())
         snap_frame = int(self.peer.frame)
         rows = []
-        for ent in self.world.values():
-            if not ent["alive"]:
-                continue
-            if ent["owner_uid"] == self.director_uid:
-                if include_dir == 1:
+        if select_all == 1:
+            # Todo lo del disco (mundo S-persist y mapa simulado): cada raiz seguida de su inventario en PREORDER.
+            # El director no es raiz del censo; su inventario solo entra con include_director_b = 1.
+            # Seleccion como el .c: esfera de GetObjectsAtPosition3D centrada en (cx, SurfaceY(cx, cz), cz), sin filtro
+            # horizontal (HandleCensusStart: centerPos). Una raiz 116 m por encima del centro queda fuera con r = 115.
+            center_y = _surface_y(center_x, center_z)
+            index = self._children_index()
+            for ent in list(self.world.values()) + self.map_objects:
+                if not ent["alive"] or ent["parent_net_id"] != "" or ent["owner_uid"] == self.director_uid:
+                    continue
+                d3 = math.sqrt(
+                    (float(ent["pos"][0]) - center_x) ** 2
+                    + (float(ent["pos"][1]) - center_y) ** 2
+                    + (float(ent["pos"][2]) - center_z) ** 2
+                )
+                if d3 > radius:
+                    continue
+                rows.append(self._census_row(ent, 1, deep=True, index=index))
+                for sub in self._preorder_children(ent["net_id"], index):
+                    rows.append(self._census_row(sub, 1, deep=True, index=index))
+            if include_dir == 1:
+                for ent in self.world.values():
+                    if ent["alive"] and ent["owner_uid"] == self.director_uid:
+                        rows.append(self._census_row(ent, 1, deep=True, index=index))
+        else:
+            for ent in self.world.values():
+                if not ent["alive"]:
+                    continue
+                if ent["owner_uid"] == self.director_uid:
+                    if include_dir == 1:
+                        rows.append(self._census_row(ent, 1))
+                    continue
+                if _dist2(ent["pos"][0], ent["pos"][2], center_x, center_z) <= radius:
                     rows.append(self._census_row(ent, 1))
-                continue
-            if _dist2(ent["pos"][0], ent["pos"][2], center_x, center_z) <= radius:
-                rows.append(self._census_row(ent, 1))
-                continue
-            if ent["own_b"] == 1 and ent["cat"] in ("infected", "animal"):
-                if ent["area_id"] == area_id:
-                    rows.append(self._census_row(ent, 0))
+                    continue
+                if ent["own_b"] == 1 and ent["cat"] in ("infected", "animal"):
+                    if ent["area_id"] == area_id:
+                        rows.append(self._census_row(ent, 0))
+        census_ncol = CENSUS_NCOL_ALL if select_all == 1 else CENSUS_NCOL
         captured = 0
         capture_failed = ""
         for row in rows:
@@ -1196,9 +1527,12 @@ class PersistFakeExt(FakeExt):
             if not self.peer.lease_valid():
                 capture_failed = "lease_expired"
                 break
-            nvals = [row[c] for c in CENSUS_NCOL]
+            nvals = [row[c] for c in census_ncol]
             svals = [row[c] for c in CENSUS_SCOL]
             if not self.jobs.append_row(job_id, nvals, svals):
+                # Con select_all_entityai_b = 1 y el tope de filas, el JobMgr ya dejo el trabajo en
+                # failed/rows_cap y ese final no cambia (end_job lo fija una sola vez, como EndJob en el .c):
+                # no se sigue ni se trunca en silencio; el arranque responde done y el estado se lee con job_read.
                 capture_failed = "capture_truncated"
                 break
             captured += 1
@@ -1232,6 +1566,198 @@ class PersistFakeExt(FakeExt):
         self.pending_finish[job_id] = CENSUS_FINISH_AFTER_ATTEMPT_TICKS
         self.census_start_tick[job_id] = snap_ms
         return ("done", "", payload)
+
+    # --------------------------------------------------------- testigo de creacion
+    def _witness_capture(self, ent):
+        # Equivale al gancho EEInit del .c: apagado cuesta un chequeo; encendido filtra por radio y ventana.
+        wit = self.witness
+        if wit is None or wit["closed"]:
+            return
+        now_ms = float(self.peer.local_ms())
+        if now_ms > wit["end_ms"]:
+            return
+        if hook_root(ent["class_name"]) is None:
+            return  # no deriva de ninguna raiz enganchada: el .c no la ve
+        if len(wit["buf"]) >= WITNESS_MAX_ROWS + 1:
+            return
+        if _dist2(ent["pos"][0], ent["pos"][2], wit["cx"], wit["cz"]) > wit["radius"]:
+            return
+        # En EEInit el motor aun no ha asignado el net_id (0:0): se lee en el primer tick de servidor.
+        wit["buf"].append({
+            "ent": ent,
+            "class_name": ent["class_name"],
+            "net_id": "0:0",
+            "parent_net_id": "",
+            "pos": tuple(ent["pos"]),
+            "yaw": float(ent["ori"][0]),
+            "tick_ms": now_ms,
+            "frame": int(wit["frame"]),
+            "ai": 1.0 if ent["ai_agent"] else 0.0,
+        })
+
+    def _witness_alive(self, ent):
+        return ent["alive"] and self.world.get(ent["net_id"]) is ent
+
+    def _witness_row(self, sample_idx, cls, net_id, parent_net_id, pos, yaw, tick_ms, frame, ai, alive):
+        return {
+            "class_name": cls,
+            "net_id": net_id,
+            "parent_net_id": parent_net_id,
+            "sample_idx": float(sample_idx),
+            "pos_x_m": float(pos[0]),
+            "pos_y_m": float(pos[1]),
+            "pos_z_m": float(pos[2]),
+            "yaw_deg": float(yaw),
+            "tick_ms": float(tick_ms),
+            "frame": float(frame),
+            "ai_agent_b": float(ai),
+            "alive_b": 1.0 if alive else 0.0,
+            # SurfaceY de la x y la z de esta fila (la ultima posicion conocida si la entidad ya no existe)
+            "surface_y_m": float(_surface_y(pos[0], pos[2])),
+        }
+
+    def _witness_append(self, job_id, row):
+        nvals = [row[c] for c in WITNESS_NCOL]
+        svals = [row[c] for c in WITNESS_SCOL]
+        return self.jobs.append_row(job_id, nvals, svals)
+
+    def _op_witness_start(self, op, args_unpacked):
+        strs = args_unpacked.get("str") or {}
+        nums = args_unpacked.get("num") or {}
+        witness_tag = strs.get("witness_tag", "")
+        for key in ("center_x_m", "center_z_m", "radius_m", "window_ms"):
+            if key not in nums:
+                return ("rejected", "bad_args", wire.empty_payload())
+        center_x = float(nums["center_x_m"])
+        center_z = float(nums["center_z_m"])
+        radius = float(nums["radius_m"])
+        window_ms = float(nums["window_ms"])
+        k_raw = float(nums.get("witness_follow_ticks", float(WITNESS_K_DEFAULT)))
+        # Los rechazos salen antes de start_job y de encender el gancho: sin efectos.
+        if not (0.0 < radius <= WITNESS_RADIUS_MAX) or not (0.0 < window_ms <= WITNESS_WINDOW_MAX_MS):
+            return ("rejected", "bad_args", wire.empty_payload())
+        if not k_raw.is_integer() or not (1 <= int(k_raw) <= WITNESS_K_MAX):
+            return ("rejected", "bad_args", wire.empty_payload())
+        follow_k = int(k_raw)
+        job_id = op["op_id"]
+        err = self.jobs.start_job(
+            self,
+            job_id,
+            "per_witness",
+            list(WITNESS_NCOL),
+            list(WITNESS_SCOL),
+            WITNESS_PAGE_SIZE,
+            WITNESS_MAX_ROWS,
+            window_ms + WITNESS_TAIL_MS,
+            "stop",
+        )
+        if err != "":
+            return ("rejected", err, wire.empty_payload())
+        start_ms = float(self.peer.local_ms())
+        self.witness = {
+            "job_id": job_id,
+            "end_ms": start_ms + window_ms,
+            "k": follow_k,
+            "cx": center_x,
+            "cz": center_z,
+            "radius": radius,
+            "closed": False,
+            "frame": int(self.peer.frame),
+            "buf": [],
+            "follow": [],
+        }
+        s = {
+            "job": job_id,
+            "state": "running",
+            "resource": "per_witness",
+            "witness_tag": witness_tag,
+            "server_epoch": self.epoch,
+        }
+        n = {
+            "start_tick_ms": start_ms,
+            "start_frame": float(self.peer.frame),
+            "center_x_m": center_x,
+            "center_z_m": center_z,
+            "radius_m": radius,
+            "window_ms": window_ms,
+            "witness_follow_ticks": float(follow_k),
+        }
+        payload = wire.pack_payload(scalars_str=s, scalars_num=n)
+        return ("done", "", payload)
+
+    def _tick_witness(self):
+        wit = self.witness
+        if wit is None:
+            return
+        jid = wit["job_id"]
+        now_ms = float(self.peer.local_ms())
+        frame = int(self.peer.frame)
+        wit["frame"] = frame
+        # 1) capturas de EEInit acumuladas desde el tick anterior; van ANTES del seguimiento: su sample_idx 1 sale en este
+        #    mismo tick, el frame siguiente (frames consecutivos 0, 1, ..., K). La fila sample_idx 0 sale en este primer tick
+        #    con la posicion, el tick_ms y el frame de EEInit pero con el net_id y el parent_net_id leidos ahora.
+        fresh = []
+        for cap in wit["buf"]:
+            fol = {
+                "ent": cap["ent"],
+                "class_name": cap["class_name"],
+                "net_id": cap["net_id"],
+                "parent_net_id": cap["parent_net_id"],
+                "pos": cap["pos"],
+                "yaw": cap["yaw"],
+                "ai": cap["ai"],
+                "tick_ms": cap["tick_ms"],
+                "frame": cap["frame"],
+                "next": 1,
+            }
+            wit["follow"].append(fol)
+            fresh.append(fol)
+        wit["buf"] = []
+        for fol in fresh:
+            ent = fol["ent"]
+            alive = self._witness_alive(ent)
+            if alive:
+                fol["net_id"] = ent["net_id"]
+                fol["parent_net_id"] = ent["parent_net_id"]
+            else:
+                fol["net_id"] = "0:0"
+                fol["parent_net_id"] = ""
+            row = self._witness_row(
+                0, fol["class_name"], fol["net_id"], fol["parent_net_id"],
+                fol["pos"], fol["yaw"], fol["tick_ms"], fol["frame"], fol["ai"], alive,
+            )
+            if not self._witness_append(jid, row):
+                return
+        # 2) muestras de seguimiento (sample_idx 1..K), incluidas las recien capturadas
+        keep = []
+        for fol in list(wit["follow"]):
+            ent = fol["ent"]
+            alive = self._witness_alive(ent)
+            if alive:
+                fol["pos"] = tuple(ent["pos"])
+                fol["yaw"] = float(ent["ori"][0])
+                fol["net_id"] = ent["net_id"]
+                fol["parent_net_id"] = ent["parent_net_id"]
+                fol["ai"] = 1.0 if ent["ai_agent"] else 0.0
+            row = self._witness_row(
+                fol["next"], fol["class_name"], fol["net_id"], fol["parent_net_id"],
+                fol["pos"], fol["yaw"], now_ms, frame, fol["ai"], alive,
+            )
+            if not self._witness_append(jid, row):
+                return
+            fol["next"] += 1
+            if fol["next"] <= wit["k"]:
+                keep.append(fol)
+        wit["follow"] = keep
+        # 3) vencida la ventana se deja de capturar; acaba cuando no queda seguimiento pendiente
+        if not wit["closed"] and now_ms >= wit["end_ms"]:
+            wit["closed"] = True
+        if wit["closed"] and not wit["follow"]:
+            self.jobs.end_job(jid, "done", "")
+
+    def on_job_end(self, job_id, state, reason):
+        if self.witness is not None and self.witness["job_id"] == job_id:
+            self.witness = None
 
     def _finish_pending_job(self, jid):
         if self.jobs.get_state(jid) == "running":
@@ -1379,6 +1905,7 @@ class PersistFakeExt(FakeExt):
         self._save_state()
 
     def on_tick(self, timeslice_s):
+        self._tick_witness()
         # BLOQ 6: A mantiene la ocupacion hasta acreditar el intento de B
         # (entonces termina en pocos ticks, con released_tick posterior al
         # snap de B) o hasta la salida acotada CENSUS_HOLD_MAX_MS.
@@ -1407,6 +1934,7 @@ class PersistFakeExt(FakeExt):
         for jid in list(self.pending_finish):
             self._finish_pending_job(jid)
         self.pending_finish.clear()
+        self.witness = None
         self.census_start_tick.clear()
         self.contention_seen_for.clear()
         self.census_failed.clear()
