@@ -6,17 +6,26 @@ etiquetas del evaluador. Los mutantes se aplican como efectos sobre
 ``part_dir/samples`` (el evaluador es ciego a sus nombres).
 """
 
+import argparse
 import json
 import math
 import random
 import shutil
 import struct
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
+import f03_common
+import fake_peer
+import gate_core
+import m1_gate
 import s_cam_eval
 import s_cam_mutants
+import wire
+from tests import e2e_witness
 
 QA_DIR = Path(__file__).resolve().parents[1]
 FIXTURES = QA_DIR / "fixtures"
@@ -698,6 +707,48 @@ def _control_recovery():
     return rows
 
 
+def _slow_stop_recovery():
+    """Control recuperado 1500 ms tarde (qa_fault cam_slow_stop): los pulsos A/B llegan
+    durante el bloqueo y solo se aplican tras PlayerControlEnable(true)."""
+    rows = []
+    tick = 1000.0
+    frame = 5000.0
+    while tick <= 2600.0:
+        if tick < 2450.0:
+            psi = 0.0
+        elif tick < 2550.0:
+            psi = 5.0
+        else:
+            psi = -2.0
+        dx = math.sin(math.radians(psi))
+        dz = math.cos(math.radians(psi))
+        rows.append(
+            [
+                float(len(rows)),
+                frame,
+                tick,
+                tick - 1000.0,
+                4500.0,
+                ANCHOR_Y,
+                9800.0,
+                dx,
+                0.0,
+                dz,
+                0.70,
+                4500.0,
+                ANCHOR_Y,
+                9800.0,
+                dx,
+                0.0,
+                dz,
+                0.0,
+            ]
+        )
+        tick += 16.0
+        frame += 1.0
+    return rows
+
+
 def _write_bmp(path, img):
     stride = W * 3
     header = bytearray()
@@ -951,6 +1002,518 @@ def apply_mutant(part_dir, name):
     raise KeyError(f"unknown mutant: {name}")
 
 
+def _samples(part_dir):
+    return Path(part_dir) / "samples"
+
+
+def _scenario_path(part_dir):
+    return _samples(part_dir) / "scenario.jsonl"
+
+
+def _set_event(part_dir, ev, phase, step, **changes):
+    def mutate(rows):
+        for row in rows:
+            if row.get("ev") == ev and row.get("phase") == phase and row.get("step") == step:
+                row.update(changes)
+
+    _rewrite_jsonl(_scenario_path(part_dir), mutate)
+
+
+def _set_state_nk(part_dir, phase, step, **changes):
+    def mutate(rows):
+        for row in rows:
+            if row.get("ev") == "state" and row.get("phase") == phase and row.get("step") == step:
+                row.setdefault("read_nk", {}).update(changes)
+
+    _rewrite_jsonl(_scenario_path(part_dir), mutate)
+
+
+def _mutate_path(part_dir, name, mutate):
+    _rewrite_jsonl(_samples(part_dir) / f"{name}.jsonl", mutate)
+
+
+def _checks_by_id(verdict):
+    return {check["id"]: check for check in verdict["checks"]}
+
+
+def _neg_wire_nan(part_dir):
+    _set_event(part_dir, "wire_nan", "SCAM-S1", "wire", nan_rejected_b=False)
+
+
+def _neg_p_roll_inactive(part_dir):
+    _set_state_nk(part_dir, "SCAM-S1", "p_roll_applied", active_b=0.0)
+
+
+def _neg_path_inactive(part_dir):
+    def mutate(rows):
+        rows[50]["active_b"] = 0.0
+
+    _mutate_path(part_dir, "path_catmull_scripted", mutate)
+
+
+def _neg_finish_late(part_dir):
+    """Extiende el recorrido hasta 6301 ms con filas identicas a la ultima clave, sin
+    cambiar la trayectoria: solo CAM-04 cae por el fin fuera de [6000, 6300]."""
+    path = _samples(part_dir) / "path_catmull_scripted.jsonl"
+    rows = _read_jsonl(path)
+    last = dict(rows[-1])
+    dt = last["dtsum_ms"] / max(1.0, last["seq_n"])
+    seq = last["seq_n"]
+    frame = last["frame"]
+    tick = last["tick_ms"]
+    dtsum = last["dtsum_ms"]
+    while dtsum < 6301.0:
+        seq += 1.0
+        frame += 1.0
+        tick += dt
+        dtsum = min(6301.0, dtsum + dt)
+        row = dict(last)
+        row["seq_n"] = seq
+        row["frame"] = frame
+        row["tick_ms"] = tick
+        row["dtsum_ms"] = dtsum
+        rows.append(row)
+    _write_jsonl(path, rows)
+
+
+def _neg_fov_off_lerp(part_dir):
+    def mutate(rows):
+        rows[120]["fov_rad"] = 0.5
+
+    _mutate_path(part_dir, "path_catmull_scripted", mutate)
+
+
+def _neg_dof_reject_accepted(part_dir):
+    _set_event(part_dir, "op", "SCAM-S4", "neg_1", status="done", reason="")
+
+
+def _neg_dof_identical_frames(part_dir):
+    samples = _samples(part_dir)
+    shutil.copyfile(samples / "dof_ctrl_noblur.bmp", samples / "dof_ctrl_near2m.bmp")
+
+
+def _neg_focus_blur_wrong(part_dir):
+    def mutate(rows):
+        rows[10]["sent_focus_blur"] = 0.0
+
+    _mutate_path(part_dir, "path_dof_var", mutate)
+
+
+def _neg_elem_visible(part_dir):
+    def mutate(rows):
+        rows[5]["elem_vis_mask"] = 1.0
+
+    _mutate_path(part_dir, "path_linear_hud", mutate)
+
+
+def _neg_burst_a_wrong_sign(part_dir):
+    def mutate(rows):
+        for row in rows:
+            if row.get("ev") == "pulse" and row.get("phase") == "SCAM-S5" and row.get("burst") == "A":
+                row["dx_px"] = -40.0
+
+    _rewrite_jsonl(_scenario_path(part_dir), mutate)
+
+
+# E9 (regla 4 de ENCARGO_original.md §3): negativas contra la fabricacion.
+# Cada una tiene que dar FALLA o INCONCLUSO, nunca PASA.
+def _fab_echo_requested_pose(part_dir):
+    """La pose leida copia la pedida (P_roll) pero el motor sigue en la pose anterior."""
+    _set_state_nk(part_dir, "SCAM-S1", "p_roll_applied", eng_x_m=4520.0, eng_y_m=ANCHOR_Y, eng_z_m=9806.0)
+
+
+def _fab_echo_requested_path(part_dir):
+    """El motor publica la trayectoria pedida, pero el nodo de camara no se movio del ancla."""
+    def mutate(rows):
+        for row in rows:
+            row["x_m"] = 4500.0
+            row["y_m"] = ANCHOR_Y
+            row["z_m"] = 9800.0
+
+    _mutate_path(part_dir, "path_catmull_scripted", mutate)
+
+
+def _fab_identical_capture(part_dir):
+    """Capturas identicas: el control sin blur se copia como si fuera el de 2 m."""
+    samples = _samples(part_dir)
+    shutil.copyfile(samples / "dof_ctrl_noblur.bmp", samples / "dof_ctrl_near2m.bmp")
+
+
+def _fab_expected_metrics_instead_of_calculated(part_dir):
+    """El runner publica un hash y una MAD esperados; el BMP calculado dice otra cosa."""
+    samples = _samples(part_dir)
+    shutil.copyfile(samples / "dof_ctrl_noblur.bmp", samples / "hud_clean_ref.bmp")
+    shutil.copyfile(samples / "dof_ctrl_noblur.bmp", samples / "hud_clean_ref_repeat.bmp")
+
+    def mutate(rows):
+        for row in rows:
+            if row.get("ev") == "capture" and row.get("file") == "hud_clean_ref.bmp":
+                row["sha256"] = "0" * 64
+                row["mad_full_screen"] = 0.0
+
+    _rewrite_jsonl(_scenario_path(part_dir), mutate)
+
+
+def _fab_hud_restored_without_widget_tree(part_dir):
+    """El HUD se da por restaurado copiando saved_flags_mask, pero los auxiliares no vuelven."""
+    _set_state_nk(part_dir, "SCAM-S3", "post_path_hud", aux_vis_mask=0.0, saved_aux_vis_mask=1.0)
+
+
+CAM_STANDIN_VERBS = frozenset(
+    {
+        "scam_fixture_setup",
+        "scam_state_read",
+        "scam_free_op",
+        "scam_pose_save",
+        "scam_pose_apply",
+        "scam_path_start",
+        "scam_dof_set",
+        "scam_hud_op",
+        "scam_sample_start",
+    }
+)
+CAM_STANDIN_COLS = ("seq_n", "dtsum_ms", "active_b")
+
+
+def _cam_standin_module():
+    """Homologo minimo de fake_ext_cam para la negativa E1 del peer falso.
+
+    Modela la guarda del lease antes de cada efecto, el trabajo "cam" con
+    deadman="stop", el bloqueo de efectos fuera de trabajo y la limpieza que
+    corre siempre (soltar la camara y restaurar el HUD). El esqueleto real de
+    S-cam aun no entiende los verbos scam_*; el e2e de E1 usa el de verdad.
+    """
+
+    class CamStandIn(fake_peer.FakeExt):
+        def __init__(self):
+            super().__init__()
+            self.peer = None
+            self.jobs = None
+            self.active = 0.0
+            self.pose = {
+                "x_m": 4500.0,
+                "y_m": ANCHOR_Y,
+                "z_m": 9800.0,
+                "yaw_deg": 0.0,
+                "pitch_deg": 0.0,
+                "roll_deg": 0.0,
+                "fov_rad": 0.70,
+            }
+            self.saved = {}
+            self.saved_names = []
+            self.flags = 0.0
+            self.saved_flags = 0.0
+            self.aux = 0.0
+            self.saved_aux = 0.0
+            self.focus_dist = 0.0
+            self.focus_blur = 0.0
+            self.focus_calls = 0.0
+            self.cam_job_id = ""
+            self.sample_job_id = ""
+            self.dtsum = 0.0
+            self.duration_ms = 0.0
+            self.seq = 0.0
+
+        def init(self, peer, jobs):
+            self.peer = peer
+            self.jobs = jobs
+
+        def handles(self, verb, role):
+            return role == "client" and verb in CAM_STANDIN_VERBS
+
+        def _read(self):
+            nk = dict(self.pose)
+            nk.update(
+                {
+                    "active_b": self.active,
+                    "enable_b": 1.0 if self.focus_dist > 0.0 else 0.0,
+                    "flags_mask": self.flags,
+                    "saved_flags_mask": self.saved_flags,
+                    "aux_vis_mask": self.aux,
+                    "saved_aux_vis_mask": self.saved_aux,
+                    "sent_focus_dist_m": self.focus_dist,
+                    "sent_focus_blur": self.focus_blur,
+                    "set_focus_calls_n": self.focus_calls,
+                    "cam_dtsum_ms": self.dtsum,
+                    "speed_mps": 4.0,
+                }
+            )
+            sk = {
+                "cam_job_id": self.cam_job_id,
+                "cam_job_state": self.jobs.get_state(self.cam_job_id) if self.cam_job_id else "",
+                "sample_job_id": self.sample_job_id,
+                "sample_job_state": self.jobs.get_state(self.sample_job_id) if self.sample_job_id else "",
+                "saved_names_csv": ",".join(self.saved_names),
+            }
+            return wire.pack_payload(
+                scalars_str=sk,
+                scalars_num={key: float(value) for key, value in nk.items()},
+            )
+
+        def _cleanup(self):
+            self.active = 0.0
+            self.flags = self.saved_flags
+            self.aux = self.saved_aux
+            self.focus_dist = 0.0
+            self.focus_blur = 0.0
+
+        def _hide(self):
+            self.saved_flags = self.flags
+            self.saved_aux = self.aux
+            self.flags = 391.0
+            self.aux = 0.0
+
+        def _pose_from(self, nums):
+            for key in ("x_m", "y_m", "z_m", "yaw_deg", "pitch_deg", "roll_deg", "fov_rad"):
+                if key in nums:
+                    self.pose[key] = float(nums[key])
+
+        def on_start_op(self, op, args_unpacked, raw_args):
+            verb = op["verb"]
+            strs = args_unpacked.get("str") or {}
+            nums = args_unpacked.get("num") or {}
+            rows = args_unpacked.get("rows") or []
+            if verb == "scam_state_read":
+                return ("done", "", self._read())
+            if verb == "scam_hud_op" and int(nums.get("op_code", -1)) == 0:
+                return ("done", "", self._read())
+            if verb == "scam_hud_op" and int(nums.get("op_code", -1)) == 2:
+                self.flags = self.saved_flags
+                self.aux = self.saved_aux
+                return ("done", "", self._read())
+            if verb == "scam_free_op" and int(nums.get("op_code", -1)) == 3:
+                self._cleanup()
+                return ("done", "", self._read())
+            if not self.peer.lease_valid():
+                return ("error", "lease_expired", wire.empty_payload())
+
+            if verb == "scam_fixture_setup":
+                self.active = 1.0
+                self.pose = {
+                    "x_m": float(nums.get("anchor_x_m", 4500.0)),
+                    "y_m": ANCHOR_Y,
+                    "z_m": float(nums.get("anchor_z_m", 9800.0)),
+                    "yaw_deg": float(nums.get("anchor_yaw_deg", 0.0)),
+                    "pitch_deg": float(nums.get("anchor_pitch_deg", 0.0)),
+                    "roll_deg": float(nums.get("anchor_roll_deg", 0.0)),
+                    "fov_rad": float(nums.get("anchor_fov_rad", 0.70)),
+                }
+                self.focus_dist = 0.0
+                self.focus_blur = 0.0
+                return ("done", "", self._read())
+            if verb == "scam_free_op":
+                if int(nums.get("op_code", -1)) != 1:
+                    return ("rejected", "bad_args", wire.empty_payload())
+                if self.cam_job_id and self.jobs.get_state(self.cam_job_id) == "running":
+                    return ("rejected", "busy", wire.empty_payload())
+                self._pose_from(nums)
+                self.active = 1.0
+                self.focus_dist = 0.0
+                self.focus_blur = 0.0
+                return ("done", "", self._read())
+            if verb == "scam_pose_save":
+                name = str(strs.get("name", ""))
+                if name == "":
+                    return ("rejected", "empty_name", wire.empty_payload())
+                if name in self.saved and str(strs.get("overwrite", "0")) != "1":
+                    return ("rejected", "duplicate_name", wire.empty_payload())
+                self.saved[name] = dict(self.pose)
+                if name not in self.saved_names:
+                    self.saved_names.append(name)
+                return ("done", "", self._read())
+            if verb == "scam_pose_apply":
+                name = str(strs.get("name", ""))
+                if name:
+                    if name not in self.saved:
+                        return ("rejected", "unknown_pose", wire.empty_payload())
+                    self.pose = dict(self.saved[name])
+                else:
+                    self._pose_from(nums)
+                if self.active != 1.0:
+                    return ("rejected", "no_active_cam", wire.empty_payload())
+                return ("done", "", self._read())
+            if verb == "scam_hud_op":
+                code = int(nums.get("op_code", -1))
+                if code == 1:
+                    self._hide()
+                elif code == 5:
+                    preset = float(nums.get("preset_mask", 0.0))
+                    self.flags = preset
+                    self.aux = 1.0
+                    self.saved_flags = preset
+                    self.saved_aux = 1.0
+                elif code == 4:
+                    if int(nums.get("mode", 0)) == 1:
+                        self.flags = self.flags & ~(128.0 | 256.0 | 512.0)
+                    else:
+                        self.flags = self.flags | 256.0
+                else:
+                    return ("rejected", "bad_args", wire.empty_payload())
+                return ("done", "", self._read())
+            if verb == "scam_dof_set":
+                if float(nums.get("enable_b", 0.0)) == 1.0:
+                    self.focus_dist = float(nums.get("focus_dist_m", 0.0))
+                    self.focus_blur = float(nums.get("focus_blur", 0.0))
+                else:
+                    self.focus_dist = 0.0
+                    self.focus_blur = 0.0
+                self.focus_calls += 1.0
+                return ("done", "", self._read())
+            if verb == "scam_path_start":
+                if len(rows) < 2:
+                    return ("rejected", "bad_args", wire.empty_payload())
+                err = self.jobs.start_job(
+                    self,
+                    op["op_id"],
+                    "cam",
+                    list(CAM_STANDIN_COLS),
+                    [],
+                    4,
+                    4096,
+                    900000.0,
+                    "stop",
+                )
+                if err:
+                    return ("rejected", err, wire.empty_payload())
+                self.cam_job_id = op["op_id"]
+                self.seq = 0.0
+                self.dtsum = 0.0
+                self.duration_ms = float(rows[-1]["t_s"]) * 1000.0
+                first = rows[0]
+                self._pose_from(first)
+                self.active = 1.0
+                if str(strs.get("hide_hud", "0")) == "1":
+                    self._hide()
+                self.jobs.append_row(self.cam_job_id, [0.0, 0.0, 1.0], [])
+                return ("done", "", self.jobs.fill_start_read(self.cam_job_id, "cam"))
+            if verb == "scam_sample_start":
+                err = self.jobs.start_job(
+                    self,
+                    op["op_id"],
+                    "cam_sample",
+                    list(CAM_STANDIN_COLS),
+                    [],
+                    5,
+                    4096,
+                    900000.0,
+                    "stop",
+                )
+                if err:
+                    return ("rejected", err, wire.empty_payload())
+                self.sample_job_id = op["op_id"]
+                self.jobs.append_row(self.sample_job_id, [0.0, 0.0, self.active], [])
+                return ("done", "", self.jobs.fill_start_read(self.sample_job_id, "cam_sample"))
+            return ("rejected", "unknown_verb", wire.empty_payload())
+
+        def on_tick(self, timeslice_s):
+            if not self.cam_job_id:
+                return
+            if self.jobs.get_state(self.cam_job_id) != "running":
+                self.cam_job_id = ""
+                return
+            if not self.peer.lease_valid():
+                return
+            self.seq += 1.0
+            self.dtsum += float(timeslice_s) * 1000.0
+            self.jobs.append_row(self.cam_job_id, [self.seq, self.dtsum, self.active], [])
+            if self.dtsum >= self.duration_ms:
+                self.jobs.end_job(self.cam_job_id, "done", "")
+
+        def on_job_end(self, job_id, state, reason):
+            if job_id == self.cam_job_id:
+                self.cam_job_id = ""
+                self._cleanup()
+            if job_id == self.sample_job_id:
+                self.sample_job_id = ""
+
+        def on_shutdown(self):
+            self._cleanup()
+
+    module = types.ModuleType("fake_ext_cam")
+    module.CamStandIn = CamStandIn
+    module.PREFIX = "scam_"
+    module.RPC_BASE = 26102820
+    module.create_ext = lambda peer, jobs: CamStandIn()
+    return module
+
+
+def _tee_bridge_class(registry):
+    """Subclase de QABridge que copia cada fila emitida (registro Tee del modelo de S-toma).
+
+    Se define antes de instalar el testigo: el testigo parchea la clase base real
+    (``bridge_qa.QABridge``), de la que esta hereda, y asi cada ``_emit`` pasa por
+    ambos sin que el Tee tape la anotacion del testigo.
+    """
+
+    class Tee(f03_common.QABridge):
+        def _emit(self, row):
+            registry.append(dict(row))
+            return super()._emit(row)
+
+    return Tee
+
+
+def _e2e_args(**overrides):
+    args = argparse.Namespace(
+        build="offline",
+        both=True,
+        ttl_ms=gate_core.DEFAULT_TTL_MS,
+        retry_ms=gate_core.DEFAULT_RETRY_MS,
+        lease_ms=gate_core.DEFAULT_LEASE_MS,
+        hold_ms=gate_core.DEFAULT_HOLD_MS,
+        seed=gate_core.DEFAULT_SEED,
+        peer_timeout=20.0,
+        pbo=None,
+        fault=None,
+        oracle_commit=None,
+        server_profile=None,
+        client_profile=None,
+        product_pbo=None,
+    )
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return args
+
+
+def _fabricated_evidence(ev_dir):
+    """Evidencia sana escrita a mano (run + los 10 mutantes) sin PartContext ni peers."""
+    ev = Path(ev_dir)
+    parts = ["run"] + [f"mut-{name}" for name in s_cam_mutants.EXPECTED_MUTANTS]
+    for name in parts:
+        part = write_healthy(ev / name)
+        if name.startswith("mut-"):
+            apply_mutant(part, name[len("mut-") :])
+        (part / "samples" / "bridge.jsonl").write_text(
+            '{"ev": "poll", "peer": "client", "http": 200, "t_ms": 0.0}\n',
+            encoding="utf-8",
+        )
+        gate_core.write_json(
+            part / "verdict.json",
+            {
+                "schema": "m1-verdict-v1",
+                "id": "S-cam",
+                "verdict": "PASA",
+                "exit_code": 0,
+                "checks": [],
+                "metrics": {},
+                "reasons": [],
+            },
+        )
+    gate_core.write_json(
+        ev / "verdict.json",
+        {
+            "schema": "m1-verdict-v1",
+            "id": "S-cam",
+            "verdict": "PASA",
+            "exit_code": 0,
+            "checks": [],
+            "metrics": {},
+            "reasons": [],
+        },
+    )
+    return ev
+
+
 class SCamOfflineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1011,6 +1574,728 @@ class SCamOfflineTests(unittest.TestCase):
             self.assertFalse(fault.endswith("_") and fault.strip("_") == "", name)
             self.assertEqual(fault.rstrip("_"), fault.rstrip("_").strip(), name)
             self.assertRegex(fault.rstrip("_"), r"^[a-z0-9_]*[a-z0-9]$", name)
+
+    # ---------------------------------------------------------------- negativas E9 y por check
+    def _verdict_with(self, label, mutate):
+        part = self._part(label)
+        mutate(part)
+        return s_cam_eval.evaluate(part)
+
+    def test_neg_e9_fabrication_is_never_pass(self):
+        """E9: poses que copian la pedida, capturas identicas, metricas esperadas y HUD
+        restaurado sin leer el arbol de widgets nunca dan PASA; se comprueba el check y el
+        detail exacto de cada deteccion."""
+        cases = (
+            (
+                "fab_echo_requested_pose",
+                _fab_echo_requested_pose,
+                "CAM-02",
+                "fail",
+                "p_roll_eng_pos_err",
+            ),
+            (
+                "fab_echo_requested_path",
+                _fab_echo_requested_path,
+                "CAM-03",
+                "fail",
+                "path_catmull_scripted_cam_eng_mismatch",
+            ),
+            (
+                "fab_identical_capture",
+                _fab_identical_capture,
+                "CAM-07",
+                "fail",
+                "dof_not_supported_or_identical_frames",
+            ),
+            (
+                "fab_expected_metrics_instead_of_calculated",
+                _fab_expected_metrics_instead_of_calculated,
+                "CAM-09",
+                "fail",
+                "hud_visible_full_screen",
+            ),
+            (
+                "fab_hud_restored_without_widget_tree",
+                _fab_hud_restored_without_widget_tree,
+                "CAM-09",
+                "fail",
+                "aux_not_restored",
+            ),
+        )
+        for label, mutate, check_id, status, detail in cases:
+            with self.subTest(fabrication=label):
+                verdict = self._verdict_with(label, mutate)
+                self.assertNotEqual(verdict["verdict"], "PASA", verdict)
+                checks = _checks_by_id(verdict)
+                self.assertEqual(checks[check_id]["status"], status, verdict)
+                self.assertEqual(checks[check_id]["detail"], detail, verdict)
+
+    def test_neg_one_per_check_cam_01_to_cam_10(self):
+        """Una negativa minima por cada check CAM-01..CAM-10: cae solo por su regla y su
+        detail exacto; el resto de checks sigue en pass."""
+        cases = (
+            ("cam01", _neg_wire_nan, "CAM-01", "fail", "wire_nan_not_rejected"),
+            ("cam02", _neg_p_roll_inactive, "CAM-02", "fail", "p_roll_inactive"),
+            ("cam03", _neg_path_inactive, "CAM-03", "fail", "path_catmull_scripted_cam_inactive"),
+            ("cam04", _neg_finish_late, "CAM-04", "fail", "path_catmull_scripted_finish_ms=6301.0"),
+            ("cam05", _neg_fov_off_lerp, "CAM-05", "fail", "fov_vs_lerp_rad"),
+            ("cam06", _neg_dof_reject_accepted, "CAM-06", "fail", "neg_1_not_rejected"),
+            (
+                "cam07",
+                _neg_dof_identical_frames,
+                "CAM-07",
+                "fail",
+                "dof_not_supported_or_identical_frames",
+            ),
+            ("cam08", _neg_focus_blur_wrong, "CAM-08", "fail", "sent_blur_row_10"),
+            ("cam09", _neg_elem_visible, "CAM-09", "fail", "elem_vis_row_5"),
+            ("cam10", _neg_burst_a_wrong_sign, "CAM-10", "fail", "burst_a_sign"),
+        )
+        for label, mutate, check_id, status, detail in cases:
+            with self.subTest(check=check_id):
+                verdict = self._verdict_with(label, mutate)
+                self.assertEqual(verdict["exit_code"], 1, verdict)
+                checks = _checks_by_id(verdict)
+                self.assertEqual(checks[check_id]["status"], status, verdict)
+                self.assertEqual(checks[check_id]["detail"], detail, verdict)
+                failed = [cid for cid, check in checks.items() if check["status"] != "pass"]
+                self.assertEqual(failed, [check_id], verdict)
+
+    def test_slow_stop_qa_fault_delays_control_and_fails_cam_10(self):
+        """La nota al pie del brief §6: cam_slow_stop retrasa 1500 ms PlayerControlEnable(true)
+        y CAM-10 cae por recuperacion fuera de 1 s (exit 1, FALLA)."""
+        part = self._part("slow_stop")
+        _write_jsonl(_samples(part) / "control_recovery.jsonl", _slow_stop_recovery())
+        verdict = s_cam_eval.evaluate(part)
+        self.assertEqual(verdict["exit_code"], 1, verdict)
+        checks = _checks_by_id(verdict)
+        self.assertEqual(checks["CAM-10"]["status"], "fail", verdict)
+        self.assertEqual(checks["CAM-10"]["detail"], "recovery_over_1s", verdict)
+        failed = [cid for cid, check in checks.items() if check["status"] != "pass"]
+        self.assertEqual(failed, ["CAM-10"], verdict)
+
+    def test_neg_e1_expired_lease_blocks_scam_effects_and_allows_cleanup(self):
+        """E1 (spikes-comun :47): con el lease caducado en el peer falso se bloquean los
+        efectos de S-cam (ordenes, trabajo y efectos fuera de trabajo) y corre la limpieza
+        (soltar la camara y restaurar el HUD). Modelo de S-persist
+        test_s_persist_offline.py:2918/:3102; el homologo de fake_ext_cam es un stand-in
+        porque el esqueleto aun no entiende scam_*."""
+        import time
+        from unittest import mock
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tf:
+            json.dump(
+                {
+                    "url": "http://127.0.0.1:18999/",
+                    "key": "test-key",
+                    "retry_ms": 2000,
+                    "callback_budget": 2000,
+                },
+                tf,
+            )
+            config_path = tf.name
+        try:
+            now_box = [1000.0]
+            standin = _cam_standin_module()
+            with mock.patch.dict(sys.modules, {"fake_ext_cam": standin}):
+                peer = fake_peer.Peer(
+                    config_path,
+                    "client",
+                    0,
+                    30.0,
+                    "",
+                    clock_ms_fn=lambda: now_box[0],
+                )
+            peer.hello_ok = True
+            peer.last_ok_ms = 1000.0
+            self.assertTrue(peer.lease_valid())
+
+            results = []
+
+            def call(verb, payload):
+                op = {
+                    "op_id": f"op-{len(results)}",
+                    "verb": verb,
+                    "args": f03_common._normalize_new_verb_args(payload, ""),
+                    "inst": peer.inst,
+                    "ttl_ms": 10000,
+                    "issued_ms": now_box[0],
+                }
+                peer._start_op(op, now_box[0], time.monotonic(), results)
+                return results[-1]
+
+            def read(out):
+                return wire.unpack_payload(out["read"])
+
+            # --- lease vigente: preparar camara libre, poses, HUD y DOF
+            out = call(
+                "scam_fixture_setup",
+                wire.pack_payload(
+                    scalars_num={
+                        "anchor_x_m": 4500.0,
+                        "anchor_z_m": 9800.0,
+                        "anchor_eye_h_m": 1.6,
+                        "anchor_yaw_deg": 0.0,
+                        "anchor_pitch_deg": 0.0,
+                        "anchor_roll_deg": 0.0,
+                        "anchor_fov_rad": 0.70,
+                        "subj_dist_m": 2.0,
+                        "bg_dist_m": 50.0,
+                    }
+                ),
+            )
+            self.assertEqual(out["status"], "done", out)
+
+            out = call(
+                "scam_free_op",
+                wire.pack_payload(
+                    scalars_num={
+                        "op_code": 1.0,
+                        "x_m": 4500.0,
+                        "y_m": ANCHOR_Y,
+                        "z_m": 9800.0,
+                        "yaw_deg": 0.0,
+                        "pitch_deg": 0.0,
+                        "roll_deg": 0.0,
+                        "fov_rad": 0.70,
+                        "speed_mps": 4.0,
+                        "ang_speed_degps": 90.0,
+                    }
+                ),
+            )
+            self.assertEqual(out["status"], "done", out)
+            state = read(call("scam_state_read", wire.pack_payload()))
+            self.assertEqual(state["num"]["active_b"], 1.0)
+            self.assertEqual(state["num"]["x_m"], 4500.0)
+
+            self.assertEqual(
+                call("scam_pose_save", wire.pack_payload(scalars_str={"name": "P0", "overwrite": "0"}))["status"],
+                "done",
+            )
+            self.assertEqual(
+                call("scam_hud_op", wire.pack_payload(scalars_num={"op_code": 5.0, "preset_mask": 258.0}))["status"],
+                "done",
+            )
+            self.assertEqual(
+                call(
+                    "scam_dof_set",
+                    wire.pack_payload(scalars_num={"enable_b": 1.0, "focus_dist_m": 2.0, "focus_blur": 1.0}),
+                )["status"],
+                "done",
+            )
+            state = read(call("scam_state_read", wire.pack_payload()))
+            self.assertEqual(state["num"]["flags_mask"], 258.0)
+            self.assertEqual(state["num"]["saved_flags_mask"], 258.0)
+            self.assertEqual(state["num"]["aux_vis_mask"], 1.0)
+            self.assertEqual(state["num"]["saved_aux_vis_mask"], 1.0)
+            self.assertEqual(state["num"]["sent_focus_dist_m"], 2.0)
+            self.assertEqual(state["num"]["sent_focus_blur"], 1.0)
+
+            # --- trabajo "cam" con deadman stop, en curso y con HUD oculto
+            path = call(
+                "scam_path_start",
+                wire.pack_payload(
+                    scalars_str={"pos_mode": "linear", "interp_mode": "scripted", "hide_hud": "1"},
+                    num_cols=[
+                        "t_s",
+                        "x_m",
+                        "y_m",
+                        "z_m",
+                        "yaw_deg",
+                        "pitch_deg",
+                        "roll_deg",
+                        "fov_rad",
+                        "focus_dist_m",
+                        "focus_blur",
+                    ],
+                    row_dicts=[
+                        {
+                            "t_s": 0.0,
+                            "x_m": 4500.0,
+                            "y_m": ANCHOR_Y,
+                            "z_m": 9800.0,
+                            "yaw_deg": 0.0,
+                            "pitch_deg": 0.0,
+                            "roll_deg": 0.0,
+                            "fov_rad": 0.70,
+                            "focus_dist_m": 2.0,
+                            "focus_blur": 1.0,
+                        },
+                        {
+                            "t_s": 6.0,
+                            "x_m": 4506.0,
+                            "y_m": ANCHOR_Y + 0.8,
+                            "z_m": 9804.0,
+                            "yaw_deg": 30.0,
+                            "pitch_deg": 2.0,
+                            "roll_deg": 0.0,
+                            "fov_rad": 0.90,
+                            "focus_dist_m": 50.0,
+                            "focus_blur": 1.0,
+                        },
+                    ],
+                ),
+            )
+            self.assertEqual(path["status"], "done", path)
+            job_id = read(path)["str"]["job"]
+            self.assertEqual(read(call("scam_state_read", wire.pack_payload()))["str"]["cam_job_state"], "running")
+
+            # filas antes del lease caducado
+            peer._step_extensions_and_jobs(0.05)
+            peer._step_extensions_and_jobs(0.05)
+            rows_before = read(call("job_read", wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0})))
+            rows_before_n = rows_before["num"]["rows_total_n"]
+            self.assertGreater(rows_before_n, 0.0)
+
+            # --- lease caducado: efectos bloqueados, sin efectos nuevos
+            now_box[0] = 5000.0
+            self.assertFalse(peer.lease_valid())
+            out = call(
+                "scam_hud_op",
+                wire.pack_payload(scalars_num={"op_code": 1.0}),
+            )
+            self.assertEqual(out["status"], "error", out)
+            self.assertEqual(out["reason"], "lease_expired", out)
+            state = read(call("scam_state_read", wire.pack_payload()))
+            self.assertEqual(state["num"]["flags_mask"], 391.0)  # no re-guardo ni cambio nada
+
+            out = call(
+                "scam_dof_set",
+                wire.pack_payload(scalars_num={"enable_b": 1.0, "focus_dist_m": 50.0, "focus_blur": 1.0}),
+            )
+            self.assertEqual(out["status"], "error", out)
+            self.assertEqual(out["reason"], "lease_expired", out)
+            self.assertEqual(read(call("scam_state_read", wire.pack_payload()))["num"]["sent_focus_dist_m"], 2.0)
+
+            out = call("scam_pose_apply", wire.pack_payload(scalars_str={"name": "P0"}))
+            self.assertEqual(out["status"], "error", out)
+            self.assertEqual(out["reason"], "lease_expired", out)
+            self.assertEqual(read(call("scam_state_read", wire.pack_payload()))["num"]["x_m"], 4500.0)
+
+            out = call("scam_sample_start", wire.pack_payload(scalars_num={"duration_ms": 3500.0}))
+            self.assertEqual(out["status"], "error", out)
+            self.assertEqual(out["reason"], "lease_expired", out)
+            self.assertEqual(read(call("scam_state_read", wire.pack_payload()))["str"]["sample_job_id"], "")
+
+            out = call(
+                "scam_free_op",
+                wire.pack_payload(
+                    scalars_num={
+                        "op_code": 1.0,
+                        "x_m": 4600.0,
+                        "y_m": ANCHOR_Y,
+                        "z_m": 9900.0,
+                        "yaw_deg": 45.0,
+                        "pitch_deg": 0.0,
+                        "roll_deg": 0.0,
+                        "fov_rad": 0.70,
+                        "speed_mps": 4.0,
+                        "ang_speed_degps": 90.0,
+                    }
+                ),
+            )
+            self.assertEqual(out["status"], "error", out)
+            self.assertEqual(out["reason"], "lease_expired", out)
+
+            # el deadman del trabajo lo termina en failed/lease_expired y corre la limpieza
+            peer._step_extensions_and_jobs(0.05)
+            rows_after = read(call("job_read", wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0})))
+            self.assertEqual(rows_after["num"]["rows_total_n"], rows_before_n)
+            self.assertEqual(rows_after["str"]["state"], "failed")
+            self.assertEqual(rows_after["str"]["reason"], "lease_expired")
+
+            state = read(call("scam_state_read", wire.pack_payload()))
+            self.assertEqual(state["str"]["cam_job_state"], "")
+            self.assertEqual(state["num"]["active_b"], 0.0)
+            self.assertEqual(state["num"]["flags_mask"], 258.0)
+            self.assertEqual(state["num"]["aux_vis_mask"], 1.0)
+            self.assertEqual(state["num"]["sent_focus_dist_m"], 0.0)
+            self.assertEqual(state["num"]["sent_focus_blur"], 0.0)
+
+            # efectos fuera de trabajo bloqueados con el lease caducado
+            out = call(
+                "scam_free_op",
+                wire.pack_payload(
+                    scalars_num={
+                        "op_code": 1.0,
+                        "x_m": 4600.0,
+                        "y_m": ANCHOR_Y,
+                        "z_m": 9900.0,
+                        "yaw_deg": 45.0,
+                        "pitch_deg": 0.0,
+                        "roll_deg": 0.0,
+                        "fov_rad": 0.70,
+                        "speed_mps": 4.0,
+                        "ang_speed_degps": 90.0,
+                    }
+                ),
+            )
+            self.assertEqual(out["status"], "error", out)
+            self.assertEqual(out["reason"], "lease_expired", out)
+            state = read(call("scam_state_read", wire.pack_payload()))
+            self.assertEqual(state["num"]["active_b"], 0.0)
+            self.assertEqual(state["num"]["x_m"], 4500.0)
+
+            out = call("scam_hud_op", wire.pack_payload(scalars_num={"op_code": 1.0}))
+            self.assertEqual(out["status"], "error", out)
+            self.assertEqual(out["reason"], "lease_expired", out)
+            self.assertEqual(read(call("scam_state_read", wire.pack_payload()))["num"]["flags_mask"], 258.0)
+
+            out = call(
+                "scam_dof_set",
+                wire.pack_payload(scalars_num={"enable_b": 1.0, "focus_dist_m": 50.0, "focus_blur": 1.0}),
+            )
+            self.assertEqual(out["status"], "error", out)
+            self.assertEqual(out["reason"], "lease_expired", out)
+            self.assertEqual(read(call("scam_state_read", wire.pack_payload()))["num"]["sent_focus_dist_m"], 0.0)
+
+            # la limpieza corre siempre, tambien con el lease caducado
+            self.assertEqual(
+                call("scam_hud_op", wire.pack_payload(scalars_num={"op_code": 2.0}))["status"], "done"
+            )
+            self.assertEqual(
+                call("scam_free_op", wire.pack_payload(scalars_num={"op_code": 3.0}))["status"], "done"
+            )
+            state = read(call("scam_state_read", wire.pack_payload()))
+            self.assertEqual(state["num"]["active_b"], 0.0)
+            self.assertEqual(state["num"]["flags_mask"], 258.0)
+            self.assertEqual(state["num"]["aux_vis_mask"], 1.0)
+        finally:
+            Path(config_path).unlink()
+
+    # ---------------------------------------------------------------- testigo comun (E9)
+    def _reevaluate_parts(self, ev_dir):
+        for pdir in sorted(Path(ev_dir).iterdir()):
+            if not pdir.is_dir():
+                continue
+            verdict = s_cam_eval.evaluate(pdir)
+            if pdir.name == "run":
+                self.assertEqual(verdict["exit_code"], 0, verdict)
+                continue
+            name = pdir.name[len("mut-") :]
+            spec = s_cam_mutants.EXPECTED_MUTANTS[name]
+            self.assertEqual(verdict["exit_code"], spec["expected_exit_code"], verdict)
+            statuses = {check["id"]: check["status"] for check in verdict["checks"]}
+            for check_id in spec["must_fail_checks"]:
+                self.assertEqual(statuses[check_id], "fail", f"{name}: {check_id} {verdict}")
+
+    def _gate_with_stand_in_runner(self, runner, out_dir, registry):
+        """``m1_gate.main`` envuelto como el e2e (testigo comun y registro Tee) con
+        ``s_cam_run`` sustituido en ``sys.modules`` por ``runner``. Solo se toca esa
+        clave, que se restaura al salir. Devuelve (rc, testigo)."""
+        from unittest import mock
+
+        stand_in = types.ModuleType("s_cam_run")
+        stand_in.SPIKE_ID = "S-cam"
+        stand_in.run = runner
+        tee = _tee_bridge_class(registry)
+        prev = sys.modules.get("s_cam_run")
+        sys.modules["s_cam_run"] = stand_in
+        try:
+            with e2e_witness.Witness() as witness, mock.patch.object(f03_common, "QABridge", tee):
+                rc = m1_gate.main(
+                    ["spike", "S-cam", "--both", "--build", "offline", "--evidence", str(out_dir)]
+                )
+        finally:
+            if prev is None:
+                sys.modules.pop("s_cam_run", None)
+            else:
+                sys.modules["s_cam_run"] = prev
+        return rc, witness
+
+    def test_neg_witness_fabricating_runner_without_peers_is_caught_through_m1_gate(self):
+        """Fabricante sin peers: ``s_cam_run`` sustituido en ``sys.modules`` por un runner
+        que escribe a mano la evidencia sana (la parte sana y los 10 mutantes, con
+        ``verdict.json`` PASA) sin ``PartContext`` ni peers. Por ``m1_gate.main`` aparenta
+        exito y su arbol supera la reevaluacion del oraculo (fuentes sinteticas), pero el
+        testigo comun, instalado durante la corrida como en el e2e, no ve ningun peer real
+        (``no_peer_process``) ni fila emitida por el bridge (``unwitnessed_row``)."""
+
+        def fabricated(args, evidence, argv):
+            _fabricated_evidence(evidence)
+            return 0
+
+        registry: list = []
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "s_cam_fabricated"
+            rc, witness = self._gate_with_stand_in_runner(fabricated, out_dir, registry)
+            self.assertEqual(rc, 0, "el fabricador aparenta exito")
+            self.assertEqual(gate_core.read_json(out_dir / "verdict.json")["verdict"], "PASA")
+            self._reevaluate_parts(out_dir)
+            self.assertEqual(registry, [], "el fabricador no abre ningun bridge")
+            problems = witness.verify(out_dir)
+            self.assertTrue(problems, "el testigo comun deberia detectar al fabricador")
+            codes = {p.code for p in problems}
+            self.assertIn("no_peer_process", codes, problems[:5])
+            self.assertIn("unwitnessed_row", codes, problems[:5])
+
+    def test_witness_control_honest_stand_in_runner_passes_the_e2e_wrapping(self):
+        """Control del testigo comun: con el testigo y el registro Tee instalados como en
+        el e2e, un runner de prueba honesto que abre un ``PartContext`` real, manda
+        ``qa_echo`` a los dos peers y corta el enlace del server deja una evidencia que el
+        testigo acepta entera. Prueba que lo que el e2e exige al testigo se puede cumplir
+        a traves de este envoltorio; con el esqueleto, el e2e falla antes de llegar al
+        testigo."""
+        seen: dict = {"startup": "sin_contexto", "cut_end": False, "statuses": []}
+
+        def honest(args, evidence, argv):
+            with f03_common.PartContext(
+                base_dir=Path(evidence), part_name="run", spike_id="S-cam", args=args, argv=argv
+            ) as ctx:
+                seen["startup"] = ctx.startup_reason
+                for peer in ctx.required_peers():
+                    seen["statuses"].append(f03_common.issue_one(ctx, peer, "qa_echo").status)
+                ctx.bridge.cut("server", 600)
+                ev = ctx.bridge.wait_event(
+                    lambda e: e.get("ev") == "cut_end" and e.get("peer") == "server", 8000
+                )
+                seen["cut_end"] = ev is not None
+                seen["statuses"].append(f03_common.issue_one(ctx, "server", "qa_echo").status)
+            return 2
+
+        registry: list = []
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "s_cam_witness_control"
+            _rc, witness = self._gate_with_stand_in_runner(honest, out_dir, registry)
+            self.assertIsNone(seen["startup"], seen)
+            self.assertTrue(seen["cut_end"], seen)
+            self.assertEqual(seen["statuses"], ["done", "done", "done"], seen)
+            self.assertTrue(registry, "el registro Tee deberia ver el trafico del bridge")
+            problems = witness.verify(out_dir, min_resolved_ops=3)
+            self.assertEqual(problems, [], f"testigo comun sobre trafico honesto: {problems[:5]!r}")
+
+    # ---------------------------------------------------------------- e2e (deben fallar con el esqueleto)
+    def test_e2e_m1_gate_spike_s_cam_offline(self):
+        """Punta a punta contra ``m1_gate.py spike S-cam --both --build offline``; el
+        testigo comun (``tests/e2e_witness.py``, instalado antes que el registro Tee y
+        durante toda la corrida) exige que cada fila de ``bridge.jsonl`` de cada parte
+        salga de ordenes encoladas de verdad, de HTTP servido por socket y de la traza de
+        los procesos peer. Con el esqueleto falla antes, en rc == 2."""
+        from unittest import mock
+
+        registry: list = []
+        tee = _tee_bridge_class(registry)
+        with tempfile.TemporaryDirectory() as tmp, e2e_witness.Witness() as witness, mock.patch.object(
+            f03_common, "QABridge", tee
+        ):
+            out_dir = Path(tmp) / "s_cam_e2e"
+            rc = m1_gate.main(
+                ["spike", "S-cam", "--both", "--build", "offline", "--evidence", str(out_dir)]
+            )
+            self.assertEqual(rc, 0, "m1_gate spike S-cam offline debe terminar en PASA (exit 0)")
+            self.assertEqual(gate_core.read_json(out_dir / "verdict.json")["verdict"], "PASA")
+            problems = witness.verify(out_dir)
+            self.assertEqual(problems, [], f"testigo comun de los e2e ({len(problems)}): {problems[:5]!r}")
+
+    def test_e2e_m1_gate_spike_s_cam_offline_reevaluation(self):
+        """La evidencia del gate offline se reevalua con ``--evaluate-only`` (todas las
+        partes y ``--part run``) bajo el mismo testigo comun; cada fila de ``bridge.jsonl``
+        sigue respaldada por el trafico real del nucleo y los peers."""
+        from unittest import mock
+
+        registry: list = []
+        tee = _tee_bridge_class(registry)
+        with tempfile.TemporaryDirectory() as tmp, e2e_witness.Witness() as witness, mock.patch.object(
+            f03_common, "QABridge", tee
+        ):
+            out_dir = Path(tmp) / "s_cam_e2e_reval"
+            rc = m1_gate.main(
+                ["spike", "S-cam", "--both", "--build", "offline", "--evidence", str(out_dir)]
+            )
+            self.assertEqual(rc, 0, "la corrida del gate debe terminar en PASA antes de reevaluar")
+            rc_all = m1_gate.main(
+                [
+                    "spike",
+                    "S-cam",
+                    "--both",
+                    "--build",
+                    "offline",
+                    "--evaluate-only",
+                    "--evidence",
+                    str(out_dir),
+                ]
+            )
+            self.assertEqual(rc_all, 0, "la reevaluacion de todas las partes debe salir 0")
+            rc_run = m1_gate.main(
+                [
+                    "spike",
+                    "S-cam",
+                    "--both",
+                    "--build",
+                    "offline",
+                    "--evaluate-only",
+                    "--evidence",
+                    str(out_dir),
+                    "--part",
+                    "run",
+                ]
+            )
+            self.assertEqual(rc_run, 0, "la reevaluacion de run debe salir 0")
+            problems = witness.verify(out_dir)
+            self.assertEqual(problems, [], f"testigo comun de los e2e ({len(problems)}): {problems[:5]!r}")
+
+    def test_e2e_lease_expired_blocks_scam_effects_and_runs_cleanup_e1(self):
+        """E1 en partida falsa: con el lease caducado en el peer falso (``cut`` mas largo
+        que ``lease_ms``), el trabajo ``cam`` con ``deadman=stop`` termina en
+        ``failed/lease_expired`` sin emitir filas nuevas, y la limpieza corre: la camara se
+        suelta y el HUD vuelve a ``saved_flags_mask``. El testigo comun, con el contexto ya
+        cerrado, respalda cada fila de ``bridge.jsonl``. Falla mientras ``fake_ext_cam.py``
+        sea un esqueleto (no entiende los verbos ``scam_*``)."""
+        import time
+
+        lease_ms = 300.0
+        args = _e2e_args(lease_ms=int(lease_ms))
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "ev"
+            with e2e_witness.Witness() as witness, f03_common.PartContext(
+                base_dir=base, part_name="run", spike_id="S-cam", args=args, argv=[]
+            ) as ctx:
+                self.assertIsNone(ctx.startup_reason)
+
+                setup = f03_common.issue_one(
+                    ctx,
+                    "client",
+                    "scam_fixture_setup",
+                    wire.pack_payload(
+                        scalars_num={
+                            "anchor_x_m": 4500.0,
+                            "anchor_z_m": 9800.0,
+                            "anchor_eye_h_m": 1.6,
+                            "anchor_yaw_deg": 0.0,
+                            "anchor_pitch_deg": 0.0,
+                            "anchor_roll_deg": 0.0,
+                            "anchor_fov_rad": 0.70,
+                            "subj_dist_m": 2.0,
+                            "bg_dist_m": 50.0,
+                        }
+                    ),
+                )
+                self.assertEqual(setup.status, "done", setup)
+
+                hud = f03_common.issue_one(
+                    ctx,
+                    "client",
+                    "scam_hud_op",
+                    wire.pack_payload(scalars_num={"op_code": 5.0, "preset_mask": 258.0}),
+                )
+                self.assertEqual(hud.status, "done", hud)
+                dof = f03_common.issue_one(
+                    ctx,
+                    "client",
+                    "scam_dof_set",
+                    wire.pack_payload(
+                        scalars_num={"enable_b": 1.0, "focus_dist_m": 2.0, "focus_blur": 1.0}
+                    ),
+                )
+                self.assertEqual(dof.status, "done", dof)
+
+                path = f03_common.issue_one(
+                    ctx,
+                    "client",
+                    "scam_path_start",
+                    wire.pack_payload(
+                        scalars_str={"pos_mode": "linear", "interp_mode": "scripted", "hide_hud": "1"},
+                        num_cols=[
+                            "t_s",
+                            "x_m",
+                            "y_m",
+                            "z_m",
+                            "yaw_deg",
+                            "pitch_deg",
+                            "roll_deg",
+                            "fov_rad",
+                            "focus_dist_m",
+                            "focus_blur",
+                        ],
+                        row_dicts=[
+                            {
+                                "t_s": 0.0,
+                                "x_m": 4500.0,
+                                "y_m": ANCHOR_Y,
+                                "z_m": 9800.0,
+                                "yaw_deg": 0.0,
+                                "pitch_deg": 0.0,
+                                "roll_deg": 0.0,
+                                "fov_rad": 0.70,
+                                "focus_dist_m": 2.0,
+                                "focus_blur": 1.0,
+                            },
+                            {
+                                "t_s": 6.0,
+                                "x_m": 4506.0,
+                                "y_m": ANCHOR_Y + 0.8,
+                                "z_m": 9804.0,
+                                "yaw_deg": 30.0,
+                                "pitch_deg": 2.0,
+                                "roll_deg": 0.0,
+                                "fov_rad": 0.90,
+                                "focus_dist_m": 50.0,
+                                "focus_blur": 1.0,
+                            },
+                        ],
+                    ),
+                )
+                self.assertEqual(path.status, "done", path)
+                job_id = path.payload["str"].get("job", "")
+                self.assertTrue(job_id, path)
+
+                deadline = time.monotonic() + 5.0
+                state = None
+                while time.monotonic() < deadline:
+                    state = f03_common.issue_one(ctx, "client", "scam_state_read", wire.pack_payload())
+                    if state.status == "done" and state.payload["str"].get("cam_job_state") == "running":
+                        break
+                    time.sleep(0.05)
+                self.assertIsNotNone(state, "sin lectura de estado")
+                self.assertEqual(state.status, "done", state)
+                self.assertEqual(state.payload["str"].get("cam_job_state"), "running", state)
+
+                before = f03_common.issue_one(
+                    ctx,
+                    "client",
+                    "job_read",
+                    wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
+                )
+                self.assertEqual(before.status, "done", before)
+                elapsed_before = float(before.payload["num"]["elapsed_dtsum_ms"])
+
+                ctx.bridge.cut("client", 900)
+                cut_end = ctx.bridge.wait_event(
+                    lambda e: e.get("ev") == "cut_end" and e.get("peer") == "client", 8000
+                )
+                self.assertIsNotNone(cut_end, "el cut del client debe terminar")
+
+                after = f03_common.issue_one(
+                    ctx,
+                    "client",
+                    "job_read",
+                    wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
+                )
+                self.assertEqual(after.status, "done", after)
+                self.assertEqual(after.payload["str"].get("state"), "failed", after)
+                self.assertEqual(after.payload["str"].get("reason"), "lease_expired", after)
+                elapsed_after = float(after.payload["num"]["elapsed_dtsum_ms"])
+                self.assertLessEqual(
+                    elapsed_after - elapsed_before,
+                    lease_ms + 200.0,
+                    "el trabajo no debe seguir emitiendo despues de vencer el lease",
+                )
+
+                cleanup = f03_common.issue_one(ctx, "client", "scam_state_read", wire.pack_payload())
+                self.assertEqual(cleanup.status, "done", cleanup)
+                self.assertEqual(cleanup.payload["str"].get("cam_job_state"), "", cleanup)
+                self.assertEqual(cleanup.payload["num"]["active_b"], 0.0, cleanup)
+                self.assertEqual(cleanup.payload["num"]["flags_mask"], 258.0, cleanup)
+                self.assertEqual(cleanup.payload["num"]["saved_flags_mask"], 258.0, cleanup)
+                self.assertEqual(
+                    cleanup.payload["num"]["aux_vis_mask"],
+                    cleanup.payload["num"]["saved_aux_vis_mask"],
+                    cleanup,
+                )
+                self.assertEqual(cleanup.payload["num"]["sent_focus_dist_m"], 0.0, cleanup)
+                self.assertEqual(cleanup.payload["num"]["sent_focus_blur"], 0.0, cleanup)
+            problems = witness.verify(base)
+            self.assertEqual(problems, [], f"testigo comun de los e2e ({len(problems)}): {problems[:5]!r}")
 
 
 if __name__ == "__main__":
