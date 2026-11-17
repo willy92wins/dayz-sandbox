@@ -1074,7 +1074,7 @@ class PersistFakeExt(FakeExt):
                 pos=pos,
                 ori=ori,
                 max_hp=DEFAULT_MAX_HP,
-                health_hp=DEFAULT_MAX_HP,
+                health_hp=DEFAULT_MAX_HP * ratio if ratio > 0.0 else DEFAULT_MAX_HP,
                 spawn_tick_ms=now_ms,
                 persistent=True,
                 own_logical_id="",
@@ -1310,7 +1310,7 @@ class PersistFakeExt(FakeExt):
                 # por identidad/marca: se protege entero.
                 rec_net_ids = {r["ent"]["net_id"] for r in kept_records}
                 has_foreign_desc = any(
-                    d["net_id"] not in qa_net_ids and d["net_id"] not in rec_net_ids
+                    d["net_id"] not in qa_net_ids and d["net_id"] not in rec_net_ids and not (d["class_name"] in SENTINEL_CLASSES and _is_health_mark(d))
                     for d in self._descendants(net_id)
                 )
                 if has_foreign_desc:

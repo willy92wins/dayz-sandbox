@@ -572,7 +572,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			EntityAI child = items.Get(i);
 			if (!child || child == ent)
 				continue;
-			if (!FindRecordByObject(child) && !FindRawRecordByObject(child))
+			if (!FindRecordByObject(child) && !FindRawRecordByObject(child) && !(IsSentinelClass(child.GetType()) && IsQaHealthMark(child)))
 				foreignCount = foreignCount + 1;
 		}
 		return foreignCount;
@@ -1698,6 +1698,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 							childObj = GameInventory.LocationCreateEntity(chLoc, childCargoClass, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
 							if (childObj)
 								childCountN = 1;
+							EntityAI childEnt = EntityAI.Cast(childObj);
+							if (childEnt && hRatio > 0.0 && childEnt.GetMaxHealth("", "") > 0.0) childEnt.SetHealth("", "", childEnt.GetMaxHealth("", "") * hRatio);
 						}
 					}
 				}

@@ -546,6 +546,79 @@ class TestFakeCleanup(_GuardedTestCase):
         self.assertIn(cont_net, ext.world)
 
 
+class TestPersistentControlMarkCleanup(_GuardedTestCase):
+    """Ronda 24: el hijo del control nace con la marca y, sin registros en
+    memoria (lo que pierde la sonda al reiniciar), la limpieza de t6 lo
+    reconoce por clase centinela + marca, no por ficheros."""
+
+    def _spawn_control(self, ext):
+        status, reason, payload = ext.on_start_op(
+            {"op_id": "op-ctrl", "verb": "per_spawn_raw", "qa_fault": ""},
+            _unpacked(
+                strings={"tag": "c_persistent_control", "mode": "persistent_control",
+                         "class_name": "Barrel_Yellow", "child_cargo_class": "Fireplace",
+                         "target_scene_id": "", "target_parent_id": ""},
+                numbers={"x_m": 4860.0, "z_m": 10200.0, "yaw_deg": 15.0,
+                         "health_mark_ratio": 0.845},
+            ), {},
+        )
+        self.assertEqual(status, "done")
+        out = wire.unpack_payload(payload)
+        self.assertEqual(out["num"].get("child_count_n"), 1.0)
+        ctrl_net = out["str"]["net_id"]
+        child = next(e for e in ext.world.values() if e["parent_net_id"] == ctrl_net)
+        return ctrl_net, child
+
+    def _cleanup_area_c(self, ext):
+        status, reason, payload = ext.on_start_op(
+            {"op_id": "op-clean", "verb": "per_cleanup_qa", "qa_fault": ""},
+            _unpacked(
+                strings={"cleanup_tag": "t6"},
+                ncol=["center_x_m", "center_z_m", "radius_m"], scol=["area_tag"],
+                rows=[{"area_tag": "area_c", "center_x_m": 4860.0,
+                       "center_z_m": 10200.0, "radius_m": 60.0}],
+            ), {},
+        )
+        self.assertEqual(status, "done")
+        return wire.unpack_payload(payload)
+
+    def test_control_child_born_with_health_mark(self):
+        peer, jobs, ext = _make_fake()
+        ctrl_net, child = self._spawn_control(ext)
+        self.assertEqual(child["class_name"], "Fireplace")
+        self.assertTrue(fake_ext_persist._is_health_mark(child))
+        self.assertAlmostEqual(
+            child["health_hp"], child["max_hp"] * 0.845, delta=1e-2
+        )
+
+    def test_cleanup_without_memory_records_deletes_control_and_child(self):
+        peer, jobs, ext = _make_fake()
+        ctrl_net, child = self._spawn_control(ext)
+        child_net = child["net_id"]
+        ext.records = []
+        ext.raw_net_ids = set()
+        ext.qa_net_ids = set()
+        out = self._cleanup_area_c(ext)
+        self.assertNotIn(ctrl_net, ext.world)
+        self.assertNotIn(child_net, ext.world)
+        self.assertGreaterEqual(out["num"]["cleaned_raw_n"], 1.0)
+
+    def test_cleanup_keeps_control_with_unmarked_foreign_descendant(self):
+        peer, jobs, ext = _make_fake()
+        ctrl_net, child = self._spawn_control(ext)
+        ext.records = []
+        ext.raw_net_ids = set()
+        ext.qa_net_ids = set()
+        ext._add_entity(
+            net_id="9:999", pers_id="0:0:0:0", class_name="Compass", cat="raw",
+            loc_kind="cargo", parent_net_id=ctrl_net, parent_class="Barrel_Yellow",
+            slot_name="Cargo:0:1:0", pos=child["pos"],
+            max_hp=100.0, health_hp=100.0, persistent=True, area_id="area_c",
+        )
+        self._cleanup_area_c(ext)
+        self.assertIn(ctrl_net, ext.world)
+
+
 class TestFakeGenerationsAndLease(_GuardedTestCase):
     def test_retained_rows_are_partial_and_not_duplicated(self):
         peer, jobs, ext = TestFakeCleanup()._applied_ext()
