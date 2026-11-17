@@ -1744,6 +1744,64 @@ def _check_cam_08(samples: dict) -> dict:
     return _chk("CAM-08", "pass", "ok")
 
 
+def _first_event(scenario: list, ev: str, phase: str) -> dict | None:
+    for row in scenario:
+        if row.get("ev") == ev and row.get("phase") == phase:
+            return row
+    return None
+
+
+def _num_any(scenario: list, key: str, phases: tuple) -> float | None:
+    for phase in phases:
+        for row in scenario:
+            if row.get("phase") != phase:
+                continue
+            nk = _nk(row)
+            if key in nk:
+                try:
+                    return float(nk[key])
+                except (TypeError, ValueError):
+                    continue
+    return None
+
+
+def _avg_pose(a: dict, b: dict):
+    out = {}
+    for key in POSE_SCALARS:
+        va = _num(a, key)
+        vb = _num(b, key)
+        if va is None or vb is None:
+            return None
+        out[key] = (va + vb) / 2.0
+    return out
+
+
+def _path_row_hidden(row: dict):
+    try:
+        elem = float(row["elem_vis_mask"])
+        qb = float(row["qb_vis_b"])
+        flags = int(float(row["flags_mask"]))
+        menu = float(row["menu_open_b"])
+        ovl = float(row["ovl_vis_b"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return elem, qb, flags, menu, ovl
+
+
+def _recovery_row(row: dict):
+    try:
+        return {
+            "tick_ms": float(row["tick_ms"]),
+            "mcam": float(row["mcam_active_b"]),
+            "eng_pos": _row_pos(row, "eng_"),
+            "eng_dir": _row_dir(row, "eng_"),
+            "pl_pos": _row_pos(row, "pl_cam_"),
+            "pl_dir": _row_dir(row, "pl_cam_"),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 # CAM-09: HUD, quickbar y auxiliares ocultos en todo el recorrido, comparación
 # visual en la pose exacta de la captura, detector recursivo de overlays y
 # restauración completa de flags y auxiliares. Captura fuera de ventana, pose
@@ -1753,7 +1811,190 @@ def _check_cam_08(samples: dict) -> dict:
 # y contra referencia limpia < 2.0/< 1.5, restauración 258 y auxiliares, y los
 # dos controles negativos observados. FAIL en caso contrario.
 def _check_cam_09(samples: dict) -> dict:
-    return _not_implemented("CAM-09")
+    scenario = samples.get("scenario") or []
+    phase = "SCAM-S3"
+    rois = samples.get("fixtures_rois") or {}
+    roi_qb = rois.get("roi_quickbar")
+    roi_full = rois.get("full_screen")
+    if roi_qb is None or roi_full is None:
+        return _chk("CAM-09", "missing", "no_rois")
+
+    rows = samples.get("paths", {}).get("path_linear_hud") or []
+    missing = []
+    if not rows:
+        missing.append("no_path_linear_hud")
+
+    cap_event = _capture_event(samples, "hud_during.bmp")
+    pre_cap = post_cap = None
+    if cap_event is not None:
+        for key in ("pre_step", "post_step"):
+            step = cap_event.get(key)
+            if isinstance(step, str) and step:
+                row = _state(scenario, phase, step)
+                if row is not None:
+                    if key == "pre_step":
+                        pre_cap = row
+                    else:
+                        post_cap = row
+    if pre_cap is None:
+        pre_cap = _find_state(scenario, phase, "pre_cap", "precap", "pre_capture")
+    if post_cap is None:
+        post_cap = _find_state(scenario, phase, "post_cap", "postcap", "post_capture")
+    if cap_event is not None and not _capture_window_ok(cap_event, rois):
+        missing.append("window:hud_during")
+
+    p_cap = None
+    if pre_cap is None or post_cap is None:
+        missing.append("no_capture_bracket")
+    else:
+        if (
+            _sk(pre_cap).get("cam_job_state") != "running"
+            or _sk(post_cap).get("cam_job_state") != "running"
+        ):
+            missing.append("capture_job_not_running")
+        pre_dt = _num(pre_cap, "cam_dtsum_ms")
+        post_dt = _num(post_cap, "cam_dtsum_ms")
+        if pre_dt is None or post_dt is None:
+            missing.append("bad_capture_dtsum")
+        else:
+            mid_dt = (pre_dt + post_dt) / 2.0
+            if mid_dt < 1850.0 or mid_dt > 2150.0:
+                missing.append("capture_window")
+        p_cap = _avg_pose(pre_cap, post_cap)
+        if p_cap is None:
+            missing.append("bad_capture_pose")
+        try:
+            if _dist(_row_pos(_nk(post_cap)), _row_pos(_nk(pre_cap))) > 0.05:
+                missing.append("capture_moved")
+            if _theta3d_cells(_nk(post_cap), _nk(pre_cap)) > 0.2:
+                missing.append("capture_rotated")
+        except (KeyError, TypeError, ValueError):
+            missing.append("bad_capture_pose")
+
+    clean_ref = _find_state(
+        scenario, phase, "clean_ref_state", "clean_ref", "ref_state", "post_clean_ref"
+    )
+    if clean_ref is None:
+        ref_event = _capture_event(samples, "hud_clean_ref.bmp")
+        if ref_event is not None:
+            step = ref_event.get("pre_step")
+            if isinstance(step, str) and step:
+                clean_ref = _state(scenario, phase, step)
+    if clean_ref is None:
+        missing.append("no_clean_ref_state")
+    elif p_cap is not None:
+        try:
+            if _dist(_row_pos(_nk(clean_ref)), [p_cap["x_m"], p_cap["y_m"], p_cap["z_m"]]) > 0.01:
+                missing.append("clean_ref_pose_moved")
+            if _theta3d_euler(_nk(clean_ref), p_cap) > 0.05:
+                missing.append("clean_ref_pose_rotated")
+            if abs(_num(clean_ref, "fov_rad") - p_cap["fov_rad"]) > 0.001:
+                missing.append("clean_ref_fov")
+        except (KeyError, TypeError, ValueError):
+            missing.append("bad_clean_ref_pose")
+
+    gray_during = _capture_ready(samples, "hud_during.bmp", rois, missing)
+    gray_clean = _capture_ready(samples, "hud_clean_ref.bmp", rois, missing)
+    gray_repeat = _capture_ready(samples, "hud_clean_ref_repeat.bmp", rois, missing)
+    gray_visible = _capture_ready(samples, "hud_visible_ref.bmp", rois, missing)
+    if gray_clean is not None and gray_repeat is not None:
+        if mad(gray_clean, gray_repeat, roi_full) >= 1.0:
+            missing.append("noise:clean_ref")
+
+    qb_items = _num(pre_cap, "qb_items_n") if pre_cap is not None else None
+    if qb_items is None:
+        qb_items = _num_any(scenario, "qb_items_n", (phase, "SCAM-S0"))
+    if qb_items is None:
+        missing.append("no_qb_items")
+    elif qb_items < 1.0:
+        return _chk("CAM-09", "fail", "qb_items_n=0")
+    in_veh = _num_any(scenario, "player_in_veh_b", (phase, "SCAM-S0"))
+    if in_veh is None:
+        missing.append("no_player_in_veh")
+    elif in_veh != 0.0:
+        return _chk("CAM-09", "fail", "player_in_vehicle")
+
+    for i, row in enumerate(rows):
+        fields = _path_row_hidden(row)
+        if fields is None:
+            missing.append(f"bad_path_row_{i}")
+            continue
+        elem, qb, flags, menu, ovl = fields
+        if elem != 0.0:
+            return _chk("CAM-09", "fail", f"elem_vis_row_{i}")
+        if qb != 0.0:
+            return _chk("CAM-09", "fail", f"qb_vis_row_{i}")
+        if (flags & 391) != 391:
+            return _chk("CAM-09", "fail", f"flags_mask_row_{i}")
+        if (flags & 1024) != 0:
+            return _chk("CAM-09", "fail", f"inventory_open_row_{i}")
+        if menu != 0.0:
+            return _chk("CAM-09", "fail", f"menu_open_row_{i}")
+        if ovl != 0.0:
+            return _chk("CAM-09", "fail", f"ovl_vis_row_{i}")
+
+    if pre_cap is not None:
+        aux_cap = _num(pre_cap, "aux_vis_mask")
+        if aux_cap is None:
+            missing.append("no_aux_vis_pre_cap")
+        elif aux_cap != 0.0:
+            return _chk("CAM-09", "fail", "aux_visible_pre_cap")
+
+    if (
+        gray_during is not None
+        and gray_visible is not None
+        and gray_clean is not None
+    ):
+        if mad(gray_during, gray_visible, roi_qb) < 4.0:
+            return _chk("CAM-09", "fail", "quickbar_not_detected")
+        if mad(gray_during, gray_clean, roi_full) >= 2.0:
+            return _chk("CAM-09", "fail", "hud_leak_full_screen")
+        if mad(gray_during, gray_clean, roi_qb) >= 1.5:
+            return _chk("CAM-09", "fail", "hud_leak_quickbar")
+
+    post_hud = _find_state(
+        scenario, phase, "post_path_hud", "post_path", "post_hud", "post_job_hud"
+    )
+    if post_hud is None:
+        missing.append("no_post_path_hud")
+    else:
+        fm = _num(post_hud, "flags_mask")
+        sfm = _num(post_hud, "saved_flags_mask")
+        av = _num(post_hud, "aux_vis_mask")
+        sav = _num(post_hud, "saved_aux_vis_mask")
+        if None in (fm, sfm, av, sav):
+            missing.append("bad_post_path_hud")
+        else:
+            if fm != 258.0 or sfm != 258.0:
+                return _chk("CAM-09", "fail", "flags_not_restored")
+            if av != sav or sav <= 0.0:
+                return _chk("CAM-09", "fail", "aux_not_restored")
+
+    controls = {}
+    for row in scenario:
+        if row.get("ev") != "hud_control" or row.get("phase") != phase:
+            continue
+        try:
+            mode = int(float(row.get("mode")))
+        except (TypeError, ValueError):
+            continue
+        if mode in (1, 2) and mode not in controls:
+            controls[mode] = row
+    for mode, key, label in ((1, "qb_vis_b", "qb"), (2, "ovl_vis_b", "ovl")):
+        row = controls.get(mode)
+        if row is None:
+            missing.append(f"no_hud_control_mode_{mode}")
+            continue
+        value = _num(row, key)
+        if value is None:
+            missing.append(f"bad_hud_control_mode_{mode}")
+            continue
+        if value != 1.0:
+            return _chk("CAM-09", "fail", f"control_{label}_not_detected")
+
+    if missing:
+        return _chk("CAM-09", "missing", missing[0])
+    return _chk("CAM-09", "pass", "ok")
 
 
 # CAM-10: parar a mitad devuelve el control en < 1 s de reloj de pared. Exige
@@ -1763,7 +2004,182 @@ def _check_cam_09(samples: dict) -> dict:
 # la parada, inversión a B <= -2.0 grados, y restauración de flags y auxiliares.
 # FAIL en caso contrario.
 def _check_cam_10(samples: dict) -> dict:
-    return _not_implemented("CAM-10")
+    scenario = samples.get("scenario") or []
+    phase = "SCAM-S5"
+    rows = samples.get("control_recovery") or []
+    missing = []
+    if not rows:
+        return _chk("CAM-10", "missing", "no_control_recovery")
+
+    stop = _first_event(scenario, "stop", phase)
+    if stop is None:
+        missing.append("no_stop_event")
+    u = None
+    t0 = None
+    if stop is not None:
+        try:
+            send = float(stop["stop_send_h_ms"])
+            ack = float(stop["stop_ack_h_ms"])
+            u = ack - send
+        except (KeyError, TypeError, ValueError):
+            try:
+                u = float(stop["u_ms"])
+            except (KeyError, TypeError, ValueError):
+                u = None
+        try:
+            t0 = float(stop["stop_recv_ms"])
+        except (KeyError, TypeError, ValueError):
+            t0 = None
+    if u is None:
+        missing.append("no_stop_u")
+    elif u > 100.0:
+        missing.append("u_over_100ms")
+    if t0 is None:
+        missing.append("no_stop_recv")
+
+    pulses = {"A": [], "B": []}
+    for row in scenario:
+        if row.get("ev") != "pulse" or row.get("phase") != phase:
+            continue
+        burst = row.get("burst")
+        if burst not in pulses:
+            continue
+        try:
+            issued = float(row["issued_h_ms"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        pulses[burst].append((issued, row))
+    for burst in ("A", "B"):
+        if not pulses[burst]:
+            missing.append(f"no_burst_{burst}")
+
+    if missing:
+        return _chk("CAM-10", "missing", missing[0])
+
+    pulse_a_h = min((issued for issued, _ in pulses["A"]), default=None)
+    pulse_b_h = min((issued for issued, _ in pulses["B"]), default=None)
+    if pulse_a_h is not None:
+        dx_a = [float(row.get("dx_px")) for _, row in pulses["A"] if row.get("dx_px") is not None]
+        if dx_a and not any(v > 0.0 for v in dx_a):
+            return _chk("CAM-10", "fail", "burst_a_sign")
+    if pulse_b_h is not None:
+        dx_b = [float(row.get("dx_px")) for _, row in pulses["B"] if row.get("dx_px") is not None]
+        if dx_b and not any(v < 0.0 for v in dx_b):
+            return _chk("CAM-10", "fail", "burst_b_sign")
+
+    rec = []
+    for i, row in enumerate(rows):
+        parsed = _recovery_row(row)
+        if parsed is None:
+            return _chk("CAM-10", "missing", f"bad_control_row_{i}")
+        rec.append(parsed)
+    for i in range(1, len(rec)):
+        try:
+            prev = float(rows[i - 1]["frame"])
+            cur = float(rows[i]["frame"])
+        except (KeyError, TypeError, ValueError):
+            return _chk("CAM-10", "missing", "bad_frame_column")
+        if abs(cur - prev - 1.0) > 1e-6:
+            return _chk("CAM-10", "fail", f"frame_not_contiguous_{i}")
+
+    if t0 is None or pulse_a_h is None or pulse_b_h is None or u is None:
+        if missing:
+            return _chk("CAM-10", "missing", missing[0])
+        return _chk("CAM-10", "missing", "no_stop_timing")
+    ack = float(stop["stop_ack_h_ms"])
+    pulse_a_min = t0 + (pulse_a_h - ack)
+    pulse_b_min = t0 + (pulse_b_h - ack)
+
+    def handoff(item):
+        return (
+            item["mcam"] == 0.0
+            and _dist(item["eng_pos"], item["pl_pos"]) < 0.02
+            and _angle_between(item["eng_dir"], item["pl_dir"]) < 0.2
+        )
+
+    r0 = None
+    for idx, item in enumerate(rec):
+        if t0 <= item["tick_ms"] < pulse_a_min and handoff(item):
+            r0 = idx
+            break
+    if r0 is None:
+        return _chk("CAM-10", "fail", "no_handoff_row")
+
+    pre_a = [idx for idx, item in enumerate(rec) if r0 <= idx and item["tick_ms"] < pulse_a_min]
+    if not pre_a:
+        return _chk("CAM-10", "fail", "no_pre_pulse_window")
+    psi0 = math.degrees(
+        math.atan2(rec[r0]["pl_dir"][0], rec[r0]["pl_dir"][2])
+    )
+    for idx in pre_a:
+        item = rec[idx]
+        if item["mcam"] != 0.0 or not (
+            _dist(item["eng_pos"], item["pl_pos"]) < 0.02
+            and _angle_between(item["eng_dir"], item["pl_dir"]) < 0.2
+        ):
+            return _chk("CAM-10", "fail", "handoff_not_player_cam")
+        psi = math.degrees(math.atan2(item["pl_dir"][0], item["pl_dir"][2]))
+        if abs(_wrap180(psi - psi0)) >= 0.5:
+            return _chk("CAM-10", "fail", "pre_pulse_drift")
+    r_pre_a = pre_a[-1]
+    psi_pre = math.degrees(
+        math.atan2(rec[r_pre_a]["pl_dir"][0], rec[r_pre_a]["pl_dir"][2])
+    )
+
+    r1 = None
+    for idx, item in enumerate(rec):
+        if item["tick_ms"] < pulse_a_min or not handoff(item):
+            continue
+        psi = math.degrees(math.atan2(item["pl_dir"][0], item["pl_dir"][2]))
+        if _wrap180(psi - psi_pre) >= 3.0:
+            r1 = idx
+            break
+    if r1 is None:
+        return _chk("CAM-10", "fail", "no_burst_a_response")
+    if (rec[r1]["tick_ms"] - t0) + u >= 1000.0:
+        return _chk("CAM-10", "fail", "recovery_over_1s")
+
+    peak_delta = -180.0
+    for item in rec:
+        if pulse_a_min <= item["tick_ms"] < pulse_b_min:
+            psi = math.degrees(math.atan2(item["pl_dir"][0], item["pl_dir"][2]))
+            peak_delta = max(peak_delta, _wrap180(psi - psi_pre))
+    psi_peak = _wrap180(psi_pre + peak_delta) if peak_delta > -180.0 else psi_pre
+
+    if pulse_b_min <= rec[r1]["tick_ms"]:
+        return _chk("CAM-10", "fail", "burst_b_before_a_response")
+    r2 = None
+    for idx, item in enumerate(rec):
+        if item["tick_ms"] < pulse_b_min or idx <= r1 or not handoff(item):
+            continue
+        psi = math.degrees(math.atan2(item["pl_dir"][0], item["pl_dir"][2]))
+        if _wrap180(psi - psi_peak) <= -2.0:
+            r2 = idx
+            break
+    if r2 is None:
+        return _chk("CAM-10", "fail", "no_burst_b_inversion")
+
+    post_stop = _find_state(
+        scenario, phase, "post_stop_state", "post_stop", "post_stop_hud", "after_stop"
+    )
+    if post_stop is None:
+        missing.append("no_post_stop_state")
+    else:
+        fm = _num(post_stop, "flags_mask")
+        sfm = _num(post_stop, "saved_flags_mask")
+        av = _num(post_stop, "aux_vis_mask")
+        sav = _num(post_stop, "saved_aux_vis_mask")
+        if None in (fm, sfm, av, sav):
+            missing.append("bad_post_stop_state")
+        else:
+            if fm != 258.0 or sfm != 258.0:
+                return _chk("CAM-10", "fail", "flags_not_restored")
+            if av != sav:
+                return _chk("CAM-10", "fail", "aux_not_restored")
+
+    if missing:
+        return _chk("CAM-10", "missing", missing[0])
+    return _chk("CAM-10", "pass", "ok")
 
 
 def evaluate(part_dir) -> dict:
