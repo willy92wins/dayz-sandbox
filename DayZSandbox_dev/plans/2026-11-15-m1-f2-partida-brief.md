@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3.12, **congelada.** La v1.3.12 recoge el cierre de Sol r4 y la pasada de Claude sobre T2f-4: en una etapa positiva, `observado` es exactamente `("observado", "")`; el `server_epoch` de la parte deja de ser obligatorio; y T2f-5, antes de congelar (§6, §6.1, §12). La v1.3.11 recoge el arbitraje de Sol r4: el oráculo se ajusta al cable real de la sonda (las páginas no llevan `server_epoch` y el `result` no lleva `inst`) y cierra los PASA falsos y el FALLA espurio que encontró Sol (§6.1, §12). La v1.3.9 corrige lo que pasa al reiniciar el backend: sesión nueva, ids que se repiten y la op cortada de P5 sin terminal (§6.1, puntos 2, 5 y 6, y F2P-09). La v1.3.10 recoge el contrato de salud del censo de F0.3 (§5.3). Ver §12. Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
+- **Versión:** v1.3.13, **congelada.** La v1.3.13 corrige §5.2: P4c resetea solo la escena 1, y la escena 2 sigue aplicada en el backend (X-03 de la pasada de Claude sobre T2f-5, decisión de la principal; §5.2, §10, §12). La v1.3.12 recoge el cierre de Sol r4 y la pasada de Claude sobre T2f-4: en una etapa positiva, `observado` es exactamente `("observado", "")`; el `server_epoch` de la parte deja de ser obligatorio; y T2f-5, antes de congelar (§6, §6.1, §12). La v1.3.11 recoge el arbitraje de Sol r4: el oráculo se ajusta al cable real de la sonda (las páginas no llevan `server_epoch` y el `result` no lleva `inst`) y cierra los PASA falsos y el FALLA espurio que encontró Sol (§6.1, §12). La v1.3.9 corrige lo que pasa al reiniciar el backend: sesión nueva, ids que se repiten y la op cortada de P5 sin terminal (§6.1, puntos 2, 5 y 6, y F2P-09). La v1.3.10 recoge el contrato de salud del censo de F0.3 (§5.3). Ver §12. Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -243,7 +243,7 @@ Si S-persist decide otros valores, se cambia la constante y se anota su commit e
 | P3c | limpieza: la sonda borra sus ajenos (§5.3); reset de la escena 1 → `observado`; censo | escena 1 vacía; escena 2 aplicada | A3 |
 | P4a | control persistente puesto, **después** de la limpieza de P3c y fuera de la zona de F2 (§5.3, V-09); reinicio **solo del backend** (mismo epoch): apply de la escena 1 → reconcilia; el reset borra la generación viva; apply → 33; censo sin extras | escena 1 aplicada | A4 |
 | P4b | reinicio del **servidor** sin reset (epoch nuevo, mismo storage): censo → nada de F2 reaparece y el control persistente sí; apply → 33 | escena 1 aplicada | A3, A4 |
-| P4c | reset de la escena 1 y de la escena 2 → reinicio del servidor con reset previo: censo → nada de F2 reaparece y el control sí | sin F2 | A3 |
+| P4c | reset de la escena 1 → reinicio del servidor con reset previo: censo → nada de F2 reaparece y el control sí (v1.3.13) | sin F2 en el mundo; la escena 2 sigue aplicada en el backend y no se resetea | A3 |
 | P5 | apply cortado: el runner corta el bridge después de un efecto observado y antes del resultado, y reinicia el backend → lectura de reconciliación **antes** del apply nuevo → `33 + 0` | escena 1 aplicada | A4 (-) |
 
 - **Lo que no se puede provocar en el juego** lo cubren además los mutantes del oráculo (§6): metatests del evaluador, que no sustituyen a P2n (P-04).
@@ -893,6 +893,10 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
 - **El testigo de creación (P-03) y el control persistente (P-06)** dependen de F0.3. Sin ellos, T2 no se congela y P4b/P4c dan INCONCLUSO.
 - **Limitación conocida (Q-02), para después de M1:** «sin extras» se acredita **dentro de la cobertura** del censo y del testigo, en modo de radio. Un huérfano nacido fuera de esa cobertura no se ve en M1. El testigo de mapa entero quedó fuera por decisión de la principal: era MAY, no BLOQ, y cada pieza de Enforce en la sonda cuesta una ronda de Sol, partida y riesgo.
 - **Limitación conocida (Q-03), para después de M1:** en partida no se mete un objeto **registrado** de la escena 2 dentro de un contenedor de la escena 1, porque haría falta un traslado por `net_id` (`per_transfer`) que no entra en M1. Esa propiedad (P-02: lo ajeno es lo que está fuera del conjunto borrable de la operación) se acredita offline (F2b F2-A3 e), y en el código Enforce la cubren la revisión de Sol y la del Experto (§9.3). En partida se cubren el ajeno no registrado dentro de `obj-17` y las tres entidades de la escena 2 en el suelo.
+- **Limitación conocida (v1.3.13, X-03), para después de M1:** M1 no juzga el reset de una escena aplicada cuyas entidades se fueron con un reinicio del servidor.
+  - En P4c, la escena 2 sigue aplicada en el backend, sin entidades en el mundo desde el reinicio de P4b, y no se resetea (§5.2).
+  - Que no vuelva lo juzga F2P-07 en P4b, con la regla de cualquier generación y pose exacta (§6.1).
+  - En P4c no se juzga, porque el seguimiento no cruza un reinicio del servidor (§6.1, punto 3).
 - **`globals` a 0:** no está medido si `ZombieMaxCount = 0` o `AnimalMaxCount = 0` afectan a las criaturas que crea el producto por script. Si F2P-02 encuentra criaturas muertas o sin IA solo con esos `globals`, se repite P2 con los `globals` originales y se anota.
 - **TTL:** el plazo cuenta desde el envío del poll (F1b-peers). Un apply de 33 son unos 10 ticks `[verify S-perf]`.
 - **Una orden a la vez en el mod:** las lecturas no se entregan durante un apply. Es coherente con el backend, porque la guarda «en vuelo» de C-01 sigue siendo válida.
@@ -1109,3 +1113,14 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
     - las citas del backend, comprobadas por el orquestador en `main` `2135f20`.
   - **§6.1, punto 8 (Sol r4c, MAY):** el `server_epoch` de la parte no es obligatorio, en la dirección de los manifests reales de F0.3, que no llevan epoch.
   - Nada de §3, §4 ni §5 cambia.
+- v1.3.13 (2026-11-17): **P4c resetea solo la escena 1.** Es X-03 de la pasada de Claude sobre T2f-5, con la opción (a) que eligió la principal.
+  - **Lo que había:** §5.2 pedía en P4c el reset de la escena 1 y el de la escena 2. La fixture del oráculo solo trae el de la escena 1, y el oráculo no exigía el de la escena 2.
+  - **Por qué se quita:**
+    - la escena 2 sigue aplicada desde P3c y pasa sin reset el reinicio del servidor de P4b, donde F2P-07 ya la juzga con la regla de cualquier generación y pose exacta (§6.1);
+    - si el producto va bien, en P4c ya no queda nada suyo que borrar;
+    - resetearla en P4c añadía a T4 dos reinicios del backend, a la escena 2 y vuelta, y el reset de una escena sin entidades, un resultado que ninguna regla juzga. Era limpieza, no una prueba.
+  - **Comprobado por el orquestador** sobre el oráculo de T2f-5 (`0536ae4`), con `C:\tmp\dsbx-f2p-work\review\t2f5\repro\scene2_reappears_after_restart.py`:
+    - los tres objetos de la generación de la escena 2, si reaparecen con la pose exacta de su última medición válida tras el reinicio de P4b, dan FALLA en F2P-07 (`reappeared`), tanto con su `net_id` como con uno nuevo;
+    - tras el reinicio de P4c, la misma reaparición no se juzga: es la limitación de §10.
+  - **El oráculo** juzga el terminal de cada reset de P4c que aparezca (T2f-6): un reset `fallido` en P4c nunca da PASA.
+  - **Cambios:** en §5.2, la fila de P4c y su estado final; en §10, la limitación. Nada de §3, §4 ni §6.1 cambia. El runner de T4 sigue el §5.2 corregido.
