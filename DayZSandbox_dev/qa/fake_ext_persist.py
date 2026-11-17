@@ -248,6 +248,9 @@ ZERO_NET_ID = "0:0"
 # acreditar el intento de B o hasta este tope desde su inicio.
 CENSUS_HOLD_MAX_MS = 750.0
 CENSUS_FINISH_AFTER_ATTEMPT_TICKS = 2
+# Presupuesto de captura (espejo de CENSUS_CAPTURE_BUDGET_MS del .c): unico
+# limite dentro del bucle de captura tras la instantanea del lease.
+CENSUS_CAPTURE_BUDGET_MS = 120000.0
 
 
 def _is_valid_identity(value, zero):
@@ -310,6 +313,9 @@ class PersistFakeExt(FakeExt):
         self.map_objects = []
         self.witness = None
         self.next_pers_seq = 1
+        # Duracion simulada de la captura del censo (la fijan los tests); se
+        # refleja en capture_wall_ms. Por defecto 0, como hasta ahora.
+        self.capture_delay_ms = 0.0
 
     def _state_file(self):
         cfg = getattr(self.peer, "config", None)
@@ -1522,25 +1528,40 @@ class PersistFakeExt(FakeExt):
         census_ncol = CENSUS_NCOL_ALL if select_all == 1 else CENSUS_NCOL
         captured = 0
         capture_failed = ""
-        for row in rows:
-            # MEN 8/9 (espejo de AppendEntityCensusRow): guarda por fila.
-            if not self.peer.lease_valid():
-                capture_failed = "lease_expired"
-                break
-            nvals = [row[c] for c in census_ncol]
-            svals = [row[c] for c in CENSUS_SCOL]
-            if not self.jobs.append_row(job_id, nvals, svals):
-                # Con select_all_entityai_b = 1 y el tope de filas, el JobMgr ya dejo el trabajo en
-                # failed/rows_cap y ese final no cambia (end_job lo fija una sola vez, como EndJob en el .c):
-                # no se sigue ni se trunca en silencio; el arranque responde done y el estado se lee con job_read.
-                capture_failed = "capture_truncated"
-                break
-            captured += 1
+        # Espejo del .c: el lease se mira una sola vez, al empezar la captura
+        # (instantanea); dentro del bucle solo limita el presupuesto. La
+        # captura puede tardar capture_delay_ms (lo fijan los tests).
+        delay_ms = float(getattr(self, "capture_delay_ms", 0.0) or 0.0)
+        if hasattr(self.peer, "lease_age_ms"):
+            lease_age_start = float(self.peer.lease_age_ms())
+        else:
+            lease_age_start = 0.0 if self.peer.lease_valid() else 1.0e9
+        lease_ms = float(getattr(self.peer, "lease_ms", 3000) or 3000)
+        total_rows = len(rows)
+        if lease_age_start > lease_ms:
+            capture_failed = "lease_expired"
+        else:
+            for row in rows:
+                elapsed_ms = delay_ms * float(captured + 1) / float(total_rows) if total_rows else delay_ms
+                if elapsed_ms > CENSUS_CAPTURE_BUDGET_MS:
+                    capture_failed = "capture_budget_exceeded"
+                    break
+                nvals = [row[c] for c in census_ncol]
+                svals = [row[c] for c in CENSUS_SCOL]
+                if not self.jobs.append_row(job_id, nvals, svals):
+                    # Con select_all_entityai_b = 1 y el tope de filas, el JobMgr ya dejo el trabajo en
+                    # failed/rows_cap y ese final no cambia (end_job lo fija una sola vez, como EndJob en el .c):
+                    # no se sigue ni se trunca en silencio; el arranque responde done y el estado se lee con job_read.
+                    capture_failed = "capture_truncated"
+                    break
+                captured += 1
         if not capture_failed and captured < len(rows):
             capture_failed = "capture_truncated"
         if capture_failed:
             # MEN 9: una captura truncada termina como trabajo fallido.
             self.census_failed[job_id] = capture_failed
+        if delay_ms and hasattr(self.peer, "now"):
+            self.peer.now = float(self.peer.now) + delay_ms
         s = {
             "job": job_id,
             "state": "running",
@@ -1551,7 +1572,7 @@ class PersistFakeExt(FakeExt):
         }
         n = {
             "snap_tick_ms": snap_ms,
-            "capture_wall_ms": 0.0,
+            "capture_wall_ms": float(delay_ms),
             "snap_frame": float(snap_frame),
             "rows_captured_n": float(captured),
             "center_x_m": center_x,

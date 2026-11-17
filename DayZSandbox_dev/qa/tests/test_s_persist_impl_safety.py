@@ -431,6 +431,48 @@ def _make_fake():
     return peer, jobs, ext
 
 
+class _ClockPeer:
+    """Peer con reloj manual y lease por edad (como LeaseOk del nucleo)."""
+
+    def __init__(self):
+        self.inst = "epoch-1"
+        self.frame = 100
+        self.config = None
+        self.now = 1000.0
+        self.lease_ms = 3000
+        self.last_ok_ms = 1000.0
+
+    def local_ms(self):
+        return float(self.now)
+
+    def lease_age_ms(self):
+        if self.last_ok_ms is None:
+            return 1.0e9
+        return max(0.0, float(self.now) - float(self.last_ok_ms))
+
+    def lease_valid(self):
+        return self.lease_age_ms() <= float(self.lease_ms)
+
+    def renew(self):
+        self.last_ok_ms = float(self.now)
+
+
+def _make_clock_fake():
+    peer = _ClockPeer()
+    jobs = fake_peer.JobMgr(peer)
+    ext = fake_ext_persist.PersistFakeExt()
+    ext.init(peer, jobs)
+    return peer, jobs, ext
+
+
+def _census_args(include_director=0.0):
+    return _unpacked(
+        strings={"area_tag": "t1_pre_transition_census:area_a"},
+        numbers={"center_x_m": 4500.0, "center_z_m": 10200.0,
+                 "radius_m": 60.0, "include_director_b": float(include_director)},
+    )
+
+
 def _unpacked(strings=None, numbers=None, ncol=None, scol=None, rows=None):
     packed = wire.pack_payload(
         scalars_str=strings or {}, scalars_num=numbers or {},
@@ -657,25 +699,31 @@ class TestFakeGenerationsAndLease(_GuardedTestCase):
         self.assertEqual((status, reason), ("error", "lease_expired"))
         self.assertGreater(len(ext.records), 0)
 
-    def test_truncated_census_ends_failed_not_done(self):
-        peer, jobs, ext = TestFakeCleanup()._applied_ext()
-        peer.lease_calls = 0
-        peer.lease_budget = 2  # entrada + primera fila; caduca en la captura
-        status, _, payload = ext.on_start_op(
-            {"op_id": "op-census", "verb": "per_census_start", "qa_fault": ""},
-            _unpacked(
-                strings={"area_tag": "t1_pre_transition_census:area_a"},
-                numbers={"center_x_m": 4500.0, "center_z_m": 10200.0,
-                         "radius_m": 60.0, "include_director_b": 1.0},
-            ), {},
+    def test_capture_longer_than_lease_still_done(self):
+        # Semantica de instantanea (punto 1): el lease se mira al empezar la
+        # captura; que la captura dure mas que lease_ms no la tumba.
+        peer, jobs, ext = _make_clock_fake()
+        status, _, _ = ext.on_start_op(
+            {"op_id": "op-apply", "verb": "per_apply_scene", "qa_fault": ""},
+            _apply_args("scene_x", "scop-1", 1, _SCENE_ROWS), {},
         )
         self.assertEqual(status, "done")
-        peer.now += 5000.0
+        ext.capture_delay_ms = 5000.0
+        status, _, payload = ext.on_start_op(
+            {"op_id": "op-census", "verb": "per_census_start", "qa_fault": ""},
+            _census_args(), {},
+        )
+        self.assertEqual(status, "done")
+        out = wire.unpack_payload(payload)
+        self.assertEqual(out["num"]["capture_wall_ms"], 5000.0)
+        self.assertEqual(out["num"]["rows_captured_n"], 2.0)
+        peer.renew()
+        peer.now += 1000.0
         for _ in range(6):
             ext.on_tick(0.016)
         job = jobs.jobs_by_id["op-census"]
-        self.assertEqual(job["state"], "failed")
-        self.assertEqual(job["reason"], "lease_expired")
+        self.assertEqual(job["state"], "done")
+        self.assertEqual(job["rows_total"], 2)
 
 
 class TestFakeContention(_GuardedTestCase):
@@ -1592,6 +1640,81 @@ class TestR26RecreatedDest(_GuardedTestCase):
             self.assertEqual(_tree_bytes(rollbacks[0]), mutated)
             self.assertTrue(slot.is_dir())
             self.assertEqual((slot / "players.db").read_bytes(), b"players-baseline")
+
+
+class TestCensusLeaseSnapshot(_GuardedTestCase):
+    """Punto 1 (lease22): instantanea del lease al empezar la captura."""
+
+    def _applied_clock_ext(self):
+        peer, jobs, ext = _make_clock_fake()
+        status, _, _ = ext.on_start_op(
+            {"op_id": "op-apply", "verb": "per_apply_scene", "qa_fault": ""},
+            _apply_args("scene_x", "scop-1", 1, _SCENE_ROWS), {},
+        )
+        self.assertEqual(status, "done")
+        return peer, jobs, ext
+
+    def test_a_long_capture_with_valid_start_lease_is_done(self):
+        peer, jobs, ext = self._applied_clock_ext()
+        ext.capture_delay_ms = 5000.0  # mas que lease_ms = 3000
+        status, _, payload = ext.on_start_op(
+            {"op_id": "op-census-a", "verb": "per_census_start", "qa_fault": ""},
+            _census_args(), {},
+        )
+        self.assertEqual(status, "done")
+        out = wire.unpack_payload(payload)
+        self.assertEqual(out["num"]["capture_wall_ms"], 5000.0)
+        self.assertEqual(out["num"]["rows_captured_n"], 2.0)
+        peer.renew()  # el siguiente poll renueva antes del cierre
+        peer.now += 1000.0
+        for _ in range(6):
+            ext.on_tick(0.016)
+        job = jobs.jobs_by_id["op-census-a"]
+        self.assertEqual(job["state"], "done")
+        self.assertEqual(job["rows_total"], 2)
+
+    def test_b_lease_expired_at_start_fails_without_rows(self):
+        peer, jobs, ext = _make_clock_fake()
+        peer.now = 10000.0  # edad del lease: 9000 ms > 3000 ms
+        status, reason, _ = ext.on_start_op(
+            {"op_id": "op-census-b", "verb": "per_census_start", "qa_fault": ""},
+            _census_args(), {},
+        )
+        self.assertEqual((status, reason), ("error", "lease_expired"))
+        self.assertEqual(jobs.get_state("op-census-b"), "")
+        self.assertNotIn("op-census-b", jobs.jobs_by_id)
+
+    def test_c_lease_expired_at_finish_fails_by_deadman(self):
+        peer, jobs, ext = self._applied_clock_ext()
+        ext.capture_delay_ms = 100.0
+        status, _, _ = ext.on_start_op(
+            {"op_id": "op-census-c", "verb": "per_census_start", "qa_fault": ""},
+            _census_args(), {},
+        )
+        self.assertEqual(status, "done")
+        peer.now += 4000.0  # sin renovar: vencido en end_tick_ms
+        for _ in range(6):
+            ext.on_tick(0.016)
+        job = jobs.jobs_by_id["op-census-c"]
+        self.assertEqual(job["state"], "failed")
+        self.assertEqual(job["reason"], "lease_expired")
+        self.assertEqual(job["rows_total"], 2)  # la captura si capturo
+
+    def test_d_capture_budget_exceeded_fails(self):
+        peer, jobs, ext = self._applied_clock_ext()
+        ext.capture_delay_ms = fake_ext_persist.CENSUS_CAPTURE_BUDGET_MS + 10000.0
+        status, _, _ = ext.on_start_op(
+            {"op_id": "op-census-d", "verb": "per_census_start", "qa_fault": ""},
+            _census_args(), {},
+        )
+        self.assertEqual(status, "done")
+        peer.renew()
+        peer.now += 1000.0
+        for _ in range(6):
+            ext.on_tick(0.016)
+        job = jobs.jobs_by_id["op-census-d"]
+        self.assertEqual(job["state"], "failed")
+        self.assertEqual(job["reason"], "capture_budget_exceeded")
 
 
 if __name__ == "__main__":

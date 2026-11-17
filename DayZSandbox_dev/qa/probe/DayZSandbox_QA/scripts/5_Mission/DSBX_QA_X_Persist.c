@@ -198,6 +198,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	protected ref array<int> m_PendingFinishSeen;
 	protected ref array<float> m_PendingFinishAgeMs;
 	protected float m_CensusCaptureStartMs;
+	protected float m_CensusLeaseAgeStartMs;
 	protected bool m_CaptureFailed;
 	protected string m_CaptureFailReason;
 	protected string m_CaptureFailJobId;
@@ -232,6 +233,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_PendingFinishSeen = new array<int>();
 		m_PendingFinishAgeMs = new array<float>();
 		m_CensusCaptureStartMs = 0.0;
+		m_CensusLeaseAgeStartMs = 0.0;
 		m_CaptureFailed = false;
 		m_CaptureFailReason = "";
 		m_CaptureFailJobId = "";
@@ -2068,9 +2070,12 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 
 	protected bool AppendEntityCensusRow(string jobId, Object obj, int inRadiusB, Man director, string directorUid, array<Object> seen, bool withSurface)
 	{
-		// E1 + MEN 9/14: sin lease o sin presupuesto, la captura queda fallida
+		// E1 + MEN 9/14: el lease se mira una sola vez, al empezar la captura (instantanea en
+		// m_CensusLeaseAgeStartMs); una fila de censo no emite efectos hacia otro peer ni hacia el
+		// mundo (plan comun E1, :30-33 y :40-41), asi que dentro del bucle solo limita el
+		// presupuesto. Sin lease al empezar o sin presupuesto, la captura queda fallida
 		// (no un censo done truncado). LeaseOk: DSBX_QA_Probe.c:447.
-		if (!m_Probe.LeaseOk())
+		if (m_CensusLeaseAgeStartMs > (float)m_Probe.GetLeaseMs())
 		{
 			m_CaptureFailed = true;
 			m_CaptureFailReason = "lease_expired";
@@ -2279,6 +2284,13 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_CaptureFailReason = "";
 		m_CaptureFailJobId = "";
 		m_CensusCaptureStartMs = m_Probe.NowMs();
+		m_CensusLeaseAgeStartMs = m_Probe.LeaseAgeMs();
+		if (!m_Probe.LeaseOk())
+		{
+			m_CaptureFailed = true;
+			m_CaptureFailReason = "lease_expired";
+			m_CaptureFailJobId = op.op_id;
+		}
 		// GetObjectsAtPosition3D: P:/scripts/3_game/global/game.c:930.
 		vector centerPos = Vector(centerX, g_Game.SurfaceY(centerX, centerZ), centerZ);
 		array<Object> nearObjs = new array<Object>();
