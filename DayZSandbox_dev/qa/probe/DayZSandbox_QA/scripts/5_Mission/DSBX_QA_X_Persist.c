@@ -1,6 +1,6 @@
 // DSBX_QA_X_Persist.c — S-persist server-only extension (F0.3b).
 // Handles verbs with prefix "per_" on role == "server".
-// Ordered arrays (m_Records, m_SceneIds, m_SceneGen, m_SceneLastOp, m_RawRecords)
+// Ordered arrays (m_Records, m_SceneIds, m_SceneGen, m_SceneLastOp, m_SceneLastRetainedSkipped, m_RawRecords)
 // use RemoveOrdered exclusively (rule E3).
 
 class DSBX_QA_PersistRecord : Managed
@@ -135,6 +135,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	protected ref array<string> m_SceneIds;
 	protected ref array<int> m_SceneGen;
 	protected ref array<string> m_SceneLastOp;
+	protected ref array<int> m_SceneLastRetainedSkipped;
 	protected ref array<ref DSBX_QA_PersistRawRecord> m_RawRecords;
 	protected ref array<string> m_SentinelClasses;
 	protected ref array<string> m_CensusNcol;
@@ -160,6 +161,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_SceneIds = new array<string>();
 		m_SceneGen = new array<int>();
 		m_SceneLastOp = new array<string>();
+		m_SceneLastRetainedSkipped = new array<int>();
 		m_RawRecords = new array<ref DSBX_QA_PersistRawRecord>();
 		m_SentinelClasses = new array<string>();
 		m_CensusNcol = new array<string>();
@@ -485,6 +487,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_SceneIds.Insert(sceneId);
 		m_SceneGen.Insert(genN);
 		m_SceneLastOp.Insert(lastOpId);
+		m_SceneLastRetainedSkipped.Insert(0);
 	}
 
 	protected DSBX_QA_PersistRecord FindRecord(string sceneId, string logicalId)
@@ -969,7 +972,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		if (scIdx >= 0 && m_SceneLastOp.Get(scIdx) == sceneOpId)
 		{
 			res.status = "done";
-			m_LastApplyRetainedSkipped = 0;
+			m_LastApplyRetainedSkipped = m_SceneLastRetainedSkipped.Get(scIdx);
 			EmitApplyResponse(res.read, sceneId, sceneOpId, pathway, m_SceneGen.Get(scIdx), 1);
 			return;
 		}
@@ -1238,6 +1241,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			m_Records.Insert(rec);
 		}
 
+		int scIdxDone = FindSceneIndex(sceneId);
+		if (scIdxDone >= 0)
+			m_SceneLastRetainedSkipped.Set(scIdxDone, m_LastApplyRetainedSkipped);
 		res.status = "done";
 		EmitApplyResponse(res.read, sceneId, sceneOpId, pathway, genN, 0);
 	}
@@ -2254,6 +2260,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			m_SceneIds.RemoveOrdered(s);
 			m_SceneGen.RemoveOrdered(s);
 			m_SceneLastOp.RemoveOrdered(s);
+			m_SceneLastRetainedSkipped.RemoveOrdered(s);
 		}
 
 		for (int j = m_RawRecords.Count() - 1; j >= 0; j--)

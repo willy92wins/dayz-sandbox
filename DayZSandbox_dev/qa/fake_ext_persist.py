@@ -210,10 +210,17 @@ class PersistFakeExt(FakeExt):
                 "scene_id": ent["scene_id"],
                 "area_id": ent["area_id"],
             })
+        qa_provenance = set(self.qa_net_ids) | set(self.raw_net_ids)
+        for rec in self.records:
+            ent = rec.get("ent")
+            if ent is not None and ent.get("net_id"):
+                qa_provenance.add(ent["net_id"])
         data = {
             "director_uid": self.director_uid,
             "next_net_low": self.next_net_low,
             "next_pers_seq": self.next_pers_seq,
+            "qa_net_ids": sorted(qa_provenance),
+            "raw_net_ids": sorted(self.raw_net_ids),
             "entities": entities,
         }
         try:
@@ -237,6 +244,15 @@ class PersistFakeExt(FakeExt):
             self.next_pers_seq = max(int(data.get("next_pers_seq", 1)), 1)
         except (TypeError, ValueError):
             self.next_pers_seq = 1
+        saved_qa = data.get("qa_net_ids")
+        saved_raw = data.get("raw_net_ids")
+        qa_provenance = set()
+        raw_provenance = set()
+        if isinstance(saved_qa, list):
+            qa_provenance = {str(v) for v in saved_qa if str(v or "")}
+        if isinstance(saved_raw, list):
+            raw_provenance = {str(v) for v in saved_raw if str(v or "")}
+        qa_provenance |= raw_provenance
         loaded = data.get("entities")
         if not isinstance(loaded, list):
             return False
@@ -269,8 +285,10 @@ class PersistFakeExt(FakeExt):
             )
             ent["alive"] = bool(raw.get("alive", True))
             ent["ai_agent"] = bool(raw.get("ai_agent", False))
-            if ent["owner_uid"] != self.director_uid:
+            if ent["net_id"] in raw_provenance:
                 self.raw_net_ids.add(ent["net_id"])
+            if ent["net_id"] in qa_provenance:
+                self.qa_net_ids.add(ent["net_id"])
         return True
 
     def init(self, peer, jobs):
@@ -278,6 +296,8 @@ class PersistFakeExt(FakeExt):
         self.jobs = jobs
         self.epoch = peer.inst
         self._build_director()
+        self.raw_net_ids.clear()
+        self.qa_net_ids.clear()
         if self._load_state():
             self.records = []
             self.scene_gen = {}
@@ -288,7 +308,6 @@ class PersistFakeExt(FakeExt):
             self.census_start_tick.clear()
             self.contention_seen_for.clear()
             self.census_failed.clear()
-            self.qa_net_ids.clear()
 
     def handles(self, verb, role):
         return role == "server" and verb in SERVER_VERBS

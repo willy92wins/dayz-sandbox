@@ -1117,5 +1117,242 @@ class TestT4DirectorWindow(unittest.TestCase):
         self.assertGreaterEqual(clock.now, 150.0)
 
 
+class TestPoint2DeclaredNamesAndRecheck(_GuardedTestCase):
+    def test_declared_server_name_case_insensitive_blocks(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, backup = _make_env(tmp)
+            env["server_exe_names"] = ["DayZServer_QA.exe"]
+            rows = [{"name": "dayzserver_qa.EXE", "pid": 61, "command_line": "DayZServer_QA.exe -server"}]
+            self.assertEqual(s_persist_run._classify_server_processes(rows, env), "running")
+            rows_none = None
+            self.assertEqual(s_persist_run._classify_server_processes(rows_none, env), "unknown")
+
+    def test_restore_rechecks_stop_before_substitution(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, backup = _make_env(tmp)
+            with mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]):
+                t0, slot = s_persist_run._backup_storage(env, backup, "t0")
+            (storage / "players.db").write_bytes(b"players-mutados")
+            mutated = _tree_bytes(storage)
+            calls = {"n": 0}
+
+            def fake_list(_env):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return []
+                return [{"name": "DayZServer_x64.exe", "pid": 62, "command_line": "DayZServer_x64.exe -server"}]
+
+            with mock.patch.object(s_persist_run, "_list_server_processes", side_effect=fake_list):
+                ok, _snap, err = s_persist_run._restore_storage(env, slot, t0)
+            self.assertEqual(ok, 0)
+            self.assertEqual(err, "server_still_running")
+            self.assertEqual(_tree_bytes(storage), mutated)
+            self.assertTrue(slot.is_dir())
+            self.assertEqual((slot / "players.db").read_bytes(), b"players-baseline")
+
+    def test_backup_rechecks_stop_before_copy(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, backup = _make_env(tmp)
+            calls = {"n": 0}
+
+            def fake_list(_env):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return []
+                return [{"name": "DayZServer_x64.exe", "pid": 63, "command_line": "DayZServer_x64.exe -server"}]
+
+            with mock.patch.object(s_persist_run, "_list_server_processes", side_effect=fake_list):
+                with self.assertRaises(RuntimeError) as raised:
+                    s_persist_run._backup_storage(env, backup, "t0")
+            self.assertEqual(str(raised.exception), "server_still_running")
+            self.assertFalse(backup.exists())
+
+
+class TestPoint1RestoreOnEveryExit(_GuardedTestCase):
+    def setUp(self):
+        super().setUp()
+        _FakePartContext.calls = []
+        _FakePartContext.instances = []
+
+    def _backup_and_mutate(self, tmp):
+        env, mission, storage, _backup = _make_env(tmp)
+        with mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]):
+            t0, slot = s_persist_run._backup_storage(env, tmp / "slot_backup", "t0")
+        (storage / "players.db").write_bytes(b"players-calentados")
+        return env, storage, t0, slot
+
+    def test_startup_reason_exit_restores_storage(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, storage, t0, slot = self._backup_and_mutate(tmp)
+            base_dir = tmp / "evidence"
+            _FakePartContext.next_startup_reason = "peer_timeout"
+            backup_return = (env, t0, slot, None, "")
+            with mock.patch.object(s_persist_run, "_live_cold_backup_before_open", return_value=backup_return), mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]), mock.patch.object(f03_common, "PartContext", _FakePartContext):
+                verdict = s_persist_run.run_part(_live_args(), base_dir, [], "run")
+            self.assertEqual(verdict.get("exit_code"), 2)
+            scenario = _FakePartContext.instances[0].scenario
+            restores = [r for r in scenario if r.get("ev") == "storage_restore_result"]
+            self.assertEqual(len(restores), 1)
+            self.assertEqual(restores[0].get("restore_ok_b"), 1)
+            self.assertEqual(restores[0].get("restore_incomplete_b"), 0)
+            self.assertEqual((storage / "players.db").read_bytes(), b"players-baseline")
+            self.assertTrue(slot.is_dir())
+
+    def test_director_absent_exit_restores_storage(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, storage, t0, slot = self._backup_and_mutate(tmp)
+            base_dir = tmp / "evidence"
+            _FakePartContext.next_startup_reason = None
+            absent = _status_outcome(uid="", present=0, alive=0, inv=0)
+            backup_return = (env, t0, slot, None, "")
+            with mock.patch.object(s_persist_run, "_live_cold_backup_before_open", return_value=backup_return), mock.patch.object(s_persist_run, "_probe_sources_at_commit", return_value={}), mock.patch.object(s_persist_run, "T0_DIRECTOR_TIMEOUT_S", 0.0), mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]), mock.patch.object(f03_common, "PartContext", _FakePartContext), mock.patch.object(f03_common, "issue_one", return_value=absent):
+                with self.assertRaises(RuntimeError) as raised:
+                    s_persist_run.run_part(_live_args(), base_dir, [], "run")
+            self.assertEqual(str(raised.exception), "t0_director_absent")
+            scenario = _FakePartContext.instances[0].scenario
+            restores = [r for r in scenario if r.get("ev") == "storage_restore_result"]
+            self.assertEqual(len(restores), 1)
+            self.assertEqual(restores[0].get("restore_ok_b"), 1)
+            self.assertEqual((storage / "players.db").read_bytes(), b"players-baseline")
+            self.assertTrue(slot.is_dir())
+
+
+class TestPoint3StorageMissionBinding(_GuardedTestCase):
+    def setUp(self):
+        super().setUp()
+        _FakePartContext.calls = []
+        _FakePartContext.instances = []
+
+    def test_mission_mismatch_is_inconclusive_before_t1_and_restores(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, _backup = _make_env(tmp)
+            other_mission = tmp / "srv" / "mpmissions" / "other_mission"
+            other_mission.mkdir(parents=True)
+            with mock.patch.object(s_persist_run, "_list_server_processes", return_value=[]):
+                t0, slot = s_persist_run._backup_storage(env, tmp / "slot_backup", "t0")
+            (storage / "players.db").write_bytes(b"players-calentados")
+            base_dir = tmp / "evidence"
+            _FakePartContext.next_startup_reason = None
+            state = {"running": True}
+            server_row = {"name": "DayZServer_x64.exe", "pid": 71, "command_line": f'DayZServer_x64.exe -server "-mission={other_mission}"'}
+            operator_calls = []
+
+            def fake_list(_env):
+                return [server_row] if state["running"] else []
+
+            def fake_await(ctx, *, step, action, instructions, predicate, timeout_s):
+                operator_calls.append({"step": step, "action": action})
+                state["running"] = False
+                return {"ok": True, "step": step, "action": action}
+
+            good = _status_outcome(uid="director-1", present=1, alive=1, inv=1)
+            verbs = []
+
+            def fake_issue(ctx, peer, verb, payload=None, **kwargs):
+                verbs.append(verb)
+                if verb == "per_status":
+                    return good
+                raise AssertionError(f"verbo inesperado antes de t1: {verb}")
+
+            backup_return = (env, t0, slot, None, "")
+            with mock.patch.object(s_persist_run, "_live_cold_backup_before_open", return_value=backup_return), mock.patch.object(s_persist_run, "_probe_sources_at_commit", return_value={}), mock.patch.object(s_persist_run, "_list_server_processes", side_effect=fake_list), mock.patch.object(f03_common, "PartContext", _FakePartContext), mock.patch.object(f03_common, "issue_one", side_effect=fake_issue), mock.patch.object(f03_common, "await_operator", side_effect=fake_await):
+                with self.assertRaises(RuntimeError) as raised:
+                    s_persist_run.run_part(_live_args(), base_dir, [], "run")
+            self.assertIn("storage_mission", str(raised.exception))
+            self.assertEqual(verbs, ["per_status"])
+            scenario = _FakePartContext.instances[0].scenario
+            evs = [r.get("ev") for r in scenario]
+            self.assertIn("storage_mission_verify", evs)
+            self.assertNotIn("apply_scene_t1", evs)
+            restores = [r for r in scenario if r.get("ev") == "storage_restore_result"]
+            self.assertEqual(len(restores), 1)
+            self.assertEqual(restores[0].get("restore_ok_b"), 1)
+            self.assertEqual((storage / "players.db").read_bytes(), b"players-baseline")
+            self.assertTrue(slot.is_dir())
+            self.assertTrue(operator_calls)
+            self.assertEqual(operator_calls[0].get("action"), "stop_server")
+            self.assertEqual(operator_calls[0].get("step"), "post_backup_stop_server_for_cold_restore")
+
+    def test_verify_storage_mission_counts(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, mission, storage, _backup = _make_env(tmp)
+            good_row = {"name": "DayZDiag_x64.exe", "pid": 72, "command_line": f'DayZDiag_x64.exe -server "-mission={mission}"'}
+            ok, err = s_persist_run._verify_storage_mission(env, rows=[good_row])
+            self.assertEqual((ok, err), (True, ""))
+            ok, err = s_persist_run._verify_storage_mission(env, rows=[])
+            self.assertFalse(ok)
+            ok, err = s_persist_run._verify_storage_mission(env, rows=[good_row, good_row])
+            self.assertFalse(ok)
+            with mock.patch.object(s_persist_run, "_list_server_processes", return_value=None):
+                ok, err = s_persist_run._verify_storage_mission(env)
+            self.assertFalse(ok)
+            self.assertEqual(err, "server_state_unknown")
+
+
+class TestPoint4IdempotentProbeReplaysOriginal(_GuardedTestCase):
+    def test_idempotent_branch_replays_saved_retained_count(self):
+        probe = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "5_Mission" / "DSBX_QA_X_Persist.c"
+        text = probe.read_text(encoding="utf-8")
+        self.assertIn("m_SceneLastRetainedSkipped", text)
+        marker = "m_SceneLastOp.Get(scIdx) == sceneOpId"
+        start = text.index(marker)
+        segment = text[start:start + 500]
+        self.assertIn("m_SceneLastRetainedSkipped.Get(scIdx)", segment)
+        self.assertNotIn("m_LastApplyRetainedSkipped = 0;", segment)
+
+
+class TestPoint5FakeProvenanceSurvivesRestart(_GuardedTestCase):
+    def _ext_with_config(self, tmp):
+        peer, jobs, ext = _make_fake()
+        prof = tmp / "srvprof"
+        prof.mkdir(parents=True, exist_ok=True)
+        peer.config = str(prof / "dsbx_qa.json")
+        return peer, jobs, ext
+
+    def test_foreign_survivor_stays_foreign_after_save_load(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            peer, jobs, ext = self._ext_with_config(tmp)
+            helper = TestPersistentControlMarkCleanup()
+            ctrl_net, child = helper._spawn_control(ext)
+            child_net = child["net_id"]
+            apple = ext._add_entity(net_id="9:999", pers_id="9:0:0:0", class_name="Apple", cat="raw", loc_kind="cargo", parent_net_id=ctrl_net, parent_class="Barrel_Yellow", slot_name="Cargo:0:1:0", pos=child["pos"], max_hp=100.0, health_hp=100.0, persistent=True, area_id="area_c")
+            apple_net = apple["net_id"]
+            ext._save_state()
+            peer2, jobs2, ext2 = self._ext_with_config(tmp)
+            ext2.init(peer2, jobs2)
+            self.assertIn(ctrl_net, ext2.world)
+            self.assertIn(apple_net, ext2.world)
+            self.assertNotIn(apple_net, ext2.raw_net_ids)
+            self.assertNotIn(apple_net, ext2.qa_net_ids)
+            self.assertIn(ctrl_net, ext2.raw_net_ids)
+            helper._cleanup_area_c(ext2)
+            self.assertIn(ctrl_net, ext2.world)
+            self.assertIn(apple_net, ext2.world)
+
+    def test_qa_leak_still_deleted_after_save_load_by_provenance(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            peer, jobs, ext = self._ext_with_config(tmp)
+            status, reason, _payload = ext.on_start_op({"op_id": "op-apply", "verb": "per_apply_scene", "qa_fault": "omit_nopersistency_flag"}, _apply_args("scene_x", "scop-1", 1, _SCENE_ROWS), {})
+            self.assertEqual(status, "done")
+            cont_net = ext._record_by("scene_x", "cont_1")["ent"]["net_id"]
+            ext._save_state()
+            peer2, jobs2, ext2 = self._ext_with_config(tmp)
+            ext2.init(peer2, jobs2)
+            self.assertIn(cont_net, ext2.world)
+            self.assertIn(cont_net, ext2.qa_net_ids)
+            status, reason, _payload = ext2.on_start_op({"op_id": "op-clean", "verb": "per_cleanup_qa", "qa_fault": ""}, _unpacked(strings={"cleanup_tag": "t6"}, ncol=["center_x_m", "center_z_m", "radius_m"], scol=["area_tag"], rows=[{"area_tag": "area_a", "center_x_m": 4500.0, "center_z_m": 10200.0, "radius_m": 60.0}]), {})
+            self.assertEqual(status, "done")
+            self.assertNotIn(cont_net, ext2.world)
+
+
 if __name__ == "__main__":
     unittest.main()

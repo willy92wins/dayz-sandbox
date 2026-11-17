@@ -268,6 +268,80 @@ def _server_query_error():
     return "unknown"
 
 
+def _declared_server_names(storage_env):
+    names = set()
+    if isinstance(storage_env, dict):
+        for raw in storage_env.get("server_exe_names") or []:
+            text = str(raw or "").strip().lower()
+            if text:
+                names.add(text)
+    return names
+
+
+def _is_server_row(name_low, cmd, storage_env):
+    cmd_low = str(cmd or "").lower()
+    if name_low in _declared_server_names(storage_env):
+        if name_low == "dayzdiag_x64.exe":
+            return "-server" in cmd_low
+        return True
+    if name_low in ("dayzserver_x64.exe", "dayzserver.exe"):
+        return True
+    if name_low == "dayzdiag_x64.exe":
+        return "-server" in cmd_low
+    return False
+
+
+def _is_unknown_server_row(name_low, cmd):
+    if name_low == "dayzdiag_x64.exe" and not str(cmd or "").strip():
+        return True
+    return False
+
+
+_MISSION_ARG_RE = re.compile(r"-mission\s*=\s*(\"[^\"]+\"|[^\s\"]+)", re.IGNORECASE)
+
+
+def _mission_from_command_line(cmd):
+    match = _MISSION_ARG_RE.search(str(cmd or ""))
+    if not match:
+        return None
+    raw = match.group(1).strip().strip('"')
+    if not raw:
+        return None
+    return _resolve_abs(raw)
+
+
+def _verify_storage_mission(storage_env, *, rows=None):
+    """(True, '') solo si hay exactamente un servidor y su -mission coincide."""
+    if not isinstance(storage_env, dict):
+        return False, "storage_mission_unverified"
+    if rows is None:
+        rows = _list_server_processes(storage_env)
+    if rows is None:
+        return False, "server_state_unknown"
+    servers = []
+    saw_unknown = False
+    for row in rows or []:
+        try:
+            name = str(row.get("name") or "")
+            cmd = str(row.get("command_line") or "")
+        except AttributeError:
+            continue
+        name_low = name.lower()
+        if _is_server_row(name_low, cmd, storage_env):
+            servers.append(row)
+        elif _is_unknown_server_row(name_low, cmd):
+            saw_unknown = True
+    if saw_unknown:
+        return False, "server_state_unknown"
+    if len(servers) != 1:
+        return False, f"storage_mission_server_count:{len(servers)}"
+    mission = _mission_from_command_line(str(servers[0].get("command_line") or ""))
+    expected = _resolve_abs(storage_env.get("mission_dir"))
+    if mission is None or expected is None or mission != expected:
+        return False, "storage_mission_mismatch"
+    return True, ""
+
+
 def _classify_server_processes(rows, storage_env, *, own_pid=None):
     """Clasifica filas (name,pid,cmdline): 'running'|'stopped'|'unknown'.
 
@@ -290,13 +364,10 @@ def _classify_server_processes(rows, storage_env, *, own_pid=None):
             except (TypeError, ValueError):
                 pass
         name_low = name.lower()
-        if name_low in ("dayzserver_x64.exe", "dayzserver.exe"):
+        if _is_server_row(name_low, cmd, storage_env):
             return "running"
-        if name_low == "dayzdiag_x64.exe":
-            if not cmd.strip():
-                saw_unknown = True
-            elif "-server" in cmd.lower():
-                return "running"
+        if _is_unknown_server_row(name_low, cmd):
+            saw_unknown = True
     return "unknown" if saw_unknown else "stopped"
 
 
@@ -437,6 +508,9 @@ def _backup_storage(storage_env, backup_dir, label):
     snapshot = _snapshot_dir(src)
     if snapshot is None:
         snapshot = {}
+    ok, err = _require_server_stopped(checked)
+    if not ok:
+        raise RuntimeError(err)
     # BLOQ 4: un backup previo es evidencia de recuperacion; no se borra.
     target = _unique_backup_path(backup_dir)
     _copy_tree_verified(src, target, snapshot)
@@ -481,11 +555,23 @@ def _restore_storage(storage_env, backup_dir, storage_t0):
         # 1) Preparar y verificar la copia fuera del destino.
         _copy_tree_verified(actual_backup, staged, expected)
         # 2) Solo entonces sustituir: destino -> rollback, staged -> destino.
+        ok, err = _require_server_stopped(checked)
+        if not ok:
+            if staged.exists():
+                shutil.rmtree(staged, ignore_errors=True)
+            return 0, _snapshot_dir(dest) or {}, err
         moved_dest = False
         try:
             if dest.exists():
                 os.rename(dest, rollback)
                 moved_dest = True
+            ok, err = _require_server_stopped(checked)
+            if not ok:
+                if moved_dest and not dest.exists() and rollback.exists():
+                    os.rename(rollback, dest)
+                if staged.exists():
+                    shutil.rmtree(staged, ignore_errors=True)
+                return 0, _snapshot_dir(dest) or {}, err
             os.rename(staged, dest)
         except OSError:
             if moved_dest and not dest.exists() and rollback.exists():
@@ -512,6 +598,35 @@ def _restore_storage(storage_env, backup_dir, storage_t0):
         except OSError:
             pass
         return 0, _snapshot_dir(dest) or {}, f"storage_restore_incomplete:{type(exc).__name__}:{exc}"
+
+
+def _cold_restore_live_storage(ctx, storage_env, backup_slot, storage_t0, *, stop_step):
+    """Restauracion en frio unica: parada pedida si hace falta y recibo."""
+    if _server_state(storage_env) != "stopped":
+        f03_common.await_operator(
+            ctx,
+            step=stop_step,
+            action="stop_server",
+            instructions="Para DayZServer para restaurar en frio $mission:storage_#.",
+            predicate=lambda _ev: _server_state(storage_env) == "stopped",
+            timeout_s=300.0,
+        )
+    try:
+        restore_ok, restored_snapshot, restore_err = _restore_storage(
+            storage_env, backup_slot, storage_t0
+        )
+    except Exception as exc:
+        restore_ok = 0
+        restored_snapshot = _snapshot_dir(Path(storage_env["storage_dir"])) or {}
+        restore_err = f"storage_restore_incomplete:{type(exc).__name__}:{exc}"
+    ctx.record_scenario({
+        "ev": "storage_restore_result",
+        "restore_ok_b": restore_ok,
+        "restore_incomplete_b": 0 if restore_ok == 1 else 1,
+        "error": restore_err,
+        "files": restored_snapshot,
+    })
+    return restore_ok
 
 
 def _live_cold_backup_before_open(base_dir, part_name):
@@ -1226,53 +1341,56 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             ctx.record_scenario(pre_failure_event)
             raise RuntimeError(pre_failure_error)
         if ctx.startup_reason is not None:
+            if is_live_build and pre_storage_env is not None and pre_storage_t0 is not None and pre_backup_slot is not None:
+                _cold_restore_live_storage(ctx, pre_storage_env, pre_backup_slot, pre_storage_t0, stop_step="post_backup_stop_server_for_cold_restore")
             ctx.collect_probe_budget_logs()
             ctx.finalize_manifest()
             verdict = s_persist_eval.evaluate(ctx.part_dir, repo_root=REPO_ROOT)
             gate_core.write_json(ctx.part_dir / "verdict.json", verdict)
             return verdict
 
-        git_head = ctx.git_head or ""
-        expected_stamp = ctx.expected_stamp or ""
-        ctx.record_scenario({
-            "ev": "probe_sources_at_commit",
-            "git_head": git_head,
-            "probe_stamp": expected_stamp,
-            "persist_files": _probe_sources_at_commit(git_head),
-        })
-
-        if cfg["mutant"]:
-            if cfg["bypass_contention"]:
-                effect = {"resource": "per_census", "bypass": True}
-                target = "DSBX_QA_X_Persist::HandleCensusStart"
-            else:
-                effect = {
-                    "scene_id": cfg["retained_scene"],
-                    "qa_fault": cfg["reset_fault"] or list(cfg["apply_faults"].values())[0],
-                }
-                target = "DSBX_QA_X_Persist"
-            ctx.write_injection(
-                mutant=cfg["mutant"],
-                kind="enforce_fault",
-                target=target,
-                observable_effect=effect,
-            )
-
-        is_live = ctx.build in ("diag", "retail")
-        # En partida la config y el backup ya vienen acreditados de
-        # antes de abrir la parte (ver _live_cold_backup_before_open);
-        # un fallo previo ya ha abortado arriba, asi que aqui solo
-        # queda registrar el snapshot y verificar los hellos que
-        # PartContext.open() ya espero. No hay parada ni arranque en
-        # t0: los peers llegan arrancados y verificados, y por tanto
-        # hay un unico epoch del servidor antes de t1.
-        storage_env = pre_storage_env if is_live else None
-        sim_storage = ctx.part_dir / "_sim_storage"
-        backup_dir = ctx.part_dir / "_storage_backup"
-        storage_t0 = pre_storage_t0 if is_live else None
-        backup_slot = pre_backup_slot if is_live else None
-
+        restore_stop_step = "post_backup_stop_server_for_cold_restore"
         try:
+            git_head = ctx.git_head or ""
+            expected_stamp = ctx.expected_stamp or ""
+            ctx.record_scenario({
+                "ev": "probe_sources_at_commit",
+                "git_head": git_head,
+                "probe_stamp": expected_stamp,
+                "persist_files": _probe_sources_at_commit(git_head),
+            })
+
+            if cfg["mutant"]:
+                if cfg["bypass_contention"]:
+                    effect = {"resource": "per_census", "bypass": True}
+                    target = "DSBX_QA_X_Persist::HandleCensusStart"
+                else:
+                    effect = {
+                        "scene_id": cfg["retained_scene"],
+                        "qa_fault": cfg["reset_fault"] or list(cfg["apply_faults"].values())[0],
+                    }
+                    target = "DSBX_QA_X_Persist"
+                ctx.write_injection(
+                    mutant=cfg["mutant"],
+                    kind="enforce_fault",
+                    target=target,
+                    observable_effect=effect,
+                )
+
+            is_live = ctx.build in ("diag", "retail")
+            # En partida la config y el backup ya vienen acreditados de
+            # antes de abrir la parte (ver _live_cold_backup_before_open);
+            # un fallo previo ya ha abortado arriba, asi que aqui solo
+            # queda registrar el snapshot y verificar los hellos que
+            # PartContext.open() ya espero. No hay parada ni arranque en
+            # t0: los peers llegan arrancados y verificados, y por tanto
+            # hay un unico epoch del servidor antes de t1.
+            storage_env = pre_storage_env if is_live else None
+            sim_storage = ctx.part_dir / "_sim_storage"
+            backup_dir = ctx.part_dir / "_storage_backup"
+            storage_t0 = pre_storage_t0 if is_live else None
+            backup_slot = pre_backup_slot if is_live else None
+
             if is_live:
                 ctx.record_scenario({"ev": "storage_snapshot_t0", "files": storage_t0})
                 verify_reason = ctx._verify_hello_events()
@@ -1315,12 +1433,16 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 })
                 if not t0_ready:
                     ctx.record_scenario({"ev": "t0_director_absent"})
-                    # Sin director no se juega y aun no se ha mutado nada:
-                    # se anula el snapshot para que el finally no intente
-                    # una restauracion en frio y se corta como los demas
-                    # fallos de t0.
-                    storage_t0 = None
                     raise RuntimeError("t0_director_absent")
+                mission_ok, mission_err = _verify_storage_mission(storage_env)
+                ctx.record_scenario({
+                    "ev": "storage_mission_verify",
+                    "ok_b": 1 if mission_ok else 0,
+                    "error": mission_err,
+                    "mission_dir": str(storage_env.get("mission_dir") or "") if storage_env else "",
+                })
+                if not mission_ok:
+                    raise RuntimeError(mission_err)
 
             baseline_director_rows = []
             for idx, area_id in enumerate(cfg["base_areas"]):
@@ -1736,6 +1858,7 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                     "center_z_m": c["center_z_m"],
                     "radius_m": c["radius_m"],
                 })
+            restore_stop_step = "t6_stop_server_for_cold_restore"
             cleanup = f03_common.issue_one(
                 ctx, "server", "per_cleanup_qa",
                 wire.pack_payload(
@@ -1758,32 +1881,7 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
 
         finally:
             if is_live and storage_env is not None and storage_t0 is not None:
-                if _server_state(storage_env) != "stopped":
-                    f03_common.await_operator(
-                        ctx,
-                        step="t6_stop_server_for_cold_restore",
-                        action="stop_server",
-                        instructions="Para DayZServer para restaurar en frio $mission:storage_#.",
-                        predicate=lambda _ev: _server_state(storage_env) == "stopped",
-                        timeout_s=300.0,
-                    )
-                # BLOQ 2/4: _restore_storage exige parada comprobada justo
-                # antes de sustituir y nunca borra el backup; cualquier
-                # fallo queda como restauracion incompleta en el recibo.
-                try:
-                    restore_ok, restored_snapshot, restore_err = _restore_storage(
-                        storage_env, backup_slot, storage_t0
-                    )
-                except Exception as exc:
-                    restore_ok, restored_snapshot = 0, _snapshot_stage(True, storage_env, sim_storage)
-                    restore_err = f"storage_restore_incomplete:{type(exc).__name__}:{exc}"
-                ctx.record_scenario({
-                    "ev": "storage_restore_result",
-                    "restore_ok_b": restore_ok,
-                    "restore_incomplete_b": 0 if restore_ok == 1 else 1,
-                    "error": restore_err,
-                    "files": restored_snapshot,
-                })
+                _cold_restore_live_storage(ctx, storage_env, backup_slot, storage_t0, stop_step=restore_stop_step)
             elif not is_live and storage_t0 is not None and backup_slot is not None:
                 if sim_storage.exists():
                     shutil.rmtree(sim_storage, ignore_errors=True)
