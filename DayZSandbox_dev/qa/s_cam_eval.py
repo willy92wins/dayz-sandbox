@@ -1948,9 +1948,9 @@ def _check_cam_09(samples: dict) -> dict:
         if mad(gray_during, gray_visible, roi_qb) < 4.0:
             return _chk("CAM-09", "fail", "quickbar_not_detected")
         if mad(gray_during, gray_clean, roi_full) >= 2.0:
-            return _chk("CAM-09", "fail", "hud_leak_full_screen")
+            return _chk("CAM-09", "fail", "hud_visible_full_screen")
         if mad(gray_during, gray_clean, roi_qb) >= 1.5:
-            return _chk("CAM-09", "fail", "hud_leak_quickbar")
+            return _chk("CAM-09", "fail", "quickbar_visible")
 
     post_hud = _find_state(
         scenario, phase, "post_path_hud", "post_path", "post_hud", "post_job_hud"
