@@ -1,6 +1,6 @@
 # Brief F2-partida (R25): escena viva en el mod núcleo y sus partidas (M1)
 
-- **Versión:** v1.3.11, **congelada.** La v1.3.11 recoge el arbitraje de Sol r4: el oráculo se ajusta al cable real de la sonda (las páginas no llevan `server_epoch` y el `result` no lleva `inst`) y cierra los PASA falsos y el FALLA espurio que encontró Sol (§6.1, §12). La v1.3.9 corrige lo que pasa al reiniciar el backend: sesión nueva, ids que se repiten y la op cortada de P5 sin terminal (§6.1, puntos 2, 5 y 6, y F2P-09). La v1.3.10 recoge el contrato de salud del censo de F0.3 (§5.3). Ver §12. Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
+- **Versión:** v1.3.12, **congelada.** La v1.3.12 recoge el cierre de Sol r4 y la pasada de Claude sobre T2f-4: en una etapa positiva, `observado` es exactamente `("observado", "")`; el `server_epoch` de la parte deja de ser obligatorio; y T2f-5, antes de congelar (§6, §6.1, §12). La v1.3.11 recoge el arbitraje de Sol r4: el oráculo se ajusta al cable real de la sonda (las páginas no llevan `server_epoch` y el `result` no lleva `inst`) y cierra los PASA falsos y el FALLA espurio que encontró Sol (§6.1, §12). La v1.3.9 corrige lo que pasa al reiniciar el backend: sesión nueva, ids que se repiten y la op cortada de P5 sin terminal (§6.1, puntos 2, 5 y 6, y F2P-09). La v1.3.10 recoge el contrato de salud del censo de F0.3 (§5.3). Ver §12. Es la ronda 2 de Sol (la última), el arbitraje del orquestador y la decisión de la principal sobre la sonda. Añade la medida de la envolvente v1.3, la alineación con el contrato del testigo tras la diag de F0.3 y con el núcleo del gate, y la semántica exacta del oráculo tras Sol r1 sobre él (§6.1, §12). Las interfaces de F0.3 de §5.3 están confirmadas por escrito y medidas en su diag. 2026-11-16, por el orquestador de F2.
 - **Base:** `main` `cacec92`. Rama `claude/f2-partida`.
 - **Contrato del que parte:** F2 sin juego, `plans/2026-11-14-m1-f2-offline-brief.md` v1.2.2 (sha256 `4b1664fe…fb852f`), en `main` por el #12. Aquí se citan solo sus deltas; lo que no se cambia sigue igual.
 - **Plan:** v2, F2 (`plans/2026-10-26-m1-cine-v2.md:95-102`), y la aceptación A2-A4 (`:152-154`).
@@ -420,7 +420,20 @@ F2P-03 comprueba el estado **y el motivo** que corresponden a la variante usada.
     - Si el filtro de OpenAI corta a Sol sin veredicto, se arbitra con las negativas y esa pasada.
     - **Sol r4,** sobre `7ed2615`, dio UNSOUND: F-01 a F-11 BLOQ, F-12 a F-14 MAY y F-15 MEN. El orquestador los acepta todos, más A-01, que encontró al comprobar F-01, y los recoge en esta v1.3.11 (`C:\tmp\dsbx-f2p-work\recibos\arbitraje-r4.md`).
       - **Cierre:** cada caso pasa primero en rojo sobre `7ed2615` (el resultado espurio que dijo Sol) y después en verde con el arreglo, con su motivo. A eso se suman la prueba de conformidad con el cable real (§6.1, fixture) y la pasada de Claude sobre el diff como extra.
-      - **Pendiente de la principal:** si Sol hace un cierre limitado al diff de T2f-4 antes de congelar. El código final cambia después de r4, que era la última ronda.
+      - **Cierre de r4 (v1.3.12):** la principal pidió a Sol un cierre limitado al diff de T2f-4 (`7ed2615..bf498a5`), sin ronda nueva de ataques. Dio **OK en su alcance** (`C:\tmp\dsbx-f2p-work\sol\LAST_sol_o_r4c.md`), con 3 MAY y 1 MEN fuera de él.
+      - **La pasada de Claude** sobre el mismo diff dio UNSOUND, con 5 PASA falsos reproducidos (W-01 a W-05) y dos regresiones de T2f-4, W-04 y W-07 (`C:\tmp\dsbx-f2p-work\review\adv_t2f4\REVIEW_claude_t2f4.md`). El orquestador los volvió a reproducir sobre el candidato.
+      - **T2f-5, por decisión de la principal, antes de congelar:**
+        - **bloquean el congelado:** W-01 a W-05, W-07, el `server_epoch` de la parte (§6.1 punto 8) y W-11 (§6.1 punto 2);
+        - **si caben en la misma corrida:** W-06, W-08, W-09 y W-10;
+        - **al backlog del recibo de congelado:** W-12, W-13 y lo que no quepa.
+      - **Método de T2f-5:**
+        - cada reproductor de un PASA falso queda como caso permanente: rojo sobre `bf498a5`, verde y su motivo;
+        - un caso por cada etapa que lista §6.1 para cada regla, no uno solo;
+        - al final, la tabla entera de rojo y verde sobre el head: los `r4_*` y los antiguos.
+      - **Cierre de T2f-5:**
+        - confirmación de Sol limitada a su diff, con la pasada de Claude en paralelo y como extra;
+        - después se congela;
+        - solo un PASA falso reproducido abre otra ronda, y la arbitra la principal. Lo MAY o MEN que salga entonces va al backlog.
   - **Antes de congelar:** cada ataque de Sol (O, R y S) y de la pasada (V) tiene su mutante, su negativa o su variante positiva, y da lo que dice §6.1.
 - **Gate y CLI (DP-13, P-11):** la forma que propone F0.3 para su núcleo (§11):
   - **`F2P` en `SPIKE_REGISTRY`** (`qa/gate_core.py:14`), con `qa/f2p_run.py`, `qa/f2p_eval.py` y `qa/f2p_mutants.py`. Hereda el despacho, las partes, `--evaluate-only` y la agregación;
@@ -478,6 +491,11 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
    - **No son terminales,** y no cuentan: `pendiente` y cualquier otro `parcial`, como `parcial/sin_resultado`.
    - **Igualdad exacta (v1.3.11, F-05):** el estado y su motivo se comparan con los que emite el backend por igualdad exacta, nunca por prefijo. Un estado que el backend no emite, como `observado_inventado`, no es terminal.
    - **El estado esperado de cada etapa** es el de §5.2: por ejemplo, el apply de P2 da `observado`, los resets de P3 dan `parcial/contenido_ajeno` y el reset de P3c da `observado`. Una etapa positiva con otro terminal, como `fallido/create_failed`, hace fallar la comprobación que la juzga, aunque el censo cuadre. La única etapa sin terminal es la op cortada de P5.
+   - **`observado` es exactamente `("observado", "")` (v1.3.12, W-11, decisión de la principal).** Es el terminal del `/result` normal, que deja el motivo vacío (`app/backend/scene_live.py:566-568`).
+     - `observado/reconciliada` solo lo da la reconciliación de una orden que sigue sin resolver (`scene_live.py:624` y `:767`). La cierra el checkpoint (`:796-801`, que acaba en `:636`) o, en el reset, `:870`.
+     - Una orden se queda sin resolver por un resultado con error (`:578-581`), por no recibir resultado a tiempo (`app/backend/bridge.py:385`, `parcial/sin_resultado`) o por una reconexión del servidor con la orden en vuelo (`bridge.py:460-468`).
+     - Fuera de esas inyecciones, `reconciliada` quiere decir que se perdió el `/result`, y aceptarlo dejaría pasar una implementación que los pierde. Donde una etapa inyecte la pérdida del resultado o una reconexión del mod con una orden en vuelo, `reconciliada` sigue valiendo. **Hoy ninguna etapa positiva de §5.2 lo hace**: el corte de P5 mata la op con su backend, y P4b reinicia el servidor sin ninguna orden en vuelo. En todas vale solo `("observado", "")`, y otro terminal hace fallar la comprobación que juzga la etapa.
+     - El backend nunca da un segundo terminal a una op ya resuelta. Ningún caso del oráculo lo inventa.
 3. **Generaciones (O-03, R-08, S-03, S-04, V-06).**
    - **Reconstrucción:** el conjunto propio de cada apply (P2, P2n, P3, P4a, P4b y los dos de P5) se reconstruye con **su** testigo.
      - Son las **raíces** nacidas en su ventana que casan con una fila del documento, por clase y a menos de 0,5 m en horizontal.
@@ -580,6 +598,7 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
 
      Sin eso, P4b y P4c dan INCONCLUSO.
    - **El epoch es por evento,** no por parte: cada evento de la sonda y del `tap` lleva el de la instancia que lo produjo o lo recibió. Una parte puede abarcar dos epochs; P4c, por ejemplo, hace el reset en e2 y reinicia a e3. El epoch del manifest de la parte no sirve para juzgar eventos.
+   - **El `server_epoch` de la parte no es obligatorio (v1.3.12, Sol r4c).** Los manifests reales del arnés de F0.3 no llevan epoch, ni por parte ni en otro sitio (`diag_manifest.json` y `diag2_manifest.json`, en `C:\tmp\dsbx-f2p-t2d\_ref\`). El reinicio del servidor se acredita por el `/hello`. Si la parte lo trae, son 32 hex; si no, no falta nada. El contrato de evidencias y el evaluador dicen lo mismo.
 9. **Ruido de la CE (H-6, H-10, R-12, S-13, V-17).**
    - El censo puede traer botín de la CE: `net_id` nuevos que no son de ninguna generación, también de clases de la escena (`Barrel_Yellow` aparece como botín en la zona).
    - Ninguna comprobación cuenta la diferencia entera entre dos censos. Se cuentan las generaciones (punto 3) y, como extras, solo los nacimientos que ve el testigo (F2P-13).
@@ -1080,3 +1099,13 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
   - **§6, «Revisión y congelado»:** lo que dio r4 y cómo se cierra. Queda pendiente que la principal decida sobre un cierre de Sol limitado al diff de T2f-4.
   - **§10:** el riesgo de `coverage_gap` con un solo componente, las criaturas de la CE tras un reinicio y el cable real.
   - Nada de §3 (T1) ni de §4 (T3) cambia. El contrato de evidencias (`qa/f2p_evidence_contract.md`) se pone al día en T2f-4 (F-15).
+- v1.3.12 (2026-11-17): **cierre de Sol r4 y pasada de Claude sobre T2f-4.**
+  - **Sol r4c,** limitado al diff `7ed2615..bf498a5`: OK en su alcance. Fuera de él deja 3 MAY y 1 MEN.
+  - **La pasada de Claude** sobre el mismo diff: UNSOUND, con 5 PASA falsos reproducidos (W-01 a W-05) y dos regresiones de T2f-4 (W-04 y W-07). El orquestador los volvió a reproducir sobre el candidato a congelar.
+  - **La principal manda T2f-5 antes de congelar,** con su alcance, su método y su cierre (§6, «Revisión y congelado»).
+  - **§6.1, punto 2 (W-11, decisión de la principal):**
+    - en una etapa positiva, `observado` es exactamente `("observado", "")`;
+    - `observado/reconciliada` quiere decir que se perdió el `/result`, salvo donde una etapa inyecte esa pérdida o una reconexión del mod, y hoy ninguna lo hace;
+    - las citas del backend, comprobadas por el orquestador en `main` `2135f20`.
+  - **§6.1, punto 8 (Sol r4c, MAY):** el `server_epoch` de la parte no es obligatorio, en la dirección de los manifests reales de F0.3, que no llevan epoch.
+  - Nada de §3, §4 ni §5 cambia.
