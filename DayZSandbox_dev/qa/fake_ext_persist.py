@@ -169,6 +169,9 @@ class PersistFakeExt(FakeExt):
         self.director_items = []
         self.director_uid = DIRECTOR_UID
         self.next_pers_seq = 1
+        # Registro durable (fuera de la memoria de la sonda): pers_id que la
+        # sonda creo y guardo en disco; sobrevive al reinicio del proceso.
+        self._qa_pers_disk = set()
 
     def _state_file(self):
         cfg = getattr(self.peer, "config", None)
@@ -214,6 +217,7 @@ class PersistFakeExt(FakeExt):
             "director_uid": self.director_uid,
             "next_net_low": self.next_net_low,
             "next_pers_seq": self.next_pers_seq,
+            "qa_pers_ids": sorted(self._qa_pers_disk),
             "entities": entities,
         }
         try:
@@ -240,20 +244,34 @@ class PersistFakeExt(FakeExt):
         loaded = data.get("entities")
         if not isinstance(loaded, list):
             return False
-        for raw in loaded:
-            if not isinstance(raw, dict) or not raw.get("persistent"):
-                continue
+        saved_qa = data.get("qa_pers_ids")
+        if isinstance(saved_qa, list):
+            for pid in saved_qa:
+                if _is_nonzero_pers_id(pid):
+                    self._qa_pers_disk.add(str(pid))
+        kept = [
+            raw for raw in loaded
+            if isinstance(raw, dict) and raw.get("persistent")
+        ]
+        net_map = {}
+        for raw in kept:
+            old_net = str(raw.get("net_id") or "")
+            if old_net and old_net not in net_map:
+                net_map[old_net] = self._alloc_net_id()
+        for raw in kept:
             saved_pers = str(raw.get("pers_id") or "")
             used_pers = {e.get("pers_id") for e in self.world.values()}
             if not _is_nonzero_pers_id(saved_pers) or saved_pers in used_pers:
                 saved_pers = self._alloc_pers_id()
+            old_net = str(raw.get("net_id") or "")
+            old_parent = str(raw.get("parent_net_id") or "")
             ent = self._add_entity(
-                net_id=str(raw.get("net_id") or ""),
+                net_id=net_map.get(old_net) or self._alloc_net_id(),
                 pers_id=saved_pers,
                 class_name=str(raw.get("class_name") or ""),
                 cat=str(raw.get("cat") or "raw"),
                 loc_kind=str(raw.get("loc_kind") or "ground"),
-                parent_net_id=str(raw.get("parent_net_id") or ""),
+                parent_net_id=net_map.get(old_parent, old_parent),
                 parent_class=str(raw.get("parent_class") or ""),
                 slot_name=str(raw.get("slot_name") or ""),
                 owner_uid=str(raw.get("owner_uid") or ""),
@@ -269,8 +287,6 @@ class PersistFakeExt(FakeExt):
             )
             ent["alive"] = bool(raw.get("alive", True))
             ent["ai_agent"] = bool(raw.get("ai_agent", False))
-            if ent["owner_uid"] != self.director_uid:
-                self.raw_net_ids.add(ent["net_id"])
         return True
 
     def init(self, peer, jobs):
@@ -289,6 +305,7 @@ class PersistFakeExt(FakeExt):
             self.contention_seen_for.clear()
             self.census_failed.clear()
             self.qa_net_ids.clear()
+            self.raw_net_ids.clear()
 
     def handles(self, verb, role):
         return role == "server" and verb in SERVER_VERBS
@@ -399,10 +416,15 @@ class PersistFakeExt(FakeExt):
                     frontier.append(ent["net_id"])
         return out
 
+    def _register_qa_pers(self, pers_id):
+        if _is_nonzero_pers_id(pers_id):
+            self._qa_pers_disk.add(str(pers_id))
+
     def _delete_entity(self, ent):
         self.world.pop(ent["net_id"], None)
         self.raw_net_ids.discard(ent["net_id"])
         self.qa_net_ids.discard(ent["net_id"])
+        self._qa_pers_disk.discard(ent.get("pers_id"))
 
     def _drop_records(self, recs):
         for rec in recs:
@@ -716,6 +738,7 @@ class PersistFakeExt(FakeExt):
             })
             if persistent:
                 self.qa_net_ids.add(net_id)
+            self._register_qa_pers(ent["pers_id"])
             local[lid] = ent
             out_rows.append({
                 "logical_id": lid,
@@ -1058,10 +1081,11 @@ class PersistFakeExt(FakeExt):
             area_id=area_id,
         )
         self.raw_net_ids.add(net_id)
+        self._register_qa_pers(pers_id)
         child_count = 0
         if mode == "persistent_control" and child_class:
             child_net = self._alloc_net_id()
-            self._add_entity(
+            child_ent = self._add_entity(
                 net_id=child_net,
                 pers_id=self._alloc_pers_id(),
                 class_name=child_class,
@@ -1082,6 +1106,7 @@ class PersistFakeExt(FakeExt):
                 area_id=area_id,
             )
             self.raw_net_ids.add(child_net)
+            self._register_qa_pers(child_ent["pers_id"])
             child_count = 1
         s = {
             "spawn_status": "ok",
@@ -1254,6 +1279,12 @@ class PersistFakeExt(FakeExt):
         for ent in self.world.values():
             if ent["net_id"] in qa_net_ids and _is_valid_identity(ent["pers_id"], ZERO_PERS_ID):
                 qa_pers_ids.add(ent["pers_id"])
+        for pid in self._qa_pers_disk:
+            if _is_valid_identity(pid, ZERO_PERS_ID):
+                qa_pers_ids.add(pid)
+        for ent in self.world.values():
+            if _is_valid_identity(ent["pers_id"], ZERO_PERS_ID) and ent["pers_id"] in qa_pers_ids:
+                qa_net_ids.add(ent["net_id"])
 
         discs = []
         for row in args_unpacked.get("rows") or []:
@@ -1311,6 +1342,7 @@ class PersistFakeExt(FakeExt):
                 rec_net_ids = {r["ent"]["net_id"] for r in kept_records}
                 has_foreign_desc = any(
                     d["net_id"] not in qa_net_ids and d["net_id"] not in rec_net_ids
+                    and not _identity_matches(d["net_id"], d["pers_id"], qa_net_ids, qa_pers_ids)
                     for d in self._descendants(net_id)
                 )
                 if has_foreign_desc:
@@ -1340,12 +1372,27 @@ class PersistFakeExt(FakeExt):
         for net_id, ent in self.world.items():
             if ent["owner_uid"] == self.director_uid or ent["persistent"]:
                 keep[net_id] = ent
-        self.world = keep
+        net_map = {}
+        for old_net, ent in keep.items():
+            if ent["owner_uid"] == self.director_uid:
+                net_map[old_net] = old_net
+            else:
+                net_map[old_net] = self._alloc_net_id()
+        self.world = {}
+        for old_net, ent in keep.items():
+            new_net = net_map[old_net]
+            ent["net_id"] = new_net
+            old_parent = ent.get("parent_net_id") or ""
+            if old_parent in net_map:
+                ent["parent_net_id"] = net_map[old_parent]
+            self.world[new_net] = ent
         for ent in self.world.values():
             if ent["owner_uid"] != self.director_uid:
                 ent["own_b"] = 0
                 ent["own_logical_id"] = ""
         self.records = []
+        self.raw_net_ids.clear()
+        self.qa_net_ids.clear()
         self.scene_gen = {}
         self.scene_last_op = {}
         self.scene_applied = {}
