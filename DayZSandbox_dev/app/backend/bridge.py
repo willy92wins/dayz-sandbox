@@ -19,6 +19,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 WIRE_CAP = 3500
+# Tope de cada cadena de una orden. El motor corta a 1023 lo que un peer lee con JsonSerializer
+# (partida diag de F0.3-0, BASE-01; su brief, §15, D10). La regla del proyecto es 1000, con
+# margen, y aqui se cuenta sobre la forma escapada del cable, que nunca es menor que la decodificada.
+STR_CAP = 1000
 DRAIN_S = 2.0  # tope total para descartar el cuerpo de una peticion rechazada (como C-02 de F1b-web)
 BODY_S = 2.0  # tope total para leer el cuerpo de una peticion aceptada
 MAX_DRAIN = 1024 * 1024  # por encima no se descarta: se responde y se cierra
@@ -32,6 +36,18 @@ def _is_hex(value, n):
 
 def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _max_str_bytes(obj):
+    """Bytes de la cadena mas larga dentro de obj (claves y valores, en profundidad), contados
+    como salen en el cable: escapada y en UTF-8, sin las comillas."""
+    if isinstance(obj, str):
+        return len(json.dumps(obj, ensure_ascii=False).encode("utf-8")) - 2
+    if isinstance(obj, dict):
+        return max([0] + [max(_max_str_bytes(k), _max_str_bytes(v)) for k, v in obj.items()])
+    if isinstance(obj, (list, tuple)):
+        return max([0] + [_max_str_bytes(v) for v in obj])
+    return 0
 
 
 def valid_world_read(read):
@@ -77,6 +93,10 @@ class Bridge:
         self.backend = backend
         self._peer_key = peer_key
         self.clock = clock if clock is not None else backend.clock
+        # Origen de los ms publicos (now_ms, issued_ms): el arranque del bridge. Asi son enteros
+        # pequenos que un peer de Enforce lee en int de 32 bits sin perder las diferencias
+        # (brief de F1b-peers, P-02); la logica interna de TTL sigue en segundos absolutos.
+        self._t0 = float(self.clock())
         self.log = log if log is not None else getattr(backend, "log", sys.stderr)
         self.lease_ms = int(lease_ms)
         self.hold_ms = int(hold_ms)
@@ -154,7 +174,11 @@ class Bridge:
         return float(self.clock())
 
     def _now_ms(self):
-        return int(self._now() * 1000)
+        return self._ms(self._now())
+
+    def _ms(self, t):
+        """ms enteros desde el arranque del bridge para un instante t del reloj (segundos)."""
+        return int((t - self._t0) * 1000)
 
     def _log_line(self, line):
         try:
@@ -184,7 +208,8 @@ class Bridge:
     def live_scene_count(self):
         with self.lock:
             return sum(1 for o in self.orders.values()
-                       if o["verb"] == "scene.apply" and o["bstate"] in ("pendiente", "ejecutando"))
+                       if o["verb"] in ("scene.apply", "scene.reset")
+                       and o["bstate"] in ("pendiente", "ejecutando"))
 
     # --- cola -----------------------------------------------------------
     def _wire_poll_len(self, order_public, now_ms):
@@ -216,7 +241,7 @@ class Bridge:
                 "role": "server", "internal": bool(internal),
                 "conn": int(srv.get("conn", 0)),
                 "epoch": srv.get("epoch"), "inst": srv.get("inst"),
-                "session": self.session, "issued_ms": int(now * 1000),
+                "session": self.session, "issued_ms": self._ms(now),
                 "enqueued_mono": now, "ttl_ms": int(ttl_ms if ttl_ms is not None else self.ttl_ms),
                 "bstate": "pendiente", "delivered_inst": None, "last_delivery": None,
                 "result_seen": False, "priority": 0 if internal else 1,
@@ -225,8 +250,11 @@ class Bridge:
             self._seq += 1
             if verb == "state.read":
                 order["priority"] = 0
-            public = self._public_order(order, int(now * 1000))
-            if self._wire_poll_len(public, int(now * 1000)) > WIRE_CAP:
+            public = self._public_order(order, self._ms(now))
+            if self._wire_poll_len(public, self._ms(now)) > WIRE_CAP:
+                return False, "wire_cap_exceeded"
+            if _max_str_bytes(public) > STR_CAP:
+                # el peer la leeria cortada: tampoco cabe en el cable (brief de F1b-peers §3.5)
                 return False, "wire_cap_exceeded"
             self.orders[(self.session, op_id)] = order
             self.cond.notify_all()
@@ -251,7 +279,9 @@ class Bridge:
         if self._active_read_locked() is not None:
             return None
         self._read_next_at = None
-        ok, order = self.enqueue_order("state.read", {}, internal=True)
+        sl = getattr(self.backend, "scene_live", None)
+        args = sl.state_read_args_locked() if sl is not None else {}
+        ok, order = self.enqueue_order("state.read", args, internal=True)
         return order if ok else None
 
     def _schedule_read_retry_locked(self):
@@ -269,17 +299,27 @@ class Bridge:
                 if order["bstate"] in ("pendiente", "ejecutando"):
                     order["bstate"] = "descartada"
                 continue
-            if order["bstate"] not in ("pendiente", "ejecutando"):
+            if order["bstate"] not in ("pendiente", "ejecutando", "parcial"):
                 continue
             reason = "mundo_reiniciado" if (order["epoch"] and new_epoch
                                             and order["epoch"] != new_epoch) else "conexion_perdida"
+            if order["bstate"] == "parcial":
+                # §4.4 (solo F2): un `parcial` de otro `epoch` se queda
+                # `parcial/mundo_reiniciado` y no se reconcilia ni se compensa. Con el
+                # mismo epoch, la lectura del mismo mundo puede reconciliarlo. Las
+                # ordenes F1 siguen como en F1b-bridge.
+                sl = getattr(self.backend, "scene_live", None)
+                if reason == "mundo_reiniciado" and sl is not None and sl.is_f2_order(order) \
+                        and order["op_id"] in self.backend.ops:
+                    self.backend.set_op_state(order["op_id"], "parcial", "backend", reason)
+                continue
             if order["bstate"] == "pendiente":
                 order["bstate"] = "terminal"
-                if order["verb"] == "scene.apply" and order["op_id"] in self.backend.ops:
+                if order["verb"] in ("scene.apply", "scene.reset") and order["op_id"] in self.backend.ops:
                     self.backend.set_op_state(order["op_id"], "fallido", "backend", reason)
             else:
                 order["bstate"] = "parcial"
-                if order["verb"] == "scene.apply" and order["op_id"] in self.backend.ops:
+                if order["verb"] in ("scene.apply", "scene.reset") and order["op_id"] in self.backend.ops:
                     self.backend.set_op_state(order["op_id"], "parcial", "backend", reason)
 
     # --- barrido --------------------------------------------------------
@@ -348,7 +388,8 @@ class Bridge:
                 srv2 = self.peers.get("server")
                 if srv2 and not srv2.get("lost"):
                     for order in self.orders.values():
-                        if order["verb"] == "scene.apply" and order["bstate"] == "parcial" \
+                        if order["verb"] in ("scene.apply", "scene.reset") \
+                                and order["bstate"] == "parcial" \
                                 and order["conn"] == srv2.get("conn"):
                             self._trigger_state_read_locked()
                             break
@@ -356,15 +397,17 @@ class Bridge:
             if srv3 and not srv3.get("lost") and self._read_next_at is not None \
                     and t >= self._read_next_at and self._active_read_locked() is None:
                 if not self.reconciled or self._has_live_parcial_locked():
-                    self._read_next_at = None
-                    self.enqueue_order("state.read", {}, internal=True)
+                    self._trigger_state_read_locked()
             self.cond.notify_all()
 
     def _has_live_parcial_locked(self):
         srv = self.peers.get("server")
         if not srv:
             return False
-        return any(o["verb"] == "scene.apply" and o["bstate"] == "parcial"
+        sl = getattr(self.backend, "scene_live", None)
+        if sl is not None and sl.has_unresolved_locked():
+            return True
+        return any(o["verb"] in ("scene.apply", "scene.reset") and o["bstate"] == "parcial"
                    and o["conn"] == srv.get("conn") for o in self.orders.values())
 
     # --- hello ------------------------------------------------------------
@@ -407,13 +450,21 @@ class Bridge:
                 "map": body.get("map"), "world_size": body.get("world_size"),
                 "modset": copy.deepcopy(body.get("modset")) if peer == "server" else None,
                 "actor_engine": body.get("actor_engine"),
+                "scene": body.get("scene") if peer == "server" else None,
                 "last_poll_mono": self._now(), "inflight": 0, "lost": False,
             }
             if peer == "server":
+                # C-03: un hello nuevo invalida los intentos de catalogo a medias.
+                # Las paginas tienen que llegar dentro de la presentacion vigente;
+                # el catalogo completo anterior lo invalida SceneLive (D4).
+                self._catalog_attempts = {}
                 self.reconciled = False
                 self.world = None
                 self._read_backoff = 0
                 self._read_next_at = None
+                sl = getattr(self.backend, "scene_live", None)
+                if sl is not None:
+                    sl.on_server_hello_locked(self.peers[peer])
                 self._trigger_state_read_locked()
             self.cond.notify_all()
             return 200, {"ok": True, "session": self.session, "conn": new_conn,
@@ -488,7 +539,8 @@ class Bridge:
                             if peer == "server":
                                 candidate["epoch"] = record["epoch"]
                             candidate["last_delivery"] = now
-                            if candidate["verb"] == "scene.apply" and candidate["op_id"] in self.backend.ops:
+                            if candidate["verb"] in ("scene.apply", "scene.reset") \
+                                    and candidate["op_id"] in self.backend.ops:
                                 self.backend.set_op_state(candidate["op_id"], "ejecutando", "backend", "entregada")
                         else:
                             candidate["last_delivery"] = now
@@ -524,7 +576,7 @@ class Bridge:
                 continue
             if (now - o["enqueued_mono"]) * 1000.0 > o["ttl_ms"]:
                 continue
-            if o["verb"] == "scene.apply" and not self.reconciled:
+            if o["verb"] in ("scene.apply", "scene.reset") and not self.reconciled:
                 continue
             return o
         return None
@@ -565,7 +617,13 @@ class Bridge:
                 return _err(409, "unknown_op")
             if epoch != order["epoch"]:
                 return _err(400, "bad_request")
-            if status == "done" and order["verb"] in ("scene.apply", "state.read"):
+            sl = getattr(self.backend, "scene_live", None)
+            is_f2 = sl is not None and sl.is_f2_order(order)
+            if is_f2:
+                # D1/A10: una orden F2 se valida con §3.2 y la juzga SceneLive.
+                if status == "done" and not sl.valid_read(order, read):
+                    return _err(400, "bad_request")
+            elif status == "done" and order["verb"] in ("scene.apply", "state.read"):
                 if not valid_world_read(read):
                     return _err(400, "bad_request")
             if order["result_seen"]:
@@ -577,7 +635,7 @@ class Bridge:
                 return 200, {"ok": True}
             if order["bstate"] not in ("ejecutando", "parcial"):
                 return _err(409, "unknown_op")
-            if order["verb"] == "scene.apply":
+            if not is_f2 and order["verb"] == "scene.apply":
                 op = self.backend.ops.get(op_id)
                 if op is None:
                     return _err(409, "unknown_op")
@@ -585,8 +643,13 @@ class Bridge:
                     order["result_seen"] = True
                     order["bstate"] = "terminal"
                     return 200, {"ok": True}
+            if is_f2:
+                # A10: SceneLive antes de marcar result_seen; el no lo marca.
+                sl.on_result_locked(order, status, reason, read)
+                order["result_seen"] = True
+                self.cond.notify_all()
+                return 200, {"ok": True}
             order["result_seen"] = True
-            prev_bstate = order["bstate"]
             order["bstate"] = "terminal"
             if order["verb"] == "state.read":
                 self._handle_read_result_locked(order, status, read)
@@ -623,15 +686,23 @@ class Bridge:
 
     def _handle_read_result_locked(self, order, status, read):
         srv = self.peers.get("server")
+        sl_check = getattr(self.backend, "scene_live", None)
         reconciles = False
         if status == "done" and srv and not srv.get("lost") \
                 and order["conn"] == int(srv["conn"]) and order["delivered_inst"] == srv["inst"] \
-                and valid_world_read(read) and read.get("epoch") == srv["epoch"]:
+                and valid_world_read(read) and read.get("epoch") == srv["epoch"] \
+                and (sl_check is None or sl_check.valid_state_read_locked(order, read)):
+            # T-01 (contrato v1.3): un state.read con `f2` reconcilia solo con su `scene` valido.
             reconciles = True
         if reconciles:
             self.world = copy.deepcopy(read)
             self.reconciled = True
             self._read_next_at = None
+            sl = getattr(self.backend, "scene_live", None)
+            if sl is not None:
+                # §4.6: la reconciliacion de F1b-bridge solo toca ordenes F1;
+                # SceneLive juzga las F2 (§4.5).
+                sl.on_world_read_locked(read)
             self._process_world_read_locked(read)
             if self._has_live_parcial_locked():
                 # sigue el calendario 1, 2, 4, 8 s y despues cada 8 s (§4); no vuelve a 1 s
@@ -652,6 +723,9 @@ class Bridge:
         target = self.orders.get((self.session, gen.get("op_id")))
         if target is None or target["verb"] != "scene.apply" or target["bstate"] != "parcial":
             return
+        sl = getattr(self.backend, "scene_live", None)
+        if sl is not None and sl.is_f2_order(target):
+            return  # las F2 las juzga SceneLive.on_world_read_locked
         if target["epoch"] != read.get("epoch"):
             return
         op = self.backend.ops.get(target["op_id"])
@@ -719,6 +793,9 @@ class Bridge:
             sha = hashlib.sha256(canon).hexdigest()
             self.catalog = {"catalog_id": catalog_id, "build": build, "modset_hash": modset_hash,
                             "n_classes": len(sorted_classes), "sha256": sha, "classes": sorted_classes}
+            sl = getattr(self.backend, "scene_live", None)
+            if sl is not None:
+                sl.on_catalog_complete_locked(q_inst, build)
             return 200, {"ok": True, "have": have, "pages": pages, "complete": True, "sha256": sha}
 
 

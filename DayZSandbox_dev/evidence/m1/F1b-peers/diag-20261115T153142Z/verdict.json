@@ -1,0 +1,17 @@
+{
+  "aggregate": "PASA",
+  "rows": {
+    "G6": {
+      "metrics": {
+        "clock_n": 134,
+        "clock_pause_t_step_ms": 5001.0,
+        "clock_pause_tick_step_ms": 5000,
+        "clock_slope": 1.0000001520997004,
+        "recovery_ms": 1207.6840832084417,
+        "results": 1
+      },
+      "reason": "",
+      "verdict": "PASA"
+    }
+  }
+}

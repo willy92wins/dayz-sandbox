@@ -2,6 +2,8 @@
 
 import argparse
 import importlib
+import os
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -20,6 +22,8 @@ def build_parser():
     spike.add_argument("--server-profile")
     spike.add_argument("--client-profile")
     spike.add_argument("--pbo", default=None)
+    spike.add_argument("--product-pbo", default=None)
+    spike.add_argument("--oracle-commit", default=None)
     spike.add_argument("--part", default="all")
     spike.add_argument("--peer-timeout", type=float, default=None)
     spike.add_argument("--hold-ms", type=int, default=gate_core.DEFAULT_HOLD_MS)
@@ -88,9 +92,20 @@ def validate(parser, args):
         if part != "all":
             if args.id == "S-puente":
                 parser.error("--part is not supported for S-puente")
-            valid_parts = _valid_parts_for_spike(args.id)
-            if part not in valid_parts:
-                parser.error(f"unknown --part {part} for spike {args.id}")
+            if getattr(args, "oracle_commit", None) is None:  # con oraculo, main() valida --part tras comprobarlo
+                valid_parts = _valid_parts_for_spike(args.id)
+                if part not in valid_parts:
+                    parser.error(f"unknown --part {part} for spike {args.id}")
+    if args.cmd == "spike":
+        if getattr(args, "oracle_commit", None) is not None:
+            entry = gate_core.SPIKE_REGISTRY.get(args.id)
+            if entry is None or not entry[2]:
+                parser.error(f"--oracle-commit is not supported for spike {args.id}")
+        product = getattr(args, "product_pbo", None)
+        if product is not None:
+            product_path = Path(product)
+            if not product_path.is_file() or product_path.suffix.lower() != ".pbo":
+                parser.error("--product-pbo must point to an existing .pbo file")
     if args.build in ("retail", "diag") and not getattr(args, "evaluate_only", False):
         server = getattr(args, "server_profile", None)
         client = getattr(args, "client_profile", None)
@@ -105,8 +120,61 @@ def validate(parser, args):
             pbo_path = Path(pbo)
             if not pbo_path.is_file() or pbo_path.suffix.lower() != ".pbo":
                 parser.error("--pbo must point to an existing .pbo file")
+            if args.id in gate_core.PRODUCT_PBO_SPIKES and not getattr(args, "product_pbo", None):
+                parser.error(f"retail/diag {args.id} requires --product-pbo")
     if hasattr(args, "peer_timeout"):
         args.peer_timeout = gate_core.peer_timeout_s(args.build, args.peer_timeout)
+
+
+def _oracle_context():
+    """(raiz del repo git, carpeta qa) para la comprobacion del oraculo; las pruebas lo parchean con un repo temporal."""
+    qa_dir = Path(__file__).resolve().parent
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], cwd=str(qa_dir), capture_output=True, text=True, check=False
+        )
+        root = top.stdout.strip() if top.returncode == 0 else ""
+    except OSError:
+        root = ""
+    return (Path(root) if root else qa_dir.parent), qa_dir
+
+
+def _is_alias(path):
+    """True si `path` es un enlace, una junction o resuelve a otra ruta (alias de directorio)."""
+    path = Path(path)
+    if path.is_symlink() or getattr(os.path, "isjunction", lambda _p: False)(path):
+        return True
+    return os.path.normcase(os.path.realpath(path)) != os.path.normcase(os.path.abspath(path))
+
+
+def _alias_reason(evidence):
+    """Motivo (str) si la carpeta de evidencia o una subcarpeta directa es un alias; None si no."""
+    evidence = Path(evidence)
+    if evidence.exists() and _is_alias(evidence):
+        return f"evidence folder is a link or resolves elsewhere: {evidence}"
+    if evidence.is_dir():
+        for child in sorted(evidence.iterdir()):
+            if (child.is_dir() or child.is_symlink()) and _is_alias(child):
+                return f"evidence subfolder is a link or resolves elsewhere: {child}"
+    return None
+
+
+def _write_root_file(evidence, name, obj):
+    """Escribe evidence/name sin atravesar enlaces: un enlace (simbolico, duro o que resuelva fuera de la raiz) se
+    desvincula antes y se escribe un fichero nuevo, para no alterar el fichero de una parte."""
+    path = Path(evidence) / name
+    if os.path.lexists(path):
+        real = Path(os.path.realpath(path))
+        ev_real = Path(os.path.realpath(evidence))
+        aliased = path.is_symlink() or real.parent != ev_real or real.name != name
+        if not aliased:
+            try:
+                aliased = os.stat(path).st_nlink > 1
+            except OSError:
+                aliased = True
+        if aliased:
+            path.unlink()
+    gate_core.write_json(path, obj)
 
 
 def _has_valid_f03_parts(evidence: Path, part: str) -> bool:
@@ -127,6 +195,25 @@ def main(argv=None):
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
+        oracle_check = None
+        oracle_collect = {}
+        if args.cmd == "spike" and args.oracle_commit is not None:
+            entry = gate_core.SPIKE_REGISTRY.get(args.id)
+            if entry is not None and entry[2]:
+                # Antes de validate() y de importar nada del spike: un modulo modificado no puede alterar la comprobacion.
+                oracle_collect = {}
+                try:
+                    repo_root, qa_dir = _oracle_context()
+                    oracle_check = gate_core.check_oracle_files(
+                        args.id, args.oracle_commit, repo_root=repo_root, qa_dir=qa_dir, collect=oracle_collect
+                    )
+                except Exception as exc:  # noqa: BLE001 - falla cerrado: INCONCLUSO con evidencia, nunca exit 1
+                    oracle_check = {
+                        "ok": False,
+                        "commit": args.oracle_commit,
+                        "files": [],
+                        "problems": [f"check_error:{type(exc).__name__}"],
+                    }
         validate(parser, args)
     except SystemExit as exc:
         return int(exc.code) if exc.code is not None else 0
@@ -160,12 +247,31 @@ def main(argv=None):
                 else:
                     evidence.mkdir(parents=True)
         accepted = True
+        if args.cmd == "spike" and getattr(args, "oracle_commit", None) is not None:
+            # Antes de importar o correr nada del spike: el oraculo debe ser byte a byte el del commit congelado.
+            check = oracle_check
+            alias = _alias_reason(evidence)
+            if alias:
+                print(f"oracle check refused: {alias}", file=sys.stderr)
+                return 2
+            _write_root_file(evidence, "oracle_check.json", check)
+            if not check["ok"]:
+                _write_root_file(
+                    evidence, "verdict.json", gate_core.make_verdict(args.id, 2, reasons=["oracle_modified"])
+                )
+                return 2
+            args.oracle_commit = check["commit"]
+            # El codigo que se ejecuta es el comprobado: se carga de los bytes verificados, no por import.
+            gate_core.load_verified_oracle(args.id, oracle_collect, qa_dir=_oracle_context()[1])
+            if part != "all" and part not in _valid_parts_for_spike(args.id):
+                return 2
         return execute(args, evidence, argv)
     except Exception as exc:
         if accepted and evidence.is_dir():
             try:
-                gate_core.write_json(
-                    evidence / "verdict.json",
+                _write_root_file(
+                    evidence,
+                    "verdict.json",
                     gate_core.make_verdict(
                         getattr(args, "id", args.cmd),
                         2,

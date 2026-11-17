@@ -160,6 +160,196 @@ def _tree_bytes(root):
     return blob
 
 
+class _FakeProc:
+    def __init__(self, pid, handle, exit_code=None):
+        self.pid = pid
+        self._handle = handle
+        self._exit_code = exit_code
+        self.terminated = False
+        self.killed = False
+        self.waited = False
+
+    def poll(self):
+        return self._exit_code
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        self.waited = True
+        return 0
+
+    def kill(self):
+        self.killed = True
+
+
+@contextlib.contextmanager
+def _cpu_load():
+    """Satura la CPU con procesos de prioridad normal (el caso de varias suites a la vez)."""
+    spin = "while True: pass"
+    burners = []
+    try:
+        for _ in range(max(8, 2 * (os.cpu_count() or 4))):
+            burners.append(subprocess.Popen([PY, "-c", spin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        yield len(burners)
+    finally:
+        for proc in burners:
+            proc.kill()
+        for proc in burners:
+            proc.wait(timeout=20)
+
+
+def _row_code(fault):
+    import s_puente_run
+
+    with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
+        evidence = Path(tmp) / "run"
+        evidence.mkdir()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = s_puente_run.run(_args(fault=None if fault == "none" else fault), evidence, [])
+        verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
+        bad = [(row["id"], row["status"]) for row in verdict["checks"] if row["status"] != "pass"]
+    return code, bad
+
+
+def _n6_ctx(
+    accept_ms,
+    apply_ms,
+    pose_read_ms,
+    read_pose=None,
+    reject_ms=626,
+    lease_ms=600,
+    accepts=None,
+    mutate_log=None,
+):
+    """Evidencia N6 minima con el rpc_log y la pose que produce un peer de reloj controlado.
+
+    El peer aplica una pose diferida en el frame siguiente y solo la descarta si su lease ya no
+    vale en ese frame (`fake_peer.py`, `_apply`), y anota el resultado en la entrada del rpc_log. El
+    reloj lo mueve el test para fijar la edad del lease al recibir y al aplicar.
+
+    `accepts = [(recibida_ms, aplicada_ms), ...]` sustituye a la unica aceptada `(accept_ms, apply_ms)`:
+    la i-esima lleva `seq0 + i` y la pose `x = 7200 + i`. Despues llega una rechazada en `reject_ms`.
+    `mutate_log(entries)` cambia una copia del rpc_log antes de evaluar, para simular un peer defectuoso
+    o una sonda sin registro de aplicacion.
+    """
+    import fake_peer
+    import s_puente_eval
+
+    clock = [0.0]
+    peer = fake_peer.Peer(
+        config=None,
+        role="client",
+        rpc_port=0,
+        frame_hz=60,
+        fault=None,
+        clock_ms_fn=lambda: clock[0],
+    )
+    peer.lease_ms = lease_ms
+    peer.last_ok_ms = 0.0
+    peer.pose = ([7300.0, 370.0, 7300.0], [0.0, 0.0, 0.0])
+    peer.frame = 100
+    seq0 = 1000
+    accepts = list(accepts) if accepts is not None else [(accept_ms, apply_ms)]
+    for i, (acc_ms, app_ms) in enumerate(accepts):
+        clock[0] = float(acc_ms)
+        peer._handle_cam_rpc(
+            {
+                "target_inst": peer.inst,
+                "seq": seq0 + i,
+                "pos": [7200.0 + i, 360.0, 7200.0],
+                "ypr": [90.0, 0.0, 0.0],
+            }
+        )
+        clock[0] = float(app_ms)
+        peer.frame += 1
+        peer._apply()
+    clock[0] = float(reject_ms)
+    peer._handle_cam_rpc(
+        {
+            "target_inst": peer.inst,
+            "seq": seq0 + len(accepts),
+            "pos": [7200.0 + len(accepts), 360.0, 7200.0],
+            "ypr": [90.0, 0.0, 0.0],
+        }
+    )
+    if read_pose is None:
+        read_pose = peer.pose
+    log_entries = [dict(entry) for entry in peer.rpc_log]
+    if mutate_log is not None:
+        mutate_log(log_entries)
+    log_done_ms = max(float(pose_read_ms), float(reject_ms) + 1.0)
+    bridge = [
+        {
+            "ev": "result",
+            "op_id": "pre",
+            "t_ms": 1,
+            "result": {
+                "status": "done",
+                "dup": False,
+                "done_ms": 0,
+                "read": {"has": ["rpc_log"], "rpc_log": []},
+            },
+        },
+        {
+            "ev": "enq",
+            "op_id": "burst",
+            "t_ms": 2,
+            "args": {
+                "seq0": seq0,
+                "count": len(accepts) + 1,
+                "pos": [7200.0, 360.0, 7200.0],
+                "ypr": [90.0, 0.0, 0.0],
+            },
+        },
+        {
+            "ev": "result",
+            "op_id": "log",
+            "t_ms": 3,
+            "result": {
+                "status": "done",
+                "dup": False,
+                "done_ms": log_done_ms,
+                "read": {"has": ["rpc_log"], "rpc_log": log_entries},
+            },
+        },
+        {
+            "ev": "result",
+            "op_id": "read",
+            "t_ms": 4,
+            "result": {
+                "status": "done",
+                "dup": False,
+                "done_ms": float(pose_read_ms),
+                "read": {
+                    "has": ["pos", "ypr"],
+                    "pos": list(read_pose[0]),
+                    "ypr": list(read_pose[1]),
+                },
+            },
+        },
+    ]
+    scenario = [
+        {"ev": "step_start", "step": "N6", "peer": "client", "t_ms": 0},
+        {
+            "ev": "expect",
+            "step": "N6",
+            "peer": "client",
+            "t_ms": 5,
+            "roles": {"pre_log": "pre", "burst": "burst", "log": "log", "read": "read"},
+        },
+        {"ev": "step_end", "step": "N6", "peer": "client", "t_ms": 10},
+    ]
+    ctx = {
+        "bridge": bridge,
+        "scenario": scenario,
+        "lease": lease_ms,
+        "skipped": {},
+        "index": {id(ev): i for i, ev in enumerate(bridge)},
+    }
+    return s_puente_eval._n6(ctx)
+
+
 class E2ESpuenteTests(unittest.TestCase):
     def setUp(self):
         self.parents = {str(os.getpid())}
@@ -217,8 +407,9 @@ class E2ESpuenteTests(unittest.TestCase):
                         err = io.StringIO()
                         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                             code = s_puente_run.run(args, evidence, [])
-                        self.assertEqual(code, expected)
                         verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
+                        not_passing = [(row["id"], row["status"], row["detail"]) for row in verdict["checks"] if row["status"] != "pass"]
+                        self.assertEqual(code, expected, not_passing)
                         self.assertEqual(verdict["exit_code"], expected)
                         if fault == "drop_results":
                             self.assertEqual(verdict["metrics"]["n_timeouts"], 11)
@@ -235,6 +426,287 @@ class E2ESpuenteTests(unittest.TestCase):
                             self.assertIn(planted.encode("ascii"), evidence_key_bytes(copied))
                             self.assertNotIn(planted.encode("ascii"), evidence_key_bytes(evidence))
                             self.assertIn(planted.encode("ascii"), evidence_key_bytes(evidence, planted))
+
+    def test_point7_rows_hold_under_cpu_load(self):
+        """Carga extrema, fuera del gate: M2 (p95 con carga extrema) es un residual del entorno."""
+        if os.environ.get("DSBX_STRESS") != "1":
+            self.skipTest("prueba de carga: solo con DSBX_STRESS=1 (fuera del gate determinista)")
+        with _cpu_load():
+            for fault, expected in (("none", 0), ("wrong_build", 2)):
+                with self.subTest(fault=fault, expected=expected):
+                    code, bad = _row_code(fault)
+                    self.assertEqual(code, expected, bad)
+
+    # --- N6 con reloj controlado (F02-H3). La pose inicial del peer es x=7300; la i-esima aceptada, x=7200+i. ---
+    _PRE_BURST = ([7300.0, 370.0, 7300.0], [0.0, 0.0, 0.0])
+
+    @staticmethod
+    def _pose_of(i):
+        return ([7200.0 + i, 360.0, 7200.0], [90.0, 0.0, 0.0])
+
+    @staticmethod
+    def _strip_apply(entries):
+        for entry in entries:
+            for key in ("apply_ms", "apply_lease_age_ms", "applied_b"):
+                entry.pop(key, None)
+
+    def test_n6_applies_last_accepted_pose_when_lease_is_valid(self):
+        status, detail, _ = _n6_ctx(566, 599, 630)
+        self.assertEqual((status, detail), ("pass", ""))
+
+    def test_n6_peer_records_apply_outcome(self):
+        def check(entries):
+            accepted = [e for e in entries if e["decision"] == "accepted"]
+            self.assertEqual([(e["apply_ms"], e["apply_lease_age_ms"], e["applied_b"]) for e in accepted],
+                             [(110.0, 110.0, 1), (601.0, 601.0, 0)])
+            self.assertNotIn("applied_b", [k for e in entries if e["decision"] != "accepted" for k in e])
+
+        _n6_ctx(None, None, 640, accepts=[(100, 110), (566, 601)], mutate_log=check)
+
+    def test_n6_discarded_single_accept_is_not_required_but_not_pass(self):
+        # 566/601: el peer descarta por lease caducado (no se exige como ultima aceptada, no es FALLA). No se
+        # aplico ninguna de la rafaga y la pose de antes no esta en la evidencia: INCONCLUSO.
+        status, detail, _ = _n6_ctx(566, 601, 630)
+        self.assertEqual((status, detail), ("missing", "no burst pose applied"))
+
+    def test_n6_excuses_pose_discarded_after_lease_expiry(self):
+        status, detail, _ = _n6_ctx(None, None, 640, accepts=[(300, 310), (566, 601)])
+        self.assertEqual((status, detail), ("pass", "pose discarded after lease expiry"))
+
+    def test_n6_slow_frame_discard_passes_without_frame_bound(self):
+        # Sol delta MEN 2: peer a 2 Hz, la segunda llega a 300 y el frame siguiente es a 800 (lease 600).
+        status, detail, _ = _n6_ctx(None, None, 900, accepts=[(100, 110), (300, 800)], reject_ms=850)
+        self.assertEqual((status, detail), ("pass", "pose discarded after lease expiry"))
+
+    def test_n6_fails_pose_discarded_while_lease_is_valid(self):
+        status, detail, _ = _n6_ctx(100, 150, 200, read_pose=self._PRE_BURST)
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
+
+    def test_n6_fails_must_apply_pose_dropped_even_if_read_after_expiry(self):
+        # Se aplico con lease vigente (150 <= 600); que la lectura sea posterior a la caducidad no excusa nada.
+        status, detail, _ = _n6_ctx(100, 150, 700, read_pose=self._PRE_BURST)
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
+
+    def test_n6_fails_peer_keeping_first_pose_sol_delta_bloq(self):
+        # Sol delta BLOQ 1: recepciones 100/400/560, frames 110/410/570, lectura 640; el peer conserva la primera.
+        status, detail, _ = _n6_ctx(
+            None, None, 640, accepts=[(100, 110), (400, 410), (560, 570)], read_pose=self._pose_of(0)
+        )
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
+
+    def test_n6_fails_discard_logged_with_valid_lease(self):
+        # Sol delta BLOQ 1, sin obligadas: aceptada a 400, descartada a 410 con el lease vigente.
+        def discard(entries):
+            entries[0]["applied_b"] = 0
+
+        status, detail, _ = _n6_ctx(400, 410, 640, read_pose=self._PRE_BURST, mutate_log=discard)
+        self.assertEqual((status, detail), ("fail", "pose apply contradicts lease"))
+
+    def test_n6_fails_apply_logged_with_expired_lease(self):
+        def apply_late(entries):
+            entries[1]["applied_b"] = 1
+
+        status, detail, _ = _n6_ctx(
+            None, None, 640, accepts=[(100, 110), (566, 601)], read_pose=self._pose_of(1), mutate_log=apply_late
+        )
+        self.assertEqual((status, detail), ("fail", "pose apply contradicts lease"))
+
+    def test_n6_fails_pose_of_rejected_rpc(self):
+        # Sol delta BLOQ 1: la pose leida es la de la RPC rechazada por lease.
+        status, detail, _ = _n6_ctx(None, None, 640, accepts=[(100, 110), (300, 310)], read_pose=self._pose_of(2))
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
+
+    def test_n6_fails_pose_older_than_last_applied(self):
+        status, detail, _ = _n6_ctx(
+            None, None, 640, accepts=[(100, 110), (300, 310), (560, 601)], read_pose=self._pose_of(0)
+        )
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
+
+    def test_n6_fails_when_no_burst_pose_was_applied(self):
+        status, detail, _ = _n6_ctx(
+            None, None, 640, accepts=[(100, 110), (300, 310), (560, 601)], read_pose=self._PRE_BURST
+        )
+        self.assertEqual((status, detail), ("fail", "pose is not last applied"))
+
+    def test_n6_without_apply_record_earlier_accepted_pose_is_missing(self):
+        # Sonda real (sin registro de aplicacion): la pose de una aceptada anterior puede ser un descarte valido.
+        status, detail, _ = _n6_ctx(
+            None,
+            None,
+            640,
+            accepts=[(100, 110), (300, 310), (560, 601)],
+            read_pose=self._pose_of(1),
+            mutate_log=self._strip_apply,
+        )
+        self.assertEqual((status, detail), ("missing", "pose mismatch without apply evidence"))
+
+    def test_n6_without_apply_record_foreign_pose_is_missing(self):
+        # Sin registro no hay identidad de frame ni de aplicacion: una pose ajena (la de antes de la rafaga, o la
+        # de una rechazada) no se puede acreditar como FALLA ni como PASS. INCONCLUSO.
+        for pose in (self._PRE_BURST, self._pose_of(3)):
+            with self.subTest(pose=pose[0][0]):
+                status, detail, _ = _n6_ctx(
+                    None,
+                    None,
+                    640,
+                    accepts=[(100, 110), (300, 310), (560, 601)],
+                    read_pose=pose,
+                    mutate_log=self._strip_apply,
+                )
+                self.assertEqual((status, detail), ("missing", "pose mismatch without apply evidence"))
+
+    def test_n6_without_apply_record_same_frame_discards_are_missing(self):
+        # Sol, confirmacion MEN 3: dos RPC drenadas a 599 y 600, las dos descartadas al aplicar a 800. Dos recv_ms
+        # distintos no acreditan dos frames: sin registro, INCONCLUSO, no FALLA.
+        status, detail, _ = _n6_ctx(
+            None,
+            None,
+            900,
+            accepts=[(599, 800), (600, 800)],
+            reject_ms=850,
+            read_pose=self._PRE_BURST,
+            mutate_log=self._strip_apply,
+        )
+        self.assertEqual((status, detail), ("missing", "pose mismatch without apply evidence"))
+
+    def test_n6_without_apply_record_last_accepted_pose_passes(self):
+        status, detail, _ = _n6_ctx(566, 599, 630, mutate_log=self._strip_apply)
+        self.assertEqual((status, detail), ("pass", ""))
+
+    def test_n6_partial_record_contradiction_fails(self):
+        # Sol, confirmacion BLOQ 1: A descartada con edad 110 (lease 600) y B sin registro cuya pose casa con la
+        # lectura. El registro presente se valida aunque falte el otro.
+        def partial(entries):
+            entries[0]["applied_b"] = 0
+            for key in ("apply_ms", "apply_lease_age_ms", "applied_b"):
+                entries[1].pop(key, None)
+
+        status, detail, _ = _n6_ctx(
+            None, None, 640, accepts=[(100, 110), (300, 310)], read_pose=self._pose_of(1), mutate_log=partial
+        )
+        self.assertEqual((status, detail), ("fail", "pose apply contradicts lease"))
+
+    def test_n6_partial_record_last_discarded_but_pose_shown_fails(self):
+        # La ultima aceptada se anota descartada (y es coherente: 601 > 600), pero la pose leida es la suya.
+        def strip_first(entries):
+            for key in ("apply_ms", "apply_lease_age_ms", "applied_b"):
+                entries[0].pop(key, None)
+
+        status, detail, _ = _n6_ctx(
+            None, None, 640, accepts=[(100, 110), (566, 601)], read_pose=self._pose_of(1), mutate_log=strip_first
+        )
+        self.assertEqual((status, detail), ("fail", "pose contradicts apply record"))
+
+    def test_n6_malformed_apply_record_fails(self):
+        def half(entries):
+            entries[0].pop("applied_b", None)
+
+        status, detail, _ = _n6_ctx(566, 599, 630, mutate_log=half)
+        self.assertEqual((status, detail), ("fail", "malformed apply record"))
+
+    def test_n6_apply_record_uses_one_clock_sample(self):
+        # Sol, confirmacion MEN 2: un reloj que avanza 1 ms en cada lectura. La decision de aplicar y la edad que se
+        # anota salen de la misma muestra, asi que nunca se contradicen en la frontera del lease.
+        import itertools
+
+        import fake_peer
+
+        checked = 0
+        for start in range(590, 606):
+            ticks = itertools.count(start)
+            peer = fake_peer.Peer(
+                config=None,
+                role="client",
+                rpc_port=0,
+                frame_hz=60,
+                fault=None,
+                clock_ms_fn=lambda: float(next(ticks)),
+            )
+            peer.lease_ms = 600
+            peer.last_ok_ms = 0.0
+            peer.frame = 100
+            peer._handle_cam_rpc(
+                {"target_inst": peer.inst, "seq": 1, "pos": [1.0, 2.0, 3.0], "ypr": [90.0, 0.0, 0.0]}
+            )
+            peer.frame += 1
+            peer._apply()
+            entry = peer.rpc_log[0]
+            if entry["decision"] != "accepted":
+                continue
+            checked += 1
+            with self.subTest(start=start):
+                self.assertEqual(bool(entry["applied_b"]), entry["apply_lease_age_ms"] <= 600, entry)
+        self.assertGreater(checked, 3)
+
+    def test_rpc_log_read_is_a_snapshot(self):
+        # Sol, confirmacion MEN 4: una lectura ya devuelta (o su duplicado cacheado) no cambia cuando _apply anota
+        # despues el resultado en la entrada viva.
+        import fake_peer
+
+        clock = [100.0]
+        peer = fake_peer.Peer(
+            config=None, role="client", rpc_port=0, frame_hz=60, fault=None, clock_ms_fn=lambda: clock[0]
+        )
+        peer.lease_ms = 600
+        peer.last_ok_ms = 0.0
+        peer.frame = 100
+        peer._handle_cam_rpc({"target_inst": peer.inst, "seq": 1, "pos": [1.0, 2.0, 3.0], "ypr": [90.0, 0.0, 0.0]})
+        before = peer._read(["rpc_log"])
+        frozen = json.dumps(before, sort_keys=True)
+        clock[0] = 110.0
+        peer.frame += 1
+        peer._apply()
+        self.assertEqual(json.dumps(before, sort_keys=True), frozen)
+        self.assertNotIn("applied_b", before["rpc_log"][0])
+        self.assertEqual(peer._read(["rpc_log"])["rpc_log"][0]["applied_b"], 1)
+
+    def test_cpu_load_kills_partially_created_burners(self):
+        created = []
+
+        def factory(*args, **kwargs):
+            if len(created) >= 2:
+                raise OSError("no se pudo crear el burner")
+            proc = _FakeProc(len(created), None)
+            created.append(proc)
+            return proc
+
+        with mock.patch.object(subprocess, "Popen", side_effect=factory):
+            with self.assertRaises(OSError):
+                with _cpu_load():
+                    self.fail("no deberia entrar al bloque protegido")
+        self.assertEqual(len(created), 2)
+        self.assertTrue(all(proc.killed and proc.waited for proc in created))
+
+    def test_write_cfg_retries_a_busy_file(self):
+        import s_puente_run
+
+        real = Path.replace
+        calls = []
+
+        def busy_twice(self, target):
+            calls.append(target)
+            if len(calls) <= 2:
+                raise PermissionError(5, "Acceso denegado")
+            return real(self, target)
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-cfg-") as tmp:
+            cfg = Path(tmp) / "dsbx_qa.json"
+            with mock.patch.object(Path, "replace", busy_twice), mock.patch.object(s_puente_run.time, "sleep"):
+                s_puente_run._write_cfg(cfg, 1234, "k" * 32, 300)
+            self.assertEqual(json.loads(cfg.read_text(encoding="utf-8"))["url"], "http://127.0.0.1:1234/")
+            self.assertEqual(len(calls), 3)
+
+    def test_write_cfg_retry_is_bounded(self):
+        import s_puente_run
+
+        def always_busy(self, target):
+            raise PermissionError(5, "Acceso denegado")
+
+        with tempfile.TemporaryDirectory(prefix="dsbx-cfg-") as tmp:
+            cfg = Path(tmp) / "dsbx_qa.json"
+            with mock.patch.object(Path, "replace", always_busy), mock.patch.object(s_puente_run.time, "sleep"):
+                with self.assertRaises(PermissionError):
+                    s_puente_run._write_cfg(cfg, 1234, "k" * 32, 300)
 
     def test_point8_retail_does_not_launch_and_writes_profiles(self):
         with tempfile.TemporaryDirectory(prefix="dsbx-ev-") as tmp:
