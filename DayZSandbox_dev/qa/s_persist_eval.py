@@ -137,6 +137,7 @@ import json
 import math
 import re
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -472,6 +473,80 @@ def _valid_pers_id(val: Any) -> bool:
 
 def _is_nonzero_pers_id(val: Any) -> bool:
     return _valid_pers_id(val) and any(int(p) != 0 for p in val.split(":"))
+
+
+def _inventory_pers_ids_of(rows: Iterable[dict[str, Any]], owner_uid: str) -> set[str]:
+    """``pers_id`` validos y no nulos de las filas cuyo ``owner_uid`` es el del jugador indicado."""
+    if not owner_uid:
+        return set()
+    mine = [r for r in rows if owner_uid == str(r.get("owner_uid") or "")]
+    return {str(r["pers_id"]) for r in mine if _is_nonzero_pers_id(r.get("pers_id"))}
+
+
+def _director_same_character_verdict(
+    anchor_ids: set[str],
+    t5_censuses: Iterable[dict[str, Any]],
+    owner_uid: str,
+) -> str:
+    """Identidad del PERSONAJE del director entre t0 y t5 (el ``director_uid`` es solo el jugador).
+
+    Devuelve ``""`` si es el mismo personaje, ``"director_identity_unanchored"`` si la linea base de t0 no trae
+    ningun ``pers_id`` utilizable (sin ancla no hay pase) y ``"director_character_replaced"`` si algun
+    ``pers_id`` de la linea base ya no esta en el inventario del director de t5.
+    """
+    if not anchor_ids:
+        return "director_identity_unanchored"
+    seen: set[str] = set()
+    for c_item in t5_censuses:
+        seen |= _inventory_pers_ids_of(c_item["rows"], owner_uid)
+    if not anchor_ids <= seen:
+        return "director_character_replaced"
+    return ""
+
+
+def _judge_startup_purge(
+    purge_ops: list[Any],
+    server_epoch_new: str,
+    t5_census_start_ticks: list[float],
+    sentinel_classes: set[str],
+) -> tuple[list[str], list[str]]:
+    """Juzga el registro `per_purge_read` del epoch nuevo (brief, enmienda 2026-11-17). Devuelve (fail, missing).
+
+    ``missing``: sin registro del epoch nuevo, ``purge_state != "done"``, ``purged_n`` mayor que las filas leidas
+    o un ``done`` sin ``purge_tick_ms`` positivo (no acredita nada). ``fail``: ``purge_tick_ms`` no anterior al
+    inicio del primer censo t5, o alguna fila de clase no centinela.
+    """
+    fails: list[str] = []
+    missings: list[str] = []
+    if not purge_ops:
+        return fails, ["purge_record_missing"]
+    # el ultimo registro leido del epoch: es el estado mas avanzado de la purga de ese proceso
+    last = max(purge_ops, key=lambda o: o.seq_idx)
+    u = _unpack_any_payload(last.read)
+    if not u:
+        return fails, ["purge_record_missing"]
+    p_s, p_n, p_rows = u
+    if p_s.get("server_epoch") != server_epoch_new:
+        return fails, ["purge_record_missing"]
+    if p_s.get("purge_state") != "done":
+        return fails, ["purge_not_done"]
+    purged_n = p_n.get("purged_n")
+    if not _is_finite_num(purged_n) or float(purged_n) < 0.0 or float(purged_n) > len(p_rows):
+        missings.append("purge_count_exceeds_rows")
+    tick = p_n.get("purge_tick_ms")
+    if not _is_finite_num(tick) or float(tick) <= 0.0:
+        missings.append("purge_tick_unaccredited")
+    else:
+        starts = [t for t in t5_census_start_ticks if t > 0.0]
+        if not starts:
+            missings.append("purge_order_unverifiable")
+        elif float(tick) >= min(starts):
+            fails.append("purge_not_before_t5_census")
+    for r in p_rows:
+        cname = str(r.get("class_name") or "")
+        if cname not in sentinel_classes:
+            fails.append(f"purge_deleted_non_sentinel:{cname}")
+    return fails, missings
 
 
 def _pers_ids_shared_by_distinct_entities(stage_censuses: list[dict[str, Any]]) -> list[str]:
@@ -1509,6 +1584,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
 
     # MEN-8: `baseline_director_foreign` del runner ya NO es una fuente de verdad: la linea base del
     # director sale solo de las filas del censo t0 de area_a (include_director_b == 1).
+    # Ancla de identidad (E9, brief :28, :276, :307, :308): los `pers_id` de esa linea base distinguen al personaje
+    # del director de un personaje nuevo del mismo jugador (el `director_uid` no cambia).
+    baseline_director_pers_ids = _inventory_pers_ids_of(baseline_director_rows, director_uid_t0)
 
     # Collect per_apply_scene and per_spawn_raw and ground_query in t1
     ground_queries: list[tuple[float, float, float]] = []
@@ -2575,6 +2653,10 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         c for c in censuses_by_stage.get("t5_post_restart_census", [])
         if c["job_complete"] and c["inst"] == server_epoch_new
     ]
+    # todos los censos t5 arrancados (completos o no): el inicio del primero fija el limite de la purga de arranque
+    t5_stage_all = [
+        c for c in censuses_by_stage.get("t5_post_restart_census", []) if c["inst"] == server_epoch_new
+    ]
 
     # Ordenes que alteran el mundo (MENOR: las lecturas puras no cuentan). El evaluador es ciego a las
     # inyecciones, asi que un per_census_start aceptado cuenta como mutador (no puede saber si el peer
@@ -2591,7 +2673,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             "per_census_start",
         ):
             return True
-        if op.verb in ("job_read", "job_free", "job_stop", "per_status", "ground_query"):
+        if op.verb in ("job_read", "job_free", "job_stop", "per_status", "per_purge_read", "ground_query"):
             return False
         return op.verb.startswith("per_")
 
@@ -2852,6 +2934,10 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         or c_t5_a["director_uid"] != director_uid_t0
     ):
         checks["PER-07"] = {"status": "missing", "detail": "director_absent_or_uid_mismatch"}
+    elif _per07_identity := _director_same_character_verdict(
+        baseline_director_pers_ids, (c_t5_a, c_t5_ret), director_uid_t0
+    ):
+        checks["PER-07"] = {"status": "missing", "detail": _per07_identity}
     elif post_t3_mutating_old_ops:
         checks["PER-07"] = {"status": "missing", "detail": "post_t3_mutating_old_ops"}
     elif not n49_extremes_accredited:
@@ -3008,6 +3094,10 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         or c_t5_b["director_uid"] != director_uid_t0
     ):
         checks["PER-08"] = {"status": "missing", "detail": "director_absent_or_uid_mismatch"}
+    elif _per08_identity := _director_same_character_verdict(
+        baseline_director_pers_ids, (c_t5_b,), director_uid_t0
+    ):
+        checks["PER-08"] = {"status": "missing", "detail": _per08_identity}
     elif post_t3_mutating_old_ops:
         checks["PER-08"] = {"status": "missing", "detail": "post_t3_mutating_old_ops"}
     elif not n49_extremes_accredited:
@@ -3091,6 +3181,10 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if ouid == director_uid_t0:
                     if cname == "WorkingGloves_Yellow":
                         per08_fail.append("reappeared_director_gloves:WorkingGloves_Yellow")
+                    elif cname in sentinel_classes:
+                        # Brief (enmienda 2026-11-17): tras la purga no queda en el director ninguna prenda de clase
+                        # centinela; las de inicio (no centinela) si.
+                        per08_fail.append(f"director_sentinel_survived:{cname}")
                     continue
                 if cname == "OrienteeringCompass" and max_hp > 0.0 and abs(hp - max_hp * 0.6150) <= 1e-2:
                     continue
@@ -3102,6 +3196,24 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         per08_fail.append(f"reappeared_in_{aid}:{cname}")
                 elif cname == "SewingKit":
                     per08_fail.append("reappeared_cross_child:SewingKit")
+
+        # (3) Purga de arranque (brief, enmienda del 2026-11-17): se acredita con `per_purge_read` del epoch nuevo.
+        purge_fail, purge_missing = _judge_startup_purge(
+            [
+                op
+                for op in ordered_ops
+                if op.verb == "per_purge_read"
+                and op.peer == "server"
+                and op.status == "done"
+                and server_epoch_new
+                and op.inst == server_epoch_new
+            ],
+            server_epoch_new,
+            [float(c["snap_tick_ms"]) for c in t5_stage_all if c["inst"] == server_epoch_new],
+            sentinel_classes,
+        )
+        per08_fail.extend(purge_fail)
+        per08_missing.extend(purge_missing)
 
         if per08_fail:
             checks["PER-08"] = {"status": "fail", "detail": ";".join(per08_fail[:5])}
@@ -3226,6 +3338,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 checks["PER-09"] = {"status": "missing", "detail": "missing_witness_status"}
             else:
                 per09_fail: list[str] = []
+                # Causas tecnicas del lado t5 (director ausente o ilegible, censo t5 caido): la fila de PER-09 (brief
+                # :309) no exige nada del director, asi que dan `missing`, nunca `fail`; un fail real manda.
+                per09_missing: list[str] = []
                 if not stale_reset_ops or any(
                     op.status != "rejected" or op.reason != "stale_epoch" for op in stale_reset_ops
                 ):
@@ -3295,15 +3410,16 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 # Nuevo 6: exigir inclusión y cobertura del director en t5 áreas obligatorias
                 # Per brief :234, t5 debe incluir director en area_a, area_b, retained_area_id
                 required_t5_director_areas = ["area_a", "area_b", retained_area_id]
-                for aid in required_t5_director_areas:
+                for aid in dict.fromkeys(required_t5_director_areas):
                     c_t5_dir = census_by_stage_area.get(("t5_post_restart_census", aid))
                     if not c_t5_dir or not c_t5_dir["job_complete"]:
-                        per09_fail.append(f"t5_missing_census:{aid}")
+                        per09_missing.append(f"t5_missing_census:{aid}")
                         continue
                     if c_t5_dir["include_director_b"] != 1:
+                        # la implementacion no pidio al director donde :234 lo exige: eso si es un fallo
                         per09_fail.append(f"t5_director_not_included:{aid}")
-                    if c_t5_dir["director_present_b"] != 1 or c_t5_dir["director_inv_readable_b"] != 1:
-                        per09_fail.append(f"t5_director_unreadable:{aid}")
+                    elif c_t5_dir["director_present_b"] != 1 or c_t5_dir["director_inv_readable_b"] != 1:
+                        per09_missing.append(f"t5_director_unreadable:{aid}")
 
                 pre_w_map = {str(r.get("net_id") or ""): r for r in c_wit_pre["rows"]}
                 post_w_map = {str(r.get("net_id") or ""): r for r in c_wit_post["rows"]}
@@ -3497,9 +3613,16 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                                 t6_survivors.append(f"{r.get('class_name')}:{r.get('net_id')}")
 
                     if t6_missing_areas:
-                        checks["PER-09"] = {"status": "missing", "detail": f"t6_cleanup_census_absent:{','.join(t6_missing_areas)}"}
+                        checks["PER-09"] = {
+                            "status": "missing",
+                            "detail": ";".join(
+                                [f"t6_cleanup_census_absent:{','.join(t6_missing_areas)}"] + per09_missing[:4]
+                            ),
+                        }
                     elif t6_survivors:
                         checks["PER-09"] = {"status": "fail", "detail": f"t6_cleanup_survivors:{';'.join(t6_survivors[:5])}"}
+                    elif per09_missing:
+                        checks["PER-09"] = {"status": "missing", "detail": ";".join(per09_missing[:5])}
                     else:
                         checks["PER-09"] = {"status": "pass", "detail": "ok"}
 
