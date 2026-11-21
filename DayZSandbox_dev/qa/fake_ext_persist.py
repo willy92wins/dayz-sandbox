@@ -1291,130 +1291,141 @@ class PersistFakeExt(FakeExt):
         self._save_state()
         return ("done", "", payload)
 
+    def _spawn_raw_area_for(self, x_value, z_value):
+        found = ""
+        for area_name, centre in AREA_CENTERS.items():
+            if _dist2(x_value, z_value, centre[0], centre[1]) <= 60.0:
+                found = area_name
+                break
+        return found
+
+    def _spawn_raw_plan(self, mode, target_net, target_scene, target_parent, class_name, ground_pos, ground_ori, area_name):
+        plan = {
+            "loc_kind": "ground",
+            "parent_net_id": "",
+            "parent_class": "",
+            "slot_name": "",
+            "pos": ground_pos,
+            "ori": ground_ori,
+            "area_id": area_name,
+        }
+        if mode != "foreign_in_container":
+            return plan, None
+        if target_net:
+            if not NET_ID_RE.fullmatch(target_net):
+                return None, ("rejected", "bad_args", wire.empty_payload())
+            holder = self._find_by_net_id(target_net)
+            if holder is None:
+                return None, ("rejected", "target_not_found", wire.empty_payload())
+            located = self._find_free_location(holder, class_name)
+            if located is None or located[0] is not holder:
+                return None, ("rejected", "no_cargo_space", wire.empty_payload())
+            plan.update({
+                "loc_kind": "cargo",
+                "parent_net_id": holder["net_id"],
+                "parent_class": holder["class_name"],
+                "slot_name": located[1],
+                "pos": holder["pos"],
+                "ori": holder["ori"],
+                "area_id": holder["area_id"],
+            })
+            return plan, None
+        record = self._record_by(target_scene, target_parent)
+        if record is None:
+            return None, ("rejected", "unknown_entity", wire.empty_payload())
+        holder = record["ent"]
+        plan.update({
+            "loc_kind": "cargo",
+            "parent_net_id": holder["net_id"],
+            "parent_class": holder["class_name"],
+            "slot_name": "Cargo:0:1:0",
+            "pos": holder["pos"],
+            "ori": holder["ori"],
+            "area_id": holder["area_id"],
+        })
+        return plan, None
+
     def _op_spawn_raw(self, args_unpacked):
-        strs = args_unpacked.get("str") or {}
-        nums = args_unpacked.get("num") or {}
-        tag = strs.get("tag", "")
-        mode = strs.get("mode", "")
-        cname = strs.get("class_name", "")
-        child_class = strs.get("child_cargo_class", "")
-        target_scene = strs.get("target_scene_id", "")
-        target_parent = strs.get("target_parent_id", "")
-        target_net = strs.get("target_net_id", "")
-        x_m = float(nums.get("x_m", 0.0))
-        z_m = float(nums.get("z_m", 0.0))
-        yaw = float(nums.get("yaw_deg", 0.0))
-        ratio = float(nums.get("health_mark_ratio", 0.0))
-        if not tag or not cname:
-            return ("rejected", "bad_args", wire.empty_payload())
+        text_args = args_unpacked.get("str") or {}
+        num_args = args_unpacked.get("num") or {}
+        label = text_args.get("tag", "")
+        mode = text_args.get("mode", "")
+        class_name = text_args.get("class_name", "")
+        child_class = text_args.get("child_cargo_class", "")
+        if not label or not class_name:
+            return self._bad_args_reply()
         if not self.peer.lease_valid():
             return ("error", "lease_expired", wire.empty_payload())
-        max_hp, hp, mark_b = self._health_at_creation(cname, ratio)
-        now_ms = float(self.peer.local_ms())
-        persistent = mode == "persistent_control"
-        loc_kind = "ground"
-        parent_net = ""
-        parent_class = ""
-        slot_name = ""
-        pos = (x_m, _surface_y(x_m, z_m), z_m)
-        ori = (yaw, 0.0, 0.0)
-        area_id = ""
-        for aid, (cx, cz) in AREA_CENTERS.items():
-            if _dist2(x_m, z_m, cx, cz) <= 60.0:
-                area_id = aid
-                break
-        if mode == "foreign_in_container" and target_net != "":
-            # Padre por net_id (GetObjectByNetworkId). Los rechazos salen antes de crear nada: sin efectos.
-            if not NET_ID_RE.fullmatch(target_net):
-                return ("rejected", "bad_args", wire.empty_payload())
-            tgt_ent = self._find_by_net_id(target_net)
-            if tgt_ent is None:
-                return ("rejected", "target_not_found", wire.empty_payload())
-            # El hueco tiene que ser CARGO y su padre exactamente el objetivo (como el .c con GetParent()); si el
-            # unico hueco esta en un subcontenedor, rechazo sin efectos.
-            found = self._find_free_location(tgt_ent, cname)
-            if found is None or found[0] is not tgt_ent:
-                return ("rejected", "no_cargo_space", wire.empty_payload())
-            loc_kind = "cargo"
-            parent_net = tgt_ent["net_id"]
-            parent_class = tgt_ent["class_name"]
-            slot_name = found[1]
-            pos = tgt_ent["pos"]
-            ori = tgt_ent["ori"]
-            area_id = tgt_ent["area_id"]
-        elif mode == "foreign_in_container":
-            tgt = self._record_by(target_scene, target_parent)
-            if tgt is None:
-                return ("rejected", "unknown_entity", wire.empty_payload())
-            tgt_ent = tgt["ent"]
-            loc_kind = "cargo"
-            parent_net = tgt_ent["net_id"]
-            parent_class = tgt_ent["class_name"]
-            slot_name = "Cargo:0:1:0"
-            pos = tgt_ent["pos"]
-            ori = tgt_ent["ori"]
-            area_id = tgt_ent["area_id"]
-        # Los identificadores se asignan despues de todas las validaciones: un rechazo no consume ni net_id ni pers_id
-        # (Sol sobre fb2dcb8: el pers_id se asignaba antes y el rechazo dejaba un efecto observable).
-        pers_id = self._alloc_pers_id()
-        net_id = self._alloc_net_id()
-        ent = self._add_entity(
-            net_id=net_id,
-            pers_id=pers_id,
-            class_name=cname,
-            cat="raw",
-            loc_kind=loc_kind,
-            parent_net_id=parent_net,
-            parent_class=parent_class,
-            slot_name=slot_name,
-            owner_uid="",
-            pos=pos,
-            ori=ori,
-            max_hp=max_hp,
-            health_hp=hp,
-            spawn_tick_ms=now_ms,
-            persistent=persistent,
-            own_logical_id="",
-            own_b=0,
-            area_id=area_id,
-        )
-        self.raw_net_ids.add(net_id)
-        child_count = 0
+        ratio = float(num_args.get("health_mark_ratio", 0.0))
+        health = self._health_at_creation(class_name, ratio)
+        stamp = float(self.peer.local_ms())
+        x_value = float(num_args.get("x_m", 0.0))
+        z_value = float(num_args.get("z_m", 0.0))
+        yaw_value = float(num_args.get("yaw_deg", 0.0))
+        ground_pos = (x_value, _surface_y(x_value, z_value), z_value)
+        ground_ori = (yaw_value, 0.0, 0.0)
+        plan, refusal = self._spawn_raw_plan(mode, text_args.get("target_net_id", ""), text_args.get("target_scene_id", ""), text_args.get("target_parent_id", ""), class_name, ground_pos, ground_ori, self._spawn_raw_area_for(x_value, z_value))
+        if refusal is not None:
+            return refusal
+        entity_data = {
+            "net_id": self._alloc_net_id(),
+            "pers_id": self._alloc_pers_id(),
+            "class_name": class_name,
+            "cat": "raw",
+            "loc_kind": plan["loc_kind"],
+            "parent_net_id": plan["parent_net_id"],
+            "parent_class": plan["parent_class"],
+            "slot_name": plan["slot_name"],
+            "owner_uid": "",
+            "pos": plan["pos"],
+            "ori": plan["ori"],
+            "max_hp": health[0],
+            "health_hp": health[1],
+            "spawn_tick_ms": stamp,
+            "persistent": mode == "persistent_control",
+            "own_logical_id": "",
+            "own_b": 0,
+            "area_id": plan["area_id"],
+        }
+        ent = self._add_entity(**entity_data)
+        self.raw_net_ids.add(ent["net_id"])
+        made_children = 0
         if mode == "persistent_control" and child_class:
-            child_net = self._alloc_net_id()
-            self._add_entity(
-                net_id=child_net,
-                pers_id=self._alloc_pers_id(),
-                class_name=child_class,
-                cat="raw_child",
-                loc_kind="cargo",
-                parent_net_id=net_id,
-                parent_class=cname,
-                slot_name="Cargo:0:0:0",
-                owner_uid="",
-                pos=pos,
-                ori=ori,
-                max_hp=DEFAULT_MAX_HP,
-                health_hp=DEFAULT_MAX_HP * ratio if ratio > 0.0 else DEFAULT_MAX_HP,
-                spawn_tick_ms=now_ms,
-                persistent=True,
-                own_logical_id="",
-                own_b=0,
-                area_id=area_id,
-            )
-            self.raw_net_ids.add(child_net)
-            child_count = 1
-        s = {
+            child_hp = DEFAULT_MAX_HP * ratio if ratio > 0.0 else DEFAULT_MAX_HP
+            child_data = {
+                "net_id": self._alloc_net_id(),
+                "pers_id": self._alloc_pers_id(),
+                "class_name": child_class,
+                "cat": "raw_child",
+                "loc_kind": "cargo",
+                "parent_net_id": ent["net_id"],
+                "parent_class": class_name,
+                "slot_name": "Cargo:0:0:0",
+                "owner_uid": "",
+                "pos": plan["pos"],
+                "ori": plan["ori"],
+                "max_hp": DEFAULT_MAX_HP,
+                "health_hp": child_hp,
+                "spawn_tick_ms": stamp,
+                "persistent": True,
+                "own_logical_id": "",
+                "own_b": 0,
+                "area_id": plan["area_id"],
+            }
+            child_ent = self._add_entity(**child_data)
+            self.raw_net_ids.add(child_ent["net_id"])
+            made_children = 1
+        text_out = {
             "spawn_status": "ok",
-            "tag": tag,
-            "class_name": cname,
-            "net_id": net_id,
-            "pers_id": pers_id,
+            "tag": label,
+            "class_name": class_name,
+            "net_id": ent["net_id"],
+            "pers_id": ent["pers_id"],
             "obs_loc_kind": ent["loc_kind"],
             "obs_parent_net_id": ent["parent_net_id"],
             "obs_slot_name": ent["slot_name"],
         }
-        n = {
+        num_out = {
             "pos_x_m": float(ent["pos"][0]),
             "pos_y_m": float(ent["pos"][1]),
             "pos_z_m": float(ent["pos"][2]),
@@ -1423,172 +1434,154 @@ class PersistFakeExt(FakeExt):
             "roll_deg": float(ent["ori"][2]),
             "max_hp": float(ent["max_hp"]),
             "health_hp": float(ent["health_hp"]),
-            "child_count_n": float(child_count),
-            "tick_ms": now_ms,
+            "child_count_n": float(made_children),
+            "tick_ms": stamp,
             "frame": float(self.peer.frame),
-            "health_mark_b": 1.0 if mark_b else 0.0,
+            "health_mark_b": 1.0 if health[2] else 0.0,
         }
-        payload = wire.pack_payload(scalars_str=s, scalars_num=n)
+        result_payload = wire.pack_payload(scalars_str=text_out, scalars_num=num_out)
         self._save_state()
-        return ("done", "", payload)
+        return ("done", "", result_payload)
 
 
+    def _bad_args_reply(self):
+        word = "rejected"
+        return (word, "bad_args", wire.empty_payload())
+
+    def _census_all_rows(self, mid_x, mid_z, radius, want_director):
+        centre = (mid_x, _surface_y(mid_x, mid_z), mid_z)
+        children = self._children_index()
+        collected = []
+        candidates = list(self.world.values()) + self.map_objects
+        for entity in candidates:
+            is_root = entity["parent_net_id"] == ""
+            if not entity["alive"] or not is_root or entity["owner_uid"] == self.director_uid:
+                continue
+            if math.dist(entity["pos"], centre) > radius:
+                continue
+            collected.append(self._census_row(entity, 1, deep=True, index=children))
+            for descendant in self._preorder_children(entity["net_id"], children):
+                collected.append(self._census_row(descendant, 1, deep=True, index=children))
+        if want_director == 1:
+            for entity in self.world.values():
+                if entity["alive"] and entity["owner_uid"] == self.director_uid:
+                    collected.append(self._census_row(entity, 1, deep=True, index=children))
+        return collected
+
+    def _census_plain_rows(self, mid_x, mid_z, radius, want_director, area_name):
+        collected = []
+        for entity in self.world.values():
+            if not entity["alive"]:
+                continue
+            if entity["owner_uid"] == self.director_uid:
+                if want_director == 1:
+                    collected.append(self._census_row(entity, 1))
+                continue
+            inside = _dist2(entity["pos"][0], entity["pos"][2], mid_x, mid_z) <= radius
+            if inside:
+                collected.append(self._census_row(entity, 1))
+                continue
+            own_creature = entity["own_b"] == 1 and entity["cat"] in ("infected", "animal")
+            if own_creature and entity["area_id"] == area_name:
+                collected.append(self._census_row(entity, 0))
+        return collected
+
+    def _census_capture_rows(self, job_name, rows_to_write, column_names):
+        delay = float(getattr(self, "capture_delay_ms", 0.0) or 0.0)
+        if hasattr(self.peer, "lease_age_ms"):
+            age_at_start = float(self.peer.lease_age_ms())
+        else:
+            age_at_start = 0.0 if self.peer.lease_valid() else 1.0e9
+        limit = float(getattr(self.peer, "lease_ms", 3000) or 3000)
+        if age_at_start > limit:
+            return 0, "lease_expired", delay
+        written = 0
+        total = len(rows_to_write)
+        problem = ""
+        for position, row_data in enumerate(rows_to_write, start=1):
+            elapsed = delay * float(position) / float(total) if total else delay
+            if elapsed > CENSUS_CAPTURE_BUDGET_MS:
+                problem = "capture_budget_exceeded"
+                break
+            numeric = [row_data[name] for name in column_names]
+            textual = [row_data[name] for name in CENSUS_SCOL]
+            if not self.jobs.append_row(job_name, numeric, textual):
+                problem = "capture_truncated"
+                break
+            written = position
+        if not problem and written < total:
+            problem = "capture_truncated"
+        return written, problem, delay
 
     def _op_census_start(self, op, args_unpacked, fault):
-        strs = args_unpacked.get("str") or {}
-        nums = args_unpacked.get("num") or {}
-        area_tag = strs.get("area_tag", "")
-        center_x = float(nums.get("center_x_m", 0.0))
-        center_z = float(nums.get("center_z_m", 0.0))
-        radius = float(nums.get("radius_m", 60.0))
-        include_dir = int(round(float(nums.get("include_director_b", 0.0))))
-        select_all_raw = float(nums.get("select_all_entityai_b", 0.0))
-        if not area_tag:
-            return ("rejected", "bad_args", wire.empty_payload())
-        # Modo opt-in select_all_entityai_b: con 0 nada cambia (ni filas, ni columnas, ni tope de radio);
-        # con 1 el radio va en (0, 120]. Los rechazos salen antes de cualquier efecto.
-        if select_all_raw not in (0.0, 1.0):
-            return ("rejected", "bad_args", wire.empty_payload())
-        select_all = int(select_all_raw)
-        if select_all == 1 and not (0.0 < radius <= CENSUS_ALL_RADIUS_MAX):
-            return ("rejected", "bad_args", wire.empty_payload())
+        text_args = args_unpacked.get("str") or {}
+        num_args = args_unpacked.get("num") or {}
+        area_label = text_args.get("area_tag", "")
+        if not area_label:
+            return self._bad_args_reply()
+        all_value = float(num_args.get("select_all_entityai_b", 0.0))
+        radius_value = float(num_args.get("radius_m", 60.0))
+        if all_value not in (0.0, 1.0):
+            return self._bad_args_reply()
+        all_mode = int(all_value)
+        if all_mode == 1 and not 0.0 < radius_value <= CENSUS_ALL_RADIUS_MAX:
+            return self._bad_args_reply()
+        mid_x = float(num_args.get("center_x_m", 0.0))
+        mid_z = float(num_args.get("center_z_m", 0.0))
+        want_director = int(round(float(num_args.get("include_director_b", 0.0))))
         if fault == "drop_ctrl_pre_restart":
-            for net_id in list(self.world.keys()):
-                ent = self.world[net_id]
-                if ent["class_name"] == "Barrel_Yellow" and ent["area_id"] == "area_c":
-                    self._delete_entity(ent)
-        job_id = op["op_id"]
-        # BLOQ 6: acreditar el intento de B sobre el censo A que retiene el
-        # recurso (aceptado por bypass o rechazado busy): A no se libera
-        # hasta este intento o hasta la salida acotada CENSUS_HOLD_MAX_MS.
-        held_jid = self.jobs.held_resources.get("per_census")
-        if held_jid and held_jid != job_id:
-            self.contention_seen_for[held_jid] = float(self.peer.local_ms())
-        # Mutante census_resource_bypass: el recurso per_census no protege; el segundo censo se
-        # acepta aunque el primero siga activo. El runner pasa este qa_fault solo en esa parte.
+            for entity in list(self.world.values()):
+                if entity["class_name"] == "Barrel_Yellow" and entity["area_id"] == "area_c":
+                    self._delete_entity(entity)
+        job_name = op["op_id"]
+        holder = self.jobs.held_resources.get("per_census")
+        if holder and holder != job_name:
+            self.contention_seen_for[holder] = float(self.peer.local_ms())
         if fault == "census_resource_bypass":
             self.jobs.held_resources.pop("per_census", None)
-        err = self.jobs.start_job(
-            self,
-            job_id,
-            "per_census",
-            list(CENSUS_NCOL_ALL if select_all == 1 else CENSUS_NCOL),
-            list(CENSUS_SCOL),
-            CENSUS_PAGE_SIZE,
-            CENSUS_MAX_ROWS,
-            CENSUS_MAX_MS,
-            "stop",
-        )
-        if err != "":
-            return ("rejected", err, wire.empty_payload())
-        area_id = area_tag
-        if ":" in area_tag:
-            area_id = area_tag.split(":", 1)[1]
-        snap_ms = float(self.peer.local_ms())
-        snap_frame = int(self.peer.frame)
-        rows = []
-        if select_all == 1:
-            # Todo lo del disco (mundo S-persist y mapa simulado): cada raiz seguida de su inventario en PREORDER.
-            # El director no es raiz del censo; su inventario solo entra con include_director_b = 1.
-            # Seleccion como el .c: esfera de GetObjectsAtPosition3D centrada en (cx, SurfaceY(cx, cz), cz), sin filtro
-            # horizontal (HandleCensusStart: centerPos). Una raiz 116 m por encima del centro queda fuera con r = 115.
-            center_y = _surface_y(center_x, center_z)
-            index = self._children_index()
-            for ent in list(self.world.values()) + self.map_objects:
-                if not ent["alive"] or ent["parent_net_id"] != "" or ent["owner_uid"] == self.director_uid:
-                    continue
-                d3 = math.sqrt(
-                    (float(ent["pos"][0]) - center_x) ** 2
-                    + (float(ent["pos"][1]) - center_y) ** 2
-                    + (float(ent["pos"][2]) - center_z) ** 2
-                )
-                if d3 > radius:
-                    continue
-                rows.append(self._census_row(ent, 1, deep=True, index=index))
-                for sub in self._preorder_children(ent["net_id"], index):
-                    rows.append(self._census_row(sub, 1, deep=True, index=index))
-            if include_dir == 1:
-                for ent in self.world.values():
-                    if ent["alive"] and ent["owner_uid"] == self.director_uid:
-                        rows.append(self._census_row(ent, 1, deep=True, index=index))
+        chosen_columns = CENSUS_NCOL_ALL if all_mode == 1 else CENSUS_NCOL
+        start_error = self.jobs.start_job(self, job_name, "per_census", list(chosen_columns), list(CENSUS_SCOL), CENSUS_PAGE_SIZE, CENSUS_MAX_ROWS, CENSUS_MAX_MS, "stop")
+        if start_error != "":
+            return ("rejected", start_error, wire.empty_payload())
+        area_name = area_label.split(":", 1)[1] if ":" in area_label else area_label
+        snap_stamp = float(self.peer.local_ms())
+        snap_frame_value = int(self.peer.frame)
+        if all_mode == 1:
+            rows_found = self._census_all_rows(mid_x, mid_z, radius_value, want_director)
         else:
-            for ent in self.world.values():
-                if not ent["alive"]:
-                    continue
-                if ent["owner_uid"] == self.director_uid:
-                    if include_dir == 1:
-                        rows.append(self._census_row(ent, 1))
-                    continue
-                if _dist2(ent["pos"][0], ent["pos"][2], center_x, center_z) <= radius:
-                    rows.append(self._census_row(ent, 1))
-                    continue
-                if ent["own_b"] == 1 and ent["cat"] in ("infected", "animal"):
-                    if ent["area_id"] == area_id:
-                        rows.append(self._census_row(ent, 0))
-        census_ncol = CENSUS_NCOL_ALL if select_all == 1 else CENSUS_NCOL
-        captured = 0
-        capture_failed = ""
-        # Espejo del .c: el lease se mira una sola vez, al empezar la captura
-        # (instantanea); dentro del bucle solo limita el presupuesto. La
-        # captura puede tardar capture_delay_ms (lo fijan los tests).
-        delay_ms = float(getattr(self, "capture_delay_ms", 0.0) or 0.0)
-        if hasattr(self.peer, "lease_age_ms"):
-            lease_age_start = float(self.peer.lease_age_ms())
-        else:
-            lease_age_start = 0.0 if self.peer.lease_valid() else 1.0e9
-        lease_ms = float(getattr(self.peer, "lease_ms", 3000) or 3000)
-        total_rows = len(rows)
-        if lease_age_start > lease_ms:
-            capture_failed = "lease_expired"
-        else:
-            for row in rows:
-                elapsed_ms = delay_ms * float(captured + 1) / float(total_rows) if total_rows else delay_ms
-                if elapsed_ms > CENSUS_CAPTURE_BUDGET_MS:
-                    capture_failed = "capture_budget_exceeded"
-                    break
-                nvals = [row[c] for c in census_ncol]
-                svals = [row[c] for c in CENSUS_SCOL]
-                if not self.jobs.append_row(job_id, nvals, svals):
-                    # Con select_all_entityai_b = 1 y el tope de filas, el JobMgr ya dejo el trabajo en
-                    # failed/rows_cap y ese final no cambia (end_job lo fija una sola vez, como EndJob en el .c):
-                    # no se sigue ni se trunca en silencio; el arranque responde done y el estado se lee con job_read.
-                    capture_failed = "capture_truncated"
-                    break
-                captured += 1
-        if not capture_failed and captured < len(rows):
-            capture_failed = "capture_truncated"
-        if capture_failed:
-            # MEN 9: una captura truncada termina como trabajo fallido.
-            self.census_failed[job_id] = capture_failed
-        if delay_ms and hasattr(self.peer, "now"):
-            self.peer.now = float(self.peer.now) + delay_ms
-        s = {
-            "job": job_id,
+            rows_found = self._census_plain_rows(mid_x, mid_z, radius_value, want_director, area_name)
+        written, problem, delay = self._census_capture_rows(job_name, rows_found, chosen_columns)
+        if problem:
+            self.census_failed[job_name] = problem
+        if delay and hasattr(self.peer, "now"):
+            self.peer.now = float(self.peer.now) + delay
+        text_out = {
+            "job": job_name,
             "state": "running",
             "resource": "per_census",
-            "area_tag": area_tag,
+            "area_tag": area_label,
             "server_epoch": self.epoch,
             "director_uid": self.director_uid,
         }
-        n = {
-            "snap_tick_ms": snap_ms,
-            "capture_wall_ms": float(delay_ms),
-            "snap_frame": float(snap_frame),
-            "rows_captured_n": float(captured),
-            "center_x_m": center_x,
-            "center_z_m": center_z,
-            "radius_m": radius,
+        num_out = {
+            "snap_tick_ms": snap_stamp,
+            "capture_wall_ms": float(delay),
+            "snap_frame": float(snap_frame_value),
+            "rows_captured_n": float(written),
+            "center_x_m": mid_x,
+            "center_z_m": mid_z,
+            "radius_m": radius_value,
             "director_present_b": 1.0,
             "director_alive_b": 1.0,
             "director_inv_readable_b": 1.0,
             "director_inv_count_n": float(len(self.director_items)),
         }
-        payload = wire.pack_payload(scalars_str=s, scalars_num=n)
-        self.pending_finish[job_id] = CENSUS_FINISH_AFTER_ATTEMPT_TICKS
-        self.census_start_tick[job_id] = snap_ms
-        return ("done", "", payload)
+        result_payload = wire.pack_payload(scalars_str=text_out, scalars_num=num_out)
+        self.pending_finish[job_name] = CENSUS_FINISH_AFTER_ATTEMPT_TICKS
+        self.census_start_tick[job_name] = snap_stamp
+        return ("done", "", result_payload)
 
-    # --------------------------------------------------------- testigo de creacion
+
     def _witness_capture(self, ent):
         # Equivale al gancho EEInit del .c: apagado cuesta un chequeo; encendido filtra por radio y ventana.
         wit = self.witness

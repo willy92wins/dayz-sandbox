@@ -203,6 +203,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	protected string m_CaptureFailReason;
 	protected string m_CaptureFailJobId;
 	protected int m_LastApplyRetainedSkipped;
+	protected bool m_PersistRawKitOk;
 	// Presupuesto verificable de captura del censo (MEN-14); el cupo de filas llega por StartJob.
 	static const float CENSUS_CAPTURE_BUDGET_MS = 120000.0;
 	// BLOQ 6: A retiene per_census hasta acreditar el intento de B; salida acotada.
@@ -1165,6 +1166,106 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutNum(read, "q9_frame", m_Probe.m_Frame);
 	}
 
+	protected void PersistReject(DSBX_QA_Result target, string state, string why)
+	{
+		target.status = state;
+		target.reason = why;
+	}
+
+	protected Object PersistSpawnRootAt(string kind, vector where, float yaw, string category, string pathway, bool stripNoPersist)
+	{
+		int flags = FLAGS_STATIC;
+		bool creature = false;
+		if (category == "infected")
+			creature = true;
+		if (category == "animal")
+			creature = true;
+		if (creature && pathway == "a")
+			flags = FLAGS_AI_A;
+		if (creature && pathway != "a")
+			flags = FLAGS_AI_B;
+		if (stripNoPersist)
+			flags = flags & (~FLAG_ECE_NOPERSISTENCY_WORLD);
+		Object made = g_Game.CreateObjectEx(kind, where, flags, FLAG_RF_DEFAULT);
+		if (made)
+			made.SetPosition(where);
+		if (made)
+			made.SetOrientation(Vector(yaw, 0.0, 0.0));
+		return made;
+	}
+
+	protected Object PersistCreateDirectInInventory(EntityAI holder, string kind, string slot, bool stripNoPersist)
+	{
+		int flags = FLAGS_INV_OWN;
+		if (stripNoPersist)
+			flags = flags & (~FLAG_ECE_NOPERSISTENCY_WORLD);
+		InventoryLocation spot = new InventoryLocation();
+		bool spotReady = false;
+		int slotNumber = -1;
+		if (slot != "Cargo")
+			slotNumber = InventorySlots.GetSlotIdFromString(slot);
+		if (slot == "Cargo")
+			spotReady = holder.GetInventory().FindFirstFreeLocationForNewEntity(kind, FindInventoryLocationType.CARGO, spot);
+		if (slot != "Cargo" && InventorySlots.IsSlotIdValid(slotNumber) && holder.GetInventory().HasAttachmentSlot(slotNumber) && holder.GetInventory().FindAttachment(slotNumber) == null)
+		{
+			spot.SetAttachment(holder, null, slotNumber);
+			spotReady = true;
+		}
+		Object made = null;
+		if (spotReady)
+			made = GameInventory.LocationCreateEntity(spot, kind, flags, FLAG_RF_DEFAULT);
+		return made;
+	}
+
+	protected Object PersistCreateByMovingIn(EntityAI holder, string kind, string slot, bool stripNoPersist)
+	{
+		int flags = FLAGS_STATIC;
+		if (stripNoPersist)
+			flags = flags & (~FLAG_ECE_NOPERSISTENCY_WORLD);
+		Object candidate = g_Game.CreateObjectEx(kind, holder.GetPosition(), flags, FLAG_RF_DEFAULT);
+		EntityAI candidateEnt = EntityAI.Cast(candidate);
+		bool moved = false;
+		InventoryLocation fromSpot = new InventoryLocation();
+		InventoryLocation toSpot = new InventoryLocation();
+		bool fromReady = false;
+		bool toReady = false;
+		int slotNumber = -1;
+		if (slot != "Cargo")
+			slotNumber = InventorySlots.GetSlotIdFromString(slot);
+		if (candidateEnt && candidateEnt.GetInventory())
+			fromReady = candidateEnt.GetInventory().GetCurrentInventoryLocation(fromSpot);
+		if (slot == "Cargo" && candidateEnt)
+			toReady = holder.GetInventory().FindFreeLocationFor(candidateEnt, FindInventoryLocationType.CARGO, toSpot);
+		if (slot != "Cargo" && InventorySlots.IsSlotIdValid(slotNumber) && holder.GetInventory().HasAttachmentSlot(slotNumber) && holder.GetInventory().FindAttachment(slotNumber) == null)
+		{
+			toSpot.SetAttachment(holder, candidateEnt, slotNumber);
+			toReady = true;
+		}
+		if (fromReady && toReady && GameInventory.LocationCanMoveEntity(fromSpot, toSpot))
+			moved = GameInventory.LocationSyncMoveEntity(fromSpot, toSpot);
+		if (moved)
+			return candidate;
+		if (candidate)
+			g_Game.ObjectDelete(candidate);
+		return null;
+	}
+
+	protected Object PersistSpawnSceneChild(string scene, string parentLogical, int generation, string kind, string slot, bool stripNoPersist)
+	{
+		DSBX_QA_PersistRecord parentRecord = FindRecordApplyParent(scene, parentLogical, generation);
+		EntityAI holder = null;
+		if (parentRecord && parentRecord.m_RefEnt)
+			holder = EntityAI.Cast(parentRecord.m_RefEnt);
+		if (!holder || !holder.GetInventory())
+			return null;
+		bool bornInInventory = false;
+		if (parentRecord.m_Cat == "actor" && slot == "Gloves")
+			bornInInventory = true;
+		if (bornInInventory)
+			return PersistCreateDirectInInventory(holder, kind, slot, stripNoPersist);
+		return PersistCreateByMovingIn(holder, kind, slot, stripNoPersist);
+	}
+
 	protected void HandleApplyScene(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
 	{
 		string sceneId = GetStrArg(args, "scene_id", "");
@@ -1172,26 +1273,26 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		string expectEpoch = GetStrArg(args, "expect_epoch", "");
 		string pathway = GetStrArg(args, "q9_pathway", "a");
 		int genN = (int)GetNumArg(args, "gen_n", 1.0);
-
 		if (expectEpoch != m_Probe.GetInst())
 		{
-			res.status = "rejected";
-			res.reason = "stale_epoch";
+			PersistReject(res, "rejected", "stale_epoch");
 			return;
 		}
-		if (pathway != "a" && pathway != "b")
+		bool pathwayKnown = false;
+		if (pathway == "a")
+			pathwayKnown = true;
+		if (pathway == "b")
+			pathwayKnown = true;
+		if (!pathwayKnown)
 		{
-			res.status = "rejected";
-			res.reason = "bad_args";
+			PersistReject(res, "rejected", "bad_args");
 			return;
 		}
 		if (sceneId == "" || sceneOpId == "" || genN < 1)
 		{
-			res.status = "rejected";
-			res.reason = "bad_args";
+			PersistReject(res, "rejected", "bad_args");
 			return;
 		}
-
 		int scIdx = FindSceneIndex(sceneId);
 		if (scIdx >= 0 && m_SceneLastOp.Get(scIdx) == sceneOpId)
 		{
@@ -1200,221 +1301,120 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			EmitApplyResponse(res.read, sceneId, sceneOpId, pathway, m_SceneGen.Get(scIdx), 1);
 			return;
 		}
-
 		int rows = 0;
 		if (args && args.rows > 0)
 			rows = args.rows;
 		if (rows < 1 || rows > 12)
 		{
-			res.status = "rejected";
-			res.reason = "bad_args";
+			PersistReject(res, "rejected", "bad_args");
 			return;
 		}
-
-		int ncolCount = args.ncol.Count();
-		int scolCount = args.scol.Count();
-
-		int idxLogical = FindColIdx(args.scol, "logical_id");
-		int idxParent = FindColIdx(args.scol, "parent_id");
-		int idxCat = FindColIdx(args.scol, "cat");
-		int idxClass = FindColIdx(args.scol, "class_name");
-		int idxSlot = FindColIdx(args.scol, "slot_name");
-
-		int idxReqX = FindColIdx(args.ncol, "req_x_m");
-		int idxReqZ = FindColIdx(args.ncol, "req_z_m");
-		int idxReqYaw = FindColIdx(args.ncol, "req_yaw_deg");
-		int idxHealthRatio = FindColIdx(args.ncol, "health_mark_ratio");
-		int idxMustVanish = FindColIdx(args.ncol, "must_vanish_b");
-
-		if (idxLogical < 0 || idxParent < 0 || idxCat < 0 || idxClass < 0 || idxSlot < 0 || idxReqX < 0 || idxReqZ < 0 || idxReqYaw < 0 || idxHealthRatio < 0 || idxMustVanish < 0)
+		array<string> scolWanted = new array<string>();
+		scolWanted.Insert("logical_id");
+		scolWanted.Insert("parent_id");
+		scolWanted.Insert("cat");
+		scolWanted.Insert("class_name");
+		scolWanted.Insert("slot_name");
+		array<string> ncolWanted = new array<string>();
+		ncolWanted.Insert("req_x_m");
+		ncolWanted.Insert("req_z_m");
+		ncolWanted.Insert("req_yaw_deg");
+		ncolWanted.Insert("health_mark_ratio");
+		ncolWanted.Insert("must_vanish_b");
+		array<int> scolPos = new array<int>();
+		array<int> ncolPos = new array<int>();
+		int missingCols = 0;
+		int colScan = 0;
+		while (colScan < scolWanted.Count())
 		{
-			res.status = "rejected";
-			res.reason = "bad_args";
+			int foundS = FindColIdx(args.scol, scolWanted.Get(colScan));
+			scolPos.Insert(foundS);
+			if (foundS < 0)
+				missingCols = missingCols + 1;
+			colScan = colScan + 1;
+		}
+		colScan = 0;
+		while (colScan < ncolWanted.Count())
+		{
+			int foundN = FindColIdx(args.ncol, ncolWanted.Get(colScan));
+			ncolPos.Insert(foundN);
+			if (foundN < 0)
+				missingCols = missingCols + 1;
+			colScan = colScan + 1;
+		}
+		if (missingCols > 0)
+		{
+			PersistReject(res, "rejected", "bad_args");
 			return;
 		}
-
 		if (!ReapplyResetWithRetention(sceneId, expectEpoch))
 		{
-			res.status = "error";
-			res.reason = "lease_expired";
+			PersistReject(res, "error", "lease_expired");
 			return;
 		}
-		// MEN 7: logical_ids retenidos de la generacion anterior.
 		array<string> retainedLids = new array<string>();
-		for (int ri = 0; ri < m_Records.Count(); ri++)
+		int keptScan = 0;
+		while (keptScan < m_Records.Count())
 		{
-			DSBX_QA_PersistRecord rrec = m_Records.Get(ri);
-			if (rrec && rrec.m_SceneId == sceneId && rrec.m_ServerEpoch == expectEpoch)
-				retainedLids.Insert(rrec.m_LogicalId);
+			DSBX_QA_PersistRecord keptRec = m_Records.Get(keptScan);
+			if (keptRec && keptRec.m_SceneId == sceneId && keptRec.m_ServerEpoch == expectEpoch)
+				retainedLids.Insert(keptRec.m_LogicalId);
+			keptScan = keptScan + 1;
 		}
 		m_LastApplyRetainedSkipped = 0;
 		UpsertSceneMeta(sceneId, genN, sceneOpId);
-
-		string opFault = m_Probe.GetOpFault();
-		bool omitNoPersist = (opFault == "omit_nopersistency_flag");
-
+		bool omitNoPersist = false;
+		if (m_Probe.GetOpFault() == "omit_nopersistency_flag")
+			omitNoPersist = true;
 		string directorUid = "";
 		int presentB = 0;
 		int dirAliveB = 0;
 		int invReadableB = 0;
 		int invCountN = 0;
 		Man director = FindDirectorMan(directorUid, presentB, dirAliveB, invReadableB, invCountN);
-
-		for (int r = 0; r < rows; r++)
+		int scolCount = args.scol.Count();
+		int ncolCount = args.ncol.Count();
+		int r = 0;
+		while (r < rows)
 		{
-			// MEN 8: guarda en cada efecto; la caducidad es error, no done parcial.
 			if (!m_Probe.LeaseOk())
 			{
-				res.status = "error";
-				res.reason = "lease_expired";
+				PersistReject(res, "error", "lease_expired");
 				return;
 			}
 			int sBase = r * scolCount;
 			int nBase = r * ncolCount;
-
-			string logicalId = args.scell.Get(sBase + idxLogical);
+			string logicalId = args.scell.Get(sBase + scolPos.Get(0));
 			bool isRetainedRow = false;
-			for (int rl = 0; rl < retainedLids.Count(); rl++)
+			int rl = 0;
+			while (rl < retainedLids.Count())
 			{
 				if (retainedLids.Get(rl) == logicalId)
 					isRetainedRow = true;
+				rl = rl + 1;
 			}
 			if (isRetainedRow)
 			{
-				// No se crea duplicado ni registro nuevo de la fila retenida.
 				m_LastApplyRetainedSkipped = m_LastApplyRetainedSkipped + 1;
+				r = r + 1;
 				continue;
 			}
-			string parentId = args.scell.Get(sBase + idxParent);
-			string cat = args.scell.Get(sBase + idxCat);
-			string className = args.scell.Get(sBase + idxClass);
-			string slotName = args.scell.Get(sBase + idxSlot);
-
-			float reqX = args.ncell.Get(nBase + idxReqX);
-			float reqZ = args.ncell.Get(nBase + idxReqZ);
-			float reqYaw = args.ncell.Get(nBase + idxReqYaw);
-			float hRatio = args.ncell.Get(nBase + idxHealthRatio);
-			int mustVanishB = (int)args.ncell.Get(nBase + idxMustVanish);
-
-			Object createdObj = null;
+			string parentId = args.scell.Get(sBase + scolPos.Get(1));
+			string cat = args.scell.Get(sBase + scolPos.Get(2));
+			string className = args.scell.Get(sBase + scolPos.Get(3));
+			string slotName = args.scell.Get(sBase + scolPos.Get(4));
+			float reqX = args.ncell.Get(nBase + ncolPos.Get(0));
+			float reqZ = args.ncell.Get(nBase + ncolPos.Get(1));
+			float reqYaw = args.ncell.Get(nBase + ncolPos.Get(2));
+			float hRatio = args.ncell.Get(nBase + ncolPos.Get(3));
+			int mustVanishB = (int)args.ncell.Get(nBase + ncolPos.Get(4));
 			float reqY = g_Game.SurfaceY(reqX, reqZ);
 			vector targetPos = Vector(reqX, reqY, reqZ);
-
+			Object createdObj = null;
 			if (parentId == "")
-			{
-				int flags = FLAGS_STATIC;
-				if (cat == "infected" || cat == "animal")
-				{
-					if (pathway == "a")
-						flags = FLAGS_AI_A;
-					else
-						flags = FLAGS_AI_B;
-				}
-				if (omitNoPersist)
-				{
-					flags = flags & (~FLAG_ECE_NOPERSISTENCY_WORLD);
-				}
-				createdObj = g_Game.CreateObjectEx(className, targetPos, flags, FLAG_RF_DEFAULT);
-				if (createdObj)
-				{
-					createdObj.SetPosition(targetPos);
-					createdObj.SetOrientation(Vector(reqYaw, 0.0, 0.0));
-				}
-			}
-			else
-			{
-				DSBX_QA_PersistRecord parentRec = FindRecordApplyParent(sceneId, parentId, genN);
-				if (parentRec && parentRec.m_RefEnt)
-				{
-					EntityAI parentEnt = EntityAI.Cast(parentRec.m_RefEnt);
-					if (parentEnt && parentEnt.GetInventory())
-					{
-						// La prenda de la ranura Gloves de un actor es la que per_child_transition lleva despues al
-						// inventario de un jugador real (move_to_director): nace dentro del inventario, como todo
-						// lo que vanilla mete en un inventario (LocationCreateEntity, inventory.c:333; CreateInInventory,
-						// inventory.c:876). Un objeto nacido en el suelo con CreateObjectEx y movido despues al
-						// director deja su personaje imposible de cargar (KILLING CORRUPTED CHAR, expulsion 64).
-						// El resto de hijos se crean como las raices, con CreateObjectEx (game.c:703) junto al padre, y
-						// se mueven a su sitio con LocationCanMoveEntity + LocationSyncMoveEntity, como vanilla
-						// (dayzplayerinventory.c:1377-1395): asi el brazalete que cae al suelo no vuelve tras el
-						// reinicio. El destino lleva el objeto: FindFreeLocationFor (inventory.c:276) o SetAttachment
-						// con la entidad (inventorylocation.c:131). Si no entra, se borra y la fila sale fallida.
-						bool bornInInventory = false;
-						if (parentRec.m_Cat == "actor" && slotName == "Gloves")
-							bornInInventory = true;
-						if (bornInInventory)
-						{
-							int invFlags = FLAGS_INV_OWN;
-							if (omitNoPersist)
-							{
-								invFlags = invFlags & (~FLAG_ECE_NOPERSISTENCY_WORLD);
-							}
-							InventoryLocation bornLoc = new InventoryLocation();
-							bool bornLocOk = false;
-							if (slotName == "Cargo")
-							{
-								if (parentEnt.GetInventory().FindFirstFreeLocationForNewEntity(className, FindInventoryLocationType.CARGO, bornLoc))
-									bornLocOk = true;
-							}
-							else
-							{
-								int bornSlotId = InventorySlots.GetSlotIdFromString(slotName);
-								if (InventorySlots.IsSlotIdValid(bornSlotId) && parentEnt.GetInventory().HasAttachmentSlot(bornSlotId) && parentEnt.GetInventory().FindAttachment(bornSlotId) == null)
-								{
-									bornLoc.SetAttachment(parentEnt, null, bornSlotId);
-									bornLocOk = true;
-								}
-							}
-							if (bornLocOk)
-								createdObj = GameInventory.LocationCreateEntity(bornLoc, className, invFlags, FLAG_RF_DEFAULT);
-						}
-						else
-						{
-						int childFlags = FLAGS_STATIC;
-						if (omitNoPersist)
-						{
-							childFlags = childFlags & (~FLAG_ECE_NOPERSISTENCY_WORLD);
-						}
-						Object stagedObj = g_Game.CreateObjectEx(className, parentEnt.GetPosition(), childFlags, FLAG_RF_DEFAULT);
-						EntityAI stagedEnt = EntityAI.Cast(stagedObj);
-						bool stagedPlaced = false;
-						if (stagedEnt && stagedEnt.GetInventory())
-						{
-							InventoryLocation stagedSrc = new InventoryLocation();
-							InventoryLocation stagedDst = new InventoryLocation();
-							bool stagedSrcOk = stagedEnt.GetInventory().GetCurrentInventoryLocation(stagedSrc);
-							bool stagedDstOk = false;
-							if (slotName == "Cargo")
-							{
-								stagedDstOk = parentEnt.GetInventory().FindFreeLocationFor(stagedEnt, FindInventoryLocationType.CARGO, stagedDst);
-							}
-							else
-							{
-								int childSlotId = InventorySlots.GetSlotIdFromString(slotName);
-								if (InventorySlots.IsSlotIdValid(childSlotId) && parentEnt.GetInventory().HasAttachmentSlot(childSlotId) && parentEnt.GetInventory().FindAttachment(childSlotId) == null)
-								{
-									stagedDst.SetAttachment(parentEnt, stagedEnt, childSlotId);
-									stagedDstOk = true;
-								}
-							}
-							if (stagedSrcOk && stagedDstOk && GameInventory.LocationCanMoveEntity(stagedSrc, stagedDst))
-							{
-								stagedPlaced = GameInventory.LocationSyncMoveEntity(stagedSrc, stagedDst);
-							}
-						}
-						if (stagedPlaced)
-						{
-							createdObj = stagedObj;
-						}
-						else if (stagedObj)
-						{
-							g_Game.ObjectDelete(stagedObj);
-						}
-						}
-					}
-				}
-			}
-
+				createdObj = PersistSpawnRootAt(className, targetPos, reqYaw, cat, pathway, omitNoPersist);
+			if (parentId != "")
+				createdObj = PersistSpawnSceneChild(sceneId, parentId, genN, className, slotName, omitNoPersist);
 			DSBX_QA_PersistRecord rec = new DSBX_QA_PersistRecord();
 			rec.m_ServerEpoch = m_Probe.GetInst();
 			rec.m_SceneId = sceneId;
@@ -1432,26 +1432,18 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			rec.m_MustVanishB = mustVanishB;
 			rec.m_SpawnTickMs = m_Probe.NowMs();
 			rec.m_RefEnt = createdObj;
-
 			if (createdObj)
 			{
 				rec.m_OkB = 1;
 				EntityAI ent = EntityAI.Cast(createdObj);
-				if (ent)
-				{
-					float maxHp = -1.0;
-					float healthNow = -1.0;
-					rec.m_HealthMarkB = ApplyQaHealthMark(ent, hRatio, maxHp, healthNow);
-					rec.m_MaxHp = maxHp;
-					rec.m_HealthHp = healthNow;
-				}
-				else if (hRatio > 0.0)
-				{
-					rec.m_HealthMarkB = 0;
-				}
+				float maxHp = -1.0;
+				float healthNow = -1.0;
+				if (ent) rec.m_HealthMarkB = ApplyQaHealthMark(ent,  hRatio, maxHp, healthNow);
+				if (ent) rec.m_MaxHp = maxHp;
+				if (ent) rec.m_HealthHp = healthNow;
+				if (!ent && hRatio > 0.0) rec.m_HealthMarkB = 0;
 				if (createdObj.IsAlive())
 					rec.m_AliveB = 1;
-
 				vector q9Pos = createdObj.GetPosition();
 				vector q9Ori = createdObj.GetOrientation();
 				rec.m_Q9XM = q9Pos[0];
@@ -1464,23 +1456,18 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				rec.m_Q9YawDeg = q9Ori[0];
 				rec.m_Q9PitchDeg = q9Ori[1];
 				rec.m_Q9RollDeg = q9Ori[2];
-
-				if (cat == "infected" || cat == "animal")
-				{
-					DayZCreatureAI creature = DayZCreatureAI.Cast(createdObj);
-					if (pathway == "b" && creature)
-					{
-						creature.InitAIAgent(g_Game.GetWorld().GetAIWorld().CreateDefaultGroup());
-					}
-					if (creature && creature.GetAIAgent() != null)
-					{
-						rec.m_AiAgentB = 1;
-					}
-				}
-
+				bool creatureCat = false;
+				if (cat == "infected")
+					creatureCat = true;
+				if (cat == "animal")
+					creatureCat = true;
+				DayZCreatureAI creature = DayZCreatureAI.Cast(createdObj);
+				if (creatureCat && pathway == "b" && creature)
+					creature.InitAIAgent(g_Game.GetWorld().GetAIWorld().CreateDefaultGroup());
+				if (creatureCat && creature && creature.GetAIAgent() != null)
+					rec.m_AiAgentB = 1;
 				rec.m_NetId = FormatNetId(createdObj);
 				rec.m_PersId = FormatPersId(createdObj);
-
 				string locKind = "";
 				string parentClass = "";
 				string parentNetId = "";
@@ -1492,18 +1479,10 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				rec.m_ObsParentNetId = parentNetId;
 				rec.m_ObsSlotName = obsSlot;
 			}
-			else
-			{
-				// Datos ausentes distinguibles de valores observados: no hay lectura de salud ni marca confirmada.
-				rec.m_MaxHp = 0.0;
-				rec.m_HealthHp = 0.0;
-				rec.m_HealthMarkB = 0;
-				rec.m_AliveB = 0;
-				rec.m_AiAgentB = 0;
-			}
+			if (!createdObj) { rec.m_MaxHp = 0.0; rec.m_HealthHp = 0.0; rec.m_HealthMarkB = 0; rec.m_AliveB = 0; rec.m_AiAgentB = 0; }
 			m_Records.Insert(rec);
+			r = r + 1;
 		}
-
 		int scIdxDone = FindSceneIndex(sceneId);
 		if (scIdxDone >= 0)
 			m_SceneLastRetainedSkipped.Set(scIdxDone, m_LastApplyRetainedSkipped);
@@ -1863,6 +1842,61 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutNum(res.read, "frame", m_Probe.m_Frame);
 	}
 
+	protected Object PersistRawGround(string kind, vector where, float yaw, int flags)
+	{
+		Object made = g_Game.CreateObjectEx(kind, where, flags, FLAG_RF_DEFAULT);
+		if (made)
+			made.SetPosition(where);
+		if (made)
+			made.SetOrientation(Vector(yaw, 0.0, 0.0));
+		return made;
+	}
+
+	protected Object PersistRawRecordContainer(DSBX_QA_PersistRecord parentRecord, string kind, DSBX_QA_Result res)
+	{
+		m_PersistRawKitOk = true;
+		EntityAI holder = null;
+		if (parentRecord && IsObjectAlive(parentRecord.m_RefEnt))
+			holder = EntityAI.Cast(parentRecord.m_RefEnt);
+		if (!holder || !holder.GetInventory())
+			return null;
+		InventoryLocation directSpot = new InventoryLocation();
+		Object direct = null;
+		if (holder.GetInventory().FindFirstFreeLocationForNewEntity(kind, FindInventoryLocationType.CARGO, directSpot))
+			direct = GameInventory.LocationCreateEntity(directSpot, kind, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
+		if (direct)
+			return direct;
+		EntityAI kitHolder = holder.GetHierarchyParent();
+		InventoryLocation kitHere = new InventoryLocation();
+		InventoryLocation kitGround = new InventoryLocation();
+		InventoryLocation kitInside = new InventoryLocation();
+		InventoryLocation kitReturnFrom = new InventoryLocation();
+		InventoryLocation kitReturnTo = new InventoryLocation();
+		bool kitHereOk = holder.GetInventory().GetCurrentInventoryLocation(kitHere);
+		bool kitGroundOk = false;
+		bool kitOut = false;
+		bool kitReturnFound = false;
+		bool kitReturned = false;
+		if (kitHolder && kitHereOk)
+			kitGroundOk = GameInventory.SetGroundPosByOwner(kitHolder, holder, kitGround);
+		if (kitGroundOk)
+			kitOut = GameInventory.LocationSyncMoveEntity(kitHere, kitGround);
+		Object nested = null;
+		if (kitOut && holder.GetInventory().FindFirstFreeLocationForNewEntity(kind, FindInventoryLocationType.CARGO, kitInside))
+			nested = GameInventory.LocationCreateEntity(kitInside, kind, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
+		bool returnFromOk = false;
+		if (kitOut)
+			returnFromOk = holder.GetInventory().GetCurrentInventoryLocation(kitReturnFrom);
+		if (returnFromOk && kitHolder && kitHolder.GetInventory())
+			kitReturnFound = kitHolder.GetInventory().FindFreeLocationFor(holder, FindInventoryLocationType.CARGO, kitReturnTo);
+		if (kitReturnFound)
+			kitReturned = GameInventory.LocationSyncMoveEntity(kitReturnFrom, kitReturnTo);
+		m_PersistRawKitOk = false;
+		if (kitOut && kitReturned && nested)
+			m_PersistRawKitOk = true;
+		return nested;
+	}
+
 	protected void HandleSpawnRaw(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
 	{
 		string tag = GetStrArg(args, "tag", "");
@@ -1871,174 +1905,116 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		string childCargoClass = GetStrArg(args, "child_cargo_class", "");
 		string targetSceneId = GetStrArg(args, "target_scene_id", "");
 		string targetParentId = GetStrArg(args, "target_parent_id", "");
-		string targetNetId = GetStrArg(args, "target_net_id", "");
-
+		string targetNetId;
+		targetNetId = GetStrArg(args, "target_net_id", "");
 		float xm = GetNumArg(args, "x_m", 0.0);
 		float zm = GetNumArg(args, "z_m", 0.0);
 		float yawDeg = GetNumArg(args, "yaw_deg", 0.0);
 		float hRatio = GetNumArg(args, "health_mark_ratio", 1.0);
-
-		// E1: guarda antes de crear (LeaseOk, DSBX_QA_Probe.c:447).
-		// CreateObjectEx: P:/scripts/3_game/global/game.c:703; SurfaceY: game.c:1176.
 		if (!m_Probe.LeaseOk())
 		{
-			res.status = "error";
-			res.reason = "lease_expired";
+			PersistReject(res, "error", "lease_expired");
 			return;
 		}
-
-		Object createdObj = null;
-		Object childObj = null;
-		int childCountN = 0;
-		bool foreignStateOk = true;
+		m_PersistRawKitOk = true;
 		float ym = g_Game.SurfaceY(xm, zm);
 		vector targetPos = Vector(xm, ym, zm);
-
+		Object createdObj = null;
+		Object childObj = null;
 		if (mode == "foreign_ground")
+			createdObj = PersistRawGround(className, targetPos, yawDeg, FLAGS_STATIC);
+		if (mode == "foreign_in_container" && targetNetId != "")
 		{
-			createdObj = g_Game.CreateObjectEx(className, targetPos, FLAGS_STATIC, FLAG_RF_DEFAULT);
-			if (createdObj)
+			int tHigh = 0; int tLow = 0;
+			bool netIdOk = ParseNetIdStr(targetNetId, tHigh, tLow);
+			if (!netIdOk)
 			{
-				createdObj.SetPosition(targetPos);
-				createdObj.SetOrientation(Vector(yawDeg, 0.0, 0.0));
+				PersistReject(res, "rejected", "bad_args");
+				return;
 			}
+			Object netObj = g_Game.GetObjectByNetworkId(tLow, tHigh);
+			EntityAI netParEnt = EntityAI.Cast(netObj);
+			bool netParBad = false;
+			if (!netParEnt)
+				netParBad = true;
+			if (netParEnt && !IsObjectAlive(netParEnt))
+				netParBad = true;
+			if (netParBad)
+			{
+				PersistReject(res, "rejected", "target_not_found");
+				return;
+			}
+			InventoryLocation netLoc;
+			netLoc = new InventoryLocation();
+			bool netLocFound = false;
+			if (netParEnt.GetInventory())
+				netLocFound = netParEnt.GetInventory().FindFirstFreeLocationForNewEntity(className, FindInventoryLocationType.CARGO, netLoc);
+			if (!netLocFound)
+			{
+				PersistReject(res, "rejected", "no_cargo_space");
+				return;
+			}
+			bool netLocWrong = false;
+			if (netLoc.GetType() != InventoryLocationType.CARGO  ||  netLoc.GetParent() != netParEnt)
+				netLocWrong = true;
+			if (netLocWrong)
+			{
+				PersistReject(res, "rejected", "no_cargo_space");
+				return;
+			}
+			if (!netLocWrong) createdObj = GameInventory.LocationCreateEntity(netLoc, className, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
 		}
-		else if (mode == "foreign_in_container" && targetNetId != "")
-		{
-			// Padre por net_id del censo. Los dos rechazos salen antes de crear nada (sin efectos).
-			int tHigh = 0;
-			int tLow = 0;
-			if (!ParseNetIdStr(targetNetId, tHigh, tLow))
-			{
-				res.status = "rejected";
-				res.reason = "bad_args";
-				return;
-			}
-			// GetObjectByNetworkId(low, high): P:/scripts/3_game/global/game.c:356
-			EntityAI netParEnt = EntityAI.Cast(g_Game.GetObjectByNetworkId(tLow, tHigh));
-			if (!netParEnt || !IsObjectAlive(netParEnt))
-			{
-				res.status = "rejected";
-				res.reason = "target_not_found";
-				return;
-			}
-			// FindFirstFreeLocationForNewEntity: inventory.c:291; LocationCreateEntity: inventory.c:333
-			InventoryLocation netLoc = new InventoryLocation();
-			if (!netParEnt.GetInventory() || !netParEnt.GetInventory().FindFirstFreeLocationForNewEntity(className, FindInventoryLocationType.CARGO, netLoc))
-			{
-				res.status = "rejected";
-				res.reason = "no_cargo_space";
-				return;
-			}
-			// La busqueda puede dar hueco en el cargo de un descendiente (vanilla usa el padre devuelto, inventory.c:879):
-			// el hueco tiene que ser CARGO y el padre de la ubicacion exactamente el objetivo; si no, sin efectos.
-			// InventoryLocation.GetType/GetParent: inventorylocation.c:43 y :52.
-			if (netLoc.GetType() != InventoryLocationType.CARGO || netLoc.GetParent() != netParEnt)
-			{
-				res.status = "rejected";
-				res.reason = "no_cargo_space";
-				return;
-			}
-			createdObj = GameInventory.LocationCreateEntity(netLoc, className, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
-		}
-		else if (mode == "foreign_in_container")
+		if (mode == "foreign_in_container" && targetNetId == "")
 		{
 			DSBX_QA_PersistRecord parRec = FindRecord(targetSceneId, targetParentId);
-			if (parRec && IsObjectAlive(parRec.m_RefEnt))
-			{
-				EntityAI parEnt = EntityAI.Cast(parRec.m_RefEnt);
-				if (parEnt && parEnt.GetInventory())
-				{
-					InventoryLocation invLoc = new InventoryLocation();
-					if (parEnt.GetInventory().FindFirstFreeLocationForNewEntity(className, FindInventoryLocationType.CARGO, invLoc))
-					{
-						createdObj = GameInventory.LocationCreateEntity(invLoc, className, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
-					}
-					if (!createdObj)
-					{
-						// El kit en cargo no acepta cargo (container_base.c:19-29; entityai.c:1685-1698): se llena en el suelo y se devuelve a su padre.
-						EntityAI kitParentEnt = parEnt.GetHierarchyParent();
-						InventoryLocation kitSrcLoc = new InventoryLocation();
-						InventoryLocation kitGroundLoc = new InventoryLocation();
-						InventoryLocation kitInvLoc = new InventoryLocation();
-						InventoryLocation kitBackSrcLoc = new InventoryLocation();
-						InventoryLocation kitBackLoc = new InventoryLocation();
-						bool kitSrcOk = parEnt.GetInventory().GetCurrentInventoryLocation(kitSrcLoc);
-						bool kitGroundOk = false;
-						bool kitOutOk = false;
-						bool kitBackFound = false;
-						bool kitBackOk = false;
-						if (kitParentEnt && kitSrcOk) kitGroundOk = GameInventory.SetGroundPosByOwner(kitParentEnt, parEnt, kitGroundLoc);
-						if (kitGroundOk) kitOutOk = GameInventory.LocationSyncMoveEntity(kitSrcLoc, kitGroundLoc);
-						if (kitOutOk && parEnt.GetInventory().FindFirstFreeLocationForNewEntity(className, FindInventoryLocationType.CARGO, kitInvLoc)) createdObj = GameInventory.LocationCreateEntity(kitInvLoc, className, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
-						// El kit ya existe: su destino sale de FindFreeLocationFor (inventory.c:276), que lleva el objeto; ForNewEntity no lo lleva y LocationSyncMoveEntity tumbaba el servidor (partida 2, 16-nov).
-						if (kitOutOk && parEnt.GetInventory().GetCurrentInventoryLocation(kitBackSrcLoc) && kitParentEnt && kitParentEnt.GetInventory()) kitBackFound = kitParentEnt.GetInventory().FindFreeLocationFor(parEnt, FindInventoryLocationType.CARGO, kitBackLoc);
-						if (kitBackFound) kitBackOk = GameInventory.LocationSyncMoveEntity(kitBackSrcLoc, kitBackLoc);
-						foreignStateOk = kitOutOk && kitBackOk && createdObj != null;
-					}
-				}
-			}
+			createdObj = PersistRawRecordContainer(parRec, className, res);
 		}
-		else if (mode == "persistent_control")
+		if (mode == "persistent_control")
 		{
-			createdObj = g_Game.CreateObjectEx(className, targetPos, FLAG_ECE_PLACE_ON_SURFACE, FLAG_RF_DEFAULT);
-			if (createdObj)
+			createdObj = PersistRawGround(className, targetPos, yawDeg, FLAG_ECE_PLACE_ON_SURFACE);
+			if (createdObj && childCargoClass != "" && !m_Probe.LeaseOk())
 			{
-				createdObj.SetPosition(targetPos);
-				createdObj.SetOrientation(Vector(yawDeg, 0.0, 0.0));
-				if (childCargoClass != "" && !m_Probe.LeaseOk())
+				PersistReject(res, "error", "lease_expired");
+				return;
+			}
+			if (createdObj && childCargoClass != "")
+			{
+				EntityAI ctrlEnt = EntityAI.Cast(createdObj);
+				Barrel_ColorBase barrelEnt = Barrel_ColorBase.Cast(createdObj);
+				if (barrelEnt && !barrelEnt.IsOpen())
+					barrelEnt.Open();
+				if (ctrlEnt && ctrlEnt.GetInventory())
 				{
-					res.status = "error";
-					res.reason = "lease_expired";
-					return;
-				}
-				if (childCargoClass != "")
-				{
-					EntityAI ctrlEnt = EntityAI.Cast(createdObj);
-					// El barril nace cerrado y cerrado no recibe cargo (barrel_colorbase.c:15,512-518); abrir en servidor como actionopenbarrel.c:29-33.
-					Barrel_ColorBase barrelEnt = Barrel_ColorBase.Cast(createdObj);
-					if (barrelEnt && !barrelEnt.IsOpen()) barrelEnt.Open();
-					if (ctrlEnt && ctrlEnt.GetInventory())
+					InventoryLocation chLoc = new InventoryLocation();
+					if (ctrlEnt.GetInventory().FindFirstFreeLocationForNewEntity(childCargoClass, FindInventoryLocationType.CARGO, chLoc))
 					{
-						InventoryLocation chLoc = new InventoryLocation();
-						if (ctrlEnt.GetInventory().FindFirstFreeLocationForNewEntity(childCargoClass, FindInventoryLocationType.CARGO, chLoc))
-						{
-							childObj = GameInventory.LocationCreateEntity(chLoc, childCargoClass, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
-							if (childObj)
-								childCountN = 1;
-							EntityAI childEnt = EntityAI.Cast(childObj);
-							float chMaxHp = -1.0;
-							float chHealthHp = -1.0;
-							if (childEnt) ApplyQaHealthMark(childEnt, hRatio, chMaxHp, chHealthHp);
-						}
+						childObj = GameInventory.LocationCreateEntity(chLoc, childCargoClass, FLAG_ECE_IN_INVENTORY, FLAG_RF_DEFAULT);
+						EntityAI childEnt = EntityAI.Cast(childObj);
+						float chMaxHp = -1.0;
+						float chHealthHp = -1.0;
+						if (childEnt) ApplyQaHealthMark(childEnt,  hRatio, chMaxHp, chHealthHp);
 					}
 				}
 			}
 		}
-
 		if (!createdObj)
 		{
-			res.status = "error";
-			res.reason = "spawn_failed";
+			PersistReject(res, "error", "spawn_failed");
 			return;
 		}
-
 		float maxHp = 100.0;
 		float healthHp = 100.0;
-		int healthMarkB = 1;
+		int healthMarkB;
+		healthMarkB = 1;
 		EntityAI cEnt = EntityAI.Cast(createdObj);
-		if (cEnt)
-			healthMarkB = ApplyQaHealthMark(cEnt, hRatio, maxHp, healthHp);
-		else if (hRatio > 0.0)
-			healthMarkB = 0;
-
+		if (cEnt) healthMarkB = ApplyQaHealthMark(cEnt,  hRatio, maxHp, healthHp);
+		if (!cEnt && hRatio > 0.0) healthMarkB = 0;
 		string directorUid = "";
 		int presentB = 0;
 		int aliveB = 0;
 		int invReadableB = 0;
 		int invCountN = 0;
 		Man director = FindDirectorMan(directorUid, presentB, aliveB, invReadableB, invCountN);
-
 		string obsLocKind = "";
 		string obsParentClass = "";
 		string obsParentNetId = "";
@@ -2046,25 +2022,25 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		string obsOwnerUid = "";
 		int invChildren = 0;
 		ReadRealLocation(createdObj, director, directorUid, obsLocKind, obsParentClass, obsParentNetId, obsSlotName, obsOwnerUid, invChildren);
-
 		if (mode == "persistent_control" && childCargoClass != "" && invChildren != 1)
 		{
-			res.status = "error";
-			res.reason = "child_spawn_failed";
+			PersistReject(res, "error", "child_spawn_failed");
 			return;
 		}
-		if (mode == "foreign_in_container" && (!foreignStateOk || obsLocKind != "cargo"))
+		bool foreignFailed = false;
+		if (mode == "foreign_in_container" && !m_PersistRawKitOk)
+			foreignFailed = true;
+		if (mode == "foreign_in_container" && obsLocKind != "cargo")
+			foreignFailed = true;
+		if (foreignFailed)
 		{
-			res.status = "error";
-			res.reason = "spawn_failed";
+			PersistReject(res, "error", "spawn_failed");
 			return;
 		}
-
 		string netId = FormatNetId(createdObj);
 		string persId = FormatPersId(createdObj);
 		vector pos = createdObj.GetPosition();
 		vector ori = createdObj.GetOrientation();
-
 		DSBX_QA_PersistRawRecord rawRec = new DSBX_QA_PersistRawRecord();
 		rawRec.m_Tag = tag;
 		rawRec.m_Mode = mode;
@@ -2074,11 +2050,10 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		rawRec.m_SpawnTickMs = m_Probe.NowMs();
 		rawRec.m_MaxHp = maxHp;
 		rawRec.m_HealthHp = healthHp;
-		rawRec.m_HealthMarkB = healthMarkB;
+		rawRec.m_HealthMarkB =  healthMarkB;
 		rawRec.m_RefEnt = createdObj;
 		rawRec.m_ChildEnt = childObj;
 		m_RawRecords.Insert(rawRec);
-
 		res.status = "done";
 		EnsurePayloadHas(res.read);
 		PutStr(res.read, "spawn_status", "ok");
@@ -2089,7 +2064,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutStr(res.read, "obs_loc_kind", obsLocKind);
 		PutStr(res.read, "obs_parent_net_id", obsParentNetId);
 		PutStr(res.read, "obs_slot_name", obsSlotName);
-
 		PutNum(res.read, "pos_x_m", pos[0]);
 		PutNum(res.read, "pos_y_m", pos[1]);
 		PutNum(res.read, "pos_z_m", pos[2]);
@@ -2101,46 +2075,58 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutNum(res.read, "child_count_n", invChildren);
 		PutNum(res.read, "tick_ms", m_Probe.NowMs());
 		PutNum(res.read, "frame", m_Probe.m_Frame);
-		PutNum(res.read, "health_mark_b", healthMarkB);
+		PutNum(res.read, "health_mark_b",  healthMarkB);
 	}
 
-	protected bool AppendEntityCensusRow(string jobId, Object obj, int inRadiusB, Man director, string directorUid, array<Object> seen, bool withSurface)
+	protected int PersistCensusBlock(string job)
 	{
-		// E1 + MEN 9/14: el lease se mira una sola vez, al empezar la captura (instantanea en
-		// m_CensusLeaseAgeStartMs); una fila de censo no emite efectos hacia otro peer ni hacia el
-		// mundo (plan comun E1, :30-33 y :40-41), asi que dentro del bucle solo limita el
-		// presupuesto. Sin lease al empezar o sin presupuesto, la captura queda fallida
-		// (no un censo done truncado). LeaseOk: DSBX_QA_Probe.c:447.
 		if (m_CensusLeaseAgeStartMs > (float)m_Probe.GetLeaseMs())
 		{
 			m_CaptureFailed = true;
 			m_CaptureFailReason = "lease_expired";
-			m_CaptureFailJobId = jobId;
-			return false;
+			m_CaptureFailJobId = job;
+			return 1;
 		}
+		bool overTime = false;
 		if (m_CensusCaptureStartMs > 0.0 && m_Probe.NowMs() - m_CensusCaptureStartMs > CENSUS_CAPTURE_BUDGET_MS)
+			overTime = true;
+		if (overTime)
 		{
 			m_CaptureFailed = true;
 			m_CaptureFailReason = "capture_budget_exceeded";
-			m_CaptureFailJobId = jobId;
-			return false;
+			m_CaptureFailJobId = job;
+			return 2;
 		}
+		return 0;
+	}
+
+	protected bool PersistCensusSeen(array<Object> bag, Object item)
+	{
+		int at = 0;
+		while (at < bag.Count())
+		{
+			if (bag.Get(at) == item)
+				return true;
+			at = at + 1;
+		}
+		return false;
+	}
+
+	protected bool AppendEntityCensusRow(string jobId, Object obj, int inRadiusB, Man director, string directorUid, array<Object> seen, bool withSurface)
+	{
+		if (PersistCensusBlock(jobId) != 0)
+			return false;
 		if (!IsObjectAlive(obj))
 			return true;
-		for (int s = 0; s < seen.Count(); s++)
-		{
-			if (seen.Get(s) == obj)
-				return true;
-		}
-		string className = obj.GetType();
+		if (PersistCensusSeen(seen, obj))
+			return true;
 		string locKind = "";
 		string parentClass = "";
 		string parentNetId = "";
 		string slotName = "";
 		string ownerUid = "";
 		int invChildrenN = 0;
-		ReadRealLocation(obj, director, directorUid, locKind, parentClass, parentNetId, slotName, ownerUid, invChildrenN, withSurface, withSurface);
-
+		ReadRealLocation(obj,  director, directorUid, locKind, parentClass, parentNetId, slotName, ownerUid, invChildrenN, withSurface, withSurface);
 		int ownB = 0;
 		string ownLogicalId = "";
 		float spawnTickMs = 0.0;
@@ -2151,7 +2137,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			ownLogicalId = rec.m_LogicalId;
 			spawnTickMs = rec.m_SpawnTickMs;
 		}
-
 		int aliveB = 0;
 		if (obj.IsAlive())
 			aliveB = 1;
@@ -2159,24 +2144,13 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		DayZCreatureAI creature = DayZCreatureAI.Cast(obj);
 		if (creature && creature.GetAIAgent() != null)
 			aiAgentB = 1;
-
 		vector pos = obj.GetPosition();
 		vector ori = obj.GetOrientation();
-		// Salud: lo que crea el QA, directa (ReadQaHealth); los objetos del mundo, con la guarda (ReadHealth: -1/-1 sin
-		// sistema de daño inicializado, p. ej. restos de vehiculo del mapa). Todos los valores de la fila se calculan
-		// antes de insertarla (AppendRow al final), asi una excepcion no deja una fila a medias.
 		float maxHp = 0.0;
 		float healthHp = 0.0;
-		if (EntityAI.Cast(obj))
-		{
-			if (IsQaCreated(obj))
-				ReadQaHealth(obj, maxHp, healthHp);
-			else
-				ReadHealth(obj, maxHp, healthHp);
-		}
-
+		if (EntityAI.Cast(obj)) { if (IsQaCreated(obj)) ReadQaHealth(obj,  maxHp, healthHp); else ReadHealth(obj, maxHp, healthHp); }
 		array<string> svals = new array<string>();
-		svals.Insert(className);
+		svals.Insert(obj.GetType());
 		svals.Insert(locKind);
 		svals.Insert(parentClass);
 		svals.Insert(parentNetId);
@@ -2185,7 +2159,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		svals.Insert(ownLogicalId);
 		svals.Insert(FormatNetId(obj));
 		svals.Insert(FormatPersId(obj));
-
 		array<float> nvals = new array<float>();
 		nvals.Insert(ownB);
 		nvals.Insert(inRadiusB);
@@ -2201,22 +2174,17 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		nvals.Insert(healthHp);
 		nvals.Insert(invChildrenN);
 		nvals.Insert(spawnTickMs);
-		if (withSurface)
-		{
-			// surface_y_m, la ultima columna y solo con select_all_entityai_b = 1: SurfaceY (game.c:1176)
-			nvals.Insert(g_Game.SurfaceY(pos[0], pos[2]));
-		}
-
+		if (withSurface) { nvals.Insert(g_Game.SurfaceY(pos[0], pos[2])); }
 		bool appended = m_Jobs.AppendRow(jobId, nvals, svals);
-		if (appended)
-			seen.Insert(obj);
-		else
+		if (!appended)
 		{
 			m_CaptureFailed = true;
 			m_CaptureFailReason = "capture_truncated";
 			m_CaptureFailJobId = jobId;
+			return false;
 		}
-		return appended;
+		seen.Insert(obj);
+		return true;
 	}
 
 	protected void HandleCensusStart(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
@@ -2226,95 +2194,83 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		float centerZ = GetNumArg(args, "center_z_m", 0.0);
 		float radiusM = GetNumArg(args, "radius_m", 60.0);
 		int includeDirectorB = (int)GetNumArg(args, "include_director_b", 0.0);
-
-		// Modo opt-in select_all_entityai_b (0 o 1, por defecto 0). Con 0 nada de lo de abajo cambia: ni filas, ni columnas,
-		// ni tope de radio (S-persist usa discos grandes). Con 1 el radio tiene que estar en (0, 120]; los rechazos salen
-		// antes de StartJob y de cualquier efecto.
-		float selectAllRaw = GetNumArg(args, "select_all_entityai_b", 0.0);
-		if (selectAllRaw != 0.0 && selectAllRaw != 1.0)
+		float selectAllRaw = GetNumArg(args,  "select_all_entityai_b", 0.0);
+		bool censusBadArgs = false;
+		if (selectAllRaw != 0.0 && selectAllRaw != 1.0) censusBadArgs = true;
+		int selectAllB = (int) selectAllRaw;
+		if (selectAllB == 1 && ( radiusM <= 0.0 || radiusM > CENSUS_ALL_RADIUS_MAX ))
+			censusBadArgs = true;
+		if (censusBadArgs)
 		{
-			res.status = "rejected";
-			res.reason = "bad_args";
+			PersistReject(res, "rejected", "bad_args");
 			return;
 		}
-		int selectAllB = (int)selectAllRaw;
-		if (selectAllB == 1 && (radiusM <= 0.0 || radiusM > CENSUS_ALL_RADIUS_MAX))
+		array<string> censusNcol;
+		censusNcol = m_CensusNcol;
+		if (selectAllB == 1) censusNcol = m_CensusNcolAll;
+		int pendingAt = 0;
+		while (pendingAt < m_PendingFinishIds.Count())
 		{
-			res.status = "rejected";
-			res.reason = "bad_args";
-			return;
+			if (m_PendingFinishIds.Get(pendingAt) != op.op_id)
+				m_PendingFinishSeen.Set(pendingAt, 1);
+			pendingAt = pendingAt + 1;
 		}
-		array<string> censusNcol = m_CensusNcol;
-		if (selectAllB == 1)
-			censusNcol = m_CensusNcolAll;
-
-		// BLOQ 6: este arranque acredita el intento de B sobre cada censo
-		// retenido; A solo se libera tras este intento o la salida acotada.
-		for (int pa = 0; pa < m_PendingFinishIds.Count(); pa++)
-		{
-			if (m_PendingFinishIds.Get(pa) != op.op_id)
-				m_PendingFinishSeen.Set(pa, 1);
-		}
-
 		string opFaultEarly = m_Probe.GetOpFault();
 		ref array<ref DSBX_QA_Job> heldJobs = new array<ref DSBX_QA_Job>();
 		if (opFaultEarly == "census_resource_bypass")
 		{
-			for (int hp = 0; hp < m_PendingFinishIds.Count(); hp++)
+			int heldAt = 0;
+			while (heldAt < m_PendingFinishIds.Count())
 			{
-				DSBX_QA_Job held = m_Jobs.GetJob(m_PendingFinishIds.Get(hp));
-				if (held)
+				DSBX_QA_Job heldJob = m_Jobs.GetJob(m_PendingFinishIds.Get(heldAt));
+				if (heldJob)
 				{
-					// Inyeccion equivalente al fake: libera el recurso solo para el chequeo de StartJob;
-					// el censo A sigue vivo y se libera mas tarde, de modo que el solapamiento es real.
-					held.m_Released = true;
-					heldJobs.Insert(held);
+					heldJob.m_Released = true;
+					heldJobs.Insert(heldJob);
 				}
+				heldAt = heldAt + 1;
 			}
 		}
-		string err = m_Jobs.StartJob(this, op.op_id, "per_census", censusNcol, m_CensusScol, 5, 4096, 900000.0, "stop");
-		for (int hr = 0; hr < heldJobs.Count(); hr++)
+		string startErr = m_Jobs.StartJob(this, op.op_id, "per_census", censusNcol, m_CensusScol, 5, 4096, 900000.0, "stop");
+		int restoreAt = 0;
+		while (restoreAt < heldJobs.Count())
 		{
-			DSBX_QA_Job heldBack = heldJobs.Get(hr);
+			DSBX_QA_Job heldBack = heldJobs.Get(restoreAt);
 			if (heldBack)
 				heldBack.m_Released = false;
+			restoreAt = restoreAt + 1;
 		}
-		if (err != "")
+		if (startErr != "")
 		{
-			res.status = "rejected";
-			res.reason = err;
+			PersistReject(res, "rejected", startErr);
 			return;
 		}
 		DSBX_QA_Job job = m_Jobs.GetJob(op.op_id);
 		if (job)
-		{
 			job.m_ExtHandlesDeadman = true;
-		}
-
-		string opFault = m_Probe.GetOpFault();
-		if (opFault == "drop_ctrl_pre_restart")
+		if (m_Probe.GetOpFault() == "drop_ctrl_pre_restart")
 		{
-			for (int d = m_RawRecords.Count() - 1; d >= 0; d--)
+			int dropAt = m_RawRecords.Count() - 1;
+			while (dropAt >= 0)
 			{
-				DSBX_QA_PersistRawRecord rraw = m_RawRecords.Get(d);
-				if (rraw && rraw.m_Mode == "persistent_control")
+				DSBX_QA_PersistRawRecord rawEntry = m_RawRecords.Get(dropAt);
+				if (rawEntry && rawEntry.m_Mode == "persistent_control")
 				{
-					if (IsObjectAlive(rraw.m_ChildEnt))
-						g_Game.ObjectDelete(rraw.m_ChildEnt);
-					if (IsObjectAlive(rraw.m_RefEnt))
-						g_Game.ObjectDelete(rraw.m_RefEnt);
-					m_RawRecords.RemoveOrdered(d);
+					if (IsObjectAlive(rawEntry.m_ChildEnt))
+						g_Game.ObjectDelete(rawEntry.m_ChildEnt);
+					if (IsObjectAlive(rawEntry.m_RefEnt))
+						g_Game.ObjectDelete(rawEntry.m_RefEnt);
+					m_RawRecords.RemoveOrdered(dropAt);
 				}
+				dropAt = dropAt - 1;
 			}
 		}
-
 		string directorUid = "";
 		int presentB = 0;
 		int aliveB = 0;
 		int invReadableB = 0;
 		int invCountN = 0;
 		Man director = FindDirectorMan(directorUid, presentB, aliveB, invReadableB, invCountN);
-
 		array<Object> seen = new array<Object>();
 		m_CaptureFailed = false;
 		m_CaptureFailReason = "";
@@ -2327,86 +2283,73 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			m_CaptureFailReason = "lease_expired";
 			m_CaptureFailJobId = op.op_id;
 		}
-		// GetObjectsAtPosition3D: P:/scripts/3_game/global/game.c:930.
 		vector centerPos = Vector(centerX, g_Game.SurfaceY(centerX, centerZ), centerZ);
 		array<Object> nearObjs = new array<Object>();
 		array<CargoBase> nearCargos = new array<CargoBase>();
 		g_Game.GetObjectsAtPosition3D(centerPos, radiusM, nearObjs, nearCargos);
-
-		for (int i = 0; i < nearObjs.Count(); i++)
+		int nearAt = 0;
+		while (nearAt < nearObjs.Count())
 		{
-			Object obj = nearObjs.Get(i);
+			Object obj = nearObjs.Get(nearAt);
+			nearAt = nearAt + 1;
 			if (!IsObjectAlive(obj))
 				continue;
 			if (director && obj == director)
 				continue;
-			string cname = obj.GetType();
 			bool includeObj = false;
-			if (selectAllB == 1)
-			{
-				// Todo EntityAI del disco; lo que no es EntityAI (arboles, rocas) queda fuera.
-				if (EntityAI.Cast(obj) != null)
-					includeObj = true;
-				// Con el tope de filas ya cumplido el trabajo esta en failed/rows_cap: no se sigue recorriendo.
-				if (m_Jobs.GetState(op.op_id) != "running")
-					break;
-			}
-			else if (FindRecordByObject(obj) != null)
+			if (selectAllB == 1 && EntityAI.Cast(obj) != null)
 				includeObj = true;
-			else if (IsSentinelClass(cname))
+			if (selectAllB != 1 && FindRecordByObject(obj) != null)
 				includeObj = true;
-			else if (DayZCreatureAI.Cast(obj) != null)
+			if (selectAllB != 1 && IsSentinelClass(obj.GetType()))
 				includeObj = true;
-
+			if (selectAllB != 1 && DayZCreatureAI.Cast(obj) != null)
+				includeObj = true;
+			if (selectAllB == 1 && m_Jobs.GetState(op.op_id) != "running")
+				break;
 			if (!includeObj)
 				continue;
-
-			if (!AppendEntityCensusRow(op.op_id, obj, 1, director, directorUid, seen, selectAllB == 1))
-				break;
+			if (!AppendEntityCensusRow(op.op_id, obj, 1, director, directorUid, seen, selectAllB == 1)) break;
 			EntityAI ent = EntityAI.Cast(obj);
 			if (ent && ent.GetInventory())
 			{
 				array<EntityAI> subItems = new array<EntityAI>();
 				ent.GetInventory().EnumerateInventory(InventoryTraversalType.PREORDER, subItems);
 				bool subOk = true;
-				for (int sub = 0; sub < subItems.Count(); sub++)
+				int sub = 0;
+				while (sub < subItems.Count())
 				{
 					EntityAI subEnt = subItems.Get(sub);
-					if (subEnt && subEnt != ent)
+					sub = sub + 1;
+					if (subEnt && subEnt != ent && !AppendEntityCensusRow(op.op_id, subEnt, 1, director, directorUid, seen, selectAllB == 1))
 					{
-						if (!AppendEntityCensusRow(op.op_id, subEnt, 1, director, directorUid, seen, selectAllB == 1))
-						{
-							subOk = false;
-							break;
-						}
+						subOk = false;
+						break;
 					}
 				}
 				if (!subOk)
 					break;
 			}
 		}
-
-		// Las criaturas propias que salieron del disco solo cuentan en el modo de S-persist (m_Records no pinta nada
-		// en el modo select_all_entityai_b).
-		int recLimit = m_Records.Count();
-		if (selectAllB == 1)
-			recLimit = 0;
-		for (int r = 0; r < recLimit; r++)
+		int recLimit = 0;
+		if (selectAllB != 1) recLimit = m_Records.Count();
+		int recAt = 0;
+		while (recAt < recLimit)
 		{
-			DSBX_QA_PersistRecord rec = m_Records.Get(r);
-			if (!rec || !IsObjectAlive(rec.m_RefEnt))
-				continue;
-			if (rec.m_Cat != "infected" && rec.m_Cat != "animal")
+			DSBX_QA_PersistRecord rec = m_Records.Get(recAt);
+			recAt = recAt + 1;
+			bool ownCreature = false;
+			if (rec && IsObjectAlive(rec.m_RefEnt) && rec.m_Cat == "infected")
+				ownCreature = true;
+			if (rec && IsObjectAlive(rec.m_RefEnt) && rec.m_Cat == "animal")
+				ownCreature = true;
+			if (!ownCreature)
 				continue;
 			float dx = rec.m_ReqXM - centerX;
 			float dz = rec.m_ReqZM - centerZ;
-			if ((dx * dx + dz * dz) <= (radiusM * radiusM))
-			{
-				if (!AppendEntityCensusRow(op.op_id, rec.m_RefEnt, 0, director, directorUid, seen, selectAllB == 1))
-					break;
-			}
+			if (dx * dx + dz * dz <= radiusM * radiusM && !AppendEntityCensusRow(op.op_id, rec.m_RefEnt, 0, director, directorUid, seen, selectAllB == 1))
+				break;
 		}
-
 		if (includeDirectorB != 0 && director)
 		{
 			EntityAI dirEnt = EntityAI.Cast(director);
@@ -2414,18 +2357,16 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			{
 				array<EntityAI> dirItems = new array<EntityAI>();
 				dirEnt.GetInventory().EnumerateInventory(InventoryTraversalType.PREORDER, dirItems);
-				for (int di = 0; di < dirItems.Count(); di++)
+				int di = 0;
+				while (di < dirItems.Count())
 				{
 					EntityAI dItem = dirItems.Get(di);
-					if (dItem && dItem != dirEnt)
-					{
-						if (!AppendEntityCensusRow(op.op_id, dItem, 1, director, directorUid, seen, selectAllB == 1))
-							break;
-					}
+					di = di + 1;
+					if (dItem && dItem != dirEnt && !AppendEntityCensusRow(op.op_id, dItem, 1, director, directorUid, seen, selectAllB == 1))
+						break;
 				}
 			}
 		}
-
 		m_PendingFinishIds.Insert(op.op_id);
 		m_PendingFinishTicks.Insert(CENSUS_FINISH_AFTER_ATTEMPT_TICKS);
 		m_PendingFinishSeen.Insert(0);
@@ -2435,10 +2376,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutStr(res.read, "area_tag", areaTag);
 		PutStr(res.read, "server_epoch", m_Probe.GetInst());
 		PutStr(res.read, "director_uid", directorUid);
-
-		float captureWallMs = m_Probe.NowMs() - m_CensusCaptureStartMs;
 		PutNum(res.read, "snap_tick_ms", m_CensusCaptureStartMs);
-		PutNum(res.read, "capture_wall_ms", captureWallMs);
+		PutNum(res.read, "capture_wall_ms", m_Probe.NowMs() - m_CensusCaptureStartMs);
 		PutNum(res.read, "snap_frame", m_Probe.m_Frame);
 		PutNum(res.read, "rows_captured_n", seen.Count());
 		PutNum(res.read, "center_x_m", centerX);
@@ -2450,7 +2389,6 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		PutNum(res.read, "director_inv_count_n", invCountN);
 	}
 
-	// ---------------------------------------------------------------- creation witness (per_witness_start)
 	protected void ResetWitness()
 	{
 		DSBX_QA_Witness.Disable();
