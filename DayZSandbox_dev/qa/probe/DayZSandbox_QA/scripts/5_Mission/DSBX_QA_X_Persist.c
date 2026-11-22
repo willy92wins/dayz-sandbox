@@ -2365,7 +2365,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				res.reason = "director_not_ready";
 				return;
 			}
-			if (!SubtreeBornInInventory(rec.m_RefEnt))
+			if (!SubtreeBornInInventory(EntityAI.Cast(rec.m_RefEnt)))
 			{
 				res.status = "rejected";
 				res.reason = "bad_args";
@@ -2431,7 +2431,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				return;
 			}
 			EntityAI targetEnt = EntityAI.Cast(targetRec.m_RefEnt);
-			if (targetEnt && targetEnt.GetHierarchyRootPlayer() != null && !SubtreeBornInInventory(rec.m_RefEnt))
+			if (targetEnt && targetEnt.GetHierarchyRootPlayer() != null && !SubtreeBornInInventory(EntityAI.Cast(rec.m_RefEnt)))
 			{
 				res.status = "rejected";
 				res.reason = "bad_args";
