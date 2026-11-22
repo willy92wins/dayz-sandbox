@@ -153,6 +153,20 @@ class DSBX_QA_PersistWitnessFollow : Managed
 	}
 }
 
+class DSBX_QA_PersistPurgeRow : Managed
+{
+	string m_ClassName;
+	string m_PersId;
+	string m_OwnerUid;
+
+	void DSBX_QA_PersistPurgeRow()
+	{
+		m_ClassName = "";
+		m_PersId = "0:0:0:0";
+		m_OwnerUid = "";
+	}
+}
+
 class DSBX_QA_X_Persist : DSBX_QA_Ext
 {
 	static const int FLAG_ECE_CREATEPHYSICS = 1024;
@@ -204,6 +218,13 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	protected string m_CaptureFailJobId;
 	protected int m_LastApplyRetainedSkipped;
 	protected bool m_PersistRawKitOk;
+	// P2b: la purga de arranque (una por proceso) y su registro per_purge_read.
+	protected ref array<ref DSBX_QA_PersistPurgeRow> m_PurgeRows;
+	protected bool m_DirectorPurgeDone;
+	protected bool m_HasAppliedScene;
+	protected float m_PurgeTickMs;
+	protected int m_PurgeFrame;
+	protected int m_PurgedN;
 	// Presupuesto verificable de captura del censo (MEN-14); el cupo de filas llega por StartJob.
 	static const float CENSUS_CAPTURE_BUDGET_MS = 120000.0;
 	// BLOQ 6: A retiene per_census hasta acreditar el intento de B; salida acotada.
@@ -239,6 +260,12 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_CaptureFailReason = "";
 		m_CaptureFailJobId = "";
 		m_LastApplyRetainedSkipped = 0;
+		m_PurgeRows = new array<ref DSBX_QA_PersistPurgeRow>();
+		m_DirectorPurgeDone = false;
+		m_HasAppliedScene = false;
+		m_PurgeTickMs = 0.0;
+		m_PurgeFrame = 0;
+		m_PurgedN = 0;
 
 		InitSentinelClasses();
 		InitCensusColumns();
@@ -335,6 +362,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		if (role != "server")
 			return false;
 		if (verb == "per_status")
+			return true;
+		if (verb == "per_purge_read")
 			return true;
 		if (verb == "per_apply_scene")
 			return true;
@@ -960,6 +989,13 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			return;
 		}
 
+		// per_purge_read tambien observa (instantaneo, sin efecto): legible aun con lease caducado.
+		if (verb == "per_purge_read" && m_Probe)
+		{
+			HandlePurgeRead(op, args, res);
+			return;
+		}
+
 		// LeaseOk: DSBX_QA_Probe.c:447; guarda de entrada y antes de cada efecto (E1).
 		if (!m_Probe || !m_Probe.LeaseOk())
 		{
@@ -1050,6 +1086,34 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			res.read.scell.Insert(lastOp);
 			res.read.ncell.Insert(genN);
 			res.read.ncell.Insert(aliveN);
+		}
+	}
+
+	protected void HandlePurgeRead(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
+	{
+		res.status = "done";
+		EnsurePayloadHas(res.read);
+		PutStr(res.read, "server_epoch", m_Probe.m_Inst);
+		if (m_DirectorPurgeDone)
+			PutStr(res.read, "purge_state", "done");
+		else
+			PutStr(res.read, "purge_state", "pending");
+		PutNum(res.read, "purge_tick_ms", m_PurgeTickMs);
+		PutNum(res.read, "purge_frame", (float)m_PurgeFrame);
+		PutNum(res.read, "purged_n", (float)m_PurgedN);
+		res.read.scol.Insert("class_name");
+		res.read.scol.Insert("pers_id");
+		res.read.scol.Insert("owner_uid");
+		int purgeRowN = m_PurgeRows.Count();
+		res.read.rows = purgeRowN;
+		int purgeRowI = 0;
+		while (purgeRowI < purgeRowN)
+		{
+			DSBX_QA_PersistPurgeRow purgeRow = m_PurgeRows.Get(purgeRowI);
+			res.read.scell.Insert(purgeRow.m_ClassName);
+			res.read.scell.Insert(purgeRow.m_PersId);
+			res.read.scell.Insert(purgeRow.m_OwnerUid);
+			purgeRowI = purgeRowI + 1;
 		}
 	}
 
@@ -1486,6 +1550,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		int scIdxDone = FindSceneIndex(sceneId);
 		if (scIdxDone >= 0)
 			m_SceneLastRetainedSkipped.Set(scIdxDone, m_LastApplyRetainedSkipped);
+		m_HasAppliedScene = true;
 		res.status = "done";
 		EmitApplyResponse(res.read, sceneId, sceneOpId, pathway, genN, 0);
 	}
@@ -2602,6 +2667,81 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	override void OnTick(float timeslice)
 	{
 		TickWitness();
+		// P2b: limpieza al arrancar de un proceso nuevo (epoch nuevo, aun sin aplicar ninguna escena):
+		// la prenda QA que un jugador trae en su inventario viene de su personaje guardado y se
+		// borra antes del primer censo; en el arranque inicial no hay clases centinela en el
+		// director (t0 aborta si las hay), asi que no se toca nada ajeno. Con lease vencido se
+		// reintenta en el tick siguiente (E1: borrar es un efecto).
+		if (!m_DirectorPurgeDone)
+		{
+			if (m_HasAppliedScene)
+			{
+				m_DirectorPurgeDone = true;
+			}
+			else if (m_Probe && m_Probe.LeaseOk())
+			{
+				string purgeUid = "";
+				int purgePresentB = 0;
+				int purgeAliveB = 0;
+				int purgeReadableB = 0;
+				int purgeCountN = 0;
+				Man purgeDirector = FindDirectorMan(purgeUid, purgePresentB, purgeAliveB, purgeReadableB, purgeCountN);
+				if (purgeDirector)
+				{
+					int purgedN = 0;
+					array<Man> purgePlayers = new array<Man>();
+					g_Game.GetPlayers(purgePlayers);
+					int pp = 0;
+					while (pp < purgePlayers.Count())
+					{
+						Man purgeMan = purgePlayers.Get(pp);
+						pp = pp + 1;
+						if (!purgeMan)
+							continue;
+						string manUid = "";
+						PlayerIdentity manIdent = purgeMan.GetIdentity();
+						if (manIdent)
+							manUid = manIdent.GetId();
+						EntityAI manEnt = EntityAI.Cast(purgeMan);
+						if (!manEnt || !manEnt.GetInventory())
+							continue;
+						array<EntityAI> purgeItems = new array<EntityAI>();
+						manEnt.GetInventory().EnumerateInventory(InventoryTraversalType.PREORDER, purgeItems);
+						array<EntityAI> purgeDoomed = new array<EntityAI>();
+						int pi = 0;
+						while (pi < purgeItems.Count())
+						{
+							EntityAI purgeItem = purgeItems.Get(pi);
+							pi = pi + 1;
+							if (purgeItem && purgeItem != manEnt && IsSentinelClass(purgeItem.GetType()))
+								purgeDoomed.Insert(purgeItem);
+						}
+						int pd = 0;
+						while (pd < purgeDoomed.Count())
+						{
+							EntityAI doomedItem = purgeDoomed.Get(pd);
+							pd = pd + 1;
+							if (!doomedItem)
+								continue;
+							if (m_PurgeRows.Count() < 8)
+							{
+								DSBX_QA_PersistPurgeRow purgeRow = new DSBX_QA_PersistPurgeRow();
+								purgeRow.m_ClassName = doomedItem.GetType();
+								purgeRow.m_PersId = FormatPersId(doomedItem);
+								purgeRow.m_OwnerUid = manUid;
+								m_PurgeRows.Insert(purgeRow);
+							}
+							g_Game.ObjectDelete(doomedItem);
+							purgedN = purgedN + 1;
+						}
+					}
+					m_PurgedN = purgedN;
+					m_PurgeTickMs = m_Probe.NowMs();
+					m_PurgeFrame = m_Probe.m_Frame;
+					m_DirectorPurgeDone = true;
+				}
+			}
+		}
 		// BLOQ 6: la ocupacion se mantiene hasta acreditar el intento de B
 		// (m_PendingFinishSeen) o hasta CENSUS_HOLD_MAX_MS desde el inicio;
 		// el solapamiento se acredita con snap_tick de B < released_tick de A.

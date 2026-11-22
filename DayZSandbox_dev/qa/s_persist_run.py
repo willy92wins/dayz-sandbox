@@ -36,6 +36,8 @@ TERMINAL_STATES = ("done", "failed", "stopped", "expired")
 T0_DIRECTOR_TIMEOUT_S = 300.0
 T0_DIRECTOR_POLL_S = 2.0
 T4_DIRECTOR_TIMEOUT_S = 300.0
+# t4: sondeo del registro de la purga de arranque dentro de la ventana del director.
+T4_PURGE_POLL_S = 1.0
 # Holgura del primer disco t5: en partida la latencia del censo varia mucho
 # mas que offline y cada reintento es otro censo grande (GetObjectsAtPosition3D),
 # asi que el radio inicial cubre el alcance estimado con margen acotado.
@@ -1159,6 +1161,80 @@ def _wait_for_director_t0(ctx, *, timeout_s=None, poll_s=None, monotonic=None, s
     return last, polls, waited_ms, ready
 
 
+def _purge_read_done(st, expected_epoch):
+    """True si `per_purge_read` ya acredita la purga del epoch nuevo (`purge_state == done`)."""
+    if st is None or getattr(st, "status", None) != "done":
+        return False
+    payload = getattr(st, "payload", None)
+    if not payload:
+        return False
+    try:
+        strings = payload.get("str") or {}
+    except AttributeError:
+        return False
+    if str(strings.get("purge_state") or "") != "done":
+        return False
+    return expected_epoch == "" or str(strings.get("server_epoch") or "") == expected_epoch
+
+
+def _read_purge_t4(ctx, *, server_epoch_new="", timeout_s=None, poll_s=None,
+                   monotonic=None, sleep=None):
+    """t4: lee `per_purge_read` tras dar al director por presente y antes del primer censo t5.
+
+    Si sale `pending`, reintenta dentro de la ventana del director. Si no llega
+    a `done`, devuelve la ultima lectura: el runner sigue y lo deja en la
+    evidencia (lo juzga el oraculo).
+    """
+    timeout = T4_DIRECTOR_TIMEOUT_S if timeout_s is None else float(timeout_s)
+    interval = T4_PURGE_POLL_S if poll_s is None else float(poll_s)
+    clock = time.monotonic if monotonic is None else monotonic
+    sleeper = time.sleep if sleep is None else sleep
+    started = clock()
+    deadline = started + max(0.0, timeout)
+    polls = 0
+    last = None
+    done = False
+    while True:
+        last = f03_common.issue_one(ctx, "server", "per_purge_read", wire.empty_payload())
+        polls += 1
+        if _purge_read_done(last, server_epoch_new):
+            done = True
+            break
+        if clock() >= deadline:
+            break
+        sleeper(interval)
+    waited_ms = int(round(max(0.0, clock() - started) * 1000.0))
+    purge_state = ""
+    purge_tick_ms = 0.0
+    purge_frame = 0.0
+    purged_n = 0.0
+    rows = []
+    if last is not None and getattr(last, "payload", None):
+        try:
+            purge_state = str(last.payload["str"].get("purge_state") or "")
+            purge_tick_ms = float(last.payload["num"].get("purge_tick_ms", 0.0))
+            purge_frame = float(last.payload["num"].get("purge_frame", 0.0))
+            purged_n = float(last.payload["num"].get("purged_n", 0.0))
+            rows = list(last.payload.get("rows") or [])
+        except (KeyError, TypeError, ValueError, AttributeError):
+            pass
+    ctx.record_scenario({
+        "ev": "t4_purge_read",
+        "status": getattr(last, "status", ""),
+        "reason": getattr(last, "reason", ""),
+        "server_epoch": server_epoch_new,
+        "purge_state": purge_state,
+        "purge_tick_ms": purge_tick_ms,
+        "purge_frame": purge_frame,
+        "purged_n": purged_n,
+        "rows": rows,
+        "polls": polls,
+        "waited_ms": waited_ms,
+        "done_b": 1 if done else 0,
+    })
+    return last, polls, waited_ms, done
+
+
 def _restart_server_live(ctx, old_epoch, director_uid_t0):
     """t4 en diag/retail: el operador reinicia DayZServer y reconecta el mismo director."""
     instructions = (
@@ -1836,6 +1912,13 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 "server_epoch_old": server_epoch_old,
                 "server_epoch_new": server_epoch_new,
             })
+
+            # P2b: registro de la purga de arranque del epoch nuevo, antes del primer censo t5.
+            # Con `pending` se reintenta dentro de la ventana del director; si no llega a
+            # `done`, se sigue y queda en la evidencia para que lo juzgue el oraculo.
+            _purge_last, _purge_polls, _purge_waited_ms, _purge_done = _read_purge_t4(
+                ctx, server_epoch_new=server_epoch_new,
+            )
 
             events_after_restart = _bridge_events(ctx)
             hello_t_ms = _bridge_hello_t(events_after_restart, server_epoch_new)

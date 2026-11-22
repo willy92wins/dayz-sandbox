@@ -29,6 +29,7 @@ RPC_BASE = 26102800
 
 SERVER_VERBS = frozenset({
     "per_status",
+    "per_purge_read",
     "per_apply_scene",
     "per_reset_scene",
     "per_child_transition",
@@ -316,6 +317,13 @@ class PersistFakeExt(FakeExt):
         # Duracion simulada de la captura del censo (la fijan los tests); se
         # refleja en capture_wall_ms. Por defecto 0, como hasta ahora.
         self.capture_delay_ms = 0.0
+        # P2b: espejo de la purga de arranque del .c y de su registro per_purge_read.
+        self.director_purge_done = False
+        self.has_applied = False
+        self.purge_tick_ms = 0.0
+        self.purge_frame = 0
+        self.purged_n = 0
+        self.purge_rows = []
 
     def _state_file(self):
         cfg = getattr(self.peer, "config", None)
@@ -782,6 +790,8 @@ class PersistFakeExt(FakeExt):
         fault = op.get("qa_fault", "")
         if verb == "per_status":
             return self._op_status(args_unpacked)
+        if verb == "per_purge_read":
+            return self._op_purge_read(args_unpacked)
         if verb == "per_cleanup_qa":
             return self._op_cleanup(args_unpacked)
         if not self.peer.lease_valid():
@@ -838,6 +848,26 @@ class PersistFakeExt(FakeExt):
             scalars_num=n,
             num_cols=["gen_n", "own_alive_n"],
             str_cols=["scene_id", "last_op_id"],
+            row_dicts=rows,
+        )
+        return ("done", "", payload)
+
+    def _op_purge_read(self, args_unpacked):
+        s = {
+            "server_epoch": self.epoch,
+            "purge_state": "done" if self.director_purge_done else "pending",
+        }
+        n = {
+            "purge_tick_ms": float(self.purge_tick_ms),
+            "purge_frame": float(self.purge_frame),
+            "purged_n": float(self.purged_n),
+        }
+        rows = [dict(r) for r in self.purge_rows]
+        payload = wire.pack_payload(
+            scalars_str=s,
+            scalars_num=n,
+            num_cols=[],
+            str_cols=["class_name", "pers_id", "owner_uid"],
             row_dicts=rows,
         )
         return ("done", "", payload)
@@ -1085,6 +1115,7 @@ class PersistFakeExt(FakeExt):
         ]
         self.scene_gen[scene_id] = gen_n
         self.scene_last_op[scene_id] = scene_op_id
+        self.has_applied = True
         self.scene_applied[scene_id] = {
             "scene_op_id": scene_op_id,
             "s": dict(s),
@@ -1895,6 +1926,12 @@ class PersistFakeExt(FakeExt):
     def simulate_world_restart(self):
         self.peer.inst = secrets.token_hex(16)
         self.epoch = self.peer.inst
+        self.director_purge_done = False
+        self.has_applied = False
+        self.purge_tick_ms = 0.0
+        self.purge_frame = 0
+        self.purged_n = 0
+        self.purge_rows = []
         keep = {}
         for net_id, ent in self.world.items():
             if ent["owner_uid"] == self.director_uid or ent["persistent"]:
@@ -1919,6 +1956,34 @@ class PersistFakeExt(FakeExt):
         self._save_state()
 
     def on_tick(self, timeslice_s):
+        # Espejo de la limpieza al arrancar del .c: en un proceso nuevo (aun
+        # sin aplicar), lo centinela del director viene de su personaje
+        # guardado y se borra antes del primer censo. Con lease vencido no
+        # corre y queda pending (E1: borrar es un efecto).
+        if not self.director_purge_done:
+            if self.has_applied:
+                self.director_purge_done = True
+            elif self.peer is not None and self.peer.lease_valid():
+                purged = []
+                for ent in list(self.world.values()):
+                    if (
+                        ent["alive"]
+                        and ent["owner_uid"] == self.director_uid
+                        and ent["class_name"] in SENTINEL_CLASSES
+                    ):
+                        purged.append(ent)
+                for ent in purged:
+                    self.purge_rows.append({
+                        "class_name": ent["class_name"],
+                        "pers_id": ent["pers_id"],
+                        "owner_uid": ent["owner_uid"],
+                    })
+                    self._delete_entity(ent)
+                self.purged_n = len(purged)
+                self.purge_rows = self.purge_rows[:8]
+                self.purge_tick_ms = float(self.peer.local_ms())
+                self.purge_frame = int(self.peer.frame)
+                self.director_purge_done = True
         self._tick_witness()
         # BLOQ 6: A mantiene la ocupacion hasta acreditar el intento de B
         # (entonces termina en pocos ticks, con released_tick posterior al
