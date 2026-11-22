@@ -30,6 +30,7 @@ FIXTURE_PATH = QA_DIR / "fixtures" / "s_persist_fixture.json"
 IN_SCOL = ["logical_id", "parent_id", "cat", "class_name", "slot_name"]
 IN_NCOL = ["req_x_m", "req_z_m", "req_yaw_deg", "health_mark_ratio", "must_vanish_b"]
 TERMINAL_STATES = ("done", "failed", "stopped", "expired")
+PURGE_PAGE_SIZE = 8
 # En partida el director puede tardar en entrar en el mundo tras el hello del
 # cliente (24 s medidos el 16-nov) y en volver tras el reinicio de t4 (hello a
 # los 65,7 s + unos 24 s hasta estar en el mundo): ambas esperas dan 300 s.
@@ -940,8 +941,47 @@ def _job_free(ctx, job_id, target_inst=None):
     )
 
 
-def _read_job_pages_target(ctx, job_id, *, target_inst="", timeout_ms=30000):
-    """read_job_pages no admite target_inst: pagina una a una con issue_one."""
+def _read_job_pages_target(ctx, job_id, *, target_inst="", timeout_ms=30000,
+                           page_size=None, expected_resource=None, require_job=False):
+    """read_job_pages no admite target_inst: pagina una a una con issue_one.
+
+    MEN 7: con page_size/expected_resource/require_job se valida la rodaja
+    contractual antes de abrir t5: job == op_id, recurso, indice de pagina,
+    estado terminal y tamano (pagina p: filas 8p..8p+7; la ultima, el resto).
+    """
+    def _int_num(payload, key):
+        v = payload["num"].get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        if not math.isfinite(float(v)) or not float(v).is_integer():
+            return None
+        return int(v)
+
+    def _check_page(payload, page_idx, *, state, rows_total_n, pages_n):
+        if require_job and str(payload["str"].get("job") or "") != str(job_id):
+            raise ValueError(f"job_read page {page_idx} job mismatch")
+        if expected_resource is not None and str(payload["str"].get("resource") or "") != expected_resource:
+            raise ValueError(f"job_read page {page_idx} resource mismatch")
+        if str(payload["str"].get("state") or "") != state:
+            raise ValueError(f"job_read page {page_idx} state mismatch")
+        got_page = _int_num(payload, "page_n")
+        if got_page != page_idx:
+            raise ValueError(f"job_read page {page_idx} index mismatch: {got_page!r}")
+        got_pages = _int_num(payload, "pages_n")
+        if got_pages != pages_n:
+            raise ValueError(f"job_read page {page_idx} pages_n mismatch: {got_pages!r}")
+        got_total = _int_num(payload, "rows_total_n")
+        if got_total != rows_total_n:
+            raise ValueError(f"job_read page {page_idx} rows_total_n mismatch: {got_total!r}")
+        page_rows = list(payload.get("rows") or [])
+        if page_size is not None:
+            expected_n = min(page_size, max(0, rows_total_n - page_size * page_idx))
+            if len(page_rows) != expected_n:
+                raise ValueError(
+                    f"job_read page {page_idx} slice mismatch: {len(page_rows)} != {expected_n}"
+                )
+        return page_rows
+
     p0 = f03_common.issue_one(
         ctx, "server", "job_read",
         wire.pack_payload({"job": job_id}, {"page_n": 0}),
@@ -954,7 +994,11 @@ def _read_job_pages_target(ctx, job_id, *, target_inst="", timeout_ms=30000):
         raise ValueError(f"read_job_pages requires terminal job state, got {state!r}")
     rows_total_n = int(p0.payload["num"]["rows_total_n"])
     pages_n = int(p0.payload["num"]["pages_n"])
-    rows = list(p0.payload["rows"])
+    if page_size is not None:
+        expected_pages = 0 if rows_total_n == 0 else (rows_total_n + page_size - 1) // page_size
+        if pages_n != expected_pages:
+            raise ValueError(f"job_read pages_n mismatch: {pages_n} != {expected_pages}")
+    rows = _check_page(p0.payload, 0, state=state, rows_total_n=rows_total_n, pages_n=pages_n)
     raw_pages = [{"page_n": 0, "str": dict(p0.payload.get("str") or {}),
                   "num": dict(p0.payload.get("num") or {}),
                   "rows": list(p0.payload.get("rows") or [])}]
@@ -966,9 +1010,8 @@ def _read_job_pages_target(ctx, job_id, *, target_inst="", timeout_ms=30000):
         )
         if pi.status != "done":
             raise ValueError(f"job_read page {page_idx} returned {pi.status}/{pi.reason}")
-        if pi.payload["str"].get("state") != state:
-            raise ValueError("job_read pages disagree on state")
-        rows.extend(pi.payload["rows"])
+        rows.extend(_check_page(pi.payload, page_idx, state=state,
+                                rows_total_n=rows_total_n, pages_n=pages_n))
         raw_pages.append({"page_n": page_idx, "str": dict(pi.payload.get("str") or {}),
                           "num": dict(pi.payload.get("num") or {}),
                           "rows": list(pi.payload.get("rows") or [])})
@@ -1442,11 +1485,23 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
                 "error": str(exc),
                 "server_epoch": server_epoch_new,
             })
+        # BLOQ 1 (aclaracion 8): un OPERATOR_DONE por fichero no acredita la
+        # parada por si solo; con storage real se exige el predicado del
+        # proceso. Sin storage_env (offline) no hay proceso que consultar.
+        server_state = ""
+        if ok and storage_env is not None:
+            try:
+                server_state = _server_state(storage_env)
+            except Exception:
+                server_state = "unknown"
+            if server_state != "stopped":
+                ok = False
         ctx.record_scenario({
             "ev": "purge_cold_stop",
             "job": job_id,
             "accredited_b": 1 if ok else 0,
             "server_epoch": server_epoch_new,
+            "server_state": server_state,
         })
         ctx.record_scenario({
             "ev": "purge_not_done",
@@ -1463,15 +1518,26 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
     reason = ""
     pre_n = 0.0
     start_ok = False
+    ack_ok = False
     if start.status == "done" and start.payload:
         reported_job = str(start.payload["str"].get("job") or "")
-        if reported_job and reported_job != job_id:
+        reported_resource = str(start.payload["str"].get("resource") or "")
+        if reported_job != job_id:
             ctx.record_scenario({
                 "ev": "purge_job_mismatch",
                 "job": reported_job,
                 "op_id": job_id,
                 "server_epoch": server_epoch_new,
             })
+        if reported_resource != "per_purge":
+            ctx.record_scenario({
+                "ev": "purge_resource_mismatch",
+                "resource": reported_resource,
+                "job": job_id,
+                "server_epoch": server_epoch_new,
+            })
+        # MEN 7: el acuse con otro job o recurso no abre t5.
+        ack_ok = (reported_job == job_id and reported_resource == "per_purge")
         pre_n = float(start.payload["num"].get("pre_n", 0.0))
         state = str(start.payload["str"].get("state") or "")
         reason = str(start.payload["str"].get("reason") or "")
@@ -1484,20 +1550,71 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
             "server_epoch": server_epoch_new,
         })
     else:
-        # Aclaracion 7: timeout/lost o un rechazo que no pruebe que no arranco:
-        # se mira el trabajo con el op_id de la orden antes de darlo por perdido.
-        probe = f03_common.issue_one(
-            ctx, "server", "job_read",
-            wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
-            target_inst=server_epoch_new,
-        )
-        probe_state = ""
-        if probe.status == "done" and probe.payload:
-            probe_state = str(probe.payload["str"].get("state") or "")
-        if probe_state:
-            state = probe_state
-            reason = str(probe.payload["str"].get("reason") or "")
+        if start.status in ("timeout", "lost"):
+            # MEN 3 (aclaracion 7): timeout/lost de la orden de purga se
+            # recuperan con job_stop de ese op_id y target_inst; el slot se
+            # resuelve con una espera acotada antes de la siguiente orden.
+            if start.status == "timeout":
+                slot_state = "unknown"
+                try:
+                    slot_state = f03_common.wait_peer_idle(ctx, "server", 2000.0)
+                except Exception:
+                    slot_state = "unknown"
+                if slot_state == "timeout":
+                    ctx.record_scenario({
+                        "ev": "purge_stop_slot_busy",
+                        "job": job_id,
+                        "server_epoch": server_epoch_new,
+                    })
+                    return _cold_stop(f"start_{start.status}_{start.reason}", "", 0, 0)
+            stop = None
+            try:
+                stop = f03_common.issue_one(
+                    ctx, "server", "job_stop",
+                    wire.pack_payload(scalars_str={"job": job_id}),
+                    target_inst=server_epoch_new,
+                )
+            except Exception as exc:
+                ctx.record_scenario({
+                    "ev": "purge_stop_error",
+                    "job": job_id,
+                    "error": str(exc),
+                    "server_epoch": server_epoch_new,
+                })
+                return _cold_stop(f"start_{start.status}_stop_error", "", 0, 0)
+            ctx.record_scenario({
+                "ev": "purge_stop",
+                "status": stop.status,
+                "reason": stop.reason,
+                "job": job_id,
+                "server_epoch": server_epoch_new,
+                "recovered_from": start.status,
+            })
+            if stop.status == "done" and stop.payload:
+                state = str(stop.payload["str"].get("state") or "")
+                reason = str(stop.payload["str"].get("reason") or "")
+            stop_deadline = clock() + 10.0
+            polls = 0
+            while state not in TERMINAL_STATES and clock() < stop_deadline:
+                last = f03_common.issue_one(
+                    ctx, "server", "job_read",
+                    wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
+                    target_inst=server_epoch_new,
+                )
+                polls += 1
+                if last.status == "done" and last.payload:
+                    state = str(last.payload["str"].get("state") or "")
+                    reason = str(last.payload["str"].get("reason") or "")
+                if state in TERMINAL_STATES:
+                    break
+                sleeper(0.2)
+            if state not in TERMINAL_STATES:
+                return _cold_stop(
+                    f"start_{start.status}_no_terminal", state,
+                    int(round(max(0.0, clock() - stop_deadline + 10.0) * 1000.0)), polls,
+                )
             start_ok = True
+            ack_ok = True
             ctx.record_scenario({
                 "ev": "purge_start_probe",
                 "job": job_id,
@@ -1506,16 +1623,38 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
                 "start_reason": start.reason,
                 "server_epoch": server_epoch_new,
             })
-        elif start.status in ("timeout", "lost"):
-            return _cold_stop(f"start_{start.status}_{start.reason}", "", 0, 0)
         else:
-            ctx.record_scenario({
-                "ev": "purge_not_done",
-                "reason": f"start_{start.status}_{start.reason}",
-                "server_epoch": server_epoch_new,
-            })
-            return {"done": False, "state": "", "reason": start.reason, "rows": [],
-                    "job_id": "", "cold_stop_ok": True}
+            # Un rechazo que no prueba que no arranco: se mira el trabajo con
+            # el op_id de la orden antes de darlo por perdido.
+            probe = f03_common.issue_one(
+                ctx, "server", "job_read",
+                wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
+                target_inst=server_epoch_new,
+            )
+            probe_state = ""
+            if probe.status == "done" and probe.payload:
+                probe_state = str(probe.payload["str"].get("state") or "")
+            if probe_state:
+                state = probe_state
+                reason = str(probe.payload["str"].get("reason") or "")
+                start_ok = True
+                ack_ok = True
+                ctx.record_scenario({
+                    "ev": "purge_start_probe",
+                    "job": job_id,
+                    "state": state,
+                    "start_status": start.status,
+                    "start_reason": start.reason,
+                    "server_epoch": server_epoch_new,
+                })
+            else:
+                ctx.record_scenario({
+                    "ev": "purge_not_done",
+                    "reason": f"start_{start.status}_{start.reason}",
+                    "server_epoch": server_epoch_new,
+                })
+                return {"done": False, "state": "", "reason": start.reason, "rows": [],
+                        "job_id": "", "cold_stop_ok": True}
 
     started = clock()
     deadline = started + max(0.0, timeout)
@@ -1579,7 +1718,12 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
     pages = None
     if state in TERMINAL_STATES:
         try:
-            pages = _read_job_pages_target(ctx, job_id, target_inst=server_epoch_new, timeout_ms=30000)
+            # MEN 7: la rodaja contractual (page_size 8) y el job/recurso del
+            # trabajo antes de abrir t5; una relectura identica no cuenta dos veces.
+            pages = _read_job_pages_target(
+                ctx, job_id, target_inst=server_epoch_new, timeout_ms=30000,
+                page_size=PURGE_PAGE_SIZE, expected_resource="per_purge", require_job=True,
+            )
             rows = list(pages.get("rows") or [])
             ctx.record_scenario({
                 "ev": "purge_pages",
@@ -1612,7 +1756,8 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
         pages is not None
         and len(rows) == int(pages.get("rows_total_n", -1))
     )
-    done = state == "done" and pages_complete
+    # MEN 7: un acuse con otro job/recurso o una rodaja invalida no abre t5.
+    done = state == "done" and pages_complete and ack_ok
     if state == "done" and not pages_complete:
         ctx.record_scenario({
             "ev": "purge_pages_incomplete",
@@ -1625,6 +1770,8 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
         nd_reason = reason or state or "wait_expired"
         if state == "done" and not pages_complete:
             nd_reason = "pages_incomplete"
+        if state == "done" and pages_complete and not ack_ok:
+            nd_reason = "ack_invalid"
         ctx.record_scenario({
             "ev": "purge_not_done",
             "reason": nd_reason,
@@ -1637,6 +1784,36 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
             "job_id": job_id, "cold_stop_ok": True}
 
 
+def _bridge_events_safe(ctx):
+    try:
+        return _bridge_events(ctx)
+    except Exception:
+        return list(getattr(getattr(ctx, "bridge", None), "events", []) or [])
+
+
+def _accepted_hello_epoch(ev, threshold, old_epoch):
+    """MEN 5: epoch de un hello aceptado del servidor nuevo.
+
+    Criterio de O3: http 200 y ok distinto de false; su epoch es su inst.
+    """
+    if not isinstance(ev, dict):
+        return ""
+    if ev.get("ev") != "hello" or ev.get("http") != 200 or ev.get("ok") is False:
+        return ""
+    if ev.get("peer") != "server":
+        return ""
+    args = ev.get("args") if isinstance(ev.get("args"), dict) else {}
+    inst = str(ev.get("inst") or args.get("inst") or "")
+    if inst == "" or inst == old_epoch:
+        return ""
+    t = ev.get("t_ms")
+    if not isinstance(t, (int, float)) or not math.isfinite(float(t)):
+        return ""
+    if float(t) < float(threshold):
+        return ""
+    return inst
+
+
 def _restart_server_live(ctx, old_epoch, director_uid_t0):
     """t4 en diag/retail: el operador reinicia DayZServer y reconecta el mismo director."""
     instructions = (
@@ -1647,14 +1824,7 @@ def _restart_server_live(ctx, old_epoch, director_uid_t0):
     threshold = ctx.bridge.now_ms()
 
     def _new_server_hello(ev):
-        if ev.get("ev") != "hello" or ev.get("http") != 200 or ev.get("peer") != "server":
-            return False
-        args = ev.get("args") if isinstance(ev.get("args"), dict) else {}
-        inst = str(ev.get("inst") or args.get("inst") or "")
-        if inst == "" or inst == old_epoch:
-            return False
-        t = ev.get("t_ms")
-        return isinstance(t, (int, float)) and float(t) >= float(threshold)
+        return _accepted_hello_epoch(ev, threshold, old_epoch) != ""
 
     res = f03_common.await_operator(
         ctx,
@@ -1681,12 +1851,16 @@ def _restart_server_live(ctx, old_epoch, director_uid_t0):
             "type": type(fail_before).__name__,
         })
 
-    hello_ev = res.get("event") if isinstance(res.get("event"), dict) else {}
-    hello_args = hello_ev.get("args") if isinstance(hello_ev.get("args"), dict) else {}
-    # Aclaracion 6: el epoch nuevo sale solo de un hello aceptado del servidor
-    # nuevo; si el operador confirma sin hello (OPERATOR_DONE), no hay epoch.
-    new_epoch = str(hello_ev.get("inst") or hello_args.get("inst") or "")
-    if new_epoch == "" or new_epoch == old_epoch:
+    # MEN 5: el epoch nuevo sale solo de un hello aceptado del servidor nuevo;
+    # en modo fichero (OPERATOR_DONE) se busca tambien en la traza posterior al
+    # umbral, porque el operador no trae el evento.
+    new_epoch = _accepted_hello_epoch(res.get("event"), threshold, old_epoch)
+    if new_epoch == "":
+        for ev in _bridge_events_safe(ctx):
+            new_epoch = _accepted_hello_epoch(ev, threshold, old_epoch)
+            if new_epoch != "":
+                break
+    if new_epoch == "":
         ctx.record_scenario({
             "ev": "live_restart_failed",
             "reason": "epoch_not_from_accepted_hello",
@@ -2357,20 +2531,24 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             })
 
             server_epoch_new = _restart_server(ctx, server_epoch_old, director_uid_t0)
-            t4_status_payload = wire.pack_payload(scalars_str={"director_uid": director_uid_t0})
-            st_t4 = f03_common.issue_one(ctx, "server", "per_status", t4_status_payload,
-                                         target_inst=server_epoch_new or None)
             first_new_tick_ms = 0.0
-            if st_t4.status == "done" and st_t4.payload:
-                # Aclaracion 6: no se adopta el epoch de la respuesta; solo vale el
-                # que trae un hello aceptado del servidor nuevo.
-                first_new_tick_ms = float(st_t4.payload["num"].get("tick_ms", 0.0))
+            st_t4 = None
+            if server_epoch_new:
+                # MEN 5: sin epoch nuevo no se manda st_t4 (usaria la instancia
+                # registrada en ese momento, que puede no ser la del reinicio).
+                t4_status_payload = wire.pack_payload(scalars_str={"director_uid": director_uid_t0})
+                st_t4 = f03_common.issue_one(ctx, "server", "per_status", t4_status_payload,
+                                             target_inst=server_epoch_new)
+                if st_t4.status == "done" and st_t4.payload:
+                    # Aclaracion 6: no se adopta el epoch de la respuesta; solo vale el
+                    # que trae un hello aceptado del servidor nuevo.
+                    first_new_tick_ms = float(st_t4.payload["num"].get("tick_ms", 0.0))
             ctx.record_scenario({
                 "ev": "t4_post_restart_status",
-                "status": st_t4.status,
+                "status": st_t4.status if st_t4 is not None else "skipped_no_epoch",
                 "server_epoch_old": server_epoch_old,
                 "server_epoch_new": server_epoch_new,
-                "num": dict(st_t4.payload["num"]) if st_t4.payload else {},
+                "num": dict(st_t4.payload["num"]) if (st_t4 is not None and st_t4.payload) else {},
             })
 
             open_t5 = False

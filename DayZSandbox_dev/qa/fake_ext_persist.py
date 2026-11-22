@@ -19,6 +19,7 @@ import json
 import math
 import re
 import secrets
+import time
 from pathlib import Path
 
 import wire
@@ -952,6 +953,17 @@ class PersistFakeExt(FakeExt):
                 break
             cur = self.world.get(parent_nid)
         return ""
+
+    def _lease_age_at_ms(self, now_ms):
+        # MEN 4: misma muestra temporal que emit_tick_ms; espejo de
+        # fake_peer.lease_age_ms pero evaluado en el instante de la emision.
+        last_ok_ms = getattr(self.peer, "last_ok_ms", None)
+        if last_ok_ms is not None:
+            return max(0.0, float(now_ms) - float(last_ok_ms))
+        last_ok = getattr(self.peer, "last_ok", None)
+        if last_ok is not None:
+            return max(0.0, (time.monotonic() - float(last_ok)) * 1000.0)
+        return 1.0e9
 
     def _subtree_born_in_inventory(self, ent):
         # MENOR 15: espejo del .c; todo registro del subarbol que se mueve a un
@@ -2289,13 +2301,14 @@ class PersistFakeExt(FakeExt):
         if self.purge_confirm is not None:
             if self._purge_count(tree, self.purge_confirm) > 0:
                 return
+            # MEN 6: la confirmacion espera un tick real estrictamente posterior
+            # a la emision; si el trabajo acaba antes, no hay deleted.
+            confirm_tick = float(self.peer.local_ms())
+            if confirm_tick <= self.purge_emit_tick:
+                return
             idx = self._purge_authorized_index(self.purge_confirm)
             if idx >= 0 and not self.purge_resolved[idx]:
                 ent = self.purge_confirm_ent
-                # Aclaracion 2: tick en que se confirma la ausencia, posterior al emit.
-                confirm_tick = float(self.peer.local_ms())
-                if confirm_tick <= self.purge_emit_tick:
-                    confirm_tick = self.purge_emit_tick + 1.0
                 if self._purge_append("result", ent, "deleted", confirm_tick=confirm_tick):
                     self.purge_resolved[idx] = 1
             self.purge_confirm = None
@@ -2334,9 +2347,11 @@ class PersistFakeExt(FakeExt):
                 if self._purge_append("result", cand, "retained_foreign"):
                     self.purge_resolved[idx] = 1
                 continue
-            # MENOR 6: una sola lectura de la edad; se decide y se registra la misma muestra.
+            # MEN 4: la edad del lease que decide la baja y la que se registra
+            # salen de la misma muestra temporal que emit_tick_ms.
+            emit_tick = float(self.peer.local_ms())
             if hasattr(self.peer, "lease_age_ms"):
-                age = float(self.peer.lease_age_ms())
+                age = self._lease_age_at_ms(emit_tick)
                 limit = float(getattr(self.peer, "lease_ms", 3000) or 3000)
                 if age > limit:
                     return
@@ -2345,7 +2360,6 @@ class PersistFakeExt(FakeExt):
                     return
                 age = 0.0
                 limit = 0.0
-            emit_tick = float(self.peer.local_ms())
             for sub in self._purge_subtree(leaf):
                 if not self._purge_append("emit", sub, "", emit_tick, age, limit):
                     return

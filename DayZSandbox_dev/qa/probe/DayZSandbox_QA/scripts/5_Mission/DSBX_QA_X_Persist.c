@@ -1527,8 +1527,9 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		}
 		res.status = "done";
 		m_Jobs.FillStartRead(res.read, op.op_id, "per_purge");
-		// MENOR 14: el acuse publica el estado real del trabajo (p. ej. failed/rows_cap), no "running" fijo.
-		string ackState = m_Jobs.GetState(m_PurgeJobId);
+		// MENOR 8: el acuse publica el estado real del trabajo (p. ej. failed/rows_cap), no "running" fijo.
+		// Se consulta por op.op_id: OnJobEnd vacia m_PurgeJobId antes de este acuse.
+		string ackState = m_Jobs.GetState(op.op_id);
 		if (ackState != "" && res.read.sv.Count() > 1)
 			res.read.sv.Set(1, ackState);
 		PutNum(res.read, "pre_n", (float)preN);
@@ -1583,10 +1584,11 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			if (still > 0)
 				return;
 			int cidx = FindPurgeAuthIndex(m_PurgeConfirmPersId);
-			// Aclaracion 2: el tick en que se confirma que ya no esta; posterior a su emit_tick_ms.
+			// MEN 6: la confirmacion espera un tick real estrictamente posterior
+			// a la emision; si el trabajo acaba antes, no hay deleted.
 			float confirmTick = m_Probe.NowMs();
 			if (confirmTick <= m_PurgeConfirmEmitTick)
-				confirmTick = m_PurgeConfirmEmitTick + 1.0;
+				return;
 			ResolvePurgeResult(cidx, "deleted", m_PurgeConfirmPersId, m_PurgeConfirmClass, m_PurgeConfirmParentPersId, m_PurgeConfirmParentNetId, m_PurgeConfirmNetId, m_PurgeDirectorUid, confirmTick);
 			m_PurgeConfirmPersId = "";
 			m_PurgeConfirmClass = "";
@@ -3494,9 +3496,15 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				// BLOQ 5: tampoco un raw con descendientes desconocidos.
 				if (IsObjectAlive(raw.m_RefEnt) && CountCleanupForeignDescendants(raw.m_RefEnt) > 0)
 					continue;
-				if (IsObjectAlive(raw.m_ChildEnt))
+				// BLOQ 2: cada baja raw, la del objeto y la de su hijo, excluye
+				// al director igual que el bucle de m_Records.
+				EntityAI rawChildEnt = EntityAI.Cast(raw.m_ChildEnt);
+				EntityAI rawObjEnt = EntityAI.Cast(raw.m_RefEnt);
+				bool rawChildInDirector = rawChildEnt && cleanupDirector && rawChildEnt.GetHierarchyRootPlayer() == cleanupDirector;
+				bool rawObjInDirector = rawObjEnt && cleanupDirector && rawObjEnt.GetHierarchyRootPlayer() == cleanupDirector;
+				if (IsObjectAlive(raw.m_ChildEnt) && !rawChildInDirector)
 					g_Game.ObjectDelete(raw.m_ChildEnt);
-				if (IsObjectAlive(raw.m_RefEnt))
+				if (IsObjectAlive(raw.m_RefEnt) && !rawObjInDirector)
 				{
 					g_Game.ObjectDelete(raw.m_RefEnt);
 					cleanedRawN = cleanedRawN + 1;

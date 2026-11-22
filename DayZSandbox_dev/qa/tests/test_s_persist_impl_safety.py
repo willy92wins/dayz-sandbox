@@ -951,18 +951,19 @@ class TestLiveColdBackupOrder(_GuardedTestCase):
 
 
 class _FakeBridgeT4:
-    def __init__(self, now_ms):
+    def __init__(self, now_ms, events=None):
         self._now_ms = float(now_ms)
         self.failure = None
         self.hold_ms = 2000
+        self.events = list(events or [])
 
     def now_ms(self):
         return self._now_ms
 
 
 class _FakeCtxT4:
-    def __init__(self, now_ms):
-        self.bridge = _FakeBridgeT4(now_ms)
+    def __init__(self, now_ms, events=None):
+        self.bridge = _FakeBridgeT4(now_ms, events=events)
         self.scenario = []
 
     def record_scenario(self, row):
@@ -1000,6 +1001,8 @@ class TestT4NewServerHello(unittest.TestCase):
         self.assertFalse(predicate(same_epoch_after))
         missing_t = {"ev": "hello", "http": 200, "peer": "server", "inst": "epoch-new"}
         self.assertFalse(predicate(missing_t))
+        rejected_ok = dict(after, ok=False)
+        self.assertFalse(predicate(rejected_ok))
 
 
 class _FakeBridge:
@@ -1823,6 +1826,7 @@ class TestDirectorGarmentPurge(_GuardedTestCase):
             ext.on_tick(0.016)
             if ext.purge_job_id == "":
                 break
+            peer.now += 16.0
 
     def test_authorized_glove_deleted_basal_kept_and_emit_before_result(self):
         peer, jobs, ext, pers, cls = self._ext_with_director_gloves()
@@ -1945,6 +1949,7 @@ class TestDirectorGarmentPurge(_GuardedTestCase):
         rows = _job_rows(jobs.jobs_by_id["op-purge"])
         self.assertNotIn(glove_net, ext.world)
         self.assertFalse(any(r["phase"] == "result" and r["result"] == "deleted" for r in rows))
+        peer.now += 1.0
         jobs.tick_jobs(0.016, peer.local_ms())
         ext.on_tick(0.016)
         rows = _job_rows(jobs.jobs_by_id["op-purge"])
@@ -2010,6 +2015,7 @@ class TestP2dPurgeContract(_GuardedTestCase):
             ext.on_tick(0.016)
             if ext.purge_job_id == "":
                 break
+            peer.now += 16.0
 
     def test_confirm_tick_is_after_emit_and_other_rows_are_zero(self):
         peer, jobs, ext, pers, cls = self._ext_with_director_gloves()
@@ -2118,12 +2124,12 @@ class TestRunnerPurgeStartContract(_GuardedTestCase):
             calls.append((verb, payload, kwargs.get("target_inst")))
             if verb == "per_purge_start":
                 return _op_outcome("done", "", "op-start", {
-                    "str": {"job": "op-start", "state": "done"},
+                    "str": {"job": "op-start", "state": "done", "resource": "per_purge"},
                     "num": {"pre_n": 0.0},
                 })
             if verb == "job_read":
                 return _op_outcome("done", "", "op-read", {
-                    "str": {"job": "op-start", "state": "done"},
+                    "str": {"job": "op-start", "state": "done", "resource": "per_purge"},
                     "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
                     "rows": [],
                 })
@@ -2152,12 +2158,12 @@ class TestRunnerPurgeStartContract(_GuardedTestCase):
             calls.append((verb, payload, kwargs.get("target_inst")))
             if verb == "per_purge_start":
                 return _op_outcome("done", "", "op-start", {
-                    "str": {"job": "alias", "state": "done"},
+                    "str": {"job": "alias", "state": "done", "resource": "per_purge"},
                     "num": {"pre_n": 0.0},
                 })
             if verb == "job_read":
                 return _op_outcome("done", "", "op-read", {
-                    "str": {"job": "alias", "state": "done"},
+                    "str": {"job": "alias", "state": "done", "resource": "per_purge"},
                     "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
                     "rows": [],
                 })
@@ -2172,7 +2178,7 @@ class TestRunnerPurgeStartContract(_GuardedTestCase):
                 director_uid="dir-uid", timeout_s=5.0, poll_s=1.0,
                 monotonic=clock.monotonic, sleep=clock.sleep,
             )
-        self.assertTrue(result["done"])
+        self.assertFalse(result["done"])
         self.assertTrue(any(ev.get("ev") == "purge_job_mismatch" for ev in ctx.scenario))
         for verb, payload, _target in calls:
             if verb == "job_read":
@@ -2252,7 +2258,7 @@ class TestRunnerPurgeStartContract(_GuardedTestCase):
             if verb == "job_read":
                 state = "stopped" if any(v == "job_stop" for v, _p, _t in calls) else "running"
                 return _op_outcome("done", "", "op-read", {
-                    "str": {"job": "op-start", "state": state},
+                    "str": {"job": "op-start", "state": state, "resource": "per_purge"},
                     "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
                     "rows": [],
                 })
@@ -2307,12 +2313,12 @@ class TestRunnerPurgeStartContract(_GuardedTestCase):
                 return _op_outcome("timeout", "", "op-start", None)
             if verb == "job_read":
                 return _op_outcome("done", "", "op-read", {
-                    "str": {"job": "op-start", "state": "running"},
+                    "str": {"job": "op-start", "state": "running", "resource": "per_purge"},
                     "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
                     "rows": [],
                 })
             if verb == "job_stop":
-                return _op_outcome("done", "", "op-stop", {"str": {"job": "op-start", "state": "stopped"}})
+                return _op_outcome("done", "", "op-stop", {"str": {"job": "op-start", "state": "running"}})
             raise AssertionError(verb)
 
         clock = _FakeClock()
@@ -2328,6 +2334,7 @@ class TestRunnerPurgeStartContract(_GuardedTestCase):
         self.assertFalse(result["cold_stop_ok"])
         self.assertTrue(any(ev.get("ev") == "purge_cold_stop"
                             and ev.get("accredited_b") == 0 for ev in ctx.scenario))
+        self.assertTrue(any(ev.get("ev") == "purge_stop" for ev in ctx.scenario))
 
     def test_cold_stop_accredited_allows_live_cleanup(self):
         ctx = _FakeCtxT4(now_ms=5000.0)
@@ -2337,12 +2344,12 @@ class TestRunnerPurgeStartContract(_GuardedTestCase):
                 return _op_outcome("lost", "", "op-start", None)
             if verb == "job_read":
                 return _op_outcome("done", "", "op-read", {
-                    "str": {"job": "op-start", "state": "running"},
+                    "str": {"job": "op-start", "state": "running", "resource": "per_purge"},
                     "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
                     "rows": [],
                 })
             if verb == "job_stop":
-                return _op_outcome("done", "", "op-stop", {"str": {"job": "op-start", "state": "stopped"}})
+                return _op_outcome("done", "", "op-stop", {"str": {"job": "op-start", "state": "running"}})
             raise AssertionError(verb)
 
         clock = _FakeClock()
@@ -2356,6 +2363,7 @@ class TestRunnerPurgeStartContract(_GuardedTestCase):
             )
         self.assertFalse(result["done"])
         self.assertTrue(result["cold_stop_ok"])
+        self.assertTrue(any(ev.get("ev") == "purge_stop" for ev in ctx.scenario))
 
     def test_pages_incomplete_does_not_open_t5(self):
         ctx = _FakeCtxT4(now_ms=5000.0)
@@ -2363,12 +2371,12 @@ class TestRunnerPurgeStartContract(_GuardedTestCase):
         def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
             if verb == "per_purge_start":
                 return _op_outcome("done", "", "op-start", {
-                    "str": {"job": "op-start", "state": "running"},
+                    "str": {"job": "op-start", "state": "running", "resource": "per_purge"},
                     "num": {"pre_n": 1.0},
                 })
             if verb == "job_read":
                 return _op_outcome("done", "", "op-read", {
-                    "str": {"job": "op-start", "state": "done"},
+                    "str": {"job": "op-start", "state": "done", "resource": "per_purge"},
                     "num": {"page_n": 0.0, "pages_n": 1.0, "rows_total_n": 2.0},
                     "rows": [{"phase": "result", "result": "deleted"}],
                 })
@@ -2526,6 +2534,7 @@ class TestRunnerRestartNewProcess(_GuardedTestCase):
                 ext2.on_tick(0.016)
                 if ext2.purge_job_id == "":
                     break
+                peer2.now += 16.0
             self.assertNotIn(glove_net, ext2.world)
             self.assertIn(fake_ext_persist.DIRECTOR_JEANS_NET, ext2.world)
             self.assertIn(fake_ext_persist.DIRECTOR_APPLE_NET, ext2.world)
@@ -2630,17 +2639,17 @@ class TestRunnerPurgeStart(_GuardedTestCase):
             calls.append((verb, kwargs.get("target_inst")))
             if verb == "per_purge_start":
                 return _op_outcome("done", "", "op-start", {
-                    "str": {"job": "j1", "state": "running"},
+                    "str": {"job": "op-start", "state": "running", "resource": "per_purge"},
                     "num": {"pre_n": 1.0},
                 })
             if verb == "job_read":
                 return _op_outcome("done", "", "op-read", {
-                    "str": {"job": "j1", "state": "done", "reason": ""},
+                    "str": {"job": "op-start", "state": "done", "reason": "", "resource": "per_purge"},
                     "num": {"page_n": 0.0, "pages_n": 1.0, "rows_total_n": 1.0},
                     "rows": [{"phase": "result", "result": "deleted"}],
                 })
             if verb == "job_free":
-                return _op_outcome("done", "", "op-free", {"str": {"job": "j1", "freed": "1"}})
+                return _op_outcome("done", "", "op-free", {"str": {"job": "op-start", "freed": "1"}})
             raise AssertionError(verb)
 
         with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue):
@@ -2664,20 +2673,20 @@ class TestRunnerPurgeStart(_GuardedTestCase):
             calls.append((verb, kwargs.get("target_inst")))
             if verb == "per_purge_start":
                 return _op_outcome("done", "", "op-start", {
-                    "str": {"job": "j1", "state": "running"},
+                    "str": {"job": "op-start", "state": "running", "resource": "per_purge"},
                     "num": {"pre_n": 1.0},
                 })
             if verb == "job_read":
                 state = "stopped" if any(v == "job_stop" for v, _t in calls) else "running"
                 return _op_outcome("done", "", "op-read", {
-                    "str": {"job": "j1", "state": state, "reason": ""},
+                    "str": {"job": "op-start", "state": state, "reason": "", "resource": "per_purge"},
                     "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
                     "rows": [],
                 })
             if verb == "job_stop":
-                return _op_outcome("done", "", "op-stop", {"str": {"job": "j1", "state": "stopped"}})
+                return _op_outcome("done", "", "op-stop", {"str": {"job": "op-start", "state": "stopped"}})
             if verb == "job_free":
-                return _op_outcome("done", "", "op-free", {"str": {"job": "j1", "freed": "1"}})
+                return _op_outcome("done", "", "op-free", {"str": {"job": "op-start", "freed": "1"}})
             raise AssertionError(verb)
 
         with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue):
@@ -2739,6 +2748,503 @@ class TestComputeAccredited(_GuardedTestCase):
         events[1]["rows"].append({"owner_uid": "dir", "net_id": "1:99",
                                   "pers_id": "3:0:0:0", "class_name": "WorkingGloves_Yellow"})
         self.assertEqual(s_persist_run._compute_accredited(events, fixture, cfg, "dir"), [])
+
+
+class _AdvancingClockPeer(_ClockPeer):
+    """Peer cuyo reloj avanza en cada lectura, para separar muestras temporales."""
+
+    def local_ms(self):
+        self.now += 1.0
+        return float(self.now)
+
+
+def _make_advancing_fake():
+    peer = _AdvancingClockPeer()
+    jobs = fake_peer.JobMgr(peer)
+    ext = fake_ext_persist.PersistFakeExt()
+    ext.init(peer, jobs)
+    return peer, jobs, ext
+
+
+class TestP2eColdStopPredicate(_GuardedTestCase):
+    """BLOQ 1: OPERATOR_DONE no acredita la parada si el proceso sigue vivo."""
+
+    def _accredited(self):
+        return [{"pers_id": "3:0:0:0", "class_name": "WorkingGloves_Yellow",
+                 "logical_id": "g", "net_id": "1:10"}]
+
+    def _run(self, state):
+        ctx = _FakeCtxT4(now_ms=5000.0)
+        calls = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append(verb)
+            if verb == "per_purge_start":
+                return _op_outcome("timeout", "", "op-start", None)
+            if verb == "job_read":
+                return _op_outcome("done", "", "op-read", {
+                    "str": {"job": "op-start", "state": "running", "resource": "per_purge"},
+                    "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
+                    "rows": [],
+                })
+            if verb == "job_stop":
+                return _op_outcome("done", "", "op-stop",
+                                   {"str": {"job": "op-start", "state": "running"}})
+            raise AssertionError(verb)
+
+        clock = _FakeClock()
+        with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue), \
+             mock.patch.object(f03_common, "wait_peer_idle", return_value="idle"), \
+             mock.patch.object(f03_common, "await_operator",
+                               return_value={"ok": True, "mode": "file"}), \
+             mock.patch.object(s_persist_run, "_server_state", return_value=state):
+            result = s_persist_run._purge_start_t4(
+                ctx, self._accredited(), server_epoch_new="epoch-new",
+                director_uid="dir-uid", timeout_s=1.0, poll_s=1.0,
+                monotonic=clock.monotonic, sleep=clock.sleep,
+                storage_env={"storage_dir": "dummy"},
+            )
+        return result, ctx, calls
+
+    def test_operator_done_with_server_running_is_not_accredited(self):
+        result, ctx, calls = self._run("running")
+        self.assertFalse(result["cold_stop_ok"])
+        self.assertTrue(any(ev.get("ev") == "purge_cold_stop"
+                            and ev.get("accredited_b") == 0
+                            and ev.get("server_state") == "running"
+                            for ev in ctx.scenario))
+        self.assertIn("job_stop", calls)
+
+    def test_operator_done_with_server_stopped_is_accredited(self):
+        result, ctx, _calls = self._run("stopped")
+        self.assertTrue(result["cold_stop_ok"])
+        self.assertTrue(any(ev.get("ev") == "purge_cold_stop"
+                            and ev.get("accredited_b") == 1
+                            and ev.get("server_state") == "stopped"
+                            for ev in ctx.scenario))
+
+
+class TestP2eRawCleanupDirector(_GuardedTestCase):
+    """BLOQ 2: la limpieza raw de t6 excluye el inventario del director."""
+
+    def _spawn_raw(self, ext, tag, class_name, x, z):
+        status, reason, payload = ext.on_start_op(
+            {"op_id": f"op-{tag}", "verb": "per_spawn_raw", "qa_fault": ""},
+            _unpacked(
+                strings={"tag": tag, "mode": "ground", "class_name": class_name,
+                         "child_cargo_class": "", "target_scene_id": "",
+                         "target_parent_id": ""},
+                numbers={"x_m": x, "z_m": z, "yaw_deg": 0.0, "health_mark_ratio": 0.0},
+            ), {},
+        )
+        self.assertEqual((status, reason), ("done", ""))
+        return wire.unpack_payload(payload)["str"]["net_id"]
+
+    def test_raw_in_director_inventory_survives_and_ground_raw_is_deleted(self):
+        _peer, _jobs, ext = _make_fake()
+        ground_net = self._spawn_raw(ext, "raw_ground", "WaterBottle", 4680.0, 10200.0)
+        dir_net = self._spawn_raw(ext, "raw_dir", "WaterBottle", 4680.0, 10200.0)
+        ent = ext.world[dir_net]
+        ent["parent_net_id"] = fake_ext_persist.DIRECTOR_JEANS_NET
+        ent["owner_uid"] = ext.director_uid
+        ent["loc_kind"] = "cargo"
+        child = ext._add_entity(
+            net_id="1:950", pers_id="90:0:0:0", class_name="Apple",
+            cat="raw_child", loc_kind="cargo", parent_net_id=dir_net,
+            owner_uid="", persistent=True,
+        )
+        status, _reason, payload = ext.on_start_op(
+            {"op_id": "op-clean", "verb": "per_cleanup_qa", "qa_fault": ""},
+            _unpacked(
+                strings={"cleanup_tag": "t6", "director_uid": ext.director_uid},
+                ncol=["center_x_m", "center_z_m", "radius_m"], scol=["area_tag"],
+                rows=[{"area_tag": "area_b", "center_x_m": 4680.0,
+                       "center_z_m": 10200.0, "radius_m": 120.0}],
+            ), {},
+        )
+        self.assertEqual(status, "done")
+        out = wire.unpack_payload(payload)
+        self.assertIn(dir_net, ext.world)
+        self.assertIn(child["net_id"], ext.world)
+        self.assertNotIn(ground_net, ext.world)
+        self.assertGreaterEqual(out["num"]["cleaned_raw_n"], 1.0)
+
+
+class TestP2ePurgeStartRecovery(_GuardedTestCase):
+    """MEN 3: timeout/lost de per_purge_start siempre acaban en job_stop o en frio."""
+
+    def _accredited(self):
+        return [{"pers_id": "3:0:0:0", "class_name": "WorkingGloves_Yellow",
+                 "logical_id": "g", "net_id": "1:10"}]
+
+    def test_lost_start_always_sends_job_stop_then_opens_t5_when_done(self):
+        ctx = _FakeCtxT4(now_ms=5000.0)
+        calls = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append((verb, kwargs.get("target_inst")))
+            if verb == "per_purge_start":
+                return _op_outcome("lost", "", "op-start", None)
+            if verb == "job_stop":
+                return _op_outcome("done", "", "op-stop",
+                                   {"str": {"job": "op-start", "state": "done"}})
+            if verb == "job_read":
+                return _op_outcome("done", "", "op-read", {
+                    "str": {"job": "op-start", "state": "done", "resource": "per_purge"},
+                    "num": {"page_n": 0.0, "pages_n": 1.0, "rows_total_n": 1.0},
+                    "rows": [{"phase": "result", "result": "deleted"}],
+                })
+            if verb == "job_free":
+                return _op_outcome("done", "", "op-free",
+                                   {"str": {"job": "op-start", "freed": "1"}})
+            raise AssertionError(verb)
+
+        with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue):
+            result = s_persist_run._purge_start_t4(
+                ctx, self._accredited(), server_epoch_new="epoch-new",
+                director_uid="dir-uid", timeout_s=5.0, poll_s=1.0,
+                monotonic=_FakeClock().monotonic, sleep=_FakeClock().sleep,
+            )
+        self.assertTrue(result["done"])
+        self.assertEqual(result["state"], "done")
+        verbs = [v for v, _t in calls]
+        self.assertIn("job_stop", verbs)
+        self.assertLess(verbs.index("job_stop"), len(verbs))
+        for verb, target in calls:
+            if verb in ("job_read", "job_stop", "job_free"):
+                self.assertEqual(target, "epoch-new")
+
+    def test_timeout_with_unresolved_slot_goes_cold_stop_without_job_stop(self):
+        ctx = _FakeCtxT4(now_ms=5000.0)
+        calls = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append(verb)
+            if verb == "per_purge_start":
+                return _op_outcome("timeout", "", "op-start", None)
+            raise AssertionError(verb)
+
+        with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue), \
+             mock.patch.object(f03_common, "wait_peer_idle", return_value="timeout"), \
+             mock.patch.object(f03_common, "await_operator",
+                               return_value={"ok": True, "mode": "file"}):
+            result = s_persist_run._purge_start_t4(
+                ctx, self._accredited(), server_epoch_new="epoch-new",
+                director_uid="dir-uid", timeout_s=1.0, poll_s=1.0,
+                monotonic=_FakeClock().monotonic, sleep=_FakeClock().sleep,
+            )
+        self.assertFalse(result["done"])
+        self.assertNotIn("job_stop", calls)
+        self.assertTrue(any(ev.get("ev") == "purge_stop_slot_busy" for ev in ctx.scenario))
+
+    def test_timeout_with_resolved_slot_stops_job(self):
+        ctx = _FakeCtxT4(now_ms=5000.0)
+        calls = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append(verb)
+            if verb == "per_purge_start":
+                return _op_outcome("timeout", "", "op-start", None)
+            if verb == "job_stop":
+                return _op_outcome("done", "", "op-stop",
+                                   {"str": {"job": "op-start", "state": "stopped"}})
+            if verb == "job_read":
+                return _op_outcome("done", "", "op-read", {
+                    "str": {"job": "op-start", "state": "stopped", "resource": "per_purge"},
+                    "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
+                    "rows": [],
+                })
+            if verb == "job_free":
+                return _op_outcome("done", "", "op-free",
+                                   {"str": {"job": "op-start", "freed": "1"}})
+            raise AssertionError(verb)
+
+        with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue), \
+             mock.patch.object(f03_common, "wait_peer_idle", return_value="idle"):
+            result = s_persist_run._purge_start_t4(
+                ctx, self._accredited(), server_epoch_new="epoch-new",
+                director_uid="dir-uid", timeout_s=1.0, poll_s=1.0,
+                monotonic=_FakeClock().monotonic, sleep=_FakeClock().sleep,
+            )
+        self.assertFalse(result["done"])
+        self.assertEqual(result["state"], "stopped")
+        self.assertIn("job_stop", calls)
+        self.assertTrue(result["cold_stop_ok"])
+
+
+class TestP2eLeaseAgeSameSample(_GuardedTestCase):
+    """MEN 4: la edad registrada es la de la emision, no otra muestra."""
+
+    def test_emit_lease_age_is_from_the_emit_sample(self):
+        peer, jobs, ext = _make_advancing_fake()
+        status, _r, _p = ext.on_start_op(
+            {"op_id": "op-apply", "verb": "per_apply_scene", "qa_fault": ""},
+            _apply_args("scene_b", "scop-1", 1, _ACTOR_ROWS), {},
+        )
+        self.assertEqual(status, "done")
+        status, _r, _p = ext.on_start_op(
+            {"op_id": "op-trans", "verb": "per_child_transition", "qa_fault": ""},
+            _unpacked(strings={"scene_id": "scene_b", "logical_id": "b_act_1_gloves_dir",
+                               "action": "move_to_director", "expect_epoch": "epoch-1",
+                               "target_scene_id": "", "target_parent_id": "",
+                               "director_uid": ext.director_uid}), {},
+        )
+        self.assertEqual(status, "done")
+        rec = ext._record_by("scene_b", "b_act_1_gloves_dir")
+        pers = rec["ent"]["pers_id"]
+        cls = rec["ent"]["class_name"]
+        peer.last_ok_ms = float(peer.now)
+        status, _r, _p = ext.on_start_op(
+            {"op_id": "op-purge", "verb": "per_purge_start", "qa_fault": ""},
+            _purge_args([{"pers_id": pers, "class_name": cls}], ext.director_uid), {},
+        )
+        self.assertEqual(status, "done")
+        for _ in range(30):
+            jobs.tick_jobs(0.016, peer.local_ms())
+            ext.on_tick(0.016)
+            if ext.purge_job_id == "":
+                break
+            peer.now += 16.0
+        rows = _job_rows(jobs.jobs_by_id["op-purge"])
+        emits = [r for r in rows if r["phase"] == "emit" and r["emit_tick_ms"] > 0.0]
+        self.assertTrue(emits)
+        for row in emits:
+            self.assertAlmostEqual(
+                row["lease_age_ms"], row["emit_tick_ms"] - peer.last_ok_ms, places=6)
+            self.assertLessEqual(row["lease_age_ms"], row["lease_limit_ms"])
+
+
+class TestP2eHelloAccepted(_GuardedTestCase):
+    """MEN 5: solo un hello aceptado (200 y ok != false) da epoch."""
+
+    def _status_ready(self):
+        return SimpleNamespace(
+            status="done", reason="", op_id="op-status",
+            payload={
+                "str": {"server_epoch": "epoch-new", "director_uid": "director-1"},
+                "num": {"director_present_b": 1.0, "director_alive_b": 1.0,
+                        "director_inv_readable_b": 1.0, "players_n": 1.0,
+                        "tick_ms": 100.0},
+            },
+        )
+
+    def test_file_mode_picks_accepted_hello_over_ok_false(self):
+        ok_false = {"ev": "hello", "http": 200, "ok": False, "peer": "server",
+                    "inst": "bad-epoch", "t_ms": 5001.0}
+        accepted = {"ev": "hello", "http": 200, "ok": True, "peer": "server",
+                    "inst": "epoch-new", "t_ms": 5002.0}
+        ctx = _FakeCtxT4(5000.0, events=[ok_false, accepted])
+        targets = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            targets.append(kwargs.get("target_inst"))
+            return self._status_ready()
+
+        with mock.patch.object(f03_common, "await_operator",
+                               return_value={"ok": True, "mode": "file"}), \
+             mock.patch.object(f03_common, "issue_one", side_effect=fake_issue), \
+             mock.patch.object(s_persist_run.time, "sleep", lambda _s: None):
+            result = s_persist_run._restart_server_live(ctx, "epoch-old", "director-1")
+        self.assertEqual(result, "epoch-new")
+        self.assertTrue(targets)
+        self.assertTrue(all(t == "epoch-new" for t in targets))
+
+    def test_file_mode_only_rejected_hello_has_no_epoch(self):
+        ok_false = {"ev": "hello", "http": 200, "ok": False, "peer": "server",
+                    "inst": "bad-epoch", "t_ms": 5001.0}
+        ctx = _FakeCtxT4(5000.0, events=[ok_false])
+        with mock.patch.object(f03_common, "await_operator",
+                               return_value={"ok": True, "mode": "file"}), \
+             mock.patch.object(f03_common, "issue_one",
+                               side_effect=AssertionError("no debe llamar")), \
+             mock.patch.object(s_persist_run.time, "sleep", lambda _s: None):
+            result = s_persist_run._restart_server_live(ctx, "epoch-old", "director-1")
+        self.assertEqual(result, "")
+        self.assertTrue(any(ev.get("ev") == "live_restart_failed"
+                            and ev.get("reason") == "epoch_not_from_accepted_hello"
+                            for ev in ctx.scenario))
+
+
+class TestP2eConfirmTickReal(_GuardedTestCase):
+    """MEN 6: no hay deleted sin un tick real posterior a la emision."""
+
+    def _gloves(self):
+        peer, jobs, ext = _make_clock_fake()
+        status, _r, _p = ext.on_start_op(
+            {"op_id": "op-apply", "verb": "per_apply_scene", "qa_fault": ""},
+            _apply_args("scene_b", "scop-1", 1, _ACTOR_ROWS), {},
+        )
+        self.assertEqual(status, "done")
+        status, _r, _p = ext.on_start_op(
+            {"op_id": "op-trans", "verb": "per_child_transition", "qa_fault": ""},
+            _unpacked(strings={"scene_id": "scene_b", "logical_id": "b_act_1_gloves_dir",
+                               "action": "move_to_director", "expect_epoch": "epoch-1",
+                               "target_scene_id": "", "target_parent_id": "",
+                               "director_uid": ext.director_uid}), {},
+        )
+        self.assertEqual(status, "done")
+        rec = ext._record_by("scene_b", "b_act_1_gloves_dir")
+        return peer, jobs, ext, rec["ent"]["pers_id"], rec["ent"]["class_name"]
+
+    def _start(self, ext, pers, cls):
+        status, reason, payload = ext.on_start_op(
+            {"op_id": "op-purge", "verb": "per_purge_start", "qa_fault": ""},
+            _purge_args([{"pers_id": pers, "class_name": cls}], ext.director_uid), {},
+        )
+        self.assertEqual((status, reason), ("done", ""))
+        return wire.unpack_payload(payload)
+
+    def test_frozen_clock_does_not_confirm_until_a_real_later_tick(self):
+        peer, jobs, ext, pers, cls = self._gloves()
+        self._start(ext, pers, cls)
+        jobs.tick_jobs(0.016, peer.local_ms())
+        ext.on_tick(0.016)
+        rows = _job_rows(jobs.jobs_by_id["op-purge"])
+        emits = [r for r in rows if r["phase"] == "emit"
+                 and r["pers_id"] == pers and r["emit_tick_ms"] > 0.0]
+        self.assertTrue(emits)
+        emit_tick = emits[0]["emit_tick_ms"]
+        for _ in range(5):
+            jobs.tick_jobs(0.016, peer.local_ms())
+            ext.on_tick(0.016)
+        rows = _job_rows(jobs.jobs_by_id["op-purge"])
+        self.assertFalse(any(r["phase"] == "result" and r["result"] == "deleted"
+                             for r in rows))
+        peer.now = emit_tick + 1.0
+        jobs.tick_jobs(0.016, peer.local_ms())
+        ext.on_tick(0.016)
+        rows = _job_rows(jobs.jobs_by_id["op-purge"])
+        deleted = [r for r in rows if r["phase"] == "result"
+                   and r["result"] == "deleted" and r["pers_id"] == pers]
+        self.assertTrue(deleted)
+        self.assertGreater(deleted[0]["confirm_tick_ms"], emit_tick)
+
+    def test_job_ended_before_later_tick_has_no_deleted(self):
+        peer, jobs, ext, pers, cls = self._gloves()
+        self._start(ext, pers, cls)
+        jobs.tick_jobs(0.016, peer.local_ms())
+        ext.on_tick(0.016)
+        peer.now = 5000.0
+        jobs.tick_jobs(0.016, peer.local_ms())
+        ext.on_tick(0.016)
+        rows = _job_rows(jobs.jobs_by_id["op-purge"])
+        self.assertFalse(any(r["phase"] == "result" and r["result"] == "deleted"
+                             for r in rows))
+        self.assertEqual(jobs.get_state("op-purge"), "failed")
+
+
+class TestP2ePageValidation(_GuardedTestCase):
+    """MEN 7: el runner valida las paginas antes de abrir t5."""
+
+    def _accredited(self):
+        return [{"pers_id": "3:0:0:0", "class_name": "WorkingGloves_Yellow",
+                 "logical_id": "g", "net_id": "1:10"}]
+
+    def _page(self, page_idx, row_counts, total, job="op-start",
+              resource="per_purge", state="done"):
+        pages_n = len(row_counts)
+        return {
+            "str": {"job": job, "state": state, "resource": resource},
+            "num": {"page_n": float(page_idx), "pages_n": float(pages_n),
+                    "rows_total_n": float(total)},
+            "rows": [{"phase": "result", "result": "deleted"}
+                     for _ in range(row_counts[page_idx])],
+        }
+
+    def _run(self, row_counts, total, job="op-start", resource="per_purge"):
+        ctx = _FakeCtxT4(now_ms=5000.0)
+        calls = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append((verb, kwargs.get("target_inst")))
+            if verb == "per_purge_start":
+                return _op_outcome("done", "", "op-start", {
+                    "str": {"job": "op-start", "state": "running",
+                            "resource": "per_purge"},
+                    "num": {"pre_n": float(total)},
+                })
+            if verb == "job_read":
+                unpacked = wire.unpack_payload(payload)
+                page_idx = int(round(float(unpacked["num"]["page_n"])))
+                return _op_outcome("done", "", "op-read",
+                                   self._page(page_idx, row_counts, total,
+                                              job=job, resource=resource))
+            if verb == "job_free":
+                return _op_outcome("done", "", "op-free",
+                                   {"str": {"job": "op-start", "freed": "1"}})
+            raise AssertionError(verb)
+
+        with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue):
+            result = s_persist_run._purge_start_t4(
+                ctx, self._accredited(), server_epoch_new="epoch-new",
+                director_uid="dir-uid", timeout_s=5.0, poll_s=1.0,
+                monotonic=_FakeClock().monotonic, sleep=_FakeClock().sleep,
+            )
+        return result, ctx
+
+    def test_pages_six_and_four_do_not_open_t5(self):
+        result, ctx = self._run([6, 4], 10)
+        self.assertFalse(result["done"])
+        self.assertTrue(any(ev.get("ev") == "purge_pages_error" for ev in ctx.scenario))
+
+    def test_pages_eight_and_two_open_t5(self):
+        result, ctx = self._run([8, 2], 10)
+        self.assertTrue(result["done"])
+        self.assertEqual(len(result["rows"]), 10)
+        self.assertFalse(any(ev.get("ev") == "purge_pages_error" for ev in ctx.scenario))
+
+    def test_job_read_with_other_job_does_not_open_t5(self):
+        result, ctx = self._run([8, 2], 10, job="other-job")
+        self.assertFalse(result["done"])
+        self.assertTrue(any(ev.get("ev") == "purge_pages_error" for ev in ctx.scenario))
+
+
+class TestP2eRowsCapAck(_GuardedTestCase):
+    """MENOR 8: el acuse tras rows_cap dice failed (job = op_id)."""
+
+    def test_rows_cap_ack_is_failed(self):
+        _peer, _jobs, ext = _make_fake()
+        for i in range(257):
+            ext._add_entity(
+                net_id=f"1:{1000 + i}", pers_id=f"{1000 + i}:0:0:0",
+                class_name="Apple", cat="director", loc_kind="cargo",
+                parent_net_id=fake_ext_persist.DIRECTOR_JEANS_NET,
+                owner_uid=ext.director_uid, persistent=True,
+            )
+        status, reason, payload = ext.on_start_op(
+            {"op_id": "op-purge", "verb": "per_purge_start", "qa_fault": ""},
+            _purge_args([{"pers_id": "3:0:0:0", "class_name": "WorkingGloves_Yellow"}],
+                        ext.director_uid), {},
+        )
+        self.assertEqual((status, reason), ("done", ""))
+        out = wire.unpack_payload(payload)
+        self.assertEqual(out["str"]["job"], "op-purge")
+        self.assertEqual(out["str"]["resource"], "per_purge")
+        self.assertEqual(out["str"]["state"], "failed")
+
+
+class TestP2eStaticContract(_GuardedTestCase):
+    """Pin estatico de lo que no se ejercita offline."""
+
+    def _c_src(self):
+        return (QA_DIR / "probe/DayZSandbox_QA/scripts/5_Mission/DSBX_QA_X_Persist.c").read_text(
+            encoding="utf-8", errors="replace")
+
+    def test_c_raw_cleanup_excludes_director_object_and_child(self):
+        src = self._c_src()
+        self.assertIn("EntityAI rawChildEnt = EntityAI.Cast(raw.m_ChildEnt);", src)
+        self.assertIn("EntityAI rawObjEnt = EntityAI.Cast(raw.m_RefEnt);", src)
+        self.assertIn("rawObjEnt && cleanupDirector && rawObjEnt.GetHierarchyRootPlayer() == cleanupDirector", src)
+        self.assertIn("rawChildEnt && cleanupDirector && rawChildEnt.GetHierarchyRootPlayer() == cleanupDirector", src)
+
+    def test_c_confirm_tick_has_no_emit_plus_one(self):
+        src = self._c_src()
+        self.assertNotIn("m_PurgeConfirmEmitTick + 1.0", src)
+        self.assertIn("if (confirmTick <= m_PurgeConfirmEmitTick)", src)
+
+    def test_c_rows_cap_ack_uses_op_id(self):
+        src = self._c_src()
+        self.assertIn("string ackState = m_Jobs.GetState(op.op_id);", src)
 
 
 def _op_outcome(status, reason, op_id, payload):
