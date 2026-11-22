@@ -1372,11 +1372,33 @@ def _compute_accredited(events, fixture, cfg, director_uid_t0):
     return candidates
 
 
+def _purge_cold_stop_predicate(storage_env):
+    """Aclaracion 8: la parada en frio solo cuenta si el operador la confirma."""
+    if storage_env is None:
+        return lambda _ev: True
+    return lambda _ev: _server_state(storage_env) == "stopped"
+
+
 def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
-                    timeout_s=None, poll_s=None, monotonic=None, sleep=None):
-    """t4: ordena la purga con las acreditadas y espera el trabajo terminal."""
+                    timeout_s=None, poll_s=None, monotonic=None, sleep=None,
+                    storage_env=None):
+    """t4: ordena la purga con las acreditadas y espera el trabajo terminal.
+
+    Aclaracion 6: el epoch nuevo solo vale si viene de un hello aceptado; sin
+    el no se ordena la purga. Aclaracion 7: si la orden vuelve en timeout o
+    lost, se trata op_id como trabajo y se para o se va a parada en frio.
+    """
     if not accredited:
-        return {"done": True, "state": "none", "reason": "", "rows": [], "job_id": ""}
+        return {"done": True, "state": "none", "reason": "", "rows": [],
+                "job_id": "", "cold_stop_ok": True}
+    if not server_epoch_new:
+        ctx.record_scenario({
+            "ev": "purge_not_done",
+            "reason": "restart_not_validated",
+            "server_epoch": "",
+        })
+        return {"done": False, "state": "", "reason": "restart_not_validated",
+                "rows": [], "job_id": "", "cold_stop_ok": True}
     timeout = T4_PURGE_TIMEOUT_S if timeout_s is None else float(timeout_s)
     interval = T4_PURGE_POLL_S if poll_s is None else float(poll_s)
     clock = time.monotonic if monotonic is None else monotonic
@@ -1387,7 +1409,8 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
         row_dicts=[{"pers_id": c["pers_id"], "class_name": c["class_name"]} for c in accredited],
     )
     start = f03_common.issue_one(ctx, "server", "per_purge_start", payload,
-                                 target_inst=server_epoch_new or None)
+                                 target_inst=server_epoch_new)
+    job_id = start.op_id
     ctx.record_scenario({
         "ev": "purge_order",
         "status": start.status,
@@ -1398,50 +1421,129 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
         "rows": [{"pers_id": c["pers_id"], "class_name": c["class_name"],
                   "logical_id": c["logical_id"], "net_id": c["net_id"]} for c in accredited],
     })
-    if start.status != "done" or not start.payload:
+
+    def _cold_stop(reason, state, waited_ms, polls):
+        predicate = _purge_cold_stop_predicate(storage_env)
+        try:
+            res = f03_common.await_operator(
+                ctx,
+                step="t4_purge_cold_stop",
+                action="stop_server_cold",
+                instructions="Para el servidor en frio: la purga no acredito un estado terminal.",
+                predicate=predicate,
+                timeout_s=600.0,
+            )
+            ok = bool(res.get("ok"))
+        except Exception as exc:
+            ok = False
+            ctx.record_scenario({
+                "ev": "purge_cold_stop_error",
+                "job": job_id,
+                "error": str(exc),
+                "server_epoch": server_epoch_new,
+            })
         ctx.record_scenario({
-            "ev": "purge_not_done",
-            "reason": f"start_{start.status}_{start.reason}",
+            "ev": "purge_cold_stop",
+            "job": job_id,
+            "accredited_b": 1 if ok else 0,
             "server_epoch": server_epoch_new,
         })
-        return {"done": False, "state": "", "reason": start.reason, "rows": [], "job_id": ""}
-    job_id = str(start.payload["str"].get("job") or start.op_id)
-    pre_n = float(start.payload["num"].get("pre_n", 0.0))
-    ctx.record_scenario({
-        "ev": "purge_start",
-        "job": job_id,
-        "pre_n": pre_n,
-        "state": str(start.payload["str"].get("state") or ""),
-        "server_epoch": server_epoch_new,
-    })
-    started = clock()
-    deadline = started + max(0.0, timeout)
+        ctx.record_scenario({
+            "ev": "purge_not_done",
+            "reason": reason,
+            "server_epoch": server_epoch_new,
+            "waited_ms": waited_ms,
+            "polls": polls,
+            "cold_stop_accredited_b": 1 if ok else 0,
+        })
+        return {"done": False, "state": state, "reason": reason, "rows": [],
+                "job_id": job_id, "cold_stop_ok": ok}
+
     state = ""
     reason = ""
-    polls = 0
-    last = None
-    while True:
-        last = f03_common.issue_one(
+    pre_n = 0.0
+    start_ok = False
+    if start.status == "done" and start.payload:
+        reported_job = str(start.payload["str"].get("job") or "")
+        if reported_job and reported_job != job_id:
+            ctx.record_scenario({
+                "ev": "purge_job_mismatch",
+                "job": reported_job,
+                "op_id": job_id,
+                "server_epoch": server_epoch_new,
+            })
+        pre_n = float(start.payload["num"].get("pre_n", 0.0))
+        state = str(start.payload["str"].get("state") or "")
+        reason = str(start.payload["str"].get("reason") or "")
+        start_ok = True
+        ctx.record_scenario({
+            "ev": "purge_start",
+            "job": job_id,
+            "pre_n": pre_n,
+            "state": state,
+            "server_epoch": server_epoch_new,
+        })
+    else:
+        # Aclaracion 7: timeout/lost o un rechazo que no pruebe que no arranco:
+        # se mira el trabajo con el op_id de la orden antes de darlo por perdido.
+        probe = f03_common.issue_one(
             ctx, "server", "job_read",
             wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
-            target_inst=server_epoch_new or None,
+            target_inst=server_epoch_new,
         )
-        polls += 1
-        if last.status == "done" and last.payload:
-            state = str(last.payload["str"].get("state") or "")
-            reason = str(last.payload["str"].get("reason") or "")
-        if state in TERMINAL_STATES:
-            break
-        if clock() >= deadline:
-            break
-        sleeper(interval)
+        probe_state = ""
+        if probe.status == "done" and probe.payload:
+            probe_state = str(probe.payload["str"].get("state") or "")
+        if probe_state:
+            state = probe_state
+            reason = str(probe.payload["str"].get("reason") or "")
+            start_ok = True
+            ctx.record_scenario({
+                "ev": "purge_start_probe",
+                "job": job_id,
+                "state": state,
+                "start_status": start.status,
+                "start_reason": start.reason,
+                "server_epoch": server_epoch_new,
+            })
+        elif start.status in ("timeout", "lost"):
+            return _cold_stop(f"start_{start.status}_{start.reason}", "", 0, 0)
+        else:
+            ctx.record_scenario({
+                "ev": "purge_not_done",
+                "reason": f"start_{start.status}_{start.reason}",
+                "server_epoch": server_epoch_new,
+            })
+            return {"done": False, "state": "", "reason": start.reason, "rows": [],
+                    "job_id": "", "cold_stop_ok": True}
+
+    started = clock()
+    deadline = started + max(0.0, timeout)
+    polls = 0
+    last = None
+    if start_ok and state not in TERMINAL_STATES:
+        while True:
+            last = f03_common.issue_one(
+                ctx, "server", "job_read",
+                wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
+                target_inst=server_epoch_new,
+            )
+            polls += 1
+            if last.status == "done" and last.payload:
+                state = str(last.payload["str"].get("state") or "")
+                reason = str(last.payload["str"].get("reason") or "")
+            if state in TERMINAL_STATES:
+                break
+            if clock() >= deadline:
+                break
+            sleeper(interval)
     waited_ms = int(round(max(0.0, clock() - started) * 1000.0))
     stopped = False
     if state not in TERMINAL_STATES:
         stop = f03_common.issue_one(
             ctx, "server", "job_stop",
             wire.pack_payload(scalars_str={"job": job_id}),
-            target_inst=server_epoch_new or None,
+            target_inst=server_epoch_new,
         )
         stopped = True
         ctx.record_scenario({
@@ -1456,7 +1558,7 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
             last = f03_common.issue_one(
                 ctx, "server", "job_read",
                 wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
-                target_inst=server_epoch_new or None,
+                target_inst=server_epoch_new,
             )
             polls += 1
             if last.status == "done" and last.payload:
@@ -1472,27 +1574,12 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
                 "state": state,
                 "server_epoch": server_epoch_new,
             })
-            f03_common.await_operator(
-                ctx,
-                step="t4_purge_cold_stop",
-                action="stop_server_cold",
-                instructions="Para el servidor en frio: la purga no acredito un estado terminal.",
-                predicate=None,
-                timeout_s=600.0,
-            )
-            ctx.record_scenario({
-                "ev": "purge_not_done",
-                "reason": "wait_expired_no_terminal",
-                "server_epoch": server_epoch_new,
-                "waited_ms": waited_ms,
-                "polls": polls,
-            })
-            return {"done": False, "state": state, "reason": reason, "rows": [], "job_id": job_id}
+            return _cold_stop("wait_expired_no_terminal", state, waited_ms, polls)
     rows = []
     pages = None
     if state in TERMINAL_STATES:
         try:
-            pages = _read_job_pages_target(ctx, job_id, target_inst=server_epoch_new or None, timeout_ms=30000)
+            pages = _read_job_pages_target(ctx, job_id, target_inst=server_epoch_new, timeout_ms=30000)
             rows = list(pages.get("rows") or [])
             ctx.record_scenario({
                 "ev": "purge_pages",
@@ -1513,7 +1600,7 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
                 "error": str(exc),
                 "server_epoch": server_epoch_new,
             })
-    free = _job_free(ctx, job_id, target_inst=server_epoch_new or None)
+    free = _job_free(ctx, job_id, target_inst=server_epoch_new)
     ctx.record_scenario({
         "ev": "purge_free",
         "status": free.status,
@@ -1521,17 +1608,33 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
         "job": job_id,
         "server_epoch": server_epoch_new,
     })
-    done = state == "done"
+    pages_complete = (
+        pages is not None
+        and len(rows) == int(pages.get("rows_total_n", -1))
+    )
+    done = state == "done" and pages_complete
+    if state == "done" and not pages_complete:
+        ctx.record_scenario({
+            "ev": "purge_pages_incomplete",
+            "job": job_id,
+            "rows_n": len(rows),
+            "rows_total_n": (pages or {}).get("rows_total_n", 0),
+            "server_epoch": server_epoch_new,
+        })
     if not done:
+        nd_reason = reason or state or "wait_expired"
+        if state == "done" and not pages_complete:
+            nd_reason = "pages_incomplete"
         ctx.record_scenario({
             "ev": "purge_not_done",
-            "reason": reason or state or "wait_expired",
+            "reason": nd_reason,
             "server_epoch": server_epoch_new,
             "waited_ms": waited_ms,
             "polls": polls,
             "stopped_b": 1 if stopped else 0,
         })
-    return {"done": done, "state": state, "reason": reason, "rows": rows, "job_id": job_id}
+    return {"done": done, "state": state, "reason": reason, "rows": rows,
+            "job_id": job_id, "cold_stop_ok": True}
 
 
 def _restart_server_live(ctx, old_epoch, director_uid_t0):
@@ -1580,32 +1683,31 @@ def _restart_server_live(ctx, old_epoch, director_uid_t0):
 
     hello_ev = res.get("event") if isinstance(res.get("event"), dict) else {}
     hello_args = hello_ev.get("args") if isinstance(hello_ev.get("args"), dict) else {}
+    # Aclaracion 6: el epoch nuevo sale solo de un hello aceptado del servidor
+    # nuevo; si el operador confirma sin hello (OPERATOR_DONE), no hay epoch.
     new_epoch = str(hello_ev.get("inst") or hello_args.get("inst") or "")
-    if new_epoch == old_epoch:
-        new_epoch = ""
+    if new_epoch == "" or new_epoch == old_epoch:
+        ctx.record_scenario({
+            "ev": "live_restart_failed",
+            "reason": "epoch_not_from_accepted_hello",
+        })
+        return ""
     deadline = time.monotonic() + T4_DIRECTOR_TIMEOUT_S
     while time.monotonic() < deadline:
         status_payload = wire.pack_payload(scalars_str={"director_uid": director_uid_t0})
         st = f03_common.issue_one(ctx, "server", "per_status", status_payload,
-                                  target_inst=new_epoch or None)
+                                  target_inst=new_epoch)
         if st.status == "done" and st.payload:
             reported = str(st.payload["str"].get("server_epoch") or "")
             n = st.payload["num"]
             uid = str(st.payload["str"].get("director_uid") or "")
-            epoch_ok = False
-            if new_epoch:
-                epoch_ok = reported == new_epoch
-            else:
-                epoch_ok = reported != "" and reported != old_epoch
             if (
-                epoch_ok
+                reported == new_epoch
                 and uid == director_uid_t0
                 and int(round(float(n.get("director_present_b", 0.0)))) == 1
                 and int(round(float(n.get("director_alive_b", 0.0)))) == 1
                 and int(round(float(n.get("director_inv_readable_b", 0.0)))) == 1
             ):
-                if not new_epoch:
-                    new_epoch = reported
                 return new_epoch
         time.sleep(2.0)
     ctx.record_scenario({"ev": "live_restart_failed", "reason": "director_not_reconnected"})
@@ -1676,7 +1778,9 @@ def _restart_server_offline(ctx, old_epoch):
         if reg and reg != old_epoch:
             return str(reg)
         time.sleep(0.02)
-    return str(ctx.bridge.registered("server") or "")
+    # Aclaracion 6: si el hello registrado sigue siendo el viejo, no hay epoch nuevo.
+    reg = str(ctx.bridge.registered("server") or "")
+    return reg if reg and reg != old_epoch else ""
 
 
 def _record_ledger(ctx, ledger_rows):
@@ -2164,7 +2268,10 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 wait_deadline = time.monotonic() + 900.0
                 waited = 0.0
                 while time.monotonic() < wait_deadline:
-                    st_wait = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
+                    st_wait = f03_common.issue_one(
+                        ctx, "server", "per_status",
+                        wire.pack_payload(scalars_str={"director_uid": director_uid_t0}),
+                    )
                     tick_ms = 0.0
                     if st_wait.status == "done" and st_wait.payload:
                         tick_ms = float(st_wait.payload["num"].get("tick_ms", 0.0))
@@ -2181,7 +2288,8 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 })
             for area_id in cfg["creature_areas"]:
                 obs_req_t = time.time()
-                rec_t2 = _census(ctx, fixture, "t2_census_10min", area_id, 1 if area_id in cfg["creature_areas"] else 0, director_uid=director_uid_t0)
+                # MENOR 9: t2 no esta en la matriz obligatoria de §6.1 (—): include_director_b=0.
+                rec_t2 = _census(ctx, fixture, "t2_census_10min", area_id, 0, director_uid=director_uid_t0)
                 _collect_creature_tracks(rec_t2, creature_lids, creature_tracks, obs_req_t)
             ctx.record_scenario({"ev": "storage_snapshot_t2", "files": _snapshot_stage(is_live, storage_env, sim_storage)})
 
@@ -2226,11 +2334,26 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             if drop_control_pre_restart:
                 _census(ctx, fixture, "t3_post_reset_census", "area_c", 0, qa_fault="drop_ctrl_pre_restart", director_uid=director_uid_t0)
 
-            stop_status = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
+            # MENOR 10: fuera de t0, per_status lleva el uid del director.
+            stop_status = f03_common.issue_one(
+                ctx, "server", "per_status",
+                wire.pack_payload(scalars_str={"director_uid": director_uid_t0}),
+            )
             ctx.record_scenario({
                 "ev": "t3_stop_status",
                 "status": stop_status.status,
                 "num": dict(stop_status.payload["num"]) if stop_status.payload else {},
+            })
+
+            # MENOR 8: las acreditadas se congelan con la evidencia del epoch viejo,
+            # antes del reinicio. El runner ordena la purga solo con esa lista.
+            accredited = _compute_accredited(_scenario_events(ctx), fixture, cfg, director_uid_t0)
+            ctx.record_scenario({
+                "ev": "purge_authorized",
+                "director_uid": director_uid_t0,
+                "server_epoch_old": server_epoch_old,
+                "candidates": accredited,
+                "pers_ids": [c["pers_id"] for c in accredited],
             })
 
             server_epoch_new = _restart_server(ctx, server_epoch_old, director_uid_t0)
@@ -2239,8 +2362,8 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                                          target_inst=server_epoch_new or None)
             first_new_tick_ms = 0.0
             if st_t4.status == "done" and st_t4.payload:
-                if not server_epoch_new:
-                    server_epoch_new = str(st_t4.payload["str"].get("server_epoch") or "")
+                # Aclaracion 6: no se adopta el epoch de la respuesta; solo vale el
+                # que trae un hello aceptado del servidor nuevo.
                 first_new_tick_ms = float(st_t4.payload["num"].get("tick_ms", 0.0))
             ctx.record_scenario({
                 "ev": "t4_post_restart_status",
@@ -2250,24 +2373,28 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 "num": dict(st_t4.payload["num"]) if st_t4.payload else {},
             })
 
-            # P2c: las acreditadas se congelan con la evidencia del epoch viejo, antes
-            # del reinicio. El runner ordena la purga solo con esa lista.
-            accredited = _compute_accredited(_scenario_events(ctx), fixture, cfg, director_uid_t0)
-            ctx.record_scenario({
-                "ev": "purge_authorized",
-                "director_uid": director_uid_t0,
-                "server_epoch_old": server_epoch_old,
-                "candidates": accredited,
-                "pers_ids": [c["pers_id"] for c in accredited],
-            })
             open_t5 = False
-            if accredited:
+            skip_live_cleanup = False
+            if not server_epoch_new:
+                # Aclaracion 6: sin reinicio acreditado no hay orden de purga ni t5.
+                ctx.record_scenario({
+                    "ev": "purge_not_done",
+                    "reason": "restart_not_validated",
+                    "server_epoch": "",
+                })
+                open_t5 = False
+            elif accredited:
                 purge_result = _purge_start_t4(
                     ctx, accredited,
                     server_epoch_new=server_epoch_new,
                     director_uid=director_uid_t0,
+                    storage_env=storage_env,
                 )
                 open_t5 = bool(purge_result.get("done"))
+                # Aclaracion 8: sin parada en frio acreditada no se sigue a la
+                # limpieza en vivo; el finally intenta la restauracion en frio.
+                if not purge_result.get("cold_stop_ok", True):
+                    skip_live_cleanup = True
             else:
                 open_t5 = True
 
@@ -2440,54 +2567,55 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
 
                 _reset_scene(ctx, "scene_b", ctx.peek_next_op_id(), server_epoch_new)
 
-            cleanup_rows = [
-                {
-                    "area_tag": area_id,
-                    "center_x_m": float(fixture["areas"][area_id]["center_x_m"]),
-                    "center_z_m": float(fixture["areas"][area_id]["center_z_m"]),
-                    "radius_m": float(fixture["areas"][area_id]["radius_m"]),
-                }
-                for area_id in cfg["base_areas"]
-            ]
-            track_discs = [
-                {
-                    "area_id": str(c.get("area_id") or ""),
-                    "center_x_m": float(c.get("start_num", {}).get("center_x_m", 0.0)),
-                    "center_z_m": float(c.get("start_num", {}).get("center_z_m", 0.0)),
-                    "radius_m": float(c.get("start_num", {}).get("radius_m", 0.0)),
-                }
-                for c in t5_censuses
-                if str(c.get("area_id") or "").startswith("t5_track_")
-            ]
-            for c in track_discs:
-                cleanup_rows.append({
-                    "area_tag": c["area_id"],
-                    "center_x_m": c["center_x_m"],
-                    "center_z_m": c["center_z_m"],
-                    "radius_m": c["radius_m"],
-                })
-            restore_stop_step = "t6_stop_server_for_cold_restore"
-            cleanup = f03_common.issue_one(
-                ctx, "server", "per_cleanup_qa",
-                wire.pack_payload(
-                    scalars_str={"cleanup_tag": "t6_cleanup"},
-                    num_cols=["center_x_m", "center_z_m", "radius_m"],
-                    str_cols=["area_tag"],
-                    row_dicts=cleanup_rows,
-                ),
-            )
-            ctx.record_scenario({"ev": "t6_cleanup_qa", "status": cleanup.status, "reason": cleanup.reason})
-
-            for area_id in cfg["base_areas"]:
-                _census(ctx, fixture, "t6_post_cleanup_census", area_id, 1 if area_id == "area_a" else 0, director_uid=director_uid_t0, target_inst=server_epoch_new or None)
-            for c in track_discs:
-                _census(
-                    ctx, fixture, "t6_post_cleanup_census", str(c["area_id"]), 0,
-                    center_override=(float(c["center_x_m"]), float(c["center_z_m"])),
-                    radius_override=float(c["radius_m"]),
-                    director_uid=director_uid_t0,
-                    target_inst=server_epoch_new or None,
+            if not skip_live_cleanup:
+                cleanup_rows = [
+                    {
+                        "area_tag": area_id,
+                        "center_x_m": float(fixture["areas"][area_id]["center_x_m"]),
+                        "center_z_m": float(fixture["areas"][area_id]["center_z_m"]),
+                        "radius_m": float(fixture["areas"][area_id]["radius_m"]),
+                    }
+                    for area_id in cfg["base_areas"]
+                ]
+                track_discs = [
+                    {
+                        "area_id": str(c.get("area_id") or ""),
+                        "center_x_m": float(c.get("start_num", {}).get("center_x_m", 0.0)),
+                        "center_z_m": float(c.get("start_num", {}).get("center_z_m", 0.0)),
+                        "radius_m": float(c.get("start_num", {}).get("radius_m", 0.0)),
+                    }
+                    for c in t5_censuses
+                    if str(c.get("area_id") or "").startswith("t5_track_")
+                ]
+                for c in track_discs:
+                    cleanup_rows.append({
+                        "area_tag": c["area_id"],
+                        "center_x_m": c["center_x_m"],
+                        "center_z_m": c["center_z_m"],
+                        "radius_m": c["radius_m"],
+                    })
+                restore_stop_step = "t6_stop_server_for_cold_restore"
+                cleanup = f03_common.issue_one(
+                    ctx, "server", "per_cleanup_qa",
+                    wire.pack_payload(
+                        scalars_str={"cleanup_tag": "t6_cleanup", "director_uid": director_uid_t0},
+                        num_cols=["center_x_m", "center_z_m", "radius_m"],
+                        str_cols=["area_tag"],
+                        row_dicts=cleanup_rows,
+                    ),
                 )
+                ctx.record_scenario({"ev": "t6_cleanup_qa", "status": cleanup.status, "reason": cleanup.reason})
+
+                for area_id in cfg["base_areas"]:
+                    _census(ctx, fixture, "t6_post_cleanup_census", area_id, 1 if area_id == "area_a" else 0, director_uid=director_uid_t0, target_inst=server_epoch_new or None)
+                for c in track_discs:
+                    _census(
+                        ctx, fixture, "t6_post_cleanup_census", str(c["area_id"]), 0,
+                        center_override=(float(c["center_x_m"]), float(c["center_z_m"])),
+                        radius_override=float(c["radius_m"]),
+                        director_uid=director_uid_t0,
+                        target_inst=server_epoch_new or None,
+                    )
 
         finally:
             if is_live and storage_env is not None and storage_t0 is not None and backup_slot is not None:

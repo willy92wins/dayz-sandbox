@@ -92,7 +92,7 @@ PURGE_MAX_MS = 600000.0
 PURGE_SCOL = ["phase", "pers_id", "class_name", "parent_pers_id", "owner_uid",
               "result", "net_id", "parent_net_id"]
 PURGE_NCOL = ["depth_n", "emit_tick_ms", "lease_age_ms", "lease_limit_ms",
-              "max_hp", "health_hp"]
+              "max_hp", "health_hp", "confirm_tick_ms"]
 
 WITNESS_SCOL = ["class_name", "net_id", "parent_net_id"]
 WITNESS_NCOL = [
@@ -267,17 +267,31 @@ def _is_valid_identity(value, zero):
     return text != "" and text != zero
 
 
+def _is_int_str(value):
+    # Espejo de IsIntStr del .c: signo opcional y 1..10 cifras ASCII (11 con '-').
+    s = str(value or "")
+    if not s:
+        return False
+    if s[0] == "-":
+        if len(s) < 2 or len(s) > 11:
+            return False
+        body = s[1:]
+    else:
+        if len(s) > 10:
+            return False
+        body = s
+    return all("0" <= c <= "9" for c in body)
+
+
 def _is_nonzero_pers_id(value):
+    # MENOR 14: admite no canonicos como "01:0:0:0" (el .c los admite en la orden);
+    # la comparacion sigue siendo textual, como FormatPersId.
     parts = str(value or "").split(":")
     if len(parts) != 4:
         return False
-    try:
-        nums = [int(p) for p in parts]
-    except ValueError:
+    if not all(_is_int_str(p) for p in parts):
         return False
-    for p, n in zip(parts, nums):
-        if str(n) != p or n < -2147483648 or n > 2147483647:
-            return False
+    nums = [int(p) for p in parts]
     return any(n != 0 for n in nums)
 
 
@@ -337,6 +351,7 @@ class PersistFakeExt(FakeExt):
         self.purge_resolved = []
         self.purge_confirm = None
         self.purge_confirm_ent = None
+        self.purge_emit_tick = 0.0
         self.purge_pre_n = 0
 
     def _state_file(self):
@@ -820,12 +835,14 @@ class PersistFakeExt(FakeExt):
         fault = op.get("qa_fault", "")
         if verb == "per_status":
             return self._op_status(args_unpacked)
-        if verb == "per_purge_start":
-            return self._op_purge_start(op, args_unpacked)
         if verb == "per_cleanup_qa":
             return self._op_cleanup(args_unpacked)
+        # MEN 1: como el .c, per_purge_start es un verbo con efecto y mira el lease
+        # antes de aceptar la orden (no despacha antes de la guarda E1).
         if not self.peer.lease_valid():
             return ("error", "lease_expired", wire.empty_payload())
+        if verb == "per_purge_start":
+            return self._op_purge_start(op, args_unpacked)
         if verb == "per_apply_scene":
             return self._op_apply(op, args_unpacked, fault)
         if verb == "per_reset_scene":
@@ -936,20 +953,52 @@ class PersistFakeExt(FakeExt):
             cur = self.world.get(parent_nid)
         return ""
 
-    def _purge_depth(self, ent):
-        depth = 0
+    def _subtree_born_in_inventory(self, ent):
+        # MENOR 15: espejo del .c; todo registro del subarbol que se mueve a un
+        # jugador debe haber nacido en inventario.
+        if not ent.get("born_in_inventory"):
+            return False
+        for desc in self._preorder_children(ent["net_id"], self._children_index()):
+            if not desc.get("born_in_inventory"):
+                return False
+        return True
+
+    def _root_entity(self, ent):
         cur = ent
         seen = set()
-        while cur is not None and cur.get("owner_uid") != self.director_uid:
+        while cur is not None:
             nid = cur.get("net_id")
             if nid in seen:
                 break
             seen.add(nid)
-            depth += 1
+            parent_nid = cur.get("parent_net_id") or ""
+            if not parent_nid:
+                return cur
+            nxt = self.world.get(parent_nid)
+            if nxt is None:
+                return cur
+            cur = nxt
+        return cur
+
+    def _purge_depth(self, ent):
+        # MENOR 14: como PurgeDepthOf del .c, el director cuenta como padre virtual
+        # (sus hijos directos dan 1, los nietos 2), no 0.
+        depth = 1
+        cur = ent
+        seen = set()
+        while cur is not None:
+            nid = cur.get("net_id")
+            if nid in seen:
+                break
+            seen.add(nid)
             parent_nid = cur.get("parent_net_id") or ""
             if not parent_nid:
                 break
-            cur = self.world.get(parent_nid)
+            parent = self.world.get(parent_nid)
+            if parent is None:
+                break
+            depth += 1
+            cur = parent
         return depth
 
     def _purge_parent_pers(self, ent):
@@ -960,13 +1009,15 @@ class PersistFakeExt(FakeExt):
     def _purge_parent_net(self, ent):
         return ent.get("parent_net_id") or ""
 
-    def _purge_append(self, phase, ent, result, emit_tick=0.0, lease_age=0.0, lease_limit=0.0):
+    def _purge_append(self, phase, ent, result, emit_tick=0.0, lease_age=0.0, lease_limit=0.0, confirm_tick=0.0):
+        # MENOR 13: owner_uid medido por la raiz del arbol, no una constante de la orden.
+        owner_uid = self.director_uid if self._root_owner_uid(ent) == self.director_uid else ""
         row = {
             "phase": phase,
             "pers_id": ent.get("pers_id", ZERO_PERS_ID),
             "class_name": ent.get("class_name", ""),
             "parent_pers_id": self._purge_parent_pers(ent),
-            "owner_uid": self.director_uid,
+            "owner_uid": owner_uid,
             "result": result,
             "net_id": ent.get("net_id", ""),
             "parent_net_id": self._purge_parent_net(ent),
@@ -976,6 +1027,7 @@ class PersistFakeExt(FakeExt):
             "lease_limit_ms": float(lease_limit),
             "max_hp": float(ent.get("max_hp", 0.0)),
             "health_hp": float(ent.get("health_hp", 0.0)),
+            "confirm_tick_ms": float(confirm_tick),
         }
         numeric = [row[name] for name in PURGE_NCOL]
         textual = [row[name] for name in PURGE_SCOL]
@@ -1498,7 +1550,7 @@ class PersistFakeExt(FakeExt):
                 return ("rejected", "director_not_ready", wire.empty_payload())
             if not (self.director_present and self.director_alive and self.director_inv_readable):
                 return ("rejected", "director_not_ready", wire.empty_payload())
-            if not ent.get("born_in_inventory"):
+            if not self._subtree_born_in_inventory(ent):
                 return ("rejected", "bad_args", wire.empty_payload())
         if not self.peer.lease_valid():
             return ("error", "lease_expired", wire.empty_payload())
@@ -1525,7 +1577,14 @@ class PersistFakeExt(FakeExt):
             if tgt is None:
                 return ("rejected", "unknown_entity", wire.empty_payload())
             tgt_ent = tgt["ent"]
-            if self._root_owner_uid(tgt_ent) == self.director_uid and not ent.get("born_in_inventory"):
+            # MENOR 14: como el .c, cualquier contenedor de un jugador (cualquier
+            # Man), no solo el director.
+            tgt_root = self._root_entity(tgt_ent)
+            is_player_root = bool(
+                tgt_root is not None
+                and (tgt_root.get("cat") == "actor" or tgt_root.get("owner_uid"))
+            )
+            if is_player_root and not self._subtree_born_in_inventory(ent):
                 return ("rejected", "bad_args", wire.empty_payload())
             ent["loc_kind"] = "cargo"
             ent["parent_net_id"] = tgt_ent["net_id"]
@@ -1808,11 +1867,12 @@ class PersistFakeExt(FakeExt):
             return self._bad_args_reply()
         if self.purge_job_id and self.jobs.get_state(self.purge_job_id) == "running":
             return ("rejected", "purge_pending", wire.empty_payload())
-        director_ready = bool(
+        # MENOR 14: como el .c, con include_director_b=1 se censa al director
+        # presente e inventario legible aunque este muerto (alive_b queda 0).
+        director_ok = bool(
             wanted_uid
             and wanted_uid == self.director_uid
             and self.director_present
-            and self.director_alive
             and self.director_inv_readable
         )
         if fault == "drop_ctrl_pre_restart":
@@ -1832,7 +1892,7 @@ class PersistFakeExt(FakeExt):
         area_name = area_label.split(":", 1)[1] if ":" in area_label else area_label
         snap_stamp = float(self.peer.local_ms())
         snap_frame_value = int(self.peer.frame)
-        want_director_rows = want_director if director_ready else 0
+        want_director_rows = want_director if director_ok else 0
         if all_mode == 1:
             rows_found = self._census_all_rows(mid_x, mid_z, radius_value, want_director_rows)
         else:
@@ -1858,10 +1918,10 @@ class PersistFakeExt(FakeExt):
             "center_x_m": mid_x,
             "center_z_m": mid_z,
             "radius_m": radius_value,
-            "director_present_b": 1.0 if director_ready else 0.0,
-            "director_alive_b": 1.0 if (director_ready and self.director_alive) else 0.0,
-            "director_inv_readable_b": 1.0 if (director_ready and self.director_inv_readable) else 0.0,
-            "director_inv_count_n": float(len(self._director_tree_entities())) if director_ready else 0.0,
+            "director_present_b": 1.0 if director_ok else 0.0,
+            "director_alive_b": 1.0 if (director_ok and self.director_alive) else 0.0,
+            "director_inv_readable_b": 1.0 if director_ok else 0.0,
+            "director_inv_count_n": float(len(self._director_tree_entities())) if director_ok else 0.0,
         }
         result_payload = wire.pack_payload(scalars_str=text_out, scalars_num=num_out)
         self.pending_finish[job_name] = CENSUS_FINISH_AFTER_ATTEMPT_TICKS
@@ -2063,6 +2123,7 @@ class PersistFakeExt(FakeExt):
             self.purge_job_id = ""
             self.purge_confirm = None
             self.purge_confirm_ent = None
+            self.purge_emit_tick = 0.0
 
     def _finish_pending_job(self, jid):
         if self.jobs.get_state(jid) == "running":
@@ -2192,6 +2253,7 @@ class PersistFakeExt(FakeExt):
         self.purge_job_id = ""
         self.purge_confirm = None
         self.purge_confirm_ent = None
+        self.purge_emit_tick = 0.0
         keep = {}
         for net_id, ent in self.world.items():
             if ent["owner_uid"] == self.director_uid or ent["persistent"]:
@@ -2230,7 +2292,11 @@ class PersistFakeExt(FakeExt):
             idx = self._purge_authorized_index(self.purge_confirm)
             if idx >= 0 and not self.purge_resolved[idx]:
                 ent = self.purge_confirm_ent
-                if self._purge_append("result", ent, "deleted"):
+                # Aclaracion 2: tick en que se confirma la ausencia, posterior al emit.
+                confirm_tick = float(self.peer.local_ms())
+                if confirm_tick <= self.purge_emit_tick:
+                    confirm_tick = self.purge_emit_tick + 1.0
+                if self._purge_append("result", ent, "deleted", confirm_tick=confirm_tick):
                     self.purge_resolved[idx] = 1
             self.purge_confirm = None
             if self.jobs.get_state(self.purge_job_id) != "running":
@@ -2268,14 +2334,22 @@ class PersistFakeExt(FakeExt):
                 if self._purge_append("result", cand, "retained_foreign"):
                     self.purge_resolved[idx] = 1
                 continue
-            if not self.peer.lease_valid():
-                return
+            # MENOR 6: una sola lectura de la edad; se decide y se registra la misma muestra.
+            if hasattr(self.peer, "lease_age_ms"):
+                age = float(self.peer.lease_age_ms())
+                limit = float(getattr(self.peer, "lease_ms", 3000) or 3000)
+                if age > limit:
+                    return
+            else:
+                if not self.peer.lease_valid():
+                    return
+                age = 0.0
+                limit = 0.0
             emit_tick = float(self.peer.local_ms())
-            age = float(self.peer.lease_age_ms()) if hasattr(self.peer, "lease_age_ms") else 0.0
-            limit = float(getattr(self.peer, "lease_ms", 3000) or 3000)
             for sub in self._purge_subtree(leaf):
                 if not self._purge_append("emit", sub, "", emit_tick, age, limit):
                     return
+            self.purge_emit_tick = emit_tick
             self.purge_confirm = leaf.get("pers_id", "")
             self.purge_confirm_ent = dict(leaf)
             self._delete_entity(leaf)

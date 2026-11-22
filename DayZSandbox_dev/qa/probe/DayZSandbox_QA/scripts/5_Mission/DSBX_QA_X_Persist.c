@@ -217,6 +217,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	protected string m_PurgeConfirmNetId;
 	protected string m_PurgeConfirmParentPersId;
 	protected string m_PurgeConfirmParentNetId;
+	protected float m_PurgeConfirmEmitTick;
 	protected int m_PurgePreN;
 	static const float PURGE_MAX_DURATION_MS = 600000.0;
 	// Presupuesto verificable de captura del censo (MEN-14); el cupo de filas llega por StartJob.
@@ -264,6 +265,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		m_PurgeConfirmNetId = "";
 		m_PurgeConfirmParentPersId = "";
 		m_PurgeConfirmParentNetId = "";
+		m_PurgeConfirmEmitTick = 0.0;
 		m_PurgePreN = 0;
 
 		InitSentinelClasses();
@@ -1341,7 +1343,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		return best;
 	}
 
-	protected bool AppendPurgeRow(string phase, string persId, string className, string parentPersId, string parentNetId, string ownerUid, string result, string netId, int depthN, float emitTick, float leaseAge, float leaseLimit, float maxHp, float healthHp)
+	protected bool AppendPurgeRow(string phase, string persId, string className, string parentPersId, string parentNetId, string ownerUid, string result, string netId, int depthN, float emitTick, float leaseAge, float leaseLimit, float maxHp, float healthHp, float confirmTick)
 	{
 		array<string> svals = new array<string>();
 		svals.Insert(phase);
@@ -1359,15 +1361,45 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		nvals.Insert(leaseLimit);
 		nvals.Insert(maxHp);
 		nvals.Insert(healthHp);
+		nvals.Insert(confirmTick);
 		return m_Jobs.AppendRow(m_PurgeJobId, nvals, svals);
 	}
 
-	protected void AppendPurgeTreeRow(string phase, EntityAI ent, Man director, string ownerUid, string result, int depthN, float emitTick, float leaseAge, float leaseLimit)
+	// MENOR 15: el nacimiento en el inventario se exige a todo registro del subarbol
+	// cuyo destino sea un jugador, no solo a la raiz que se mueve.
+	protected bool SubtreeBornInInventory(EntityAI root)
+	{
+		if (!root)
+			return false;
+		DSBX_QA_PersistRecord rootRec = FindRecordByObject(root);
+		if (!rootRec || rootRec.m_BornInInventory != 1)
+			return false;
+		if (!root.GetInventory())
+			return true;
+		array<EntityAI> sub = new array<EntityAI>();
+		root.GetInventory().EnumerateInventory(InventoryTraversalType.PREORDER, sub);
+		for (int i = 0; i < sub.Count(); i++)
+		{
+			EntityAI se = sub.Get(i);
+			if (!se || se == root)
+				continue;
+			DSBX_QA_PersistRecord seRec = FindRecordByObject(se);
+			if (seRec && seRec.m_BornInInventory != 1)
+				return false;
+		}
+		return true;
+	}
+
+	protected void AppendPurgeTreeRow(string phase, EntityAI ent, Man director, string directorUid, string result, int depthN, float emitTick, float leaseAge, float leaseLimit)
 	{
 		float maxHp = -1.0;
 		float healthHp = -1.0;
-		ReadQaHealth(ent, maxHp, healthHp);
-		AppendPurgeRow(phase, FormatPersId(ent), ent.GetType(), ParentPersIdOf(ent), ParentNetIdOf(ent), ownerUid, result, FormatNetId(ent), depthN, emitTick, leaseAge, leaseLimit, maxHp, healthHp);
+		// MENOR 7: lo vanilla del director se lee como el censo (ReadHealth); lo del QA, con ReadQaHealth.
+		if (IsQaCreated(ent)) ReadQaHealth(ent, maxHp, healthHp); else ReadHealth(ent, maxHp, healthHp);
+		// MENOR 13: owner_uid medido por la raiz del arbol, no una constante de la orden.
+		string rowOwnerUid = "";
+		if (director && ent.GetHierarchyRootPlayer() == director) rowOwnerUid = directorUid;
+		AppendPurgeRow(phase, FormatPersId(ent), ent.GetType(), ParentPersIdOf(ent), ParentNetIdOf(ent), rowOwnerUid, result, FormatNetId(ent), depthN, emitTick, leaseAge, leaseLimit, maxHp, healthHp, 0.0);
 	}
 
 	protected void HandlePurgeStart(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
@@ -1436,6 +1468,8 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		ncol.Insert("lease_limit_ms");
 		ncol.Insert("max_hp");
 		ncol.Insert("health_hp");
+		// Aclaracion 2: columna nueva al final; las anteriores no cambian.
+		ncol.Insert("confirm_tick_ms");
 		array<string> scol = new array<string>();
 		scol.Insert("phase");
 		scol.Insert("pers_id");
@@ -1493,6 +1527,10 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		}
 		res.status = "done";
 		m_Jobs.FillStartRead(res.read, op.op_id, "per_purge");
+		// MENOR 14: el acuse publica el estado real del trabajo (p. ej. failed/rows_cap), no "running" fijo.
+		string ackState = m_Jobs.GetState(m_PurgeJobId);
+		if (ackState != "" && res.read.sv.Count() > 1)
+			res.read.sv.Set(1, ackState);
 		PutNum(res.read, "pre_n", (float)preN);
 	}
 
@@ -1506,13 +1544,13 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		return true;
 	}
 
-	protected void ResolvePurgeResult(int idx, string result, string persId, string className, string parentPersId, string parentNetId, string netId)
+	protected void ResolvePurgeResult(int idx, string result, string persId, string className, string parentPersId, string parentNetId, string netId, string ownerUid, float confirmTick)
 	{
 		if (idx < 0)
 			return;
 		if (m_PurgeResolved.Get(idx) != 0)
 			return;
-		bool ok = AppendPurgeRow("result", persId, className, parentPersId, parentNetId, m_PurgeDirectorUid, result, netId, 0, 0.0, 0.0, 0.0, -1.0, -1.0);
+		bool ok = AppendPurgeRow("result", persId, className, parentPersId, parentNetId, ownerUid, result, netId, 0, 0.0, 0.0, 0.0, -1.0, -1.0, confirmTick);
 		if (!ok)
 			return;
 		m_PurgeResolved.Set(idx, 1);
@@ -1545,7 +1583,11 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			if (still > 0)
 				return;
 			int cidx = FindPurgeAuthIndex(m_PurgeConfirmPersId);
-			ResolvePurgeResult(cidx, "deleted", m_PurgeConfirmPersId, m_PurgeConfirmClass, m_PurgeConfirmParentPersId, m_PurgeConfirmParentNetId, m_PurgeConfirmNetId);
+			// Aclaracion 2: el tick en que se confirma que ya no esta; posterior a su emit_tick_ms.
+			float confirmTick = m_Probe.NowMs();
+			if (confirmTick <= m_PurgeConfirmEmitTick)
+				confirmTick = m_PurgeConfirmEmitTick + 1.0;
+			ResolvePurgeResult(cidx, "deleted", m_PurgeConfirmPersId, m_PurgeConfirmClass, m_PurgeConfirmParentPersId, m_PurgeConfirmParentNetId, m_PurgeConfirmNetId, m_PurgeDirectorUid, confirmTick);
 			m_PurgeConfirmPersId = "";
 			m_PurgeConfirmClass = "";
 			m_PurgeConfirmNetId = "";
@@ -1570,25 +1612,32 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			int count = CountPersIdInTree(treeItems, pid);
 			if (count == 0)
 			{
-				ResolvePurgeResult(a, "absent", pid, cls, "", "", "");
+				ResolvePurgeResult(a, "absent", pid, cls, "", "", "", "", 0.0);
 				continue;
 			}
 			if (count > 1)
 			{
 				EntityAI first = FindFirstPersIdInTree(treeItems, pid);
-				ResolvePurgeResult(a, "ambiguous", pid, cls, ParentPersIdOf(first), ParentNetIdOf(first), FormatNetId(first));
+				string firstOwner = "";
+				if (first && director && first.GetHierarchyRootPlayer() == director) firstOwner = m_PurgeDirectorUid;
+				ResolvePurgeResult(a, "ambiguous", pid, cls, ParentPersIdOf(first), ParentNetIdOf(first), FormatNetId(first), firstOwner, 0.0);
 				continue;
 			}
 			EntityAI cand = FindFirstPersIdInTree(treeItems, pid);
-			if (!cand || cand.GetType() != cls || !IsPurgeTreeEligible(cand, director, treeItems))
+			// MENOR 12: el propio director nunca es candidato.
+			if (!cand || cand == dirEnt || cand.IsMan() || cand.GetType() != cls || !IsPurgeTreeEligible(cand, director, treeItems))
 			{
-				ResolvePurgeResult(a, "retained_foreign", pid, cls, ParentPersIdOf(cand), ParentNetIdOf(cand), FormatNetId(cand));
+				string candOwner = "";
+				if (cand && director && cand.GetHierarchyRootPlayer() == director) candOwner = m_PurgeDirectorUid;
+				ResolvePurgeResult(a, "retained_foreign", pid, cls, ParentPersIdOf(cand), ParentNetIdOf(cand), FormatNetId(cand), candOwner, 0.0);
 				continue;
 			}
 			EntityAI leaf = PickPurgeLeaf(cand, director, treeItems);
 			if (!leaf)
 			{
-				ResolvePurgeResult(a, "retained_foreign", pid, cls, ParentPersIdOf(cand), ParentNetIdOf(cand), FormatNetId(cand));
+				string candOwner2 = "";
+				if (cand && director && cand.GetHierarchyRootPlayer() == director) candOwner2 = m_PurgeDirectorUid;
+				ResolvePurgeResult(a, "retained_foreign", pid, cls, ParentPersIdOf(cand), ParentNetIdOf(cand), FormatNetId(cand), candOwner2, 0.0);
 				continue;
 			}
 			if (!m_Probe.LeaseOk())
@@ -1618,6 +1667,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			m_PurgeConfirmNetId = leafNet;
 			m_PurgeConfirmParentPersId = leafParentPers;
 			m_PurgeConfirmParentNetId = leafParentNet;
+			m_PurgeConfirmEmitTick = emitTick;
 			return;
 		}
 		if (PurgeAllResolved())
@@ -2313,7 +2363,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				res.reason = "director_not_ready";
 				return;
 			}
-			if (rec.m_BornInInventory != 1)
+			if (!SubtreeBornInInventory(rec.m_RefEnt))
 			{
 				res.status = "rejected";
 				res.reason = "bad_args";
@@ -2379,7 +2429,7 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				return;
 			}
 			EntityAI targetEnt = EntityAI.Cast(targetRec.m_RefEnt);
-			if (targetEnt && targetEnt.GetHierarchyRootPlayer() != null && rec.m_BornInInventory != 1)
+			if (targetEnt && targetEnt.GetHierarchyRootPlayer() != null && !SubtreeBornInInventory(rec.m_RefEnt))
 			{
 				res.status = "rejected";
 				res.reason = "bad_args";
@@ -3356,6 +3406,24 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 	{
 		cleanedOwnN = 0;
 		cleanedRawN = 0;
+		// MEN 5: t6 solo excluye el inventario del director; los actores de la escena
+		// y sus prendas se borran como antes (no se salta cualquier Man).
+		string cleanupDirUid = "";
+		int cleanupPlayersN = 0;
+		int cleanupPresentB = 0;
+		int cleanupAliveB = 0;
+		int cleanupInvReadableB = 0;
+		int cleanupInvCountN = 0;
+		Man cleanupDirector = null;
+		// Si la purga fijo al director, se usa su uid; si no, el uid que manda el
+		// runner; y si tampoco, el unico jugador listo.
+		string cleanupWantedUid = m_PurgeDirectorUid;
+		if (cleanupWantedUid == "")
+			cleanupWantedUid = GetStrArg(args, "director_uid", "");
+		if (cleanupWantedUid != "")
+			cleanupDirector = FindPlayerByUid(cleanupWantedUid, cleanupDirUid, cleanupPresentB, cleanupAliveB, cleanupInvReadableB, cleanupInvCountN);
+		else
+			cleanupDirector = FindOnlyPlayer(cleanupDirUid, cleanupPlayersN, cleanupPresentB, cleanupAliveB, cleanupInvReadableB, cleanupInvCountN);
 
 		array<string> qaNetIds = new array<string>();
 		array<string> qaPersIds = new array<string>();
@@ -3389,11 +3457,12 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		for (int i = m_Records.Count() - 1; i >= 0; i--)
 		{
 			DSBX_QA_PersistRecord rec = m_Records.Get(i);
-			// P2c: t6 no toca el inventario de un jugador (el director conserva lo suyo).
+			// MEN 5: t6 no toca el inventario del director (conserva lo suyo); el de
+			// los actores de la escena si se borra.
 			EntityAI recEnt = null;
 			if (rec)
 				recEnt = EntityAI.Cast(rec.m_RefEnt);
-			if (recEnt && recEnt.GetHierarchyRootPlayer() != null)
+			if (recEnt && cleanupDirector && recEnt.GetHierarchyRootPlayer() == cleanupDirector)
 				continue;
 			// BLOQ 5: un contenedor registrado con descendientes ajenos o
 			// desconocidos no se borra (como al reaplicar); se conserva.
@@ -3460,9 +3529,13 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 					if (!IsObjectAlive(cand))
 						continue;
 					EntityAI ent = EntityAI.Cast(cand);
-					if (!ent || ent.IsMan())
+					if (!ent)
 						continue;
-					if (ent.GetHierarchyRootPlayer() != null)
+					// MEN 5: solo se protege al director y su inventario; un actor de
+					// la escena (otro Man) y sus prendas se borran.
+					if (cleanupDirector && ent == cleanupDirector)
+						continue;
+					if (cleanupDirector && ent.GetHierarchyRootPlayer() == cleanupDirector)
 						continue;
 					bool byIdentity = IsQaIdentity(FormatNetId(cand), FormatPersId(cand), qaNetIds, qaPersIds);
 					bool byMark = IsSentinelClass(cand.GetType()) && IsQaHealthMark(cand);
