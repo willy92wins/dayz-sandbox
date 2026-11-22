@@ -429,10 +429,16 @@ class PartContext:
         self.git_head = self.harness.get("git_head")
         self.expected_stamp: str | None = None
         self.pbo_sha256: str | None = None
+        self.product_pbo_sha256: str | None = None
+        oracle_arg = getattr(args, "oracle_commit", None)
+        self.oracle_commit: str | None = oracle_arg if isinstance(oracle_arg, str) else None
 
         pbo_arg = getattr(args, "pbo", None)
         if pbo_arg and Path(pbo_arg).is_file():
             self.pbo_sha256 = sha256_file_hex(Path(pbo_arg))
+        product_arg = getattr(args, "product_pbo", None)
+        if isinstance(product_arg, (str, Path)) and product_arg and Path(product_arg).is_file():
+            self.product_pbo_sha256 = sha256_file_hex(Path(product_arg))
 
         self._owns_bridge = bridge is None
         self.bridge = bridge
@@ -825,6 +831,7 @@ class PartContext:
             "build": self.build,
             "git_dirty": self.harness.get("git_dirty"),
             "git_head": self.git_head,
+            "oracle_commit": self.oracle_commit,
             "params": {
                 "hold_ms": self.hold_ms,
                 "lease_ms": self.lease_ms,
@@ -838,6 +845,7 @@ class PartContext:
             "pbo_sha256": self.pbo_sha256,
             "peer_builds": peer_builds,
             "probe_stamp": self.expected_stamp,
+            "product_pbo_sha256": self.product_pbo_sha256,
         }
         manifest["execution_identity"] = {
             "fake_peer_pids": dict(self.fake_peer_pids),
@@ -1357,6 +1365,8 @@ def aggregate_spike(
                 return _finish(2, ["git_dirty"])
             if not ident.get("pbo_sha256"):
                 return _finish(2, ["mixed_parts"])
+            if spike_id in gate_core.PRODUCT_PBO_SPIKES and not ident.get("product_pbo_sha256"):
+                return _finish(2, ["mixed_parts"])
         sig = (
             git_head,
             ident.get("git_dirty"),
@@ -1365,6 +1375,8 @@ def aggregate_spike(
             ident.get("probe_stamp"),
             json.dumps(ident.get("peer_builds"), sort_keys=True),
             ident.get("pbo_sha256"),
+            ident.get("product_pbo_sha256"),
+            ident.get("oracle_commit"),
         )
         if ref_sig is None:
             ref_sig = sig
