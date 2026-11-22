@@ -3500,12 +3500,17 @@ class TestSPersistOracleOffline(unittest.TestCase):
                 "op-prep-status", "per_status", wire.pack_payload(), now_box[0]
             )
             peer._start_op(prep_status_op, now_box[0], time.monotonic(), prep_results)
+            # Ronda 2 de la enmienda (`brief:529-535`): el runner toma el `director_uid` del `per_status` de t0 y lo
+            # pasa explicito; un censo con `include_director_b = 1` sin el se rechaza con `rejected/bad_args`
+            # (arreglo del orquestador, 22-nov).
+            prep_status_s, _, _ = _unpack(next(r for r in prep_results if r["op_id"] == "op-prep-status")["read"])
+            prep_director_uid = prep_status_s.get("director_uid", "")
 
             prep_census_op = _make_valid_op(
                 "op-prep-census",
                 "per_census_start",
                 wire.pack_payload(
-                    scalars_str={"area_tag": "t1_pre_transition_census:area_a"},
+                    scalars_str={"area_tag": "t1_pre_transition_census:area_a", "director_uid": prep_director_uid},
                     scalars_num={
                         "center_x_m": 4500.0,
                         "center_z_m": 10200.0,
