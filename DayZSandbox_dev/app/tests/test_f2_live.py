@@ -613,6 +613,67 @@ class F2A2Apply(LiveBase):
             rows=[["obj-01", 0, 0, 0, 0, 0, 0]])
         self.assertTrue(check_apply_predicate(order, read_ok))
 
+    def test_predicado_checkpoint_objetos_apoyo_y_criaturas_3d(self):
+        # §6.1 (:664, R-13, V-10): objetos en horizontal (< 498 mm) + apoyo (|y - gy| <= 2000 mm);
+        # criaturas en 3D (< 498 mm).
+        gen = {"session": "a" * 16, "op_id": "op-1", "rev": 1,
+               "hash": "0" * 64, "plan_sha256": "0" * 64}
+        last = {"session": "a" * 16, "op_id": "op-1",
+                "verb": "scene.apply", "outcome": "done"}
+        obj_order = {
+            "session": "a" * 16, "op_id": "op-1", "epoch": "e" * 32,
+            "verb": "scene.apply",
+            "args": {
+                "f2": 1, "doc_id": DOC_ID, "rev": 1, "hash": "0" * 64,
+                "plan_sha256": "0" * 64,
+                "caps": {"objeto": 1, "infectado": 0, "animal": 0, "total": -1},
+                "classes": ["Land_Wreck_Ikarus"],
+                "lid": ["obj-01"], "ci": [0], "x_mm": [1000], "z_mm": [1000], "yaw_mdeg": [0],
+            },
+            "expectation": {"obj-01": ("Land_Wreck_Ikarus", 1000.0, 1000.0)},
+        }
+        gy = 10000
+
+        def obj_read(x, y, z):
+            return self.scene_read(
+                "e" * 32, generation=gen, n=1, last=last, obs_at="checkpoint",
+                rows=[["obj-01", 0, x, y, z, 0, gy]])
+
+        # Objeto con origen a +1291 mm sobre gy (Land_Wreck_Ikarus) y 0 en horizontal -> pasa
+        self.assertTrue(check_apply_predicate(obj_order, obj_read(1000, gy + 1291, 1000)))
+        # Limite de apoyo vertical: |y - gy| == 2000 pasa, 2001 falla (en ambos signos)
+        self.assertTrue(check_apply_predicate(obj_order, obj_read(1000, gy + 2000, 1000)))
+        self.assertTrue(check_apply_predicate(obj_order, obj_read(1000, gy - 2000, 1000)))
+        self.assertFalse(check_apply_predicate(obj_order, obj_read(1000, gy + 2001, 1000)))
+        self.assertFalse(check_apply_predicate(obj_order, obj_read(1000, gy - 2001, 1000)))
+        # Limite horizontal en objetos: 497 mm pasa (aun con origen a +1291), 498 mm falla
+        self.assertTrue(check_apply_predicate(obj_order, obj_read(1497, gy + 1291, 1000)))
+        self.assertFalse(check_apply_predicate(obj_order, obj_read(1498, gy, 1000)))
+
+        zmb_order = {
+            "session": "a" * 16, "op_id": "op-1", "epoch": "e" * 32,
+            "verb": "scene.apply",
+            "args": {
+                "f2": 1, "doc_id": DOC_ID, "rev": 1, "hash": "0" * 64,
+                "plan_sha256": "0" * 64,
+                "caps": {"objeto": 0, "infectado": 1, "animal": 0, "total": -1},
+                "classes": ["ZmbM_FarmerFat_Brown"],
+                "lid": ["zmb-01"], "ci": [0], "x_mm": [1000], "z_mm": [1000], "yaw_mdeg": [0],
+            },
+            "expectation": {"zmb-01": ("ZmbM_FarmerFat_Brown", 1000.0, 1000.0)},
+        }
+
+        def zmb_read(x, y, z):
+            return self.scene_read(
+                "e" * 32, generation=gen, n=1, last=last, obs_at="checkpoint",
+                rows=[["zmb-01", 0, x, y, z, 0, gy]])
+
+        # Criatura a +600 mm en vertical y 0 en horizontal -> falla (3D)
+        self.assertFalse(check_apply_predicate(zmb_order, zmb_read(1000, gy + 600, 1000)))
+        # Criatura a 497 mm exactos en 3D (142^2 + 213^2 + 426^2 = 497^2) -> pasa; a 498 -> falla
+        self.assertTrue(check_apply_predicate(zmb_order, zmb_read(1142, gy + 213, 1426)))
+        self.assertFalse(check_apply_predicate(zmb_order, zmb_read(1000, gy + 498, 1000)))
+
     def test_fila_omitida_y_ci_de_otra_clase(self):
         env = self.make_env()
         world = FakeWorld()

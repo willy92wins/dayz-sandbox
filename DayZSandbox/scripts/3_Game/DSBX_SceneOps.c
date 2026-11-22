@@ -1325,7 +1325,6 @@ class DSBX_SceneOps
 				StartInOrderCompensation(peer, inBatch);
 				return;
 			}
-			obj.SetPosition(targetPos);
 			obj.SetOrientation(Vector(fyaw, 0.0, 0.0));
 
 			int netLow = 0;
