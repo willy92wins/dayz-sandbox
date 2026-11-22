@@ -1264,11 +1264,22 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
       - objetos: distancia horizontal menor de 498 mm y `|y − gy|` de 2000 mm como mucho;
       - criaturas: la distancia 3D, como hasta ahora.
 
+      En los objetos es un cambio sobre F2 sin juego §4.3, punto 5 (`plans/2026-11-14-m1-f2-offline-brief.md:226`) y D12 (`:51`), que medían 3D.
+
       Lo implementa T3, con el OK de la principal para tocar esas líneas y `app/tests`. El oráculo congelado no cambia.
-    - **La variante 2 de P2n** sigue siendo un desplazamiento del motor (§5.5, `:355`); el runner no la provoca. Con el predicado nuevo, el desplazamiento tiene que ser de 0,5 m o más en horizontal, o de más de 2 m en vertical.
-    - **F2P-13 y la variante 2:** F2P-13 compara cada nacimiento de `P2n:apply` con `doc1` en horizontal, a menos de 0,5 m, y solo para las clases de las dos escenas (`qa/f2p_eval.py:2891` y `:4296-4326`). Por eso, en las fixtures negativas de T4:
-      - la entidad desplazada es de una clase que no está en ninguna de las dos escenas, porque si no, cuenta como extra y da FALLA o INCONCLUSO (`:4341-4351`);
-      - las demás filas, o están en posiciones de `doc1`, o son de clases fuera de las escenas.
+  - **P2n con el oráculo congelado (para las fixtures negativas y el runner de T4).**
+    - **Todas las filas de P2n que llegan a crearse usan clases de `doc1`.** `_generation_rebuild` deja fuera de la generación los nacimientos de clases ajenas al documento (`qa/f2p_eval.py:1269-1271`). Con una clase ajena, F2P-03 (`:3162-3183`) y F2P-07 no verían ni su limpieza ni su persistencia, y un reset que no la borrara daría PASA. La excepción es la fila que falla en la variante 1: `CreateObjectEx` devuelve `null`, no hay nacimiento y `_generation_rebuild` no la ve.
+    - **La variante 2** sigue siendo un desplazamiento que hace el motor (§5.5, `:355`); el runner no lo provoca. F2P-13 (`:4318-4320`) y `_generation_rebuild` (`:1278-1280`) casan los nacimientos con `doc1` solo en horizontal, a menos de 0,5 m. Por eso la variante 2 solo encaja si se cumplen las dos cosas:
+      - el nacimiento queda a menos de 0,5 m en horizontal de una fila de `doc1` de su clase;
+      - el checkpoint incumple el predicado: en un objeto, más de 2 m en vertical (por ejemplo, el motor lo apoya sobre un obstáculo); en una criatura, 498 mm o más en 3D.
+
+      Un desplazamiento de 0,5 m o más en horizontal cuenta como extra en F2P-13 y da FALLA o INCONCLUSO (`:4341-4351`). Si el motor real no da un estímulo así, F2P-03 queda INCONCLUSO con su motivo (§5.5, `:363`), nunca PASA.
+    - **La variante 1 basta para que F2P-03 dé PASA; la variante 2 no hace falta.** P2n aplica sobre la escena 1 viva de P2 (§5.2, `:246`), así que la etapa 4 borra antes la generación de P2 y ya hay efecto. Por eso una clase que no se puede crear se compensa dentro de la orden aunque vaya en la primera fila, sin pasar por M12 (`DSBX_SceneOps.c:1211-1215`). El mod deja `last.outcome = compensated` (`:1092-1098`) y el backend cierra la op en `parcial/compensada` (`app/backend/scene_plan.py:1112-1113`).
+      - **La línea que lo decide:** T4 declara `p2n_variant = create_failed_after`, que espera `parcial/compensada` (`qa/f2p_eval.py:3108`), y F2P-03 lo compara en `:3143`.
+      - **Ni F2P-03 (`:3105-3183`) ni F2P-13 (`:4259-4353`) piden nacimientos ni desplazamientos.** `_generation_rebuild` da `ok` con cero nacimientos (`:1288-1289`), y un testigo sin filas vale, porque la página 0 se exige siempre (`:359` y `:372-373`; `qa/f2p_evidence_contract.md:147-149`).
+      - **La clase que falla va en la primera fila del documento,** que es la primera que se crea (`app/backend/scene_plan.py:249-252` y `:263-267`; `DSBX_SceneOps.c:1290`). Detrás de otras filas, la compensación borraría sus nacimientos sin que quepa un censo previo, y F2P-10 daría INCONCLUSO `no_position` (`qa/f2p_eval.py:4152-4156`).
+      - **La clase tiene que estar también en la biblioteca web** (`fixtures/catalog-m1.json`) con su tipo, porque el Store valida contra ella las clases del documento (`app/backend/validate.py:304-311`). Si ninguna clase de la biblioteca hace fallar a `CreateObjectEx`, la variante 1 no se puede provocar en el juego: queda la variante 2 o el INCONCLUSO con su motivo (§5.5, `:363`).
+    - **F2P-10:** cada borrado que se juzga necesita un censo previo de la misma parte y el mismo epoch, también en P2n y en P5. El runner lo toma, como ya pide el contrato del oráculo (`qa/f2p_evidence_contract.md:466`). En P5 son dos: uno antes de `P5:cut` (§5.2, `:259`) y otro entre el corte y la entrega de `P5:apply2`, con los nacimientos de `P5:cut` ya en el mundo, porque la etapa 4 del apply nuevo los borra (`DSBX_SceneOps.c:589-616`; `qa/f2p_eval.py:4138-4156`).
   - **`now` fuera de rango.** En la fila `now` de `scene.observe` (M15), una raíz viva cuya lectura se sale de los rangos normativos (F2 sin juego §3.6, `:150`) va como en el checkpoint (`:117`): la fila de nulos, con los contadores a 0.
     - Si se mandara la lectura, el backend rechazaría el resultado entero: `valid_obs_now_row` (`app/backend/scene_plan.py:773`) falla y `bridge.py:624-625` responde 400.
-    - Es lo que ya hace T3 (`DSBX_SceneOps.c:362`).
+    - Es lo que ya hace T3 (`DSBX_SceneOps.c:356-359`).
