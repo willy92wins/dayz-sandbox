@@ -177,16 +177,21 @@ class DSBX_Wire
 			body = body + ",\"world_size\":" + worldSize;
 			body = body + ",\"modset\":[" + modsetItems + "]";
 			body = body + ",\"actor_engine\":\"none\"";
+			body = body + ",\"scene\":1";
 		}
 		body = body + "}";
 		return body;
 	}
 
-	static string WorldReadJson(DSBX_World world)
+	static string WorldReadJson(DSBX_World world, DSBX_Scene scene = null, DSBX_Args args = null)
 	{
 		if (!world)
 		{
 			return "{}";
+		}
+		if (args && args.f2 == 1 && scene && args.doc_id != "")
+		{
+			return DSBX_SceneWire.SceneReadJson(world.GetEpoch(), scene, args.doc_id, "");
 		}
 		string epochJson = WireId(world.GetEpoch());
 		string regShaJson = WireId(world.GetRegistrySha256());

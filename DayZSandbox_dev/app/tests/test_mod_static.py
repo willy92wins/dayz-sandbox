@@ -18,6 +18,10 @@ EXPECTED_C_FILES = (
     "scripts/3_Game/DSBX_World.c",
     "scripts/3_Game/DSBX_Catalog.c",
     "scripts/3_Game/DSBX_Peer.c",
+    # F2-partida T3 (brief §4.1): la escena viva.
+    "scripts/3_Game/DSBX_Scene.c",
+    "scripts/3_Game/DSBX_SceneOps.c",
+    "scripts/3_Game/DSBX_SceneWire.c",
     "scripts/5_Mission/DSBX_Mission.c",
 )
 

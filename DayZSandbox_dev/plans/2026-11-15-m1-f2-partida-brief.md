@@ -1244,3 +1244,7 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
   - **Nada de §3, §4 ni §5.2 cambia, ni la fixture.** El producto no cambia. El `tap` de T4 guarda el `upstream_status`, como el proxy de F1b.
 - Congelado del oráculo (2026-11-22, T2f-15m): **sin cambios de semántica;** la v1.3.16 sigue vigente. Se añaden los BLOQ conocidos M-01, J-01 y J-02, con su reproductor (§10), y se precisa en `:589` que el `req_id` 424 de las capturas reales es un `/poll`. Las líneas de antes de §10 no se mueven, porque el código las cita.
 - Tras el congelado (2026-11-22): se añaden al final de §10 los PASA falsos MAY de rondas anteriores (Y-05, A-04, C-05 y `c05e`), para que la lista sea una sola. Sin cambios de semántica ni del oráculo.
+- T3 (2026-11-22): el mod núcleo de la escena viva (§4), de Gemini 4 Neon (`agy`, `gemini-4-neon-high`).
+  - Los ganchos de F1b-peers (§4.2) se acordaron con la principal el 22-nov. El #19 está mergeado y no tiene sesión activa.
+  - Las constantes de §4.4 se cotejaron con el veredicto de S-persist (#21, `90c6d6b`) y no cambian: `FLAGS_ROOT` = `FLAGS_STATIC` y `FLAGS_CREATURE` = `FLAGS_AI_A`, por la vía (a) de Q9.
+  - El write-set de T3 (§8) suma `app/tests/test_mod_static.py`, que lista el árbol exacto de ficheros del mod (M1). Es un arreglo del orquestador.
