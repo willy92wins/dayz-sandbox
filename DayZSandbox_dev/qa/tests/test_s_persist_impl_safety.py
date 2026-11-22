@@ -465,6 +465,16 @@ def _make_clock_fake():
     return peer, jobs, ext
 
 
+def _make_fake_with_config(cfg_path, inst):
+    peer = _StubPeer()
+    peer.inst = inst
+    peer.config = str(cfg_path)
+    jobs = fake_peer.JobMgr(peer)
+    ext = fake_ext_persist.PersistFakeExt()
+    ext.init(peer, jobs)
+    return peer, jobs, ext
+
+
 def _census_args(include_director=0.0):
     return _unpacked(
         strings={"area_tag": "t1_pre_transition_census:area_a"},
@@ -1033,7 +1043,9 @@ class TestPeerCutFailureClear(unittest.TestCase):
         self.assertIsNone(ctx.bridge.failure)
 
 
-def _status_outcome(uid="", present=0, alive=0, inv=0, epoch="epoch-1"):
+def _status_outcome(uid="", present=0, alive=0, inv=0, epoch="epoch-1", players_n=None):
+    if players_n is None:
+        players_n = 1 if uid else 0
     return SimpleNamespace(
         status="done",
         reason="",
@@ -1041,6 +1053,7 @@ def _status_outcome(uid="", present=0, alive=0, inv=0, epoch="epoch-1"):
         payload={
             "str": {"server_epoch": epoch, "director_uid": uid},
             "num": {
+                "players_n": float(players_n),
                 "director_present_b": float(present),
                 "director_alive_b": float(alive),
                 "director_inv_readable_b": float(inv),
@@ -1068,10 +1081,11 @@ class TestT0DirectorWait(unittest.TestCase):
         good = _status_outcome(uid="director-1", present=1, alive=1, inv=1, epoch="epoch-good")
         outcomes = iter([absent, not_ready, good])
         with mock.patch.object(f03_common, "issue_one", side_effect=lambda *a, **k: next(outcomes)):
-            st, polls, waited_ms, ready = s_persist_run._wait_for_director_t0(
+            st, polls, waited_ms, ready, ambiguous = s_persist_run._wait_for_director_t0(
                 mock.Mock(), timeout_s=300.0, poll_s=2.0,
                 monotonic=clock.monotonic, sleep=clock.sleep,
             )
+        self.assertFalse(ambiguous)
         self.assertTrue(ready)
         self.assertIs(st, good)
         self.assertEqual(st.payload["str"]["server_epoch"], "epoch-good")
@@ -1083,12 +1097,39 @@ class TestT0DirectorWait(unittest.TestCase):
         clock = _FakeClock()
         absent = _status_outcome(uid="", present=0, alive=0, inv=0)
         with mock.patch.object(f03_common, "issue_one", return_value=absent):
-            st, polls, waited_ms, ready = s_persist_run._wait_for_director_t0(
+            st, polls, waited_ms, ready, ambiguous = s_persist_run._wait_for_director_t0(
                 mock.Mock(), timeout_s=5.0, poll_s=2.0,
                 monotonic=clock.monotonic, sleep=clock.sleep,
             )
+        self.assertFalse(ambiguous)
         self.assertFalse(ready)
         self.assertIs(st, absent)
+        self.assertGreaterEqual(polls, 3)
+        self.assertGreaterEqual(waited_ms, 5000)
+
+    def test_t0_two_players_is_ambiguous(self):
+        clock = _FakeClock()
+        two = _status_outcome(uid="", present=0, alive=0, inv=0, players_n=2)
+        with mock.patch.object(f03_common, "issue_one", return_value=two):
+            st, polls, waited_ms, ready, ambiguous = s_persist_run._wait_for_director_t0(
+                mock.Mock(), timeout_s=300.0, poll_s=2.0,
+                monotonic=clock.monotonic, sleep=clock.sleep,
+            )
+        self.assertTrue(ambiguous)
+        self.assertFalse(ready)
+        self.assertIs(st, two)
+        self.assertEqual(polls, 1)
+
+    def test_t0_zero_players_keeps_waiting(self):
+        clock = _FakeClock()
+        zero = _status_outcome(uid="", present=0, alive=0, inv=0, players_n=0)
+        with mock.patch.object(f03_common, "issue_one", return_value=zero):
+            st, polls, waited_ms, ready, ambiguous = s_persist_run._wait_for_director_t0(
+                mock.Mock(), timeout_s=5.0, poll_s=2.0,
+                monotonic=clock.monotonic, sleep=clock.sleep,
+            )
+        self.assertFalse(ambiguous)
+        self.assertFalse(ready)
         self.assertGreaterEqual(polls, 3)
         self.assertGreaterEqual(waited_ms, 5000)
 
@@ -1151,8 +1192,10 @@ class TestT4DirectorWindow(unittest.TestCase):
                 return _status_outcome(uid="director-1", present=0, alive=0, inv=0, epoch="epoch-new")
             return _status_outcome(uid="director-1", present=1, alive=1, inv=1, epoch="epoch-new")
 
+        hello = {"ev": "hello", "http": 200, "peer": "server", "inst": "epoch-new",
+                 "t_ms": 5000.0}
         with mock.patch.object(
-            f03_common, "await_operator", return_value={"ok": True}
+            f03_common, "await_operator", return_value={"ok": True, "event": hello}
         ), mock.patch.object(
             f03_common, "issue_one", side_effect=fake_issue
         ), mock.patch.object(
@@ -1728,7 +1771,8 @@ class TestActorGlovesBornInInventory(_GuardedTestCase):
         self.assertIn("bornInInventory", src)
         self.assertIn("LocationCreateEntity", src)
         self.assertIn("CreateObjectEx", src)  # la via staged sigue para el resto
-        self.assertIn("m_DirectorPurgeDone", src)
+        self.assertIn("m_PurgeJobId", src)
+        self.assertIn("per_purge_start", src)
 
 
 _ACTOR_ROWS = [
@@ -1745,12 +1789,7 @@ _ACTOR_ROWS = [
 
 
 class TestDirectorGarmentPurge(_GuardedTestCase):
-    """P2b: la purga de arranque borra solo las clases centinela del inventario de los jugadores.
-
-    El fake no modela la corrupcion nativa del personaje; si modela que lo del
-    director sobrevive al reinicio en memoria y que la limpieza al arrancar lo
-    retira antes del primer censo.
-    """
+    """P2c: la purga la ordena el runner con pers_id; solo borra lo autorizado."""
 
     def _ext_with_director_gloves(self):
         peer, jobs, ext = _make_clock_fake()
@@ -1763,157 +1802,509 @@ class TestDirectorGarmentPurge(_GuardedTestCase):
             {"op_id": "op-trans", "verb": "per_child_transition", "qa_fault": ""},
             _unpacked(strings={"scene_id": "scene_b", "logical_id": "b_act_1_gloves_dir",
                                "action": "move_to_director", "expect_epoch": "epoch-1",
-                               "target_scene_id": "", "target_parent_id": ""}), {},
+                               "target_scene_id": "", "target_parent_id": "",
+                               "director_uid": ext.director_uid}), {},
         )
         self.assertEqual(status, "done")
-        gloves_net = ext._record_by("scene_b", "b_act_1_gloves_dir")["ent"]["net_id"]
-        self.assertIn(gloves_net, ext.world)
-        return peer, jobs, ext, gloves_net
+        rec = ext._record_by("scene_b", "b_act_1_gloves_dir")
+        return peer, jobs, ext, rec["ent"]["pers_id"], rec["ent"]["class_name"]
 
-    def test_gloves_purged_on_new_epoch_but_not_mid_run_and_jeans_kept(self):
-        peer, jobs, ext, gloves_net = self._ext_with_director_gloves()
-        ext.on_tick(0.016)  # en plena partida no hay limpieza
-        self.assertIn(gloves_net, ext.world)
-        ext.simulate_world_restart()
-        self.assertIn(gloves_net, ext.world)  # vuelve con el personaje
-        for _ in range(3):
+    def _start_purge(self, ext, rows):
+        status, reason, payload = ext.on_start_op(
+            {"op_id": "op-purge", "verb": "per_purge_start", "qa_fault": ""},
+            _purge_args(rows, ext.director_uid), {},
+        )
+        self.assertEqual((status, reason), ("done", ""))
+        return wire.unpack_payload(payload)
+
+    def _run_purge(self, peer, jobs, ext, n=20):
+        for _ in range(n):
+            jobs.tick_jobs(0.016, peer.local_ms())
             ext.on_tick(0.016)
-        self.assertNotIn(gloves_net, ext.world)  # limpieza al arrancar
-        # Lo ajeno no centinela del director (sus pantalones) queda intacto.
+            if ext.purge_job_id == "":
+                break
+
+    def test_authorized_glove_deleted_basal_kept_and_emit_before_result(self):
+        peer, jobs, ext, pers, cls = self._ext_with_director_gloves()
+        basal = ext._add_entity(
+            net_id="1:900", pers_id=ext._alloc_pers_id(), class_name="WorkingGloves_Beige",
+            cat="director", loc_kind="cargo", parent_net_id=fake_ext_persist.DIRECTOR_JEANS_NET,
+            owner_uid=ext.director_uid, pos=(4500.0, 100.0, 10200.0), persistent=True,
+        )
+        out = self._start_purge(ext, [{"pers_id": pers, "class_name": cls}])
+        self.assertEqual(out["num"]["pre_n"], 4.0)
+        glove_net = ext._record_by("scene_b", "b_act_1_gloves_dir")["ent"]["net_id"]
+        self.assertIn(glove_net, ext.world)
+        self._run_purge(peer, jobs, ext)
+        job = jobs.jobs_by_id["op-purge"]
+        self.assertEqual(job["state"], "done")
+        self.assertNotIn(glove_net, ext.world)
+        self.assertIn(basal["net_id"], ext.world)
         self.assertIn(fake_ext_persist.DIRECTOR_JEANS_NET, ext.world)
-        status, _, payload = ext.on_start_op(
-            {"op_id": "op-purge", "verb": "per_purge_read", "qa_fault": ""},
-            _unpacked(), {},
-        )
-        self.assertEqual(status, "done")
-        out = wire.unpack_payload(payload)
-        self.assertEqual(out["str"]["purge_state"], "done")
-        self.assertEqual(out["num"]["purged_n"], 1.0)
-        self.assertEqual(out["rows"][0]["class_name"], "WorkingGloves_Yellow")
-        self.assertEqual(out["rows"][0]["owner_uid"], ext.director_uid)
-        self.assertGreater(out["num"]["purge_tick_ms"], 0.0)
+        rows = _job_rows(job)
+        phases = [r["phase"] for r in rows]
+        self.assertIn("pre", phases)
+        self.assertIn("emit", phases)
+        self.assertTrue(any(r["phase"] == "result" and r["result"] == "deleted" and r["pers_id"] == pers for r in rows))
 
-    def test_expired_lease_does_not_purge_and_read_is_pending(self):
-        peer, jobs, ext, gloves_net = self._ext_with_director_gloves()
-        ext.simulate_world_restart()
-        peer.now = 10000.0  # edad del lease: 9000 ms > 3000 ms
-        for _ in range(3):
-            ext.on_tick(0.016)
-        self.assertIn(gloves_net, ext.world)
-        status, _, payload = ext.on_start_op(
-            {"op_id": "op-purge", "verb": "per_purge_read", "qa_fault": ""},
-            _unpacked(), {},
+    def test_tree_with_foreign_child_is_retained(self):
+        peer, jobs, ext = _make_clock_fake()
+        chest = ext._add_entity(
+            net_id="1:901", pers_id="20:0:0:0", class_name="SeaChest", cat="director",
+            loc_kind="cargo", parent_net_id=fake_ext_persist.DIRECTOR_JEANS_NET,
+            owner_uid=ext.director_uid, pos=(4500.0, 100.0, 10200.0), persistent=True,
         )
-        self.assertEqual(status, "done")
-        out = wire.unpack_payload(payload)
-        self.assertEqual(out["str"]["purge_state"], "pending")
-        self.assertEqual(out["num"]["purge_tick_ms"], 0.0)
-        self.assertEqual(out["num"]["purge_frame"], 0.0)
-        self.assertEqual(out["num"]["purged_n"], 0.0)
-        self.assertEqual(out["rows"], [])
+        child = ext._add_entity(
+            net_id="1:902", pers_id="21:0:0:0", class_name="WaterBottle", cat="raw",
+            loc_kind="cargo", parent_net_id="1:901", owner_uid="", persistent=True,
+        )
+        self._start_purge(ext, [{"pers_id": chest["pers_id"], "class_name": "SeaChest"}])
+        self._run_purge(peer, jobs, ext)
+        self.assertIn(chest["net_id"], ext.world)
+        self.assertIn(child["net_id"], ext.world)
+        rows = _job_rows(jobs.jobs_by_id["op-purge"])
+        self.assertTrue(any(r["phase"] == "result" and r["result"] == "retained_foreign" for r in rows))
+        self.assertEqual(jobs.jobs_by_id["op-purge"]["state"], "done")
 
-    def test_purge_runs_only_once_per_process(self):
-        peer, jobs, ext, gloves_net = self._ext_with_director_gloves()
-        ext.simulate_world_restart()
-        for _ in range(3):
-            ext.on_tick(0.016)
-        self.assertNotIn(gloves_net, ext.world)
-        extra = ext._add_entity(
-            net_id="1:900", pers_id=ext._alloc_pers_id(),
-            class_name="WorkingGloves_Beige", owner_uid=ext.director_uid,
-            parent_net_id=fake_ext_persist.DIRECTOR_JEANS_NET, loc_kind="attachment",
-        )
+    def test_duplicate_pers_id_is_ambiguous_and_other_class_is_retained(self):
+        peer, jobs, ext = _make_clock_fake()
+        a = ext._add_entity(net_id="1:903", pers_id="30:0:0:0", class_name="WorkingGloves_Yellow",
+                            cat="director", loc_kind="cargo", parent_net_id=fake_ext_persist.DIRECTOR_JEANS_NET,
+                            owner_uid=ext.director_uid, persistent=True)
+        b = ext._add_entity(net_id="1:904", pers_id="30:0:0:0", class_name="WorkingGloves_Yellow",
+                            cat="director", loc_kind="cargo", parent_net_id=fake_ext_persist.DIRECTOR_JEANS_NET,
+                            owner_uid=ext.director_uid, persistent=True)
+        c = ext._add_entity(net_id="1:905", pers_id="31:0:0:0", class_name="WorkingGloves_Yellow",
+                            cat="director", loc_kind="cargo", parent_net_id=fake_ext_persist.DIRECTOR_JEANS_NET,
+                            owner_uid=ext.director_uid, persistent=True)
+        self._start_purge(ext, [
+            {"pers_id": "30:0:0:0", "class_name": "WorkingGloves_Yellow"},
+            {"pers_id": "31:0:0:0", "class_name": "RadarCap_Black"},
+        ])
+        self._run_purge(peer, jobs, ext)
+        self.assertIn(a["net_id"], ext.world)
+        self.assertIn(b["net_id"], ext.world)
+        self.assertIn(c["net_id"], ext.world)
+        rows = _job_rows(jobs.jobs_by_id["op-purge"])
+        results = {(r["pers_id"], r["result"]) for r in rows if r["phase"] == "result"}
+        self.assertIn(("30:0:0:0", "ambiguous"), results)
+        self.assertIn(("31:0:0:0", "retained_foreign"), results)
+
+    def test_parent_falls_only_after_authorized_child(self):
+        peer, jobs, ext = _make_clock_fake()
+        chest = ext._add_entity(net_id="1:906", pers_id="40:0:0:0", class_name="SeaChest",
+                                cat="director", loc_kind="cargo", parent_net_id=fake_ext_persist.DIRECTOR_JEANS_NET,
+                                owner_uid=ext.director_uid, persistent=True)
+        child = ext._add_entity(net_id="1:907", pers_id="41:0:0:0", class_name="WaterBottle",
+                                cat="director", loc_kind="cargo", parent_net_id="1:906",
+                                owner_uid=ext.director_uid, persistent=True)
+        self._start_purge(ext, [
+            {"pers_id": "40:0:0:0", "class_name": "SeaChest"},
+            {"pers_id": "41:0:0:0", "class_name": "WaterBottle"},
+        ])
+        self._run_purge(peer, jobs, ext)
+        self.assertNotIn(chest["net_id"], ext.world)
+        self.assertNotIn(child["net_id"], ext.world)
+        rows = _job_rows(jobs.jobs_by_id["op-purge"])
+        emit_pers = [r["pers_id"] for r in rows if r["phase"] == "emit"]
+        self.assertIn("41:0:0:0", emit_pers)
+        self.assertIn("40:0:0:0", emit_pers)
+        self.assertLess(emit_pers.index("41:0:0:0"), emit_pers.index("40:0:0:0"))
+
+    def test_lease_expires_between_candidates(self):
+        peer, jobs, ext = _make_clock_fake()
+        a = ext._add_entity(net_id="1:910", pers_id="50:0:0:0", class_name="WorkingGloves_Yellow",
+                            cat="director", loc_kind="cargo", parent_net_id=fake_ext_persist.DIRECTOR_JEANS_NET,
+                            owner_uid=ext.director_uid, persistent=True)
+        b = ext._add_entity(net_id="1:911", pers_id="51:0:0:0", class_name="WorkingGloves_Yellow",
+                            cat="director", loc_kind="cargo", parent_net_id=fake_ext_persist.DIRECTOR_JEANS_NET,
+                            owner_uid=ext.director_uid, persistent=True)
+        self._start_purge(ext, [
+            {"pers_id": "50:0:0:0", "class_name": "WorkingGloves_Yellow"},
+            {"pers_id": "51:0:0:0", "class_name": "WorkingGloves_Yellow"},
+        ])
+        jobs.tick_jobs(0.016, peer.local_ms())
         ext.on_tick(0.016)
-        self.assertIn(extra["net_id"], ext.world)
+        self.assertNotIn(a["net_id"], ext.world)
+        peer.now = 6000.0  # lease vencido: 5000 > 3000
+        jobs.tick_jobs(0.016, peer.local_ms())
+        ext.on_tick(0.016)
+        job = jobs.jobs_by_id["op-purge"]
+        self.assertEqual(job["state"], "failed")
+        self.assertEqual(job["reason"], "lease_expired")
+        self.assertIn(b["net_id"], ext.world)
+        rows = _job_rows(job)
+        self.assertTrue(any(r["phase"] == "emit" and r["pers_id"] == "50:0:0:0" for r in rows))
 
-    def test_per_purge_read_schema(self):
-        peer, jobs, ext, _gloves_net = self._ext_with_director_gloves()
-        ext.simulate_world_restart()
-        for _ in range(3):
-            ext.on_tick(0.016)
-        status, _, payload = ext.on_start_op(
-            {"op_id": "op-purge", "verb": "per_purge_read", "qa_fault": ""},
-            _unpacked(), {},
+    def test_deleted_only_after_confirming_absence(self):
+        peer, jobs, ext, pers, cls = self._ext_with_director_gloves()
+        glove_net = ext._record_by("scene_b", "b_act_1_gloves_dir")["ent"]["net_id"]
+        self._start_purge(ext, [{"pers_id": pers, "class_name": cls}])
+        jobs.tick_jobs(0.016, peer.local_ms())
+        ext.on_tick(0.016)
+        rows = _job_rows(jobs.jobs_by_id["op-purge"])
+        self.assertNotIn(glove_net, ext.world)
+        self.assertFalse(any(r["phase"] == "result" and r["result"] == "deleted" for r in rows))
+        jobs.tick_jobs(0.016, peer.local_ms())
+        ext.on_tick(0.016)
+        rows = _job_rows(jobs.jobs_by_id["op-purge"])
+        self.assertTrue(any(r["phase"] == "result" and r["result"] == "deleted" and r["pers_id"] == pers for r in rows))
+
+    def test_purge_pending_blocks_census_without_effects(self):
+        peer, jobs, ext, pers, cls = self._ext_with_director_gloves()
+        self._start_purge(ext, [{"pers_id": pers, "class_name": cls}])
+        status, reason, _ = ext.on_start_op(
+            {"op_id": "op-census", "verb": "per_census_start", "qa_fault": ""},
+            _census_args(), {},
         )
+        self.assertEqual((status, reason), ("rejected", "purge_pending"))
+        self.assertEqual(jobs.get_state("op-census"), "")
+        self._run_purge(peer, jobs, ext)
+        status, reason, _ = ext.on_start_op(
+            {"op_id": "op-census-2", "verb": "per_census_start", "qa_fault": ""},
+            _census_args(), {},
+        )
+        self.assertEqual((status, reason), ("done", ""))
+
+    def test_client_handles_purge_but_deletes_nothing(self):
+        peer, jobs, ext, pers, cls = self._ext_with_director_gloves()
+        self.assertFalse(ext.handles("per_purge_start", "client"))
+        glove_net = ext._record_by("scene_b", "b_act_1_gloves_dir")["ent"]["net_id"]
+        ext.on_tick(0.016)
+        self.assertIn(glove_net, ext.world)
+        self.assertEqual(ext.purge_job_id, "")
+
+
+class TestTransitionBornInInventory(_GuardedTestCase):
+    """P2c: FLAGS_INV_OWN en el destino efectivo; brazalete estatico -> bad_args."""
+
+    _AC_ROWS = [
+        {"logical_id": "ac_act_1", "parent_id": "", "cat": "actor", "class_name": "SurvivorM_Mirek",
+         "slot_name": "", "req_x_m": 4500.0, "req_z_m": 10200.0, "req_yaw_deg": 0.0,
+         "health_mark_ratio": 0.0, "must_vanish_b": 1.0},
+        {"logical_id": "ac_act_1_gloves_dir", "parent_id": "ac_act_1", "cat": "child_attach",
+         "class_name": "WorkingGloves_Beige", "slot_name": "Gloves", "req_x_m": 4500.0,
+         "req_z_m": 10200.0, "req_yaw_deg": 0.0, "health_mark_ratio": 0.0, "must_vanish_b": 1.0},
+    ]
+
+    def _ext(self):
+        peer, jobs, ext = _make_clock_fake()
+        self.assertEqual(ext.on_start_op(
+            {"op_id": "op-apply-b", "verb": "per_apply_scene", "qa_fault": ""},
+            _apply_args("scene_b", "scop-b", 1, _ACTOR_ROWS), {})[0], "done")
+        self.assertEqual(ext.on_start_op(
+            {"op_id": "op-apply-ac", "verb": "per_apply_scene", "qa_fault": ""},
+            _apply_args("scene_a_clean", "scop-ac", 1, self._AC_ROWS), {})[0], "done")
+        return peer, jobs, ext
+
+    def _move(self, ext, scene_id, lid, action, target_scene="", target_parent=""):
+        return ext.on_start_op(
+            {"op_id": f"op-{lid}", "verb": "per_child_transition", "qa_fault": ""},
+            _unpacked(strings={"scene_id": scene_id, "logical_id": lid, "action": action,
+                               "expect_epoch": "epoch-1", "target_scene_id": target_scene,
+                               "target_parent_id": target_parent,
+                               "director_uid": ext.director_uid}), {},
+        )
+
+    def test_static_armband_rejected_for_director_and_for_player_container(self):
+        peer, jobs, ext = self._ext()
+        status, _, _ = self._move(ext, "scene_b", "b_act_1_gloves_dir", "move_to_director")
         self.assertEqual(status, "done")
+        arm = ext._record_by("scene_b", "b_act_1_armband_drop")["ent"]
+        self.assertEqual(arm["loc_kind"], "attachment")
+        status, reason, _ = self._move(ext, "scene_b", "b_act_1_armband_drop", "move_to_director")
+        self.assertEqual((status, reason), ("rejected", "bad_args"))
+        self.assertEqual(arm["loc_kind"], "attachment")
+        status, reason, _ = self._move(ext, "scene_b", "b_act_1_armband_drop", "move_to_container",
+                                       "scene_b", "b_act_1_gloves_dir")
+        self.assertEqual((status, reason), ("rejected", "bad_args"))
+        self.assertEqual(arm["loc_kind"], "attachment")
+
+    def test_inventory_born_glove_accepted_for_player_container(self):
+        peer, jobs, ext = self._ext()
+        self.assertEqual(self._move(ext, "scene_b", "b_act_1_gloves_dir", "move_to_director")[0], "done")
+        status, reason, payload = self._move(ext, "scene_a_clean", "ac_act_1_gloves_dir",
+                                             "move_to_container", "scene_b", "b_act_1_gloves_dir")
+        self.assertEqual((status, reason), ("done", ""))
         out = wire.unpack_payload(payload)
-        self.assertEqual(set(out["str"]), {"server_epoch", "purge_state"})
-        self.assertEqual(set(out["num"]), {"purge_tick_ms", "purge_frame", "purged_n"})
-        self.assertEqual(out["scol"], ["class_name", "pers_id", "owner_uid"])
-        self.assertEqual(out["ncol"], [])
-        self.assertLessEqual(len(out["rows"]), 8)
-        self.assertGreaterEqual(out["num"]["purged_n"], float(len(out["rows"])))
-        for row in out["rows"]:
-            self.assertEqual(set(row), {"class_name", "pers_id", "owner_uid"})
+        self.assertEqual(out["str"]["transition_status"], "ok")
 
 
-def _purge_outcome(epoch, state, tick, frame, purged, rows):
-    return SimpleNamespace(
-        status="done", reason="", op_id="op-purge",
-        payload={
-            "str": {"server_epoch": epoch, "purge_state": state},
-            "num": {"purge_tick_ms": float(tick), "purge_frame": float(frame),
-                    "purged_n": float(purged)},
-            "rows": rows,
-        },
+class TestRunnerRestartNewProcess(_GuardedTestCase):
+    """P2c MEN 10: otro proceso conserva el arbol del director con el mismo pers_id."""
+
+    def test_glove_reappears_deleted_and_absent_with_foreign_gear_intact(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            cfg = tmp / "dsbx_qa.json"
+            peer1, jobs1, ext1 = _make_fake_with_config(cfg, "epoch-1")
+            self.assertEqual(ext1.on_start_op(
+                {"op_id": "op-apply", "verb": "per_apply_scene", "qa_fault": ""},
+                _apply_args("scene_b", "scop-1", 1, _ACTOR_ROWS), {})[0], "done")
+            self.assertEqual(ext1.on_start_op(
+                {"op_id": "op-trans", "verb": "per_child_transition", "qa_fault": ""},
+                _unpacked(strings={"scene_id": "scene_b", "logical_id": "b_act_1_gloves_dir",
+                                   "action": "move_to_director", "expect_epoch": "epoch-1",
+                                   "target_scene_id": "", "target_parent_id": "",
+                                   "director_uid": ext1.director_uid}), {})[0], "done")
+            rec = ext1._record_by("scene_b", "b_act_1_gloves_dir")
+            glove_net = rec["ent"]["net_id"]
+            glove_pers = rec["ent"]["pers_id"]
+            glove_cls = rec["ent"]["class_name"]
+            ext1._save_state()
+            peer2, jobs2, ext2 = _make_fake_with_config(cfg, "epoch-2")
+            self.assertIn(glove_net, ext2.world)
+            self.assertEqual(ext2.world[glove_net]["pers_id"], glove_pers)
+            self.assertEqual(ext2.world[glove_net]["owner_uid"], ext2.director_uid)
+            status, _, payload = ext2.on_start_op(
+                {"op_id": "op-purge", "verb": "per_purge_start", "qa_fault": ""},
+                _purge_args([{"pers_id": glove_pers, "class_name": glove_cls}], ext2.director_uid,
+                            epoch="epoch-2"), {},
+            )
+            self.assertEqual(status, "done")
+            out = wire.unpack_payload(payload)
+            self.assertGreaterEqual(out["num"]["pre_n"], 3.0)
+            for _ in range(20):
+                jobs2.tick_jobs(0.016, peer2.local_ms())
+                ext2.on_tick(0.016)
+                if ext2.purge_job_id == "":
+                    break
+            self.assertNotIn(glove_net, ext2.world)
+            self.assertIn(fake_ext_persist.DIRECTOR_JEANS_NET, ext2.world)
+            self.assertIn(fake_ext_persist.DIRECTOR_APPLE_NET, ext2.world)
+            status, _, _ = ext2.on_start_op(
+                {"op_id": "op-census-t5", "verb": "per_census_start", "qa_fault": ""},
+                _unpacked(strings={"area_tag": "t5_post_restart_census:area_b",
+                                   "director_uid": ext2.director_uid},
+                          numbers={"center_x_m": 4680.0, "center_z_m": 10200.0,
+                                   "radius_m": 60.0, "include_director_b": 1.0}), {},
+            )
+            self.assertEqual(status, "done")
+            for _ in range(10):
+                jobs2.tick_jobs(0.016, peer2.local_ms())
+                ext2.on_tick(0.016)
+                if jobs2.get_state("op-census-t5") != "running":
+                    break
+            rows = _job_rows(jobs2.jobs_by_id["op-census-t5"])
+            self.assertFalse(any(r["net_id"] == glove_net for r in rows))
+            self.assertTrue(any(r["net_id"] == fake_ext_persist.DIRECTOR_JEANS_NET for r in rows))
+
+
+class TestT0AmbiguousAborts(_GuardedTestCase):
+    def setUp(self):
+        super().setUp()
+        _FakePartContext.calls = []
+        _FakePartContext.instances = []
+        _FakePartContext.next_startup_reason = None
+
+    def test_two_players_cuts_part_with_director_ambiguous(self):
+        with self._inside_tmp() as td:
+            tmp = Path(td)
+            env, _mission, _storage, _backup = _make_env(tmp)
+            base_dir = tmp / "evidence"
+            two = _status_outcome(uid="", present=0, alive=0, inv=0, players_n=2)
+
+            def fake_issue(ctx, peer, verb, payload=None, **kwargs):
+                return two
+
+            backup_return = (env, {}, tmp / "_storage_backup", None, "")
+            with mock.patch.object(
+                s_persist_run, "_live_cold_backup_before_open", return_value=backup_return
+            ), mock.patch.object(
+                s_persist_run, "_probe_sources_at_commit", return_value={}
+            ), mock.patch.object(
+                s_persist_run, "T0_DIRECTOR_TIMEOUT_S", 0.0
+            ), mock.patch.object(
+                f03_common, "PartContext", _FakePartContext
+            ), mock.patch.object(
+                f03_common, "issue_one", side_effect=fake_issue
+            ):
+                with self.assertRaises(RuntimeError) as raised:
+                    s_persist_run.run_part(_live_args(), base_dir, [], "run")
+            self.assertEqual(str(raised.exception), "director_ambiguous")
+            scenario = _FakePartContext.instances[0].scenario
+            evs = [row.get("ev") for row in scenario]
+            self.assertIn("t0_director_ambiguous", evs)
+
+
+class TestFakeCensusBoundary(_GuardedTestCase):
+    """MENOR 9: la aritmetica del borde del censo del fake como 63bb265."""
+
+    def test_boundary_compass_is_captured_with_base_arithmetic(self):
+        peer, jobs, ext = _make_fake()
+        status, reason, _ = ext.on_start_op(
+            {"op_id": "op-spawn-edge", "verb": "per_spawn_raw", "qa_fault": ""},
+            _unpacked(strings={"tag": "edge", "mode": "", "class_name": "Compass"},
+                      numbers={"x_m": 4683.0, "z_m": 10202.0, "yaw_deg": 0.0,
+                               "health_mark_ratio": 0.0}), {},
+        )
+        self.assertEqual((status, reason), ("done", ""))
+        status, reason, _ = ext.on_start_op(
+            {"op_id": "op-census-edge", "verb": "per_census_start", "qa_fault": ""},
+            _unpacked(strings={"area_tag": "edge:area_b", "director_uid": ""},
+                      numbers={"center_x_m": 4680.0, "center_z_m": 10200.0,
+                               "radius_m": 3.60659408389042, "include_director_b": 0.0,
+                               "select_all_entityai_b": 1.0}), {},
+        )
+        self.assertEqual((status, reason), ("done", ""))
+        for _ in range(10):
+            jobs.tick_jobs(0.016, peer.local_ms())
+            ext.on_tick(0.016)
+            if jobs.get_state("op-census-edge") != "running":
+                break
+        job = jobs.jobs_by_id["op-census-edge"]
+        rows = _job_rows(job)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["class_name"], "Compass")
+
+
+class TestRunnerPurgeStart(_GuardedTestCase):
+    """P2c: el runner ordena la purga, sondea, para al vencer y archiva paginas."""
+
+    def _accredited(self):
+        return [{"pers_id": "3:0:0:0", "class_name": "WorkingGloves_Yellow",
+                 "logical_id": "b_act_1_gloves_dir", "net_id": "1:10"}]
+
+    def test_done_reads_pages_with_target_inst(self):
+        ctx = _FakeCtxT4(now_ms=5000.0)
+        calls = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append((verb, kwargs.get("target_inst")))
+            if verb == "per_purge_start":
+                return _op_outcome("done", "", "op-start", {
+                    "str": {"job": "j1", "state": "running"},
+                    "num": {"pre_n": 1.0},
+                })
+            if verb == "job_read":
+                return _op_outcome("done", "", "op-read", {
+                    "str": {"job": "j1", "state": "done", "reason": ""},
+                    "num": {"page_n": 0.0, "pages_n": 1.0, "rows_total_n": 2.0},
+                    "rows": [{"phase": "result", "result": "deleted"}],
+                })
+            if verb == "job_free":
+                return _op_outcome("done", "", "op-free", {"str": {"job": "j1", "freed": "1"}})
+            raise AssertionError(verb)
+
+        with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue):
+            result = s_persist_run._purge_start_t4(
+                ctx, self._accredited(), server_epoch_new="epoch-new",
+                director_uid="dir-uid", timeout_s=5.0, poll_s=1.0,
+                monotonic=_FakeClock().monotonic, sleep=_FakeClock().sleep,
+            )
+        self.assertTrue(result["done"])
+        self.assertEqual(result["state"], "done")
+        self.assertEqual(result["rows"], [{"phase": "result", "result": "deleted"}])
+        self.assertTrue(any(ev.get("ev") == "purge_pages" for ev in ctx.scenario))
+        self.assertTrue(all(t == "epoch-new" for _v, t in calls if _v != "per_purge_start" or t == "epoch-new"))
+
+    def test_wait_expired_sends_job_stop_and_does_not_open_t5(self):
+        clock = _FakeClock()
+        ctx = _FakeCtxT4(now_ms=5000.0)
+        calls = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append((verb, kwargs.get("target_inst")))
+            if verb == "per_purge_start":
+                return _op_outcome("done", "", "op-start", {
+                    "str": {"job": "j1", "state": "running"},
+                    "num": {"pre_n": 1.0},
+                })
+            if verb == "job_read":
+                state = "stopped" if any(v == "job_stop" for v, _t in calls) else "running"
+                return _op_outcome("done", "", "op-read", {
+                    "str": {"job": "j1", "state": state, "reason": ""},
+                    "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
+                    "rows": [],
+                })
+            if verb == "job_stop":
+                return _op_outcome("done", "", "op-stop", {"str": {"job": "j1", "state": "stopped"}})
+            if verb == "job_free":
+                return _op_outcome("done", "", "op-free", {"str": {"job": "j1", "freed": "1"}})
+            raise AssertionError(verb)
+
+        with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue):
+            result = s_persist_run._purge_start_t4(
+                ctx, self._accredited(), server_epoch_new="epoch-new",
+                director_uid="dir-uid", timeout_s=2.0, poll_s=1.0,
+                monotonic=clock.monotonic, sleep=clock.sleep,
+            )
+        self.assertFalse(result["done"])
+        self.assertEqual(result["state"], "stopped")
+        self.assertTrue(any(v == "job_stop" for v, _t in calls))
+        self.assertTrue(any(ev.get("ev") == "purge_not_done" for ev in ctx.scenario))
+
+    def test_empty_accredited_sends_no_order(self):
+        ctx = _FakeCtxT4(now_ms=5000.0)
+        with mock.patch.object(f03_common, "issue_one", side_effect=AssertionError("no debe llamar")):
+            result = s_persist_run._purge_start_t4(
+                ctx, [], server_epoch_new="epoch-new", director_uid="dir-uid",
+            )
+        self.assertTrue(result["done"])
+        self.assertEqual(result["state"], "none")
+
+
+class TestComputeAccredited(_GuardedTestCase):
+    """P2c: acreditadas por identidad y clase, con basal y unicidad."""
+
+    def _events(self):
+        rows = [{"owner_uid": "dir", "net_id": "1:10", "pers_id": "3:0:0:0",
+                 "class_name": "WorkingGloves_Yellow"}]
+        return [
+            {"ev": "child_transition_t1", "action": "move_to_director",
+             "transition_status": "ok", "post_owner_uid": "dir",
+             "logical_id": "b_act_1_gloves_dir", "net_id": "1:10"},
+            {"ev": "census_stage", "stage": "t1_post_transition_census", "rows": rows},
+            {"ev": "census_stage", "stage": "t2_census_10min", "rows": rows},
+            {"ev": "census_stage", "stage": "t3_pre_reset_census", "rows": rows},
+            {"ev": "census_stage", "stage": "t3_post_reset_census", "rows": rows},
+            {"ev": "census_stage", "stage": "t0_baseline_census",
+             "rows": [{"owner_uid": "dir", "net_id": "1:2", "pers_id": "1:0:0:0",
+                       "class_name": "Jeans_Blue"}]},
+        ]
+
+    def test_positive_accredits_the_transitioned_glove(self):
+        fixture = s_persist_run._fixture()
+        cfg = s_persist_run._part_config("run", fixture)
+        got = s_persist_run._compute_accredited(self._events(), fixture, cfg, "dir")
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["pers_id"], "3:0:0:0")
+        self.assertEqual(got[0]["class_name"], "WorkingGloves_Yellow")
+
+    def test_basal_or_shared_pers_id_is_not_accredited(self):
+        fixture = s_persist_run._fixture()
+        cfg = s_persist_run._part_config("run", fixture)
+        events = self._events()
+        events[-1]["rows"].append({"owner_uid": "dir", "net_id": "1:2",
+                                   "pers_id": "3:0:0:0", "class_name": "Jeans_Blue"})
+        self.assertEqual(s_persist_run._compute_accredited(events, fixture, cfg, "dir"), [])
+        events = self._events()
+        events[1]["rows"].append({"owner_uid": "dir", "net_id": "1:99",
+                                  "pers_id": "3:0:0:0", "class_name": "WorkingGloves_Yellow"})
+        self.assertEqual(s_persist_run._compute_accredited(events, fixture, cfg, "dir"), [])
+
+
+def _op_outcome(status, reason, op_id, payload):
+    return SimpleNamespace(status=status, reason=reason, op_id=op_id, payload=payload)
+
+
+def _purge_args(rows, director_uid, epoch="epoch-1"):
+    return _unpacked(
+        strings={"director_uid": director_uid, "expect_epoch": epoch},
+        ncol=[], scol=["pers_id", "class_name"], rows=rows,
     )
 
 
-class TestRunnerPurgeRead(_GuardedTestCase):
-    """P2b: el runner lee `per_purge_read` en t4, antes del primer censo t5."""
-
-    def test_pending_is_retried_within_the_director_window_and_recorded(self):
-        clock = _FakeClock()
-        ctx = _FakeCtxT4(now_ms=5000.0)
-        pending = _purge_outcome("epoch-new", "pending", 0.0, 0.0, 0.0, [])
-        done = _purge_outcome(
-            "epoch-new", "done", 1500.0, 3, 1.0,
-            [{"class_name": "WorkingGloves_Yellow", "pers_id": "1:0:0:0", "owner_uid": "dir"}],
-        )
-        outcomes = iter([pending, pending, done])
-
-        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
-            self.assertEqual(verb, "per_purge_read")
-            return next(outcomes)
-
-        with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue):
-            last, polls, waited_ms, done_b = s_persist_run._read_purge_t4(
-                ctx, server_epoch_new="epoch-new", timeout_s=5.0, poll_s=1.0,
-                monotonic=clock.monotonic, sleep=clock.sleep,
-            )
-        self.assertTrue(done_b)
-        self.assertIs(last, done)
-        self.assertEqual(polls, 3)
-        self.assertEqual(waited_ms, 2000)
-        row = ctx.scenario[-1]
-        self.assertEqual(row.get("ev"), "t4_purge_read")
-        self.assertEqual(row.get("purge_state"), "done")
-        self.assertEqual(row.get("done_b"), 1)
-
-    def test_never_done_returns_last_pending(self):
-        clock = _FakeClock()
-        ctx = _FakeCtxT4(now_ms=5000.0)
-        pending = _purge_outcome("epoch-new", "pending", 0.0, 0.0, 0.0, [])
-        with mock.patch.object(f03_common, "issue_one", return_value=pending):
-            last, polls, waited_ms, done_b = s_persist_run._read_purge_t4(
-                ctx, server_epoch_new="epoch-new", timeout_s=2.0, poll_s=1.0,
-                monotonic=clock.monotonic, sleep=clock.sleep,
-            )
-        self.assertFalse(done_b)
-        self.assertIs(last, pending)
-        self.assertGreaterEqual(polls, 3)
-        self.assertGreaterEqual(waited_ms, 2000)
-        self.assertEqual(ctx.scenario[-1].get("purge_state"), "pending")
-        self.assertEqual(ctx.scenario[-1].get("done_b"), 0)
-
-    def test_read_is_placed_after_t4_status_and_before_first_t5_census(self):
-        src = (QA_DIR / "s_persist_run.py").read_text(encoding="utf-8", errors="replace")
-        i_t4 = src.index('"ev": "t4_post_restart_status"')
-        i_purge = src.index("= _read_purge_t4(")
-        i_t5 = src.index('_census(ctx, fixture, "t5_post_restart_census"')
-        self.assertLess(i_t4, i_purge)
-        self.assertLess(i_purge, i_t5)
-
-
+def _job_rows(job):
+    rows = []
+    nsc = len(job["scol"])
+    nnc = len(job["ncol"])
+    for i in range(job["rows_total"]):
+        s = job["scell"][i * nsc:(i + 1) * nsc]
+        n = job["ncell"][i * nnc:(i + 1) * nnc]
+        row = {job["scol"][j]: s[j] for j in range(nsc)}
+        row.update({job["ncol"][j]: n[j] for j in range(nnc)})
+        rows.append(row)
+    return rows
 if __name__ == "__main__":
     unittest.main()

@@ -29,7 +29,7 @@ RPC_BASE = 26102800
 
 SERVER_VERBS = frozenset({
     "per_status",
-    "per_purge_read",
+    "per_purge_start",
     "per_apply_scene",
     "per_reset_scene",
     "per_child_transition",
@@ -85,6 +85,14 @@ CENSUS_NCOL = [
 
 CENSUS_NCOL_ALL = CENSUS_NCOL + ["surface_y_m"]
 CENSUS_ALL_RADIUS_MAX = 120.0
+
+PURGE_PAGE_SIZE = 8
+PURGE_MAX_ROWS = 256
+PURGE_MAX_MS = 600000.0
+PURGE_SCOL = ["phase", "pers_id", "class_name", "parent_pers_id", "owner_uid",
+              "result", "net_id", "parent_net_id"]
+PURGE_NCOL = ["depth_n", "emit_tick_ms", "lease_age_ms", "lease_limit_ms",
+              "max_hp", "health_hp"]
 
 WITNESS_SCOL = ["class_name", "net_id", "parent_net_id"]
 WITNESS_NCOL = [
@@ -311,19 +319,25 @@ class PersistFakeExt(FakeExt):
         self.census_failed = {}
         self.director_items = []
         self.director_uid = DIRECTOR_UID
+        self.director_present = True
+        self.director_alive = True
+        self.director_inv_readable = True
+        self.players_n_override = None
         self.map_objects = []
         self.witness = None
         self.next_pers_seq = 1
         # Duracion simulada de la captura del censo (la fijan los tests); se
         # refleja en capture_wall_ms. Por defecto 0, como hasta ahora.
         self.capture_delay_ms = 0.0
-        # P2b: espejo de la purga de arranque del .c y de su registro per_purge_read.
-        self.director_purge_done = False
-        self.has_applied = False
-        self.purge_tick_ms = 0.0
-        self.purge_frame = 0
-        self.purged_n = 0
-        self.purge_rows = []
+        # P2c: la purga la ordena el runner (trabajo per_purge, deadman stop).
+        self.purge_job_id = ""
+        self.purge_director_uid = ""
+        self.purge_auth_pers = []
+        self.purge_auth_class = []
+        self.purge_resolved = []
+        self.purge_confirm = None
+        self.purge_confirm_ent = None
+        self.purge_pre_n = 0
 
     def _state_file(self):
         cfg = getattr(self.peer, "config", None)
@@ -340,7 +354,8 @@ class PersistFakeExt(FakeExt):
             return
         entities = []
         for ent in self.world.values():
-            if ent.get("owner_uid") == self.director_uid:
+            director_owned = ent.get("owner_uid") == self.director_uid
+            if director_owned and ent["net_id"] in (DIRECTOR_JEANS_NET, DIRECTOR_APPLE_NET):
                 continue
             entities.append({
                 "net_id": ent["net_id"],
@@ -360,6 +375,8 @@ class PersistFakeExt(FakeExt):
                 "alive": bool(ent["alive"]),
                 "ai_agent": bool(ent["ai_agent"]),
                 "persistent": bool(ent["persistent"]),
+                "director_owned": bool(director_owned),
+                "born_in_inventory": bool(ent.get("born_in_inventory", False)),
                 "own_logical_id": ent["own_logical_id"],
                 "own_b": int(ent["own_b"]),
                 "scene_id": ent["scene_id"],
@@ -412,14 +429,20 @@ class PersistFakeExt(FakeExt):
         if not isinstance(loaded, list):
             return False
         for raw in loaded:
-            if not isinstance(raw, dict) or not raw.get("persistent"):
+            if not isinstance(raw, dict):
+                continue
+            director_owned = bool(raw.get("director_owned"))
+            if not raw.get("persistent") and not director_owned:
+                continue
+            saved_net = str(raw.get("net_id") or "")
+            if saved_net in self.world:
                 continue
             saved_pers = str(raw.get("pers_id") or "")
             used_pers = {e.get("pers_id") for e in self.world.values()}
             if not _is_nonzero_pers_id(saved_pers) or saved_pers in used_pers:
                 saved_pers = self._alloc_pers_id()
             ent = self._add_entity(
-                net_id=str(raw.get("net_id") or ""),
+                net_id=saved_net,
                 pers_id=saved_pers,
                 class_name=str(raw.get("class_name") or ""),
                 cat=str(raw.get("cat") or "raw"),
@@ -433,9 +456,11 @@ class PersistFakeExt(FakeExt):
                 max_hp=float(raw.get("max_hp", DEFAULT_MAX_HP)),
                 health_hp=float(raw.get("health_hp", DEFAULT_MAX_HP)),
                 spawn_tick_ms=float(raw.get("spawn_tick_ms", 0.0)),
-                persistent=True,
+                persistent=bool(raw.get("persistent", False)),
+                born_in_inventory=bool(raw.get("born_in_inventory", False)),
                 own_logical_id="",
                 own_b=0,
+                scene_id=str(raw.get("scene_id") or ""),
                 area_id=str(raw.get("area_id") or ""),
             )
             ent["alive"] = bool(raw.get("alive", True))
@@ -464,6 +489,10 @@ class PersistFakeExt(FakeExt):
             self.census_start_tick.clear()
             self.contention_seen_for.clear()
             self.census_failed.clear()
+        self.director_items = [
+            net_id for net_id, ent in self.world.items()
+            if ent.get("owner_uid") == self.director_uid and ent.get("alive")
+        ]
 
     def handles(self, verb, role):
         return role == "server" and verb in SERVER_VERBS
@@ -538,6 +567,7 @@ class PersistFakeExt(FakeExt):
             "alive": True,
             "ai_agent": bool(kw.get("ai_agent", False)),
             "persistent": bool(kw.get("persistent", False)),
+            "born_in_inventory": bool(kw.get("born_in_inventory", False)),
             "own_logical_id": kw.get("own_logical_id", ""),
             "own_b": int(kw.get("own_b", 0)),
             "scene_id": kw.get("scene_id", ""),
@@ -790,8 +820,8 @@ class PersistFakeExt(FakeExt):
         fault = op.get("qa_fault", "")
         if verb == "per_status":
             return self._op_status(args_unpacked)
-        if verb == "per_purge_read":
-            return self._op_purge_read(args_unpacked)
+        if verb == "per_purge_start":
+            return self._op_purge_start(op, args_unpacked)
         if verb == "per_cleanup_qa":
             return self._op_cleanup(args_unpacked)
         if not self.peer.lease_valid():
@@ -813,6 +843,24 @@ class PersistFakeExt(FakeExt):
     def _op_status(self, args_unpacked):
         strs = args_unpacked.get("str") or {}
         lifecycle = strs.get("lifecycle", "")
+        wanted_uid = strs.get("director_uid", "")
+        players_n = int(self.players_n_override) if self.players_n_override is not None else 1
+        director_uid = ""
+        present = 0
+        alive = 0
+        readable = 0
+        if wanted_uid == "":
+            if players_n == 1:
+                director_uid = self.director_uid
+                present = 1 if self.director_present else 0
+                alive = 1 if (self.director_present and self.director_alive) else 0
+                readable = 1 if (self.director_present and self.director_inv_readable) else 0
+        else:
+            director_uid = wanted_uid
+            if wanted_uid == self.director_uid and self.director_present:
+                present = 1
+                alive = 1 if self.director_alive else 0
+                readable = 1 if self.director_inv_readable else 0
         rows = []
         for scene_id, gen in self.scene_gen.items():
             alive_n = sum(
@@ -827,21 +875,22 @@ class PersistFakeExt(FakeExt):
             })
         s = {
             "server_epoch": self.epoch,
-            "director_uid": self.director_uid,
+            "director_uid": director_uid,
         }
         if lifecycle == "shutdown":
             s["shutdown_marker"] = "1"
         elif lifecycle == "startup":
             s["startup_marker"] = "1"
         n = {
+            "players_n": float(players_n),
             "tick_ms": float(self.peer.local_ms()),
             "frame": float(self.peer.frame),
             "registered_total_n": float(len(self.records)),
             "scenes_count_n": float(len(self.scene_gen)),
-            "director_present_b": 1.0,
-            "director_alive_b": 1.0,
-            "director_inv_readable_b": 1.0,
-            "director_inv_count_n": float(len(self.director_items)),
+            "director_present_b": float(present),
+            "director_alive_b": float(alive),
+            "director_inv_readable_b": float(readable),
+            "director_inv_count_n": float(len(self._director_tree_entities())) if present else 0.0,
         }
         payload = wire.pack_payload(
             scalars_str=s,
@@ -852,23 +901,194 @@ class PersistFakeExt(FakeExt):
         )
         return ("done", "", payload)
 
-    def _op_purge_read(self, args_unpacked):
-        s = {
-            "server_epoch": self.epoch,
-            "purge_state": "done" if self.director_purge_done else "pending",
+    def _director_tree_entities(self):
+        roots = [
+            ent for ent in self.world.values()
+            if ent.get("alive") and ent.get("owner_uid") == self.director_uid
+        ]
+        index = self._children_index()
+        out = []
+        seen = set()
+        for root in roots:
+            if root["net_id"] in seen:
+                continue
+            seen.add(root["net_id"])
+            out.append(root)
+            for desc in self._preorder_children(root["net_id"], index):
+                if desc["net_id"] not in seen:
+                    seen.add(desc["net_id"])
+                    out.append(desc)
+        return out
+
+    def _root_owner_uid(self, ent):
+        cur = ent
+        seen = set()
+        while cur is not None:
+            nid = cur.get("net_id")
+            if nid in seen:
+                break
+            seen.add(nid)
+            if cur.get("owner_uid"):
+                return cur["owner_uid"]
+            parent_nid = cur.get("parent_net_id") or ""
+            if not parent_nid:
+                break
+            cur = self.world.get(parent_nid)
+        return ""
+
+    def _purge_depth(self, ent):
+        depth = 0
+        cur = ent
+        seen = set()
+        while cur is not None and cur.get("owner_uid") != self.director_uid:
+            nid = cur.get("net_id")
+            if nid in seen:
+                break
+            seen.add(nid)
+            depth += 1
+            parent_nid = cur.get("parent_net_id") or ""
+            if not parent_nid:
+                break
+            cur = self.world.get(parent_nid)
+        return depth
+
+    def _purge_parent_pers(self, ent):
+        parent_nid = ent.get("parent_net_id") or ""
+        parent = self.world.get(parent_nid)
+        return parent["pers_id"] if parent is not None else ZERO_PERS_ID
+
+    def _purge_parent_net(self, ent):
+        return ent.get("parent_net_id") or ""
+
+    def _purge_append(self, phase, ent, result, emit_tick=0.0, lease_age=0.0, lease_limit=0.0):
+        row = {
+            "phase": phase,
+            "pers_id": ent.get("pers_id", ZERO_PERS_ID),
+            "class_name": ent.get("class_name", ""),
+            "parent_pers_id": self._purge_parent_pers(ent),
+            "owner_uid": self.director_uid,
+            "result": result,
+            "net_id": ent.get("net_id", ""),
+            "parent_net_id": self._purge_parent_net(ent),
+            "depth_n": float(self._purge_depth(ent)),
+            "emit_tick_ms": float(emit_tick),
+            "lease_age_ms": float(lease_age),
+            "lease_limit_ms": float(lease_limit),
+            "max_hp": float(ent.get("max_hp", 0.0)),
+            "health_hp": float(ent.get("health_hp", 0.0)),
         }
-        n = {
-            "purge_tick_ms": float(self.purge_tick_ms),
-            "purge_frame": float(self.purge_frame),
-            "purged_n": float(self.purged_n),
-        }
-        rows = [dict(r) for r in self.purge_rows]
+        numeric = [row[name] for name in PURGE_NCOL]
+        textual = [row[name] for name in PURGE_SCOL]
+        return self.jobs.append_row(self.purge_job_id, numeric, textual)
+
+    def _purge_authorized_index(self, pers_id):
+        for idx, pid in enumerate(self.purge_auth_pers):
+            if pid == pers_id:
+                return idx
+        return -1
+
+    def _purge_count(self, tree, pers_id):
+        return sum(1 for ent in tree if ent.get("pers_id") == pers_id)
+
+    def _purge_subtree(self, cand):
+        out = [cand]
+        index = self._children_index()
+        out.extend(self._preorder_children(cand["net_id"], index))
+        return out
+
+    def _purge_tree_eligible(self, cand, tree):
+        if self._root_owner_uid(cand) != self.director_uid:
+            return False
+        pers = cand.get("pers_id", "")
+        if not _is_nonzero_pers_id(pers):
+            return False
+        idx = self._purge_authorized_index(pers)
+        if idx < 0 or self.purge_auth_class[idx] != cand.get("class_name"):
+            return False
+        if self._purge_count(tree, pers) != 1:
+            return False
+        for desc in self._purge_subtree(cand):
+            dp = desc.get("pers_id", "")
+            if not _is_nonzero_pers_id(dp):
+                return False
+            di = self._purge_authorized_index(dp)
+            if di < 0 or self.purge_auth_class[di] != desc.get("class_name"):
+                return False
+            if self._purge_count(tree, dp) != 1:
+                return False
+            if self._root_owner_uid(desc) != self.director_uid:
+                return False
+        return True
+
+    def _purge_pick_leaf(self, cand, tree):
+        best = None
+        best_depth = -1
+        for desc in self._purge_subtree(cand):
+            has_child = any(
+                other is not desc and other.get("parent_net_id") == desc["net_id"]
+                for other in tree
+            )
+            if has_child:
+                continue
+            depth = self._purge_depth(desc)
+            if depth > best_depth:
+                best_depth = depth
+                best = desc
+        return best
+
+    def _op_purge_start(self, op, args_unpacked):
+        strs = args_unpacked.get("str") or {}
+        expect_epoch = strs.get("expect_epoch", "")
+        director_uid = strs.get("director_uid", "")
+        rows = args_unpacked.get("rows") or []
+        scol_in = list(args_unpacked.get("scol") or [])
+        ncol_in = list(args_unpacked.get("ncol") or [])
+        if expect_epoch != self.epoch:
+            return ("rejected", "stale_epoch", wire.empty_payload())
+        if len(rows) < 1 or len(rows) > 16:
+            return ("rejected", "bad_args", wire.empty_payload())
+        if "pers_id" not in scol_in or "class_name" not in scol_in:
+            return ("rejected", "bad_args", wire.empty_payload())
+        if ncol_in:
+            return ("rejected", "bad_args", wire.empty_payload())
+        auth_pers = []
+        auth_class = []
+        for row in rows:
+            pid = str(row.get("pers_id") or "")
+            cls = str(row.get("class_name") or "")
+            if not _is_nonzero_pers_id(pid) or not cls or pid in auth_pers:
+                return ("rejected", "bad_args", wire.empty_payload())
+            auth_pers.append(pid)
+            auth_class.append(cls)
+        if not director_uid or director_uid != self.director_uid:
+            return ("rejected", "director_not_ready", wire.empty_payload())
+        if not (self.director_present and self.director_alive and self.director_inv_readable):
+            return ("rejected", "director_not_ready", wire.empty_payload())
+        job_name = str(op.get("op_id") or "")
+        err = self.jobs.start_job(self, job_name, "per_purge", list(PURGE_NCOL), list(PURGE_SCOL), PURGE_PAGE_SIZE, PURGE_MAX_ROWS, PURGE_MAX_MS, "stop")
+        if err != "":
+            return ("rejected", err, wire.empty_payload())
+        self.purge_job_id = job_name
+        self.purge_director_uid = director_uid
+        self.purge_auth_pers = auth_pers
+        self.purge_auth_class = auth_class
+        self.purge_resolved = [0 for _ in auth_pers]
+        self.purge_confirm = None
+        tree = self._director_tree_entities()
+        self.purge_pre_n = len(tree)
+        if self.purge_pre_n + len(auth_pers) > PURGE_MAX_ROWS:
+            self.jobs.end_job(self.purge_job_id, "failed", "rows_cap")
+        else:
+            for ent in tree:
+                if not self._purge_append("pre", ent, ""):
+                    break
         payload = wire.pack_payload(
-            scalars_str=s,
-            scalars_num=n,
-            num_cols=[],
-            str_cols=["class_name", "pers_id", "owner_uid"],
-            row_dicts=rows,
+            scalars_str={
+                "job": job_name,
+                "state": self.jobs.get_state(job_name),
+                "resource": "per_purge",
+            },
+            scalars_num={"pre_n": float(self.purge_pre_n)},
         )
         return ("done", "", payload)
 
@@ -953,6 +1173,7 @@ class PersistFakeExt(FakeExt):
             cat = str(row.get("cat", ""))
             cname = str(row.get("class_name", ""))
             sname = str(row.get("slot_name", ""))
+            born_in_inventory = False
             rx = float(row.get("req_x_m", 0.0))
             rz = float(row.get("req_z_m", 0.0))
             ryaw = float(row.get("req_yaw_deg", 0.0))
@@ -988,6 +1209,9 @@ class PersistFakeExt(FakeExt):
                         "health_mark_b": 0.0,
                     })
                     continue
+                born_in_inventory = bool(
+                    cat == "child_attach" and sname == "Gloves" and parent.get("cat") == "actor"
+                )
                 pos = parent["pos"]
                 ori = parent["ori"]
                 if sname == "Cargo":
@@ -1021,6 +1245,7 @@ class PersistFakeExt(FakeExt):
                 health_hp=hp,
                 spawn_tick_ms=now_ms,
                 persistent=persistent,
+                born_in_inventory=born_in_inventory,
                 own_logical_id=lid,
                 own_b=1,
                 scene_id=scene_id,
@@ -1042,6 +1267,7 @@ class PersistFakeExt(FakeExt):
                 "max_hp": max_hp,
                 "health_hp": hp,
                 "mark_b": 1.0 if mark_b else 0.0,
+                "born_in_inventory": born_in_inventory,
             })
             if persistent:
                 self.qa_net_ids.add(net_id)
@@ -1258,12 +1484,22 @@ class PersistFakeExt(FakeExt):
         expect_epoch = strs.get("expect_epoch", "")
         target_scene = strs.get("target_scene_id", "")
         target_parent = strs.get("target_parent_id", "")
+        wanted_uid = strs.get("director_uid", "")
         if expect_epoch != self.epoch:
             return ("rejected", "stale_epoch", wire.empty_payload())
         rec = self._record_by(scene_id, logical_id)
         if rec is None:
             return ("rejected", "unknown_entity", wire.empty_payload())
         ent = rec["ent"]
+        if action == "move_to_director":
+            if not wanted_uid:
+                return ("rejected", "bad_args", wire.empty_payload())
+            if wanted_uid != self.director_uid:
+                return ("rejected", "director_not_ready", wire.empty_payload())
+            if not (self.director_present and self.director_alive and self.director_inv_readable):
+                return ("rejected", "director_not_ready", wire.empty_payload())
+            if not ent.get("born_in_inventory"):
+                return ("rejected", "bad_args", wire.empty_payload())
         if not self.peer.lease_valid():
             return ("error", "lease_expired", wire.empty_payload())
         pre = {
@@ -1289,6 +1525,8 @@ class PersistFakeExt(FakeExt):
             if tgt is None:
                 return ("rejected", "unknown_entity", wire.empty_payload())
             tgt_ent = tgt["ent"]
+            if self._root_owner_uid(tgt_ent) == self.director_uid and not ent.get("born_in_inventory"):
+                return ("rejected", "bad_args", wire.empty_payload())
             ent["loc_kind"] = "cargo"
             ent["parent_net_id"] = tgt_ent["net_id"]
             ent["parent_class"] = tgt_ent["class_name"]
@@ -1488,25 +1726,30 @@ class PersistFakeExt(FakeExt):
             is_root = entity["parent_net_id"] == ""
             if not entity["alive"] or not is_root or entity["owner_uid"] == self.director_uid:
                 continue
-            if math.dist(entity["pos"], centre) > radius:
+            d3 = math.sqrt(
+                (float(entity["pos"][0]) - centre[0]) ** 2
+                + (float(entity["pos"][1]) - centre[1]) ** 2
+                + (float(entity["pos"][2]) - centre[2]) ** 2
+            )
+            if d3 > radius:
                 continue
             collected.append(self._census_row(entity, 1, deep=True, index=children))
             for descendant in self._preorder_children(entity["net_id"], children):
                 collected.append(self._census_row(descendant, 1, deep=True, index=children))
         if want_director == 1:
-            for entity in self.world.values():
-                if entity["alive"] and entity["owner_uid"] == self.director_uid:
-                    collected.append(self._census_row(entity, 1, deep=True, index=children))
+            for entity in self._director_tree_entities():
+                collected.append(self._census_row(entity, 1, deep=True, index=children))
         return collected
 
     def _census_plain_rows(self, mid_x, mid_z, radius, want_director, area_name):
         collected = []
+        if want_director == 1:
+            for entity in self._director_tree_entities():
+                collected.append(self._census_row(entity, 1))
         for entity in self.world.values():
             if not entity["alive"]:
                 continue
-            if entity["owner_uid"] == self.director_uid:
-                if want_director == 1:
-                    collected.append(self._census_row(entity, 1))
+            if self._root_owner_uid(entity) == self.director_uid:
                 continue
             inside = _dist2(entity["pos"][0], entity["pos"][2], mid_x, mid_z) <= radius
             if inside:
@@ -1560,6 +1803,18 @@ class PersistFakeExt(FakeExt):
         mid_x = float(num_args.get("center_x_m", 0.0))
         mid_z = float(num_args.get("center_z_m", 0.0))
         want_director = int(round(float(num_args.get("include_director_b", 0.0))))
+        wanted_uid = text_args.get("director_uid", "")
+        if want_director == 1 and not wanted_uid:
+            return self._bad_args_reply()
+        if self.purge_job_id and self.jobs.get_state(self.purge_job_id) == "running":
+            return ("rejected", "purge_pending", wire.empty_payload())
+        director_ready = bool(
+            wanted_uid
+            and wanted_uid == self.director_uid
+            and self.director_present
+            and self.director_alive
+            and self.director_inv_readable
+        )
         if fault == "drop_ctrl_pre_restart":
             for entity in list(self.world.values()):
                 if entity["class_name"] == "Barrel_Yellow" and entity["area_id"] == "area_c":
@@ -1577,10 +1832,11 @@ class PersistFakeExt(FakeExt):
         area_name = area_label.split(":", 1)[1] if ":" in area_label else area_label
         snap_stamp = float(self.peer.local_ms())
         snap_frame_value = int(self.peer.frame)
+        want_director_rows = want_director if director_ready else 0
         if all_mode == 1:
-            rows_found = self._census_all_rows(mid_x, mid_z, radius_value, want_director)
+            rows_found = self._census_all_rows(mid_x, mid_z, radius_value, want_director_rows)
         else:
-            rows_found = self._census_plain_rows(mid_x, mid_z, radius_value, want_director, area_name)
+            rows_found = self._census_plain_rows(mid_x, mid_z, radius_value, want_director_rows, area_name)
         written, problem, delay = self._census_capture_rows(job_name, rows_found, chosen_columns)
         if problem:
             self.census_failed[job_name] = problem
@@ -1592,7 +1848,7 @@ class PersistFakeExt(FakeExt):
             "resource": "per_census",
             "area_tag": area_label,
             "server_epoch": self.epoch,
-            "director_uid": self.director_uid,
+            "director_uid": wanted_uid,
         }
         num_out = {
             "snap_tick_ms": snap_stamp,
@@ -1602,10 +1858,10 @@ class PersistFakeExt(FakeExt):
             "center_x_m": mid_x,
             "center_z_m": mid_z,
             "radius_m": radius_value,
-            "director_present_b": 1.0,
-            "director_alive_b": 1.0,
-            "director_inv_readable_b": 1.0,
-            "director_inv_count_n": float(len(self.director_items)),
+            "director_present_b": 1.0 if director_ready else 0.0,
+            "director_alive_b": 1.0 if (director_ready and self.director_alive) else 0.0,
+            "director_inv_readable_b": 1.0 if (director_ready and self.director_inv_readable) else 0.0,
+            "director_inv_count_n": float(len(self._director_tree_entities())) if director_ready else 0.0,
         }
         result_payload = wire.pack_payload(scalars_str=text_out, scalars_num=num_out)
         self.pending_finish[job_name] = CENSUS_FINISH_AFTER_ATTEMPT_TICKS
@@ -1803,6 +2059,10 @@ class PersistFakeExt(FakeExt):
     def on_job_end(self, job_id, state, reason):
         if self.witness is not None and self.witness["job_id"] == job_id:
             self.witness = None
+        if self.purge_job_id == job_id:
+            self.purge_job_id = ""
+            self.purge_confirm = None
+            self.purge_confirm_ent = None
 
     def _finish_pending_job(self, jid):
         if self.jobs.get_state(jid) == "running":
@@ -1863,6 +2123,9 @@ class PersistFakeExt(FakeExt):
         kept_records = []
         for rec in list(self.records):
             ent = rec.get("ent")
+            if ent is not None and self._root_owner_uid(ent) == self.director_uid:
+                kept_records.append(rec)
+                continue
             if ent is not None and retain.get(ent["net_id"]):
                 kept_records.append(rec)
                 continue
@@ -1873,7 +2136,7 @@ class PersistFakeExt(FakeExt):
         cleaned_raw = 0
         for net_id in list(self.world.keys()):
             ent = self.world.get(net_id)
-            if ent is None or ent["owner_uid"] == self.director_uid:
+            if ent is None or self._root_owner_uid(ent) == self.director_uid:
                 continue
             if retain.get(net_id):
                 continue
@@ -1926,12 +2189,9 @@ class PersistFakeExt(FakeExt):
     def simulate_world_restart(self):
         self.peer.inst = secrets.token_hex(16)
         self.epoch = self.peer.inst
-        self.director_purge_done = False
-        self.has_applied = False
-        self.purge_tick_ms = 0.0
-        self.purge_frame = 0
-        self.purged_n = 0
-        self.purge_rows = []
+        self.purge_job_id = ""
+        self.purge_confirm = None
+        self.purge_confirm_ent = None
         keep = {}
         for net_id, ent in self.world.items():
             if ent["owner_uid"] == self.director_uid or ent["persistent"]:
@@ -1955,35 +2215,76 @@ class PersistFakeExt(FakeExt):
         self.census_failed.clear()
         self._save_state()
 
+    def _tick_purge(self):
+        if not self.purge_job_id:
+            return
+        if self.jobs.get_state(self.purge_job_id) != "running":
+            return
+        if not (self.director_present and self.director_alive and self.director_inv_readable):
+            self.jobs.end_job(self.purge_job_id, "failed", "director_lost")
+            return
+        tree = self._director_tree_entities()
+        if self.purge_confirm is not None:
+            if self._purge_count(tree, self.purge_confirm) > 0:
+                return
+            idx = self._purge_authorized_index(self.purge_confirm)
+            if idx >= 0 and not self.purge_resolved[idx]:
+                ent = self.purge_confirm_ent
+                if self._purge_append("result", ent, "deleted"):
+                    self.purge_resolved[idx] = 1
+            self.purge_confirm = None
+            if self.jobs.get_state(self.purge_job_id) != "running":
+                return
+        if all(self.purge_resolved):
+            self.jobs.end_job(self.purge_job_id, "done", "ok")
+            return
+        for idx, pers in enumerate(self.purge_auth_pers):
+            if self.jobs.get_state(self.purge_job_id) != "running":
+                return
+            if self.purge_resolved[idx]:
+                continue
+            cls = self.purge_auth_class[idx]
+            count = self._purge_count(tree, pers)
+            if count == 0:
+                if self._purge_append("result", {"pers_id": pers, "class_name": cls,
+                                                 "net_id": "", "parent_net_id": "",
+                                                 "max_hp": 0.0, "health_hp": 0.0}, "absent"):
+                    self.purge_resolved[idx] = 1
+                continue
+            if count > 1:
+                first = next((e for e in tree if e.get("pers_id") == pers), None)
+                if self._purge_append("result", first, "ambiguous"):
+                    self.purge_resolved[idx] = 1
+                continue
+            cand = next((e for e in tree if e.get("pers_id") == pers), None)
+            if cand is None or cand.get("class_name") != cls or not self._purge_tree_eligible(cand, tree):
+                if self._purge_append("result", cand or {"pers_id": pers, "class_name": cls,
+                                                         "net_id": "", "parent_net_id": "",
+                                                         "max_hp": 0.0, "health_hp": 0.0}, "retained_foreign"):
+                    self.purge_resolved[idx] = 1
+                continue
+            leaf = self._purge_pick_leaf(cand, tree)
+            if leaf is None:
+                if self._purge_append("result", cand, "retained_foreign"):
+                    self.purge_resolved[idx] = 1
+                continue
+            if not self.peer.lease_valid():
+                return
+            emit_tick = float(self.peer.local_ms())
+            age = float(self.peer.lease_age_ms()) if hasattr(self.peer, "lease_age_ms") else 0.0
+            limit = float(getattr(self.peer, "lease_ms", 3000) or 3000)
+            for sub in self._purge_subtree(leaf):
+                if not self._purge_append("emit", sub, "", emit_tick, age, limit):
+                    return
+            self.purge_confirm = leaf.get("pers_id", "")
+            self.purge_confirm_ent = dict(leaf)
+            self._delete_entity(leaf)
+            return
+        if all(self.purge_resolved):
+            self.jobs.end_job(self.purge_job_id, "done", "ok")
+
     def on_tick(self, timeslice_s):
-        # Espejo de la limpieza al arrancar del .c: en un proceso nuevo (aun
-        # sin aplicar), lo centinela del director viene de su personaje
-        # guardado y se borra antes del primer censo. Con lease vencido no
-        # corre y queda pending (E1: borrar es un efecto).
-        if not self.director_purge_done:
-            if self.has_applied:
-                self.director_purge_done = True
-            elif self.peer is not None and self.peer.lease_valid():
-                purged = []
-                for ent in list(self.world.values()):
-                    if (
-                        ent["alive"]
-                        and ent["owner_uid"] == self.director_uid
-                        and ent["class_name"] in SENTINEL_CLASSES
-                    ):
-                        purged.append(ent)
-                for ent in purged:
-                    self.purge_rows.append({
-                        "class_name": ent["class_name"],
-                        "pers_id": ent["pers_id"],
-                        "owner_uid": ent["owner_uid"],
-                    })
-                    self._delete_entity(ent)
-                self.purged_n = len(purged)
-                self.purge_rows = self.purge_rows[:8]
-                self.purge_tick_ms = float(self.peer.local_ms())
-                self.purge_frame = int(self.peer.frame)
-                self.director_purge_done = True
+        self._tick_purge()
         self._tick_witness()
         # BLOQ 6: A mantiene la ocupacion hasta acreditar el intento de B
         # (entonces termina en pocos ticks, con released_tick posterior al

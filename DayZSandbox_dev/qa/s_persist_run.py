@@ -36,8 +36,9 @@ TERMINAL_STATES = ("done", "failed", "stopped", "expired")
 T0_DIRECTOR_TIMEOUT_S = 300.0
 T0_DIRECTOR_POLL_S = 2.0
 T4_DIRECTOR_TIMEOUT_S = 300.0
-# t4: sondeo del registro de la purga de arranque dentro de la ventana del director.
+# t4: sondeo del trabajo de purga dentro de la ventana del director (120 s).
 T4_PURGE_POLL_S = 1.0
+T4_PURGE_TIMEOUT_S = 120.0
 # Holgura del primer disco t5: en partida la latencia del censo varia mucho
 # mas que offline y cada reintento es otro censo grande (GetObjectsAtPosition3D),
 # asi que el radio inicial cubre el alcance estimado con margen acotado.
@@ -931,11 +932,54 @@ def _probe_sources_at_commit(git_head):
     return out
 
 
-def _job_free(ctx, job_id):
+def _job_free(ctx, job_id, target_inst=None):
     return f03_common.issue_one(
         ctx, "server", "job_free",
         wire.pack_payload(scalars_str={"job": job_id}),
+        target_inst=target_inst,
     )
+
+
+def _read_job_pages_target(ctx, job_id, *, target_inst="", timeout_ms=30000):
+    """read_job_pages no admite target_inst: pagina una a una con issue_one."""
+    p0 = f03_common.issue_one(
+        ctx, "server", "job_read",
+        wire.pack_payload({"job": job_id}, {"page_n": 0}),
+        timeout_ms=timeout_ms, target_inst=target_inst,
+    )
+    if p0.status != "done":
+        raise ValueError(f"job_read page 0 returned {p0.status}/{p0.reason}")
+    state = p0.payload["str"].get("state", "")
+    if state not in TERMINAL_STATES:
+        raise ValueError(f"read_job_pages requires terminal job state, got {state!r}")
+    rows_total_n = int(p0.payload["num"]["rows_total_n"])
+    pages_n = int(p0.payload["num"]["pages_n"])
+    rows = list(p0.payload["rows"])
+    raw_pages = [{"page_n": 0, "str": dict(p0.payload.get("str") or {}),
+                  "num": dict(p0.payload.get("num") or {}),
+                  "rows": list(p0.payload.get("rows") or [])}]
+    for page_idx in range(1, pages_n):
+        pi = f03_common.issue_one(
+            ctx, "server", "job_read",
+            wire.pack_payload({"job": job_id}, {"page_n": page_idx}),
+            timeout_ms=timeout_ms, target_inst=target_inst,
+        )
+        if pi.status != "done":
+            raise ValueError(f"job_read page {page_idx} returned {pi.status}/{pi.reason}")
+        if pi.payload["str"].get("state") != state:
+            raise ValueError("job_read pages disagree on state")
+        rows.extend(pi.payload["rows"])
+        raw_pages.append({"page_n": page_idx, "str": dict(pi.payload.get("str") or {}),
+                          "num": dict(pi.payload.get("num") or {}),
+                          "rows": list(pi.payload.get("rows") or [])})
+    return {
+        "state": state,
+        "reason": p0.payload["str"].get("reason", ""),
+        "rows_total_n": rows_total_n,
+        "pages_n": pages_n,
+        "rows": rows,
+        "raw_pages": raw_pages,
+    }
 
 
 def _census_tag(stage, area_id, has_center_override=False):
@@ -949,7 +993,7 @@ def _census_tag(stage, area_id, has_center_override=False):
     return f"{stage}:{area_id}"
 
 
-def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy_fault=None, qa_fault=None, defer_free=False, center_override=None, radius_override=None):
+def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy_fault=None, qa_fault=None, defer_free=False, center_override=None, radius_override=None, director_uid="", target_inst=None):
     if center_override is None:
         area = fixture["areas"][area_id]
         tag = _census_tag(stage, area_id)
@@ -962,7 +1006,7 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy
         cz = float(center_override[1])
         rad = float(radius_override) if radius_override is not None else 60.0
     payload = wire.pack_payload(
-        scalars_str={"area_tag": tag},
+        scalars_str={"area_tag": tag, "director_uid": director_uid},
         scalars_num={
             "center_x_m": cx,
             "center_z_m": cz,
@@ -970,7 +1014,7 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy
             "include_director_b": float(include_dir),
         },
     )
-    out = f03_common.issue_one(ctx, "server", "per_census_start", payload, qa_fault=qa_fault)
+    out = f03_common.issue_one(ctx, "server", "per_census_start", payload, qa_fault=qa_fault, target_inst=target_inst)
     rec = {
         "ev": "census_stage",
         "stage": stage,
@@ -1000,7 +1044,7 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy
 
     if busy_probe:
         probe_payload = wire.pack_payload(
-            scalars_str={"area_tag": f"contention_probe:{area_id}"},
+            scalars_str={"area_tag": f"contention_probe:{area_id}", "director_uid": director_uid},
             scalars_num={
                 "center_x_m": cx,
                 "center_z_m": cz,
@@ -1008,7 +1052,7 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy
                 "include_director_b": 0.0,
             },
         )
-        probe = f03_common.issue_one(ctx, "server", "per_census_start", probe_payload, qa_fault=busy_fault)
+        probe = f03_common.issue_one(ctx, "server", "per_census_start", probe_payload, qa_fault=busy_fault, target_inst=target_inst)
         ctx.record_scenario({
             "ev": "census_busy_probe",
             "area_id": area_id,
@@ -1026,6 +1070,7 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy
                 probe_page = f03_common.issue_one(
                     ctx, "server", "job_read",
                     wire.pack_payload(scalars_str={"job": probe_jid}, scalars_num={"page_n": 0.0}),
+                    target_inst=target_inst,
                 )
                 if probe_page.status != "done" or not probe_page.payload:
                     break
@@ -1035,10 +1080,13 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy
                 time.sleep(0.02)
             if probe_state == "done":
                 try:
-                    f03_common.read_job_pages(ctx, "server", probe_jid, timeout_ms=30000)
+                    if target_inst is not None:
+                        _read_job_pages_target(ctx, probe_jid, target_inst=target_inst, timeout_ms=30000)
+                    else:
+                        f03_common.read_job_pages(ctx, "server", probe_jid, timeout_ms=30000)
                 except Exception:
                     pass
-            _job_free(ctx, probe_jid)
+            _job_free(ctx, probe_jid, target_inst=target_inst)
 
     state = ""
     deadline = time.monotonic() + 60.0
@@ -1046,6 +1094,7 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy
         probe_page = f03_common.issue_one(
             ctx, "server", "job_read",
             wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
+            target_inst=target_inst,
         )
         if probe_page.status != "done" or not probe_page.payload:
             break
@@ -1055,18 +1104,26 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy
         time.sleep(0.02)
 
     rows = []
-    if state == "done":
+    if state in TERMINAL_STATES:
         try:
-            pages = f03_common.read_job_pages(ctx, "server", job_id, timeout_ms=30000)
+            if target_inst is not None:
+                pages = _read_job_pages_target(ctx, job_id, target_inst=target_inst, timeout_ms=30000)
+                rec["job_complete"] = True
+                rec["job_num"] = {
+                    "rows_total_n": float(pages.get("rows_total_n", 0)),
+                    "pages_n": float(pages.get("pages_n", 0)),
+                }
+            else:
+                pages = f03_common.read_job_pages(ctx, "server", job_id, timeout_ms=30000)
+                rec["job_complete"] = True
+                rec["job_num"] = dict(pages.get("num") or {})
             rows = list(pages.get("rows") or [])
-            rec["job_complete"] = True
-            rec["job_num"] = dict(pages.get("num") or {})
         except Exception as exc:
             rec["pages_error"] = str(exc)
     if defer_free:
         rec["free_status"] = "deferred"
     else:
-        free = _job_free(ctx, job_id)
+        free = _job_free(ctx, job_id, target_inst=target_inst)
         rec["free_status"] = free.status
     rec["rows"] = rows
     rec["state"] = state
@@ -1133,11 +1190,39 @@ def _director_status_ready(st):
     return True
 
 
-def _wait_for_director_t0(ctx, *, timeout_s=None, poll_s=None, monotonic=None, sleep=None):
-    """t0 en partida: sondea per_status cada poll_s hasta ver al director.
+def _players_n_from_status(st):
+    if st is None or getattr(st, "status", None) != "done" or not getattr(st, "payload", None):
+        return None
+    try:
+        return int(round(float((st.payload.get("num") or {}).get("players_n", -1.0))))
+    except (TypeError, ValueError):
+        return None
 
-    Devuelve (ultimo_per_status, polls, waited_ms, ready). Con el tope agotado
-    ready es False y el llamador registra el ultimo estado visto y corta.
+
+def _t0_status_ready(st):
+    """t0 sin uid: listo solo con players_n == 1, uid no vacio y estado 1/1/1."""
+    players_n = _players_n_from_status(st)
+    if players_n is None or players_n != 1:
+        return False
+    payload = st.payload
+    strings = payload.get("str") or {}
+    numbers = payload.get("num") or {}
+    if not str(strings.get("director_uid") or ""):
+        return False
+    for key in ("director_present_b", "director_alive_b", "director_inv_readable_b"):
+        try:
+            if int(round(float(numbers.get(key, 0.0)))) != 1:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _wait_for_director_t0(ctx, *, timeout_s=None, poll_s=None, monotonic=None, sleep=None):
+    """t0: sondea per_status hasta ver un unico director listo.
+
+    Con cero jugadores sigue esperando hasta el limite; con dos o mas corta
+    como ambiguo (2 INCONCLUSO). Devuelve (ultimo, polls, waited_ms, ready, ambiguous).
     """
     timeout = T0_DIRECTOR_TIMEOUT_S if timeout_s is None else float(timeout_s)
     interval = T0_DIRECTOR_POLL_S if poll_s is None else float(poll_s)
@@ -1148,91 +1233,305 @@ def _wait_for_director_t0(ctx, *, timeout_s=None, poll_s=None, monotonic=None, s
     polls = 0
     last = None
     ready = False
+    ambiguous = False
     while True:
         last = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
         polls += 1
-        if _director_status_ready(last):
+        players_n = _players_n_from_status(last)
+        if players_n is not None and players_n >= 2:
+            ambiguous = True
+            break
+        if _t0_status_ready(last):
             ready = True
             break
         if clock() >= deadline:
             break
         sleeper(interval)
     waited_ms = int(round(max(0.0, clock() - started) * 1000.0))
-    return last, polls, waited_ms, ready
+    return last, polls, waited_ms, ready, ambiguous
 
 
-def _purge_read_done(st, expected_epoch):
-    """True si `per_purge_read` ya acredita la purga del epoch nuevo (`purge_state == done`)."""
-    if st is None or getattr(st, "status", None) != "done":
-        return False
-    payload = getattr(st, "payload", None)
-    if not payload:
-        return False
+def _scenario_events(ctx):
+    """Lee scenario.jsonl ya volcado (flush por linea) para congelar acreditadas."""
+    samples = getattr(ctx, "samples_dir", None)
+    if samples is None:
+        return []
+    path = Path(samples) / "scenario.jsonl"
+    if not path.is_file():
+        return []
+    out = []
     try:
-        strings = payload.get("str") or {}
-    except AttributeError:
-        return False
-    if str(strings.get("purge_state") or "") != "done":
-        return False
-    return expected_epoch == "" or str(strings.get("server_epoch") or "") == expected_epoch
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+    except OSError:
+        return out
+    return out
 
 
-def _read_purge_t4(ctx, *, server_epoch_new="", timeout_s=None, poll_s=None,
-                   monotonic=None, sleep=None):
-    """t4: lee `per_purge_read` tras dar al director por presente y antes del primer censo t5.
+def _ledger_classes(fixture, active_scenes):
+    classes = {}
+    for scene_id in active_scenes:
+        _wire_rows, ledger_rows = _build_scene_rows(fixture, scene_id)
+        for row in ledger_rows:
+            classes[row["logical_id"]] = row["class_name"]
+    return classes
 
-    Si sale `pending`, reintenta dentro de la ventana del director. Si no llega
-    a `done`, devuelve la ultima lectura: el runner sigue y lo deja en la
-    evidencia (lo juzga el oraculo).
+
+def _compute_accredited(events, fixture, cfg, director_uid_t0):
+    """Acreditadas con la evidencia del epoch viejo, antes del reinicio.
+
+    Cruza alta/transicion con exito, censos que incluyen al director y el
+    basal de t0. La misma entidad vista en varios discos cuenta una vez.
     """
-    timeout = T4_DIRECTOR_TIMEOUT_S if timeout_s is None else float(timeout_s)
+    classes = _ledger_classes(fixture, cfg["active_scenes"])
+    baseline_rows = []
+    census_rows_by_stage = {}
+    all_rows = []
+    transitions = []
+    for ev in events:
+        name = ev.get("ev")
+        if name == "census_stage":
+            stage = str(ev.get("stage") or "")
+            rows = list(ev.get("rows") or [])
+            all_rows.extend(rows)
+            census_rows_by_stage.setdefault(stage, []).extend(rows)
+            if stage == "t0_baseline_census":
+                baseline_rows.extend(rows)
+        elif name == "child_transition_t1":
+            transitions.append(ev)
+    baseline_pers = {
+        str(r.get("pers_id") or "") for r in baseline_rows
+        if str(r.get("pers_id") or "") not in ("", "0:0:0:0")
+    }
+    stages = ("t1_post_transition_census", "t2_census_10min",
+              "t3_pre_reset_census", "t3_post_reset_census")
+    candidates = []
+    for tr in transitions:
+        if tr.get("action") != "move_to_director":
+            continue
+        if str(tr.get("transition_status") or "") != "ok":
+            continue
+        if str(tr.get("post_owner_uid") or "") != director_uid_t0:
+            continue
+        lid = str(tr.get("logical_id") or "")
+        net_id = str(tr.get("net_id") or "")
+        cls = classes.get(lid, "")
+        if not lid or not cls or net_id in ("", "0:0"):
+            continue
+        readings = []
+        for stage in stages:
+            for row in census_rows_by_stage.get(stage, []):
+                if str(row.get("owner_uid") or "") != director_uid_t0:
+                    continue
+                if str(row.get("net_id") or "") != net_id:
+                    continue
+                readings.append((stage, row))
+        if not readings:
+            continue
+        pers_ids = {str(r.get("pers_id") or "") for _stage, r in readings}
+        if len(pers_ids) != 1:
+            continue
+        pers_id = next(iter(pers_ids))
+        if pers_id in ("", "0:0:0:0"):
+            continue
+        if any(str(r.get("class_name") or "") != cls for _stage, r in readings):
+            continue
+        if pers_id in baseline_pers:
+            continue
+        shared = False
+        for row in all_rows:
+            if str(row.get("pers_id") or "") != pers_id:
+                continue
+            if str(row.get("net_id") or "") != net_id or str(row.get("class_name") or "") != cls:
+                shared = True
+                break
+        if shared:
+            continue
+        censuses = []
+        for stage, row in readings:
+            censuses.append({
+                "stage": stage,
+                "area_tag": str(row.get("area_tag") or stage),
+                "net_id": net_id,
+                "pers_id": pers_id,
+            })
+        candidates.append({
+            "pers_id": pers_id,
+            "class_name": cls,
+            "logical_id": lid,
+            "net_id": net_id,
+            "censuses": censuses,
+        })
+    candidates.sort(key=lambda c: (c["logical_id"], c["pers_id"]))
+    return candidates
+
+
+def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
+                    timeout_s=None, poll_s=None, monotonic=None, sleep=None):
+    """t4: ordena la purga con las acreditadas y espera el trabajo terminal."""
+    if not accredited:
+        return {"done": True, "state": "none", "reason": "", "rows": [], "job_id": ""}
+    timeout = T4_PURGE_TIMEOUT_S if timeout_s is None else float(timeout_s)
     interval = T4_PURGE_POLL_S if poll_s is None else float(poll_s)
     clock = time.monotonic if monotonic is None else monotonic
     sleeper = time.sleep if sleep is None else sleep
+    payload = wire.pack_payload(
+        scalars_str={"director_uid": director_uid, "expect_epoch": server_epoch_new},
+        str_cols=["pers_id", "class_name"],
+        row_dicts=[{"pers_id": c["pers_id"], "class_name": c["class_name"]} for c in accredited],
+    )
+    start = f03_common.issue_one(ctx, "server", "per_purge_start", payload,
+                                 target_inst=server_epoch_new or None)
+    ctx.record_scenario({
+        "ev": "purge_order",
+        "status": start.status,
+        "reason": start.reason,
+        "op_id": start.op_id,
+        "server_epoch": server_epoch_new,
+        "director_uid": director_uid,
+        "rows": [{"pers_id": c["pers_id"], "class_name": c["class_name"],
+                  "logical_id": c["logical_id"], "net_id": c["net_id"]} for c in accredited],
+    })
+    if start.status != "done" or not start.payload:
+        ctx.record_scenario({
+            "ev": "purge_not_done",
+            "reason": f"start_{start.status}_{start.reason}",
+            "server_epoch": server_epoch_new,
+        })
+        return {"done": False, "state": "", "reason": start.reason, "rows": [], "job_id": ""}
+    job_id = str(start.payload["str"].get("job") or start.op_id)
+    pre_n = float(start.payload["num"].get("pre_n", 0.0))
+    ctx.record_scenario({
+        "ev": "purge_start",
+        "job": job_id,
+        "pre_n": pre_n,
+        "state": str(start.payload["str"].get("state") or ""),
+        "server_epoch": server_epoch_new,
+    })
     started = clock()
     deadline = started + max(0.0, timeout)
+    state = ""
+    reason = ""
     polls = 0
     last = None
-    done = False
     while True:
-        last = f03_common.issue_one(ctx, "server", "per_purge_read", wire.empty_payload())
+        last = f03_common.issue_one(
+            ctx, "server", "job_read",
+            wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
+            target_inst=server_epoch_new or None,
+        )
         polls += 1
-        if _purge_read_done(last, server_epoch_new):
-            done = True
+        if last.status == "done" and last.payload:
+            state = str(last.payload["str"].get("state") or "")
+            reason = str(last.payload["str"].get("reason") or "")
+        if state in TERMINAL_STATES:
             break
         if clock() >= deadline:
             break
         sleeper(interval)
     waited_ms = int(round(max(0.0, clock() - started) * 1000.0))
-    purge_state = ""
-    purge_tick_ms = 0.0
-    purge_frame = 0.0
-    purged_n = 0.0
+    stopped = False
+    if state not in TERMINAL_STATES:
+        stop = f03_common.issue_one(
+            ctx, "server", "job_stop",
+            wire.pack_payload(scalars_str={"job": job_id}),
+            target_inst=server_epoch_new or None,
+        )
+        stopped = True
+        ctx.record_scenario({
+            "ev": "purge_stop",
+            "status": stop.status,
+            "reason": stop.reason,
+            "job": job_id,
+            "server_epoch": server_epoch_new,
+        })
+        stop_deadline = clock() + 10.0
+        while clock() < stop_deadline:
+            last = f03_common.issue_one(
+                ctx, "server", "job_read",
+                wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
+                target_inst=server_epoch_new or None,
+            )
+            polls += 1
+            if last.status == "done" and last.payload:
+                state = str(last.payload["str"].get("state") or "")
+                reason = str(last.payload["str"].get("reason") or "")
+            if state in TERMINAL_STATES:
+                break
+            sleeper(0.2)
+        if state not in TERMINAL_STATES:
+            ctx.record_scenario({
+                "ev": "purge_stop_unaccredited",
+                "job": job_id,
+                "state": state,
+                "server_epoch": server_epoch_new,
+            })
+            f03_common.await_operator(
+                ctx,
+                step="t4_purge_cold_stop",
+                action="stop_server_cold",
+                instructions="Para el servidor en frio: la purga no acredito un estado terminal.",
+                predicate=None,
+                timeout_s=600.0,
+            )
+            ctx.record_scenario({
+                "ev": "purge_not_done",
+                "reason": "wait_expired_no_terminal",
+                "server_epoch": server_epoch_new,
+                "waited_ms": waited_ms,
+                "polls": polls,
+            })
+            return {"done": False, "state": state, "reason": reason, "rows": [], "job_id": job_id}
     rows = []
-    if last is not None and getattr(last, "payload", None):
+    pages = None
+    if state in TERMINAL_STATES:
         try:
-            purge_state = str(last.payload["str"].get("purge_state") or "")
-            purge_tick_ms = float(last.payload["num"].get("purge_tick_ms", 0.0))
-            purge_frame = float(last.payload["num"].get("purge_frame", 0.0))
-            purged_n = float(last.payload["num"].get("purged_n", 0.0))
-            rows = list(last.payload.get("rows") or [])
-        except (KeyError, TypeError, ValueError, AttributeError):
-            pass
+            pages = _read_job_pages_target(ctx, job_id, target_inst=server_epoch_new or None, timeout_ms=30000)
+            rows = list(pages.get("rows") or [])
+            ctx.record_scenario({
+                "ev": "purge_pages",
+                "job": job_id,
+                "state": pages.get("state", state),
+                "reason": pages.get("reason", reason),
+                "rows_total_n": pages.get("rows_total_n", 0),
+                "pages_n": pages.get("pages_n", 0),
+                "rows": rows,
+                "raw_pages": pages.get("raw_pages", []),
+                "server_epoch": server_epoch_new,
+            })
+        except Exception as exc:
+            ctx.record_scenario({
+                "ev": "purge_pages_error",
+                "job": job_id,
+                "state": state,
+                "error": str(exc),
+                "server_epoch": server_epoch_new,
+            })
+    free = _job_free(ctx, job_id, target_inst=server_epoch_new or None)
     ctx.record_scenario({
-        "ev": "t4_purge_read",
-        "status": getattr(last, "status", ""),
-        "reason": getattr(last, "reason", ""),
+        "ev": "purge_free",
+        "status": free.status,
+        "reason": free.reason,
+        "job": job_id,
         "server_epoch": server_epoch_new,
-        "purge_state": purge_state,
-        "purge_tick_ms": purge_tick_ms,
-        "purge_frame": purge_frame,
-        "purged_n": purged_n,
-        "rows": rows,
-        "polls": polls,
-        "waited_ms": waited_ms,
-        "done_b": 1 if done else 0,
     })
-    return last, polls, waited_ms, done
+    done = state == "done"
+    if not done:
+        ctx.record_scenario({
+            "ev": "purge_not_done",
+            "reason": reason or state or "wait_expired",
+            "server_epoch": server_epoch_new,
+            "waited_ms": waited_ms,
+            "polls": polls,
+            "stopped_b": 1 if stopped else 0,
+        })
+    return {"done": done, "state": state, "reason": reason, "rows": rows, "job_id": job_id}
 
 
 def _restart_server_live(ctx, old_epoch, director_uid_t0):
@@ -1279,22 +1578,34 @@ def _restart_server_live(ctx, old_epoch, director_uid_t0):
             "type": type(fail_before).__name__,
         })
 
+    hello_ev = res.get("event") if isinstance(res.get("event"), dict) else {}
+    hello_args = hello_ev.get("args") if isinstance(hello_ev.get("args"), dict) else {}
+    new_epoch = str(hello_ev.get("inst") or hello_args.get("inst") or "")
+    if new_epoch == old_epoch:
+        new_epoch = ""
     deadline = time.monotonic() + T4_DIRECTOR_TIMEOUT_S
-    new_epoch = ""
     while time.monotonic() < deadline:
-        st = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
+        status_payload = wire.pack_payload(scalars_str={"director_uid": director_uid_t0})
+        st = f03_common.issue_one(ctx, "server", "per_status", status_payload,
+                                  target_inst=new_epoch or None)
         if st.status == "done" and st.payload:
-            new_epoch = str(st.payload["str"].get("server_epoch") or "")
+            reported = str(st.payload["str"].get("server_epoch") or "")
             n = st.payload["num"]
             uid = str(st.payload["str"].get("director_uid") or "")
+            epoch_ok = False
+            if new_epoch:
+                epoch_ok = reported == new_epoch
+            else:
+                epoch_ok = reported != "" and reported != old_epoch
             if (
-                new_epoch
-                and new_epoch != old_epoch
+                epoch_ok
                 and uid == director_uid_t0
                 and int(round(float(n.get("director_present_b", 0.0)))) == 1
                 and int(round(float(n.get("director_alive_b", 0.0)))) == 1
                 and int(round(float(n.get("director_inv_readable_b", 0.0)))) == 1
             ):
+                if not new_epoch:
+                    new_epoch = reported
                 return new_epoch
         time.sleep(2.0)
     ctx.record_scenario({"ev": "live_restart_failed", "reason": "director_not_reconnected"})
@@ -1443,7 +1754,7 @@ def _spawn_raw(ctx, fixture, tag):
     return f03_common.issue_one(ctx, "server", "per_spawn_raw", payload)
 
 
-def _transition(ctx, scene_id, logical_id, action, expect_epoch, target_scene="", target_parent=""):
+def _transition(ctx, scene_id, logical_id, action, expect_epoch, target_scene="", target_parent="", director_uid=""):
     payload = wire.pack_payload(
         scalars_str={
             "scene_id": scene_id,
@@ -1452,6 +1763,7 @@ def _transition(ctx, scene_id, logical_id, action, expect_epoch, target_scene=""
             "expect_epoch": expect_epoch,
             "target_scene_id": target_scene,
             "target_parent_id": target_parent,
+            "director_uid": director_uid,
         }
     )
     return f03_common.issue_one(ctx, "server", "per_child_transition", payload)
@@ -1650,15 +1962,9 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 shutil.copytree(sim_storage, backup_slot)
                 ctx.record_scenario({"ev": "storage_snapshot_t0", "files": storage_t0})
 
-            # En partida el hello del cliente llega antes de que el jugador
-            # este en el mundo: t0 sondea hasta ver al director (o agota el
-            # tope) antes de fijar epoch/uid. Offline el primer per_status
-            # ya vale y la rama no cambia.
-            if is_live:
-                st_t0, t0_polls, t0_waited_ms, t0_ready = _wait_for_director_t0(ctx)
-            else:
-                st_t0 = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
-                t0_polls, t0_waited_ms, t0_ready = 1, 0, _director_status_ready(st_t0)
+            # t0: sin uid; con cero jugadores se sigue esperando hasta el
+            # limite y con dos o mas se corta como ambiguo (2 INCONCLUSO).
+            st_t0, t0_polls, t0_waited_ms, t0_ready, t0_ambiguous = _wait_for_director_t0(ctx)
             server_epoch_old = ""
             director_uid_t0 = ""
             if st_t0.status == "done" and st_t0.payload:
@@ -1671,15 +1977,22 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 "director_uid": director_uid_t0,
                 "num": dict(st_t0.payload["num"]) if st_t0.payload else {},
             })
-            if is_live:
+            ctx.record_scenario({
+                "ev": "t0_director_wait",
+                "polls": t0_polls,
+                "waited_ms": t0_waited_ms,
+                "players_n": _players_n_from_status(st_t0),
+            })
+            if t0_ambiguous:
                 ctx.record_scenario({
-                    "ev": "t0_director_wait",
-                    "polls": t0_polls,
-                    "waited_ms": t0_waited_ms,
+                    "ev": "t0_director_ambiguous",
+                    "players_n": _players_n_from_status(st_t0),
                 })
-                if not t0_ready:
-                    ctx.record_scenario({"ev": "t0_director_absent"})
-                    raise RuntimeError("t0_director_absent")
+                raise RuntimeError("director_ambiguous")
+            if not t0_ready:
+                ctx.record_scenario({"ev": "t0_director_absent"})
+                raise RuntimeError("t0_director_absent")
+            if is_live:
                 mission_ok, mission_err = _verify_storage_mission(storage_env)
                 ctx.record_scenario({
                     "ev": "storage_mission_verify",
@@ -1690,24 +2003,37 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 if not mission_ok:
                     raise RuntimeError(mission_err)
 
-            baseline_director_rows = []
+            baseline_all_rows = []
             for idx, area_id in enumerate(cfg["base_areas"]):
                 include_dir = 1 if area_id == "area_a" else 0
                 if idx == 0 and cfg["bypass_contention"]:
                     rec = _census(
                         ctx, fixture, "t0_baseline_census", area_id, include_dir,
                         busy_probe=True, busy_fault="census_resource_bypass",
+                        director_uid=director_uid_t0,
                     )
                 else:
-                    rec = _census(ctx, fixture, "t0_baseline_census", area_id, include_dir, busy_probe=(idx == 0))
-                if include_dir == 1:
-                    for row in rec.get("rows") or []:
-                        if row.get("owner_uid") == director_uid_t0 and row.get("class_name") not in fixture["sentinel_classes"]:
-                            baseline_director_rows.append(row)
+                    rec = _census(ctx, fixture, "t0_baseline_census", area_id, include_dir,
+                                  busy_probe=(idx == 0), director_uid=director_uid_t0)
+                baseline_all_rows.extend(rec.get("rows") or [])
+            baseline_director_rows = []
+            baseline_director_sentinel = []
+            for row in baseline_all_rows:
+                if row.get("owner_uid") != director_uid_t0:
+                    continue
+                if row.get("class_name") in fixture["sentinel_classes"]:
+                    baseline_director_sentinel.append(row)
+                else:
+                    baseline_director_rows.append(row)
             ctx.record_scenario({
                 "ev": "baseline_director_foreign",
                 "director_uid": director_uid_t0,
                 "rows": baseline_director_rows,
+            })
+            ctx.record_scenario({
+                "ev": "baseline_director_sentinel",
+                "director_uid": director_uid_t0,
+                "rows": baseline_director_sentinel,
             })
 
             creature_lids = {f"{cfg['pfx']}_inf_1", f"{cfg['pfx']}_ani_1", "b_inf_1", "b_ani_1"}
@@ -1801,7 +2127,7 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                     })
 
             for area_id in cfg["base_areas"]:
-                _census(ctx, fixture, "t1_pre_transition_census", area_id, 1 if area_id in ("area_a", "area_b") else 0)
+                _census(ctx, fixture, "t1_pre_transition_census", area_id, 1 if area_id in ("area_a", "area_b") else 0, director_uid=director_uid_t0)
 
             transitions = [
                 ("scene_a_clean", "ac_act_1_armband_drop", "drop_to_ground", "", ""),
@@ -1811,7 +2137,9 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 ("scene_b", "b_cross_child", "move_to_container", cfg["cross_scene"], cfg["cross_parent"]),
             ]
             for t_scene, t_lid, t_action, t_sc, t_par in transitions:
-                tr = _transition(ctx, t_scene, t_lid, t_action, server_epoch_old, t_sc, t_par)
+                tr = _transition(ctx, t_scene, t_lid, t_action, server_epoch_old, t_sc, t_par,
+                                 director_uid=director_uid_t0)
+                tr_str = (tr.payload.get("str") if tr.payload else {}) or {}
                 ctx.record_scenario({
                     "ev": "child_transition_t1",
                     "scene_id": t_scene,
@@ -1819,10 +2147,15 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                     "action": t_action,
                     "status": tr.status,
                     "reason": tr.reason,
+                    "transition_status": str(tr_str.get("transition_status") or ""),
+                    "net_id": str(tr_str.get("net_id") or ""),
+                    "post_loc_kind": str(tr_str.get("post_loc_kind") or ""),
+                    "post_owner_uid": str(tr_str.get("post_owner_uid") or ""),
+                    "post_parent_net_id": str(tr_str.get("post_parent_net_id") or ""),
                 })
 
             for area_id in cfg["base_areas"]:
-                _census(ctx, fixture, "t1_post_transition_census", area_id, 1 if area_id in ("area_a", "area_b") else 0)
+                _census(ctx, fixture, "t1_post_transition_census", area_id, 1 if area_id in ("area_a", "area_b") else 0, director_uid=director_uid_t0)
             ctx.record_scenario({"ev": "storage_snapshot_t1", "files": _snapshot_stage(is_live, storage_env, sim_storage)})
 
             creature_tracks = []
@@ -1848,14 +2181,14 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
                 })
             for area_id in cfg["creature_areas"]:
                 obs_req_t = time.time()
-                rec_t2 = _census(ctx, fixture, "t2_census_10min", area_id, 0)
+                rec_t2 = _census(ctx, fixture, "t2_census_10min", area_id, 1 if area_id in cfg["creature_areas"] else 0, director_uid=director_uid_t0)
                 _collect_creature_tracks(rec_t2, creature_lids, creature_tracks, obs_req_t)
             ctx.record_scenario({"ev": "storage_snapshot_t2", "files": _snapshot_stage(is_live, storage_env, sim_storage)})
 
             t3_director_areas = {cfg["retained_area"], "area_a", "area_b"}
             for area_id in cfg["base_areas"]:
                 obs_req_t = time.time()
-                rec_t3p = _census(ctx, fixture, "t3_pre_reset_census", area_id, 1 if area_id in t3_director_areas else 0)
+                rec_t3p = _census(ctx, fixture, "t3_pre_reset_census", area_id, 1 if area_id in t3_director_areas else 0, director_uid=director_uid_t0)
                 _collect_creature_tracks(rec_t3p, creature_lids, creature_tracks, obs_req_t)
 
             for attempt in (1, 2):
@@ -1886,12 +2219,12 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             t3_post_snap_by_area = {}
             for area_id in cfg["base_areas"]:
                 obs_req_t = time.time()
-                rec_t3q = _census(ctx, fixture, "t3_post_reset_census", area_id, 1 if area_id in t3_director_areas else 0)
+                rec_t3q = _census(ctx, fixture, "t3_post_reset_census", area_id, 1 if area_id in t3_director_areas else 0, director_uid=director_uid_t0)
                 t3_post_snap_by_area[area_id] = float(rec_t3q.get("snap_tick_ms", 0.0))
                 _collect_creature_tracks(rec_t3q, creature_lids, creature_tracks, obs_req_t)
 
             if drop_control_pre_restart:
-                _census(ctx, fixture, "t3_post_reset_census", "area_c", 0, qa_fault="drop_ctrl_pre_restart")
+                _census(ctx, fixture, "t3_post_reset_census", "area_c", 0, qa_fault="drop_ctrl_pre_restart", director_uid=director_uid_t0)
 
             stop_status = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
             ctx.record_scenario({
@@ -1901,189 +2234,211 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             })
 
             server_epoch_new = _restart_server(ctx, server_epoch_old, director_uid_t0)
-            st_t4 = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
+            t4_status_payload = wire.pack_payload(scalars_str={"director_uid": director_uid_t0})
+            st_t4 = f03_common.issue_one(ctx, "server", "per_status", t4_status_payload,
+                                         target_inst=server_epoch_new or None)
             first_new_tick_ms = 0.0
             if st_t4.status == "done" and st_t4.payload:
-                server_epoch_new = str(st_t4.payload["str"].get("server_epoch") or server_epoch_new)
+                if not server_epoch_new:
+                    server_epoch_new = str(st_t4.payload["str"].get("server_epoch") or "")
                 first_new_tick_ms = float(st_t4.payload["num"].get("tick_ms", 0.0))
             ctx.record_scenario({
                 "ev": "t4_post_restart_status",
                 "status": st_t4.status,
                 "server_epoch_old": server_epoch_old,
                 "server_epoch_new": server_epoch_new,
+                "num": dict(st_t4.payload["num"]) if st_t4.payload else {},
             })
 
-            # P2b: registro de la purga de arranque del epoch nuevo, antes del primer censo t5.
-            # Con `pending` se reintenta dentro de la ventana del director; si no llega a
-            # `done`, se sigue y queda en la evidencia para que lo juzgue el oraculo.
-            _purge_last, _purge_polls, _purge_waited_ms, _purge_done = _read_purge_t4(
-                ctx, server_epoch_new=server_epoch_new,
-            )
+            # P2c: las acreditadas se congelan con la evidencia del epoch viejo, antes
+            # del reinicio. El runner ordena la purga solo con esa lista.
+            accredited = _compute_accredited(_scenario_events(ctx), fixture, cfg, director_uid_t0)
+            ctx.record_scenario({
+                "ev": "purge_authorized",
+                "director_uid": director_uid_t0,
+                "server_epoch_old": server_epoch_old,
+                "candidates": accredited,
+                "pers_ids": [c["pers_id"] for c in accredited],
+            })
+            open_t5 = False
+            if accredited:
+                purge_result = _purge_start_t4(
+                    ctx, accredited,
+                    server_epoch_new=server_epoch_new,
+                    director_uid=director_uid_t0,
+                )
+                open_t5 = bool(purge_result.get("done"))
+            else:
+                open_t5 = True
 
-            events_after_restart = _bridge_events(ctx)
-            hello_t_ms = _bridge_hello_t(events_after_restart, server_epoch_new)
-            stop_first_t_ms = _bridge_op_first_t(events_after_restart, stop_status.op_id) if stop_status else None
-            stop_tick_ms = float(stop_status.payload["num"].get("tick_ms", 0.0)) if (stop_status and stop_status.payload) else 0.0
-            stop_window_ms = 0.0
-            if hello_t_ms is not None and stop_first_t_ms is not None and hello_t_ms >= stop_first_t_ms:
-                stop_window_ms = float(hello_t_ms) - float(stop_first_t_ms)
-            max_old_srv_tick_ms = max(
-                [stop_tick_ms, rr_tick_ms, _bridge_old_max_tick_ms(events_after_restart, hello_t_ms)]
-                + [float(v) for v in t3_post_snap_by_area.values()]
-            )
-
-            t5_director_areas = {cfg["retained_area"], "area_a", "area_b"}
             t5_censuses = []
-            for area_id in cfg["base_areas"]:
-                rec_t5 = _census(ctx, fixture, "t5_post_restart_census", area_id, 1 if area_id in t5_director_areas else 0)
-                rec_t5["hello_t_ms"] = hello_t_ms
-                t5_censuses.append(rec_t5)
+            if open_t5:
+                events_after_restart = _bridge_events(ctx)
+                hello_t_ms = _bridge_hello_t(events_after_restart, server_epoch_new)
+                stop_first_t_ms = _bridge_op_first_t(events_after_restart, stop_status.op_id) if stop_status else None
+                stop_tick_ms = float(stop_status.payload["num"].get("tick_ms", 0.0)) if (stop_status and stop_status.payload) else 0.0
+                stop_window_ms = 0.0
+                if hello_t_ms is not None and stop_first_t_ms is not None and hello_t_ms >= stop_first_t_ms:
+                    stop_window_ms = float(hello_t_ms) - float(stop_first_t_ms)
+                max_old_srv_tick_ms = max(
+                    [stop_tick_ms, rr_tick_ms, _bridge_old_max_tick_ms(events_after_restart, hello_t_ms)]
+                    + [float(v) for v in t3_post_snap_by_area.values()]
+                )
 
-            # Duracion bridge medida de un censo t5 (first->result): proyecta el dt_post
-            # del censo aun no lanzado hasta su propio resultado, con la misma formula N49.
-            t5_census_dur_ms = 0.0
-            for c0 in t5_censuses:
-                f0 = c0.get("start_first_t_ms")
-                r0 = c0.get("start_result_t_ms")
-                if f0 is not None and r0 is not None and float(r0) > float(f0):
-                    t5_census_dur_ms = max(t5_census_dur_ms, float(r0) - float(f0))
+                t5_director_areas = {cfg["retained_area"], "area_a", "area_b"}
+                t5_censuses = []
+                for area_id in cfg["base_areas"]:
+                    rec_t5 = _census(ctx, fixture, "t5_post_restart_census", area_id, 1 if area_id in t5_director_areas else 0, director_uid=director_uid_t0, target_inst=server_epoch_new or None)
+                    rec_t5["hello_t_ms"] = hello_t_ms
+                    t5_censuses.append(rec_t5)
 
-            # Latencia de dimensionado registrada de verdad: cuanto crece el dt_post
-            # real de un disco sobre la cota inferior medida al dimensionarlo
-            # (tick del per_status y reloj del bridge de ese instante). Arranca con
-            # la duracion first->result de los censos t5 base y se corrige con el
-            # snap/resultado reales de cada disco lanzado.
-            sizing_latency_ms = t5_census_dur_ms
+                # Duracion bridge medida de un censo t5 (first->result): proyecta el dt_post
+                # del censo aun no lanzado hasta su propio resultado, con la misma formula N49.
+                t5_census_dur_ms = 0.0
+                for c0 in t5_censuses:
+                    f0 = c0.get("start_first_t_ms")
+                    r0 = c0.get("start_result_t_ms")
+                    if f0 is not None and r0 is not None and float(r0) > float(f0):
+                        t5_census_dur_ms = max(t5_census_dur_ms, float(r0) - float(f0))
 
-            tracks_by_lid = {}
-            for trk in creature_tracks:
-                tracks_by_lid.setdefault(trk["logical_id"], []).append(trk)
+                # Latencia de dimensionado registrada de verdad: cuanto crece el dt_post
+                # real de un disco sobre la cota inferior medida al dimensionarlo
+                # (tick del per_status y reloj del bridge de ese instante). Arranca con
+                # la duracion first->result de los censos t5 base y se corrige con el
+                # snap/resultado reales de cada disco lanzado.
+                sizing_latency_ms = t5_census_dur_ms
 
-            retained_creature_lids = {f"{cfg['pfx']}_inf_1", f"{cfg['pfx']}_ani_1"}
-            for lid, obs_list in tracks_by_lid.items():
-                obs_list = sorted(obs_list, key=lambda o: float(o["snap_tick_ms"]))
-                if lid in retained_creature_lids:
-                    stages = ("t2_census_10min", "t3_pre_reset_census")
-                    reset_branch = True
-                else:
-                    stages = ("t2_census_10min", "t3_pre_reset_census", "t3_post_reset_census")
-                    reset_branch = False
-                relevant = [o for o in obs_list if o.get("stage") in stages and float(o.get("snap_tick_ms", 0.0)) > 0.0]
-                if not relevant:
-                    continue
-                last_obs_tick = float(relevant[-1]["snap_tick_ms"])
-                v_m_s = _tracks_speed(relevant)
-                if reset_branch:
-                    post_ret_snap = float(t3_post_snap_by_area.get(cfg["retained_area"], 0.0))
-                    # N49 rama reset (eval :2629): misma formula, sin atajo optimista.
-                    dt_pre_ms = (
-                        max(0.0, rr_tick_ms - last_obs_tick)
-                        + max(0.0, max_old_srv_tick_ms - post_ret_snap)
-                        + stop_window_ms
-                    )
-                else:
-                    dt_pre_ms = max(0.0, max_old_srv_tick_ms - last_obs_tick) + stop_window_ms
-                    last_obs_first = relevant[-1].get("start_first_t_ms")
-                    if hello_t_ms is not None and last_obs_first is not None:
-                        dt_pre_ms = max(dt_pre_ms, float(hello_t_ms) - float(last_obs_first))
+                tracks_by_lid = {}
+                for trk in creature_tracks:
+                    tracks_by_lid.setdefault(trk["logical_id"], []).append(trk)
 
-                for idx, trk in enumerate(relevant):
-                    if _n49_covered(trk, t5_censuses, dt_pre_ms, v_m_s, first_new_tick_ms):
+                retained_creature_lids = {f"{cfg['pfx']}_inf_1", f"{cfg['pfx']}_ani_1"}
+                for lid, obs_list in tracks_by_lid.items():
+                    obs_list = sorted(obs_list, key=lambda o: float(o["snap_tick_ms"]))
+                    if lid in retained_creature_lids:
+                        stages = ("t2_census_10min", "t3_pre_reset_census")
+                        reset_branch = True
+                    else:
+                        stages = ("t2_census_10min", "t3_pre_reset_census", "t3_post_reset_census")
+                        reset_branch = False
+                    relevant = [o for o in obs_list if o.get("stage") in stages and float(o.get("snap_tick_ms", 0.0)) > 0.0]
+                    if not relevant:
                         continue
-                    prev_actual_dt_post_ms = None
-                    prev_result_t_ms = None
-                    prev_required_radius_m = 0.0
-                    for attempt in range(5):
-                        # Misma formula N49 (eval :2662) para dimensionar y para reintentar:
-                        # dt_post = max(snap_del_proceso_nuevo, resultado_en_bridge - hello).
-                        # Para el censo aun no lanzado, snap >= tick actual del proceso nuevo
-                        # y resultado >= ahora en el bridge; ambos son cotas inferiores del
-                        # mismo termino, y sobre ellas se suma la latencia registrada de
-                        # verdad en los discos ya lanzados (su snap/resultado reales menos
-                        # la cota medida al dimensionarlos), no una duracion ajena.
-                        st_disc = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
-                        tick_now = 0.0
-                        if st_disc.status == "done" and st_disc.payload:
-                            tick_now = float(st_disc.payload["num"].get("tick_ms", 0.0))
-                        bridge_now_ms = float(ctx.bridge.now_ms())
-                        bridge_dt_post = 0.0
-                        if hello_t_ms is not None:
-                            bridge_dt_post = max(0.0, bridge_now_ms - float(hello_t_ms))
-                        lower_dt_post_ms = max(tick_now, bridge_dt_post, 0.0)
-                        dt_post_est = lower_dt_post_ms + sizing_latency_ms
-                        if prev_actual_dt_post_ms is not None and prev_result_t_ms is not None:
-                            # El siguiente disco no puede tener un dt_post menor que el
-                            # real del disco fallido mas el tiempo de bridge ya pasado
-                            # desde su resultado registrado.
-                            dt_post_est = max(
-                                dt_post_est,
-                                prev_actual_dt_post_ms + max(0.0, bridge_now_ms - float(prev_result_t_ms)),
-                            )
-                        reach_m = max(15.0, v_m_s * (dt_pre_ms + dt_post_est) / 1000.0)
-                        radius_m = max(60.0, reach_m * (1 + SLACK_REL) + SLACK_ABS_M, prev_required_radius_m)
-                        track_tag = f"t5_track_{lid}_p{idx}_r{attempt}"
-                        rec_disc = _census(
-                            ctx, fixture, "t5_post_restart_census", track_tag, 0,
-                            center_override=(trk["x_m"], trk["z_m"]),
-                            radius_override=radius_m,
+                    last_obs_tick = float(relevant[-1]["snap_tick_ms"])
+                    v_m_s = _tracks_speed(relevant)
+                    if reset_branch:
+                        post_ret_snap = float(t3_post_snap_by_area.get(cfg["retained_area"], 0.0))
+                        # N49 rama reset (eval :2629): misma formula, sin atajo optimista.
+                        dt_pre_ms = (
+                            max(0.0, rr_tick_ms - last_obs_tick)
+                            + max(0.0, max_old_srv_tick_ms - post_ret_snap)
+                            + stop_window_ms
                         )
-                        rec_disc["hello_t_ms"] = hello_t_ms
-                        t5_censuses.append(rec_disc)
-                        ctx.record_scenario({
-                            "ev": "t5_track_disc",
-                            "area_tag": track_tag,
-                            "logical_id": lid,
-                            "stage": trk["stage"],
-                            "center_x_m": trk["x_m"],
-                            "center_z_m": trk["z_m"],
-                            "radius_m": radius_m,
-                            "reach_m": reach_m,
-                            "v_m_s": v_m_s,
-                            "dt_pre_ms": dt_pre_ms,
-                            "dt_post_est_ms": dt_post_est,
-                            "attempt": attempt,
-                        })
-                        d_first = rec_disc.get("start_first_t_ms")
-                        d_res = rec_disc.get("start_result_t_ms")
-                        if d_first is not None and d_res is not None and float(d_res) > float(d_first):
-                            t5_census_dur_ms = max(t5_census_dur_ms, float(d_res) - float(d_first))
-                        # Registra el dt_post real de este disco (formula del oraculo)
-                        # para corregir la latencia de dimensionado del siguiente.
-                        d_snap = float(rec_disc.get("snap_tick_ms", 0.0))
-                        if rec_disc.get("job_complete") and d_snap > 0.0 and d_res is not None and hello_t_ms is not None:
-                            actual_dt_post_ms = max(d_snap, float(d_res) - float(hello_t_ms), 0.0)
-                            sizing_latency_ms = max(sizing_latency_ms, actual_dt_post_ms - lower_dt_post_ms)
-                            prev_actual_dt_post_ms = actual_dt_post_ms
-                            prev_result_t_ms = float(d_res)
-                            dist_m = math.hypot(
-                                float(trk["x_m"]) - float(rec_disc["center_x_m"]),
-                                float(trk["z_m"]) - float(rec_disc["center_z_m"]),
+                    else:
+                        dt_pre_ms = max(0.0, max_old_srv_tick_ms - last_obs_tick) + stop_window_ms
+                        last_obs_first = relevant[-1].get("start_first_t_ms")
+                        if hello_t_ms is not None and last_obs_first is not None:
+                            dt_pre_ms = max(dt_pre_ms, float(hello_t_ms) - float(last_obs_first))
+
+                    for idx, trk in enumerate(relevant):
+                        if _n49_covered(trk, t5_censuses, dt_pre_ms, v_m_s, first_new_tick_ms):
+                            continue
+                        prev_actual_dt_post_ms = None
+                        prev_result_t_ms = None
+                        prev_required_radius_m = 0.0
+                        for attempt in range(5):
+                            # Misma formula N49 (eval :2662) para dimensionar y para reintentar:
+                            # dt_post = max(snap_del_proceso_nuevo, resultado_en_bridge - hello).
+                            # Para el censo aun no lanzado, snap >= tick actual del proceso nuevo
+                            # y resultado >= ahora en el bridge; ambos son cotas inferiores del
+                            # mismo termino, y sobre ellas se suma la latencia registrada de
+                            # verdad en los discos ya lanzados (su snap/resultado reales menos
+                            # la cota medida al dimensionarlos), no una duracion ajena.
+                            st_disc = f03_common.issue_one(ctx, "server", "per_status", wire.pack_payload(scalars_str={"director_uid": director_uid_t0}), target_inst=server_epoch_new or None)
+                            tick_now = 0.0
+                            if st_disc.status == "done" and st_disc.payload:
+                                tick_now = float(st_disc.payload["num"].get("tick_ms", 0.0))
+                            bridge_now_ms = float(ctx.bridge.now_ms())
+                            bridge_dt_post = 0.0
+                            if hello_t_ms is not None:
+                                bridge_dt_post = max(0.0, bridge_now_ms - float(hello_t_ms))
+                            lower_dt_post_ms = max(tick_now, bridge_dt_post, 0.0)
+                            dt_post_est = lower_dt_post_ms + sizing_latency_ms
+                            if prev_actual_dt_post_ms is not None and prev_result_t_ms is not None:
+                                # El siguiente disco no puede tener un dt_post menor que el
+                                # real del disco fallido mas el tiempo de bridge ya pasado
+                                # desde su resultado registrado.
+                                dt_post_est = max(
+                                    dt_post_est,
+                                    prev_actual_dt_post_ms + max(0.0, bridge_now_ms - float(prev_result_t_ms)),
+                                )
+                            reach_m = max(15.0, v_m_s * (dt_pre_ms + dt_post_est) / 1000.0)
+                            radius_m = max(60.0, reach_m * (1 + SLACK_REL) + SLACK_ABS_M, prev_required_radius_m)
+                            track_tag = f"t5_track_{lid}_p{idx}_r{attempt}"
+                            rec_disc = _census(
+                                ctx, fixture, "t5_post_restart_census", track_tag, 0,
+                                center_override=(trk["x_m"], trk["z_m"]),
+                                radius_override=radius_m,
+                                director_uid=director_uid_t0,
+                                target_inst=server_epoch_new or None,
                             )
-                            prev_required_radius_m = dist_m + max(15.0, v_m_s * (dt_pre_ms + actual_dt_post_ms) / 1000.0)
-                        if _n49_covered(trk, [rec_disc], dt_pre_ms, v_m_s, first_new_tick_ms):
-                            break
-                        # El siguiente intento recalcula arriba con la misma formula,
-                        # la latencia registrada de este disco y los relojes avanzados.
+                            rec_disc["hello_t_ms"] = hello_t_ms
+                            t5_censuses.append(rec_disc)
+                            ctx.record_scenario({
+                                "ev": "t5_track_disc",
+                                "area_tag": track_tag,
+                                "logical_id": lid,
+                                "stage": trk["stage"],
+                                "center_x_m": trk["x_m"],
+                                "center_z_m": trk["z_m"],
+                                "radius_m": radius_m,
+                                "reach_m": reach_m,
+                                "v_m_s": v_m_s,
+                                "dt_pre_ms": dt_pre_ms,
+                                "dt_post_est_ms": dt_post_est,
+                                "attempt": attempt,
+                            })
+                            d_first = rec_disc.get("start_first_t_ms")
+                            d_res = rec_disc.get("start_result_t_ms")
+                            if d_first is not None and d_res is not None and float(d_res) > float(d_first):
+                                t5_census_dur_ms = max(t5_census_dur_ms, float(d_res) - float(d_first))
+                            # Registra el dt_post real de este disco (formula del oraculo)
+                            # para corregir la latencia de dimensionado del siguiente.
+                            d_snap = float(rec_disc.get("snap_tick_ms", 0.0))
+                            if rec_disc.get("job_complete") and d_snap > 0.0 and d_res is not None and hello_t_ms is not None:
+                                actual_dt_post_ms = max(d_snap, float(d_res) - float(hello_t_ms), 0.0)
+                                sizing_latency_ms = max(sizing_latency_ms, actual_dt_post_ms - lower_dt_post_ms)
+                                prev_actual_dt_post_ms = actual_dt_post_ms
+                                prev_result_t_ms = float(d_res)
+                                dist_m = math.hypot(
+                                    float(trk["x_m"]) - float(rec_disc["center_x_m"]),
+                                    float(trk["z_m"]) - float(rec_disc["center_z_m"]),
+                                )
+                                prev_required_radius_m = dist_m + max(15.0, v_m_s * (dt_pre_ms + actual_dt_post_ms) / 1000.0)
+                            if _n49_covered(trk, [rec_disc], dt_pre_ms, v_m_s, first_new_tick_ms):
+                                break
+                            # El siguiente intento recalcula arriba con la misma formula,
+                            # la latencia registrada de este disco y los relojes avanzados.
 
-            witness_rows, _ = _build_scene_rows(fixture, "scene_b")
-            w_op_id = ctx.peek_next_op_id()
-            w_app = _apply_scene(ctx, fixture, "scene_b", w_op_id, server_epoch_new, 1, "a")
-            ctx.record_scenario({"ev": "t5_witness_apply", "status": w_app.status, "reason": w_app.reason})
+                witness_rows, _ = _build_scene_rows(fixture, "scene_b")
+                w_op_id = ctx.peek_next_op_id()
+                w_app = _apply_scene(ctx, fixture, "scene_b", w_op_id, server_epoch_new, 1, "a")
+                ctx.record_scenario({"ev": "t5_witness_apply", "status": w_app.status, "reason": w_app.reason})
 
-            w_pre = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
-            ctx.record_scenario({"ev": "t5_witness_pre_status", "status": w_pre.status, "num": dict(w_pre.payload["num"]) if w_pre.payload else {}})
-            _census(ctx, fixture, "t5_witness_pre_census", "area_b", 1)
+                w_pre = f03_common.issue_one(ctx, "server", "per_status", wire.pack_payload(scalars_str={"director_uid": director_uid_t0}), target_inst=server_epoch_new or None)
+                ctx.record_scenario({"ev": "t5_witness_pre_status", "status": w_pre.status, "num": dict(w_pre.payload["num"]) if w_pre.payload else {}})
+                _census(ctx, fixture, "t5_witness_pre_census", "area_b", 1, director_uid=director_uid_t0, target_inst=server_epoch_new or None)
 
-            stale_reset = _reset_scene(ctx, "scene_b", ctx.peek_next_op_id(), server_epoch_old)
-            ctx.record_scenario({"ev": "t5_stale_epoch_reset", "status": stale_reset.status, "reason": stale_reset.reason})
-            stale_apply = _apply_scene(ctx, fixture, "scene_b", ctx.peek_next_op_id(), server_epoch_old, 2, "a")
-            ctx.record_scenario({"ev": "t5_stale_epoch_apply", "status": stale_apply.status, "reason": stale_apply.reason})
+                stale_reset = _reset_scene(ctx, "scene_b", ctx.peek_next_op_id(), server_epoch_old)
+                ctx.record_scenario({"ev": "t5_stale_epoch_reset", "status": stale_reset.status, "reason": stale_reset.reason})
+                stale_apply = _apply_scene(ctx, fixture, "scene_b", ctx.peek_next_op_id(), server_epoch_old, 2, "a")
+                ctx.record_scenario({"ev": "t5_stale_epoch_apply", "status": stale_apply.status, "reason": stale_apply.reason})
 
-            w_post = f03_common.issue_one(ctx, "server", "per_status", wire.empty_payload())
-            ctx.record_scenario({"ev": "t5_witness_post_status", "status": w_post.status, "num": dict(w_post.payload["num"]) if w_post.payload else {}})
-            _census(ctx, fixture, "t5_witness_post_census", "area_b", 1)
+                w_post = f03_common.issue_one(ctx, "server", "per_status", wire.pack_payload(scalars_str={"director_uid": director_uid_t0}), target_inst=server_epoch_new or None)
+                ctx.record_scenario({"ev": "t5_witness_post_status", "status": w_post.status, "num": dict(w_post.payload["num"]) if w_post.payload else {}})
+                _census(ctx, fixture, "t5_witness_post_census", "area_b", 1, director_uid=director_uid_t0, target_inst=server_epoch_new or None)
 
-            _reset_scene(ctx, "scene_b", ctx.peek_next_op_id(), server_epoch_new)
+                _reset_scene(ctx, "scene_b", ctx.peek_next_op_id(), server_epoch_new)
 
             cleanup_rows = [
                 {
@@ -2124,12 +2479,14 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
             ctx.record_scenario({"ev": "t6_cleanup_qa", "status": cleanup.status, "reason": cleanup.reason})
 
             for area_id in cfg["base_areas"]:
-                _census(ctx, fixture, "t6_post_cleanup_census", area_id, 1 if area_id == "area_a" else 0)
+                _census(ctx, fixture, "t6_post_cleanup_census", area_id, 1 if area_id == "area_a" else 0, director_uid=director_uid_t0, target_inst=server_epoch_new or None)
             for c in track_discs:
                 _census(
                     ctx, fixture, "t6_post_cleanup_census", str(c["area_id"]), 0,
                     center_override=(float(c["center_x_m"]), float(c["center_z_m"])),
                     radius_override=float(c["radius_m"]),
+                    director_uid=director_uid_t0,
+                    target_inst=server_epoch_new or None,
                 )
 
         finally:
