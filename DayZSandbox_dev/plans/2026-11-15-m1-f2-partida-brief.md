@@ -955,6 +955,19 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
   - **J-02:** el `400` de ese reenvío con el query vacío o sin `session`, en un tramo sin `/hello` aceptado (un `restart` después de P5), da PASA: la sesión de ese tramo es `""` y casa. Según `:588`, el mod pone en el query su sesión vigente, nunca vacía, y no manda el `/result` sin sesión (`DSBX_Peer.c:1483` y `:1497`).
     - **Lo que mira la revisión:** que T3 conserva esa guarda del mod.
     - **Reproductor:** `C:\tmp\dsbx-f2p-work\review\adv_t2f15m\scratch\c05_reenvio_400_query_vacio.py`. Da PASA con el oráculo congelado e INCONCLUSO con `4744eaa`.
+  - **PASA falsos de rondas anteriores (MAY), fuera del delta de su ronda.** Se añadieron el 22-nov, tras el congelado, para que la lista sea una sola. No se ha juzgado si el sistema real produce su evidencia:
+    - **Y-05:** una op de más fuera del guion de §5.2 en una parte que no es P4c da PASA: un segundo reset fallido en P2n, P3c o P4a, o un segundo apply fallido en P4b. La regla de P4c (`p4c_reset_fuera_de_guion`) no se aplica en las demás partes.
+      - **Lo que mira la revisión:** que el runner de T4 manda solo las ops del guion.
+      - **Reproductor:** `C:\tmp\dsbx-f2p-work\review\t2f15r\bat_ref\t2f7\adv\y05_extra_ops_twins.py`. De `y05a` a `y05d` dan PASA con el oráculo congelado.
+    - **A-04:** de la clase de Y-05, en P4c. Un segundo reset de la escena 1 con el terminal posterior al censo `P4c:post_restart` da PASA, porque Z-02 solo mide frente al primer reset.
+      - **Lo que mira la revisión:** lo mismo que en Y-05.
+      - **Reproductor:** `C:\tmp\dsbx-f2p-work\review\adv_t2f8\scratch\a04_p4c_second_scene1_reset_late_terminal.py` (`a04a` y `a04b`). Es anterior al `req_id`, y con el oráculo congelado da INCONCLUSO `tap_req_id_missing`, también en su control. **No está comprobado sobre el congelado.**
+    - **C-05:** una línea del `tap` con el `t_ms` nulo o no finito se descarta en silencio. Unas ops entregadas al cliente con el `t_ms` nulo (`c03f`) dan PASA.
+      - **Lo que mira la revisión:** que el `tap` y el runner de T4 estampan cada línea con un `t_ms` numérico y finito.
+      - **Reproductor:** `C:\tmp\dsbx-f2p-t2f6\_ref\t2f15i\adv\c03_k02_fuera_de_parte.py` (`c03f`). Da PASA con el oráculo congelado.
+    - **`c05e`** (MEN): dos `/hello` intercalados, del cliente y del servidor, con una sola respuesta aceptada que puede ser de cualquiera de los dos, dan PASA. Sale así porque el reproductor no trae `req_id`, y la batería se lo pone eligiendo uno de los dos emparejamientos. Con el `req_id` obligatorio del `tap` (§5.4) esa ambigüedad no se da.
+      - **Lo que mira la revisión:** que el `tap` de T4 escribe en cada respuesta el `req_id` de su petición.
+      - **Reproductor:** `C:\tmp\dsbx-f2p-work\review\t2f15r\bat_ref\t2f11\adv\c05_b03_orphan_hello_response.py` (`c05e`).
 
   El sha del congelado, los veredictos, los MAY y MEN de la ronda y las notas para T4 están en el recibo de congelado (`C:\tmp\dsbx-f2p-work\recibos\T2-congelado.md`).
 
@@ -1230,3 +1243,4 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
       - un acuse en el mismo ms que su resultado vale (`:555`).
   - **Nada de §3, §4 ni §5.2 cambia, ni la fixture.** El producto no cambia. El `tap` de T4 guarda el `upstream_status`, como el proxy de F1b.
 - Congelado del oráculo (2026-11-22, T2f-15m): **sin cambios de semántica;** la v1.3.16 sigue vigente. Se añaden los BLOQ conocidos M-01, J-01 y J-02, con su reproductor (§10), y se precisa en `:589` que el `req_id` 424 de las capturas reales es un `/poll`. Las líneas de antes de §10 no se mueven, porque el código las cita.
+- Tras el congelado (2026-11-22): se añaden al final de §10 los PASA falsos MAY de rondas anteriores (Y-05, A-04, C-05 y `c05e`), para que la lista sea una sola. Sin cambios de semántica ni del oráculo.
