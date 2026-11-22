@@ -92,14 +92,21 @@ Evidence contract consumed by ``evaluate(part_dir)``
        ``director_uid``, ``expect_epoch``, rows ``scol = ["pers_id", "class_name"]``; the start ``read`` (the
        acknowledgement) carries ``job``, ``state``, ``resource`` and ``pre_n``; every ``job_read`` page has rows
        ``scol = ["phase", "pers_id", "class_name", "parent_pers_id", "owner_uid", "result", "net_id", "parent_net_id"]``,
-       ``ncol = ["depth_n", "emit_tick_ms", "lease_age_ms", "lease_limit_ms", "max_hp", "health_hp"]`` with
-       ``phase`` in ``pre`` / ``emit`` / ``result`` (a deletion is an ``emit`` row with ``emit_tick_ms > 0``). The
-       accredited garments are recomputed from the apply, the ``move_to_director`` transition and the old-epoch
-       censuses with the director (``purge_authorized`` is not trusted), and compared by equality with the raw order.
-       The order, the waiting ``per_status`` and every read are tied to the new epoch by ``op_id`` (``enq`` with that
-       ``inst``, a delivery to it, and a ``result`` whose last accepted server ``hello`` is that epoch).
+       ``ncol = ["depth_n", "emit_tick_ms", "lease_age_ms", "lease_limit_ms", "max_hp", "health_hp",
+       "confirm_tick_ms"]`` with ``phase`` in ``pre`` / ``emit`` / ``result`` (a deletion is an ``emit`` row with
+       ``emit_tick_ms > 0``; the other contiguous ``emit`` rows are the candidate's subtree in that tick; a
+       ``deleted`` result carries in ``confirm_tick_ms`` the later tick that confirmed it; clarification of
+       2026-11-22). The job is the order's ``op_id`` and its pages are the contractual 8-row slices. The accredited
+       garments are recomputed from the apply, the ``move_to_director`` transition and the old-epoch censuses with the
+       director (``purge_authorized`` is not trusted), each link tied to the old epoch, and compared by equality with
+       the raw order. The order, every waiting ``per_status`` and every read are tied to the new epoch by ``op_id``
+       (``enq`` with that ``inst``, a delivery to it, and a ``result`` whose last accepted server ``hello`` is that
+       epoch). Remnants and unattributable sentinels are judged in every post-purge census (t5 and t6); absence only
+       with t5.
      * ``per_status`` in t0 goes without ``director_uid`` and reports ``players_n``: two or more players ->
-       ``director_ambiguous`` (2 INCONCLUSO); the uid is fixed only with exactly one ready player.
+       ``director_ambiguous`` (2 INCONCLUSO); the uid is fixed only with exactly one ready player before the first
+       baseline census (otherwise ``director_not_selected``, 2 INCONCLUSO; traces without ``players_n`` nor a runner
+       purge keep the historical fallback).
      * ``per_cleanup_qa`` (instant on ``"server"``):
        - ``read`` numbers: ``cleaned_own_n``, ``cleaned_raw_n``, ``tick_ms``, ``frame``.
        - In ``t6_post_cleanup_census`` only entities of the test count as survivors (oracle v2.1, brief :284,
@@ -458,6 +465,10 @@ def _is_finite_num(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
 
 
+def _dict_or_empty(v: Any) -> dict[str, Any]:
+    return v if isinstance(v, dict) else {}
+
+
 def _angle_diff_deg(a: float, b: float) -> float:
     d = (float(a) - float(b)) % 360.0
     if d > 180.0:
@@ -604,14 +615,20 @@ def _bridge_op_links(bridge_events: list[dict[str, Any]]) -> dict[str, dict[str,
     return links
 
 
-def _epoch_link_issue(links: dict[str, dict[str, Any]], op_id: str, epoch: str) -> str:
+def _epoch_link_issue(
+    links: dict[str, dict[str, Any]], op_id: str, epoch: str, *, untargeted_ok: bool = False
+) -> str:
     """``""`` si la orden ``op_id`` queda ligada al epoch ``epoch`` en la traza: ``enq`` con ese ``inst`` destino, una
     entrega a ese ``inst`` entre el ``enq`` y el resultado, y un resultado del servidor cuyo ultimo ``hello`` aceptado
-    (y su ``inst``, si lo trae) es ese epoch. Si no, el primer eslabon que falta."""
+    (y su ``inst``, si lo trae) es ese epoch. Si no, el primer eslabon que falta.
+
+    O3 (H6): con ``untargeted_ok`` vale tambien un ``enq`` sin ``inst`` destino (el runner no fija ``target_inst`` antes
+    del reinicio: el puente real escribe ``inst = null``, `qa/bridge_qa.py:371-378`); la entrega (un ``poll`` del peer de
+    ese epoch que la lleva) y el resultado se exigen igual."""
     lk = links.get(op_id)
     if not epoch or lk is None or lk["enq_idx"] is None:
         return "no_enq"
-    if lk["enq_inst"] != epoch:
+    if lk["enq_inst"] != epoch and not (untargeted_ok and lk["enq_inst"] in (None, "")):
         return "enq_inst"
     if lk["result_idx"] is None:
         return "no_result"
@@ -626,6 +643,8 @@ def _epoch_link_issue(links: dict[str, dict[str, Any]], op_id: str, epoch: str) 
 # `result` y censos del epoch viejo de los que salen las acreditadas (`:541`, arbitraje 3).
 _PURGE_TERMINAL_STATES = frozenset({"done", "failed", "stopped", "expired"})
 _PURGE_RESULT_VALUES = frozenset({"deleted", "retained_foreign", "absent", "ambiguous"})
+# `StartJob(this, op.op_id, "per_purge", ncol, scol, 8, 256, 600000.0, "stop")` (brief, arbitraje 1; aclaracion, punto 1)
+_PURGE_PAGE_SIZE = 8
 _ACCREDITATION_STAGES = frozenset({
     "t1_post_transition_census",
     "t2_census_10min",
@@ -652,7 +671,25 @@ def _purge_row(r: dict[str, Any]) -> dict[str, Any]:
         "emit_tick_ms": _num("emit_tick_ms"),
         "lease_age_ms": _num("lease_age_ms"),
         "lease_limit_ms": _num("lease_limit_ms"),
+        # aclaracion, punto 2: tick en que se confirmo que la entidad ya no estaba (solo en `result = deleted`)
+        "confirm_tick_ms": _num("confirm_tick_ms"),
     }
+
+
+def _purge_emit_runs(rows: list[dict[str, Any]]) -> list[list[int]]:
+    """Indices de las filas ``emit`` contiguas del recibo (en el orden del trabajo). Las filas de un tick van juntas:
+    el subarbol del candidato en ese tick y su baja (aclaracion: una baja es la fila `emit` con `emit_tick_ms > 0`)."""
+    runs: list[list[int]] = []
+    cur: list[int] = []
+    for i, r in enumerate(rows):
+        if r["phase"] == "emit":
+            cur.append(i)
+        elif cur:
+            runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+    return runs
 
 
 def _job_of(op: Any) -> str:
@@ -675,6 +712,7 @@ def _judge_runner_purge(
     ledger_by_id: dict[str, dict[str, Any]],
     fixture: dict[str, Any],
     sentinel_classes: set[str],
+    new_hello_idx: int | None = None,
 ) -> dict[str, Any]:
     """Juzga la purga que ordena el runner (brief, secciones finales; sustituye a `per_purge_read` y a `:510-514`).
 
@@ -685,7 +723,13 @@ def _judge_runner_purge(
 
     Devuelve ``fails`` (acreditados con evidencia del epoch correcto: mandan sobre cualquier ``missing`` de PER-08),
     ``missings``, ``accredited`` (``{pers_id: {logical_id, class_name, role}}``), ``candidate_pids`` (todo ``pers_id``
-    leido para una prenda prevista), ``baseline_pids``, ``done`` y ``order_seq``.
+    leido para una prenda prevista), ``baseline_pids``, ``done``, ``order_seq`` y ``ambiguous_pids`` (O3, H3: los
+    ``pers_id`` que dos entidades llevan en una misma ventana de observacion del epoch nuevo).
+
+    O3 (ultima ronda): el enlace al epoch viejo de cada eslabon de la procedencia (H6), la captura del tick de cada baja
+    y su identidad (H2, H4), la cronologia (H7), el trabajo de la orden y su rodaja de 8 filas (H8), toda la espera de
+    `per_status` (H9), la unicidad antes del remanente (H3) y lo observado en t6 (H10); `absent` ya no da `missing` por
+    estar en `pre` (H1). ``new_hello_idx`` es el indice del primer `hello` aceptado del servidor nuevo en la traza.
     """
     fails: list[str] = []
     missings: list[str] = []
@@ -702,6 +746,7 @@ def _judge_runner_purge(
         "done": False,
         "order_seq": None,
         "metrics": {},
+        "ambiguous_pids": set(),
     }
 
     # (1) Prendas previstas: lo que el runner llevo al director con `move_to_director` (`:540`). Una transicion `ok`
@@ -720,13 +765,21 @@ def _judge_runner_purge(
         lid = in_u[0].get("logical_id", "")
         if lid:
             ent = expected.setdefault(
-                lid, {"scene_id": in_u[0].get("scene_id", ""), "net_ids": set(), "to_director": True}
+                lid, {"scene_id": in_u[0].get("scene_id", ""), "net_ids": set(), "to_director": True, "op_ids": []}
             )
             ent["net_ids"].add(str(out_u[0].get("net_id") or ""))
+            ent["op_ids"].append(op.op_id)
             if not director_uid or out_u[0].get("post_owner_uid") != director_uid:
                 ent["to_director"] = False
 
     old_complete = [c for c in censuses if c.get("job_complete") and c.get("inst") == server_epoch_old]
+    # O3 (H6): las lecturas `job_read` aceptadas de cada trabajo de censo (llevan las filas de las que sale el pers_id)
+    census_reads: dict[str, list[str]] = {}
+    for op in ordered_ops:
+        if op.verb == "job_read" and op.status == "done" and op.peer == "server":
+            j = _job_of(op)
+            if j:
+                census_reads.setdefault(j, []).append(op.op_id)
     accredited: dict[str, dict[str, Any]] = {}
     candidate_pids: dict[str, str] = {}
     unidentified: list[str] = []
@@ -777,6 +830,27 @@ def _judge_runner_purge(
                 for r in c.get("rows") or []
             ):
                 issue = "pers_id_shared"
+        if not issue:
+            # O3 (H6, brief arbitraje 3 y 7): antes de autorizar por identidad, cada eslabon de la procedencia vieja
+            # queda ligado al epoch viejo en la traza (su `enq`, su ENTREGA a ese epoch y su resultado): el alta
+            # (`per_apply_scene`), la transicion `move_to_director` y cada censo del que sale una lectura (su
+            # `per_census_start` y sus `job_read`). Un eslabon ausente deja la prenda sin identificar (`missing`).
+            chain: list[tuple[str, str]] = [("per_apply_scene", str(info.get("apply_op_id") or ""))]
+            chain += [("per_child_transition", oid) for oid in ent["op_ids"]]
+            for c in old_complete:
+                if c.get("stage") in _ACCREDITATION_STAGES and any(
+                    str(r.get("owner_uid") or "") == director_uid and str(r.get("net_id") or "") == apply_nid
+                    for r in c.get("rows") or []
+                ):
+                    chain.append(("per_census_start", str(c.get("op_id") or "")))
+                    chain += [("job_read", oid) for oid in census_reads.get(str(c.get("job_id") or ""), [])]
+            for verb, oid in chain:
+                link_issue = (
+                    _epoch_link_issue(links, oid, server_epoch_old, untargeted_ok=True) if oid else "no_enq"
+                )
+                if link_issue:
+                    issue = f"old_link:{verb}:{link_issue}"
+                    break
         if issue:
             unidentified.append(lid)
             missings.append(f"purge_accredited_unidentified:{lid}:{issue}")
@@ -820,20 +894,46 @@ def _judge_runner_purge(
         missings.append("purge_order_not_after_restart")
     out["order_seq"] = main.seq_idx if main is not None else None
 
-    # censos posteriores a la purga que juzga PER-08: los de t5 (reinicio y testigo) del epoch nuevo tras la orden (sin
-    # orden, todos los de t5). Los de t6 son la limpieza: sus supervivientes los juzga PER-09.
+    # Censos posteriores a la purga del epoch nuevo, tras la orden (sin orden, todos). Aclaracion, punto 4 (O3, H10): lo
+    # OBSERVADO (un remanente o una centinela sin atribuir) se juzga en cualquiera de ellos, t5 (reinicio y testigo) y
+    # t6; la AUSENCIA se acredita solo con t5, antes de la limpieza (`post_purge_t5`).
     post_purge = [
         c for c in new_epoch_complete
-        if c.get("stage") in ("t5_post_restart_census", "t5_witness_pre_census", "t5_witness_post_census")
+        if c.get("stage") in (
+            "t5_post_restart_census", "t5_witness_pre_census", "t5_witness_post_census", "t6_post_cleanup_census",
+        )
         and (main is None or c["seq_idx"] > main.seq_idx)
     ]
-    t5_post = [c for c in post_purge if c.get("stage") == "t5_post_restart_census"]
+    post_purge_t5 = [c for c in post_purge if c.get("stage") != "t6_post_cleanup_census"]
+    t5_post = [c for c in post_purge_t5 if c.get("stage") == "t5_post_restart_census"]
     t5_director_ok = any(
         int(c.get("include_director_b", 0)) == 1 and not _director_census_identity_issue(c, director_uid, anchor)
         for c in t5_post
     )
-    t5_seen_pids = {str(r.get("pers_id")) for c in t5_post for r in c.get("rows") or [] if _is_nonzero_pers_id(r.get("pers_id"))}
-    t5_seen_nids = {str(r.get("net_id") or "") for c in t5_post for r in c.get("rows") or []}
+    # O3 (H2): lo observado despues en t5 (reinicio y testigo, cualquier dueno) acredita la supervivencia: por `pers_id`
+    # (valido y distinto de cero) y clase, o por `net_id` del epoch nuevo y clase si el `pers_id` no sirve.
+    t5_seen_by_pid = {
+        (str(r.get("pers_id")), str(r.get("class_name") or ""))
+        for c in post_purge_t5 for r in c.get("rows") or [] if _is_nonzero_pers_id(r.get("pers_id"))
+    }
+    t5_seen_by_nid = {
+        (str(r.get("net_id") or ""), str(r.get("class_name") or ""))
+        for c in post_purge_t5 for r in c.get("rows") or [] if _valid_net_id(r.get("net_id"))
+    }
+
+    def _seen_after_in_t5(row: dict[str, Any]) -> bool:
+        if _is_nonzero_pers_id(row["pers_id"]):
+            return (row["pers_id"], row["class_name"]) in t5_seen_by_pid
+        return _valid_net_id(row["net_id"]) and (row["net_id"], row["class_name"]) in t5_seen_by_nid
+
+    # O3 (H3): la unicidad del `pers_id` en el epoch nuevo se resuelve en cada ventana de observacion: la captura `pre`,
+    # la captura de cada tick (filas `emit` contiguas) y los censos posteriores a la purga. Dos entidades distintas (por
+    # `net_id`, que dentro de un proceso identifica a una entidad) con el mismo `pers_id` en una misma ventana lo hacen
+    # ambiguo. Entre ventanas no se cruza: una prenda borrada en la purga y una entidad con su `pers_id` despues es un
+    # remanente por identidad (`:582`), como juzgaban O2 y e9.
+    identity_windows: list[list[dict[str, Any]]] = [
+        [{"pers_id": str(r.get("pers_id") or ""), "net_id": str(r.get("net_id") or "")} for c in post_purge for r in c.get("rows") or []]
+    ]
 
     for o in orders:
         is_main = o is main
@@ -867,15 +967,24 @@ def _judge_runner_purge(
                 missings.append(f"purge_not_done:order_{o.status or 'no_result'}")
             continue
         start_u = _unpack_any_payload(o.read) or ({}, {}, [])
-        job = str(start_u[0].get("job") or o.op_id)
+        # aclaracion, punto 3 (O3, H8): el trabajo de la orden es su `op_id`; el `job` del acuse y de todas las lecturas
+        # tiene que serlo (un alias no se acepta)
+        job = o.op_id
+        if is_main and str(start_u[0].get("job") or "") != job:
+            missings.append("purge_job_is_not_the_order_op_id")
         if is_main and start_u[0].get("resource") != "per_purge":
             missings.append("purge_wrong_resource")
         pre_n_raw = start_u[1].get("pre_n")
         pre_n = int(round(pre_n_raw)) if _is_finite_num(pre_n_raw) else None
 
+        def _op_jobs(op: Any) -> tuple[str, str]:
+            a_u = _unpack_any_payload(op.args)
+            r_u = _unpack_any_payload(op.read)
+            return (str(a_u[0].get("job") or "") if a_u else "", str(r_u[0].get("job") or "") if r_u else "")
+
         job_ops = [
             op for op in ordered_ops
-            if op.verb in ("job_read", "job_stop", "job_free") and op.seq_idx > o.seq_idx and _job_of(op) == job
+            if op.verb in ("job_read", "job_stop", "job_free") and op.seq_idx > o.seq_idx and job in _op_jobs(op)
         ]
         reads: list[dict[str, Any]] = []
         last_read_idx: int | None = None
@@ -902,7 +1011,12 @@ def _judge_runner_purge(
                 continue
             a_u = _unpack_any_payload(jop.args) or ({}, {}, [])
             page = int(round(j_n.get("page_n", -1.0)))
-            if j_s.get("job") != job or j_s.get("resource") != "per_purge" or page != int(round(a_u[1].get("page_n", -2.0))):
+            if (
+                j_s.get("job") != job
+                or str(a_u[0].get("job") or "") != job
+                or j_s.get("resource") != "per_purge"
+                or page != int(round(a_u[1].get("page_n", -2.0)))
+            ):
                 if is_main:
                     missings.append("purge_read_inconsistent")
                 continue
@@ -921,10 +1035,12 @@ def _judge_runner_purge(
         term_state = ""
         complete_rows: list[dict[str, Any]] | None = None
         end_tick = 0.0
+        start_tick = 0.0
         if term:
             sigs = {(r["state"], r["reason"], r["rows_total"], r["pages_n"], r["start"], r["end"]) for r in term}
             term_state = term[-1]["state"]
             end_tick = term[-1]["end"]
+            start_tick = term[-1]["start"]
             consistent = len(sigs) == 1 and (not stop_states or stop_states == {term_state})
             if not consistent and is_main:
                 missings.append("purge_terminal_inconsistent")
@@ -933,15 +1049,20 @@ def _judge_runner_purge(
                 pages.setdefault(r["page"], []).append(r["rows"])
             pages_n = term[-1]["pages_n"]
             rows_total = term[-1]["rows_total"]
+            # una relectura identica de la misma pagina es valida y no cuenta dos veces (aclaracion, punto 1)
             same_dup = all(all(x == lst[0] for x in lst) for lst in pages.values())
             if rows_total == 0:
                 ok_pages = pages_n == 0 and set(pages) == {0} and pages[0][0] == []
             else:
+                # aclaracion, punto 1 (O3, H8): la rodaja contractual de `job_read` con `page_size = 8` del `StartJob`:
+                # `pages_n = ceil(total / 8)` y la pagina `p` lleva las filas `8p` a `8p + 7` (`F0.3-0` `:161`)
                 ok_pages = (
-                    pages_n > 0
+                    pages_n == (rows_total + _PURGE_PAGE_SIZE - 1) // _PURGE_PAGE_SIZE
                     and set(pages) == set(range(pages_n))
-                    and sum(len(pages[p][0]) for p in range(pages_n)) == rows_total
-                    and all(len(pages[p][0]) > 0 for p in range(pages_n))
+                    and all(
+                        len(pages[p][0]) == min(_PURGE_PAGE_SIZE, rows_total - _PURGE_PAGE_SIZE * p)
+                        for p in range(pages_n)
+                    )
                 )
             if consistent and same_dup and ok_pages:
                 complete_rows = [row for p in range(max(pages_n, 0)) for row in pages[p][0]] if rows_total else []
@@ -960,7 +1081,17 @@ def _judge_runner_purge(
         pre_rows = [r for r in scan_rows if r["phase"] == "pre"]
         emit_rows = [r for r in scan_rows if r["phase"] == "emit"]
         result_rows = [r for r in scan_rows if r["phase"] == "result"]
-        bajas = [r for r in emit_rows if r["emit_tick_ms"] is not None and r["emit_tick_ms"] > 0.0]
+        bajas_idx = [
+            i for i, r in enumerate(scan_rows)
+            if r["phase"] == "emit" and r["emit_tick_ms"] is not None and r["emit_tick_ms"] > 0.0
+        ]
+        bajas = [scan_rows[i] for i in bajas_idx]
+        if not start_tick and reads:
+            start_tick = max((r["start"] for r in reads), default=0.0)
+        if is_main:
+            # O3 (H3): ventanas de identidad de la purga: la captura `pre` y la de cada tick
+            identity_windows.append(pre_rows)
+            identity_windows.extend([scan_rows[j] for j in run] for run in _purge_emit_runs(scan_rows))
 
         # (b) las bajas: identidad, dueno, clase y E1 (`:577-580`); de cualquier estado terminal (arbitraje 5)
         for b in bajas:
@@ -982,33 +1113,96 @@ def _judge_runner_purge(
                 missings.append("purge_emit_lease_unaccredited")
             elif age > lim:
                 fails.append(f"purge_emit_lease_expired:{cls}")
-        # (c) un descendiente sin autorizar de una baja que falta en t5: se borro algo ajeno con el padre (`:580`). El
-        # arbol sale de las filas `pre` y de las `emit` (subarbol en el tick de cada emision): vale cualquier padre
-        # observado, tambien el contenido que entro despues de `pre` (arbitraje 2 y 4).
-        children_of: dict[str, set[str]] = {}
-        by_nid: dict[str, dict[str, Any]] = {}
-        for r in pre_rows + emit_rows:
+        # (c) O3 (H4, H2 y H7): la captura del tick de cada baja. Las filas `emit` contiguas del recibo son la captura
+        # del tick (aclaracion: el subarbol del candidato en ese momento, con su baja); `pre` es la captura inicial.
+        #  - H4: la baja se cruza por la identidad del epoch nuevo (`net_id`, `pers_id` y clase) con `pre` y con su
+        #    captura; si la entidad o su arbol no se pueden acreditar, `missing`. Un descendiente de la baja presente
+        #    en su tick es `fail`: un padre solo se borra cuando ya esta fisicamente vacio (arbitraje 2).
+        #  - H2: el arrastre se atribuye con la captura del tick: un descendiente ajeno en ella que no se observa despues
+        #    en t5 se borro con el padre (`fail`, `:580`); sin el director cubierto en t5, `missing`. Un descendiente de
+        #    `pre` que la captura del tick ya no pone bajo la baja no se le atribuye: si no se observa despues en t5, su
+        #    ausencia no se explica (`missing`, nunca `fail`).
+        #  - H7: como mucho una baja por tick y cada emision dentro de la ventana del trabajo.
+        pre_by_nid: dict[str, dict[str, Any]] = {}
+        pre_children: dict[str, list[dict[str, Any]]] = {}
+        for r in pre_rows:
             if _valid_net_id(r["net_id"]):
-                by_nid.setdefault(r["net_id"], r)
+                pre_by_nid.setdefault(r["net_id"], r)
                 if r["parent_net_id"]:
-                    children_of.setdefault(r["parent_net_id"], set()).add(r["net_id"])
+                    pre_children.setdefault(r["parent_net_id"], []).append(r)
+        baja_tick_by_nid: dict[str, float] = {}
         for b in bajas:
-            desc: set[str] = set()
-            todo = [b["net_id"]]
+            if _valid_net_id(b["net_id"]):
+                baja_tick_by_nid[b["net_id"]] = min(b["emit_tick_ms"], baja_tick_by_nid.get(b["net_id"], b["emit_tick_ms"]))
+        tick_count: dict[float, int] = {}
+        for b in bajas:
+            tick_count[b["emit_tick_ms"]] = tick_count.get(b["emit_tick_ms"], 0) + 1
+        if any(n > 1 for n in tick_count.values()):
+            missings.append("purge_two_bajas_in_one_tick")
+        if any(
+            (start_tick > 0.0 and b["emit_tick_ms"] < start_tick) or (end_tick > 0.0 and b["emit_tick_ms"] > end_tick)
+            for b in bajas
+        ):
+            missings.append("purge_emit_outside_the_job_window")
+        run_of: dict[int, list[int]] = {i: run for run in _purge_emit_runs(scan_rows) for i in run}
+        for bi in bajas_idx:
+            b = scan_rows[bi]
+            b_nid = b["net_id"]
+            capture = [scan_rows[j] for j in run_of.get(bi, [bi])]
+            if not _valid_net_id(b_nid):
+                missings.append("purge_baja_unidentified")
+                continue
+            p_row = pre_by_nid.get(b_nid)
+            if p_row is None:
+                missings.append("purge_baja_not_in_pre")
+            elif (p_row["pers_id"], p_row["class_name"]) != (b["pers_id"], b["class_name"]):
+                missings.append("purge_baja_identity_mismatch")
+            if any(not _valid_net_id(r["net_id"]) for r in capture) or any(
+                r["net_id"] in pre_by_nid
+                and (pre_by_nid[r["net_id"]]["pers_id"], pre_by_nid[r["net_id"]]["class_name"])
+                != (r["pers_id"], r["class_name"])
+                for r in capture
+            ):
+                missings.append("purge_emit_tree_unidentified")
+            # descendientes de la baja en la captura de su tick (sin la propia baja ni lo que ya tuvo su baja antes)
+            cap_children: dict[str, list[dict[str, Any]]] = {}
+            for r in capture:
+                if r["parent_net_id"]:
+                    cap_children.setdefault(r["parent_net_id"], []).append(r)
+            tick_desc: dict[str, dict[str, Any]] = {}
+            todo = [b_nid]
             while todo:
-                for ch in children_of.get(todo.pop(), set()):
-                    if ch not in desc and ch != b["net_id"]:
-                        desc.add(ch)
-                        todo.append(ch)
-            for nid in sorted(desc):
-                row = by_nid[nid]
-                if row["pers_id"] in order_pids:
-                    continue
-                present = (row["pers_id"] in t5_seen_pids) if _is_nonzero_pers_id(row["pers_id"]) else (nid in t5_seen_nids)
-                if present:
+                for ch in cap_children.get(todo.pop(), []):
+                    ch_nid = ch["net_id"]
+                    if ch_nid == b_nid or ch_nid in tick_desc:
+                        continue
+                    if baja_tick_by_nid.get(ch_nid, b["emit_tick_ms"]) < b["emit_tick_ms"]:
+                        continue
+                    tick_desc[ch_nid] = ch
+                    todo.append(ch_nid)
+            for ch_nid in sorted(tick_desc):
+                row = tick_desc[ch_nid]
+                fails.append(f"purge_baja_with_descendant:{row['class_name']}")
+                if row["pers_id"] in order_pids or _seen_after_in_t5(row):
                     continue
                 if t5_director_ok:
                     fails.append(f"purge_foreign_lost_with_parent:{row['class_name']}")
+                else:
+                    missings.append("purge_t5_director_uncovered")
+            # descendientes de la captura inicial que la del tick ya no pone bajo la baja
+            pre_desc: dict[str, dict[str, Any]] = {}
+            todo = [b_nid]
+            while todo:
+                for ch in pre_children.get(todo.pop(), []):
+                    if ch["net_id"] != b_nid and ch["net_id"] not in pre_desc:
+                        pre_desc[ch["net_id"]] = ch
+                        todo.append(ch["net_id"])
+            for ch_nid in sorted(pre_desc):
+                row = pre_desc[ch_nid]
+                if ch_nid in tick_desc or row["pers_id"] in order_pids or _seen_after_in_t5(row):
+                    continue
+                if t5_director_ok:
+                    missings.append(f"purge_foreign_unaccounted:{row['class_name']}")
                 else:
                     missings.append("purge_t5_director_uncovered")
 
@@ -1035,24 +1229,42 @@ def _judge_runner_purge(
                 if cnt > 1:
                     missings.append("purge_duplicate_baja")
             if term_state == "done":
-                res_by_pid: dict[str, list[str]] = {}
-                for r in result_rows:
-                    res_by_pid.setdefault(r["pers_id"], []).append(r["result"])
-                pre_pids = {r["pers_id"] for r in pre_rows}
+                res_by_pid: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+                for i, r in enumerate(scan_rows):
+                    if r["phase"] == "result":
+                        res_by_pid.setdefault(r["pers_id"], []).append((i, r))
+                first_baja_of: dict[str, int] = {}
+                for bi in bajas_idx:
+                    first_baja_of.setdefault(scan_rows[bi]["pers_id"], bi)
                 for pid in sorted(order_pids):
                     vals = res_by_pid.get(pid, [])
                     if len(vals) != 1:
                         missings.append("purge_result_missing_or_repeated")
                         continue
-                    val = vals[0]
+                    r_idx_row, r_row = vals[0]
+                    val = r_row["result"]
                     if val not in _PURGE_RESULT_VALUES:
                         missings.append("purge_result_unknown")
                     elif val == "deleted" and pid not in baja_count:
                         missings.append("purge_result_deleted_without_baja")
                     elif val != "deleted" and pid in baja_count:
                         missings.append("purge_result_contradicts_baja")
-                    elif val == "absent" and pid in pre_pids:
-                        missings.append("purge_result_absent_but_in_pre")
+                    elif val == "deleted":
+                        b_row = scan_rows[first_baja_of[pid]]
+                        # H4: el `result` cruza con su baja por la identidad del epoch nuevo
+                        if not _valid_net_id(r_row["net_id"]) or r_row["net_id"] != b_row["net_id"]:
+                            missings.append("purge_result_identity_mismatch")
+                        # H7 y aclaracion, punto 2: `deleted` despues de su `emit`, confirmado en un tick posterior a su
+                        # emision y dentro del trabajo
+                        if r_idx_row < first_baja_of[pid]:
+                            missings.append("purge_deleted_before_its_emit")
+                        conf = r_row["confirm_tick_ms"]
+                        if conf is None or conf <= b_row["emit_tick_ms"] or (end_tick > 0.0 and conf > end_tick):
+                            missings.append("purge_confirm_not_after_emit")
+                    # O3 (H1): un `absent` de algo que estaba en `pre` es legitimo: `pre` es la captura inicial y la
+                    # implementacion resuelve `absent` sobre el arbol del tick de resolucion (P2c). Se contrasta con las
+                    # emisiones (sin baja: arriba) y con la cobertura posterior (remanente o director sin cubrir en t5,
+                    # abajo); ya no da `missing` por estar en `pre`.
                 if any(pid not in order_pids for pid in res_by_pid):
                     missings.append("purge_result_unordered")
         # (f) el estado: sin `done` del epoch validado, `missing` (`:584`); las bajas ya quedaron juzgadas
@@ -1077,8 +1289,14 @@ def _judge_runner_purge(
                     missings.append("purge_order_unverifiable")
                 elif end_tick >= min(starts):
                     fails.append("purge_not_before_t5_census")
-            if last_read_idx is None or last_read_idx >= first_t5["seq_idx"]:
-                missings.append("purge_read_not_before_t5")
+        # O3 (H7, cierre parcial de Sol 5): la barrera de la traza es el ENVIO del primer censo tras la orden (su `enq`),
+        # tambien si se rechazo (`purge_pending`): no el primer trabajo aceptado, que sigue siendo el del `fail` de arriba
+        first_send = min(
+            (op.seq_idx for op in ordered_ops if op.verb == "per_census_start" and op.peer == "server" and op.seq_idx > o.seq_idx),
+            default=None,
+        )
+        if first_send is not None and (last_read_idx is None or last_read_idx >= first_send):
+            missings.append("purge_read_not_before_t5")
         out["metrics"] = {
             "order_n": len(order_pairs),
             "accredited_n": len(accredited),
@@ -1104,16 +1322,51 @@ def _judge_runner_purge(
             v_issue = _epoch_link_issue(links, validating[-1].op_id, epoch_new)
             if v_issue:
                 missings.append(f"purge_epoch_unlinked:per_status:{v_issue}")
+        # O3 (H9, aclaracion, punto 5): TODA la espera de `per_status` entre el `hello` nuevo y la orden se liga al epoch
+        # nuevo, no solo la respuesta que valida: cada `per_status` con respuesta en esa ventana (por su `enq` o por su
+        # resultado) va con `target_inst` del epoch nuevo, entregado a el y respondido por el; y si su respuesta trae
+        # `server_epoch`, es ese. Una orden sin respuesta no tiene respuesta que ligar.
+        order_enq = (links.get(main.op_id) or {}).get("enq_idx")
+        lo = new_hello_idx if new_hello_idx is not None else -1
+        hi = order_enq if order_enq is not None else main.seq_idx
+        for op in ordered_ops:
+            if op.verb != "per_status" or op.peer != "server":
+                continue
+            lk = links.get(op.op_id) or {}
+            e_idx, r_idx = lk.get("enq_idx"), lk.get("result_idx")
+            if r_idx is None or not ((e_idx is not None and lo < e_idx < hi) or lo < r_idx < hi):
+                continue
+            w_issue = _epoch_link_issue(links, op.op_id, epoch_new)
+            if not w_issue:
+                w_u = _unpack_any_payload(op.read)
+                if w_u and str(w_u[0].get("server_epoch") or epoch_new) != epoch_new:
+                    w_issue = "server_epoch"
+            if w_issue:
+                missings.append(f"purge_epoch_unlinked:per_status_wait:{w_issue}")
 
     # (5) remanentes por identidad (`:582`): tras un `done`, un `pers_id` acreditado en el director de un censo
-    # posterior es `fail`; la ausencia solo se acredita con un censo t5 completo del mismo director (arbitraje 4)
+    # posterior (t5 o t6, aclaracion punto 4) es `fail`; la ausencia solo se acredita con un censo t5 completo del mismo
+    # director (arbitraje 4). O3 (H3): la unicidad se resuelve antes. Si ese `pers_id` lo llevan dos entidades distintas
+    # en una misma ventana de observacion del epoch nuevo (la captura `pre`, la de un tick o los censos posteriores), no
+    # hay prueba de cual es la prenda de Sandbox: `missing`, nunca `fail`.
+    ambiguous_pids: set[str] = set()
+    for window in identity_windows:
+        w_nids: dict[str, set[str]] = {}
+        for r in window:
+            if _is_nonzero_pers_id(r["pers_id"]) and _valid_net_id(r["net_id"]):
+                w_nids.setdefault(r["pers_id"], set()).add(r["net_id"])
+        ambiguous_pids |= {pid for pid, nids in w_nids.items() if len(nids) > 1}
+    out["ambiguous_pids"] = ambiguous_pids
     if accredited:
         if out["done"]:
             for c in post_purge:
                 for r in c.get("rows") or []:
                     pid = str(r.get("pers_id") or "")
                     if str(r.get("owner_uid") or "") == director_uid and pid in accredited:
-                        fails.append(f"purge_remnant:{accredited[pid]['logical_id']}")
+                        if pid in ambiguous_pids:
+                            missings.append(f"purge_remnant_ambiguous:{accredited[pid]['logical_id']}")
+                        else:
+                            fails.append(f"purge_remnant:{accredited[pid]['logical_id']}")
         if not t5_director_ok:
             missings.append("purge_t5_director_uncovered")
 
@@ -2208,6 +2461,36 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if aid == "area_a" and ouid == director_uid_t0:
                     baseline_director_rows.append(row)
 
+    # O3 (H5, brief ronda 2 `:531` y arbitraje 8): en el contrato nuevo (el `per_status` de t0 publica `players_n`, o la
+    # corrida ordena una purga `per_purge_start`) el uid del director solo vale si una seleccion lista (`players_n == 1`,
+    # uid no vacio, presente, vivo y legible) precede al primer censo basal de t0, y es ese uid. Si no, la seleccion no
+    # esta acreditada: `director_not_selected` (INCONCLUSO); el uid de un censo o de otro `per_status` ya no la suple. Las
+    # trazas antiguas (sin `players_n` ni purga del runner) conservan el respaldo historico.
+    t0_new_contract = any(op.verb == "per_purge_start" for op in ordered_ops) or any(
+        "players_n" in n for _bop, _s, n, _r in status_ops_old
+    )
+    if t0_new_contract and "director_ambiguous" not in reasons:
+        first_t0_seq = min(
+            (c["seq_idx"] for c in censuses if c.get("stage") == "t0_baseline_census"), default=10**9
+        )
+        t0_selected_uid = next(
+            (
+                str(s.get("director_uid") or "")
+                for bop, s, n, _r in status_ops_old
+                if bop.seq_idx < first_t0_seq
+                and n.get("players_n") is not None
+                and int(round(n["players_n"])) == 1
+                and str(s.get("director_uid") or "")
+                and all(
+                    int(round(n.get(k, 0.0))) == 1
+                    for k in ("director_present_b", "director_alive_b", "director_inv_readable_b")
+                )
+            ),
+            "",
+        )
+        if not t0_selected_uid or t0_selected_uid != director_uid_t0:
+            reasons.append("director_not_selected")
+
     # MEN-8: `baseline_director_foreign` / `baseline_director_sentinel` del runner NO son fuente de verdad: el basal
     # del director sale solo de las filas del censo t0 de area_a (include_director_b == 1), completo.
     # Ancla de identidad (E9 y O2): los `pers_id` de ese basal, con su clase, distinguen al personaje del director de
@@ -2269,6 +2552,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
 
     # Build authoritative entity spawn metadata from bridge per_apply_scene + per_spawn_raw
     applied_scenes_final: dict[str, tuple[dict[str, str], dict[str, float], list[dict[str, Any]], list[dict[str, Any]]]] = {}
+    # O3 (H6): la orden del alta de cada escena, para ligar la procedencia vieja de las prendas al epoch viejo
+    applied_scene_op_ids: dict[str, str] = {}
     idempotent_hits_by_scene: dict[str, int] = {}
     selected_pathway = ""
     for _bop, in_s, _in_n, in_r, out_s, out_n, out_r in apply_ops_old:
@@ -2278,6 +2563,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             idempotent_hits_by_scene[sc_id] = idempotent_hits_by_scene.get(sc_id, 0) + 1
         else:
             applied_scenes_final[sc_id] = (out_s, out_n, in_r, out_r)
+            applied_scene_op_ids[sc_id] = _bop.op_id
             pw = out_s.get("q9_pathway") or in_s.get("q9_pathway") or ""
             if pw in ("a", "b"):
                 selected_pathway = pw
@@ -2298,6 +2584,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     "health_hp": float(row.get("health_hp", 0.0)),
                     "spawn_tick_ms": float(row.get("spawn_tick_ms", 0.0)),
                     "q9_row": row,
+                    "apply_op_id": applied_scene_op_ids.get(sc_id, ""),
                 }
     for tag, (out_s, out_n) in spawn_raw_ops.items():
         bridge_spawn_info[tag] = {
@@ -3574,6 +3861,16 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         ledger_by_id=ledger_by_id,
         fixture=fixture,
         sentinel_classes=sentinel_classes,
+        new_hello_idx=next(
+            (
+                i for i, ev in enumerate(bridge_events)
+                if ev.get("ev") == "hello" and ev.get("http") == 200 and ev.get("ok") is not False
+                and server_epoch_new
+                and str(ev.get("peer") or _dict_or_empty(ev.get("args")).get("peer") or "") == "server"
+                and str(ev.get("inst") or _dict_or_empty(ev.get("args")).get("inst") or "") == server_epoch_new
+            ),
+            None,
+        ),
     )
     metrics["runner_purge"] = {
         "accredited": sorted(a["logical_id"] for a in purge["accredited"].values()),
@@ -3606,7 +3903,11 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 acc = accredited_pids.get(pid)
                 if acc is not None:
                     if roles is None or acc["role"] in roles:
-                        if purge["done"]:
+                        if pid in purge["ambiguous_pids"]:
+                            # O3 (H3): el mismo cruce que PER-08; un `pers_id` repetido en el epoch nuevo no prueba
+                            # cual es la prenda de Sandbox
+                            c_missing.append(f"purge_remnant_ambiguous:{acc['logical_id']}")
+                        elif purge["done"]:
                             c_fail.append(f"reappeared_director_gloves:{cname}")
                         else:
                             c_missing.append("purge_not_done")
