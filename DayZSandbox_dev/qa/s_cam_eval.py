@@ -160,6 +160,10 @@ PATH_COLS_27 = (
     "set_focus_calls_n", "active_b", "elem_vis_mask", "flags_mask",
     "qb_vis_b", "menu_open_b", "ovl_vis_b",
 )
+# Enmienda 2026-11-18: cada fila lleva ademas las 9 celdas crudas m00..m22.
+PATH_COLS_36 = PATH_COLS_27 + tuple(
+    f"m{r}{c}" for r in range(3) for c in range(3)
+)
 SAMPLE_COLS_18 = (
     "seq_n", "frame", "tick_ms", "dtsum_ms",
     "eng_x_m", "eng_y_m", "eng_z_m", "eng_dx", "eng_dy", "eng_dz",
@@ -195,12 +199,33 @@ def _rows_as_dicts(rows: list, cols: tuple) -> list[dict]:
     out = []
     for row in rows:
         if isinstance(row, dict):
+            if set(row) != set(cols):
+                return []
             out.append(dict(row))
         elif isinstance(row, list) and len(row) == len(cols):
             out.append({name: row[i] for i, name in enumerate(cols)})
         else:
             return []
     return out
+
+
+def _path_rows_load(rows: list):
+    """Filas del recorrido: exactamente las 36 columnas de la enmienda.
+
+    Devuelve (filas, bad_columns). Una fila de 27 columnas, un dict con
+    claves de mas o de menos, o una lista de otra longitud es bad_columns.
+    """
+    out = []
+    for row in rows:
+        if isinstance(row, dict):
+            if set(row) != set(PATH_COLS_36):
+                return [], True
+            out.append(dict(row))
+        elif isinstance(row, list) and len(row) == len(PATH_COLS_36):
+            out.append({name: row[i] for i, name in enumerate(PATH_COLS_36)})
+        else:
+            return [], True
+    return out, False
 
 
 def _load_samples(part_dir) -> dict:
@@ -221,10 +246,14 @@ def _load_samples(part_dir) -> dict:
     if mpath.is_file():
         samples["manifest"] = gate_core.read_json(mpath)
     samples["scenario"] = f03_common.read_jsonl(sdir / "scenario.jsonl")
+    samples["bridge"] = f03_common.read_jsonl(sdir / "bridge.jsonl")
+    samples["path_bad_columns"] = {}
     for name in PATH_DUMPS:
-        samples["paths"][name] = _rows_as_dicts(
-            f03_common.read_jsonl(sdir / f"{name}.jsonl"), PATH_COLS_27
+        rows, bad = _path_rows_load(
+            f03_common.read_jsonl(sdir / f"{name}.jsonl")
         )
+        samples["paths"][name] = rows
+        samples["path_bad_columns"][name] = bad
     samples["control_recovery"] = _rows_as_dicts(
         f03_common.read_jsonl(sdir / "control_recovery.jsonl"), SAMPLE_COLS_18
     )
@@ -841,66 +870,65 @@ _PATH_RESET_HINTS = (
 )
 
 
+def _scenario_index(scenario: list, row) -> int:
+    for i, cand in enumerate(scenario):
+        if cand is row:
+            return i
+    return -1
+
+
 def _static_reset_fields(samples: dict, phase: str):
+    """Reset estatico por identidad y orden: state exacto post_reset en
+    SCAM-S4, posterior a la captura dof_ctrl_far50m."""
     scenario = samples.get("scenario") or []
-    for step in _STATIC_RESET_STEPS:
-        row = _state(scenario, phase, step)
-        if row is not None:
-            dist = _num(row, "sent_focus_dist_m")
-            blur = _num(row, "sent_focus_blur")
-            if dist is not None and blur is not None:
-                return dist, blur
-    for row in scenario:
-        if row.get("ev") != "state" or row.get("phase") != phase:
-            continue
-        step = str(row.get("step") or "").lower()
-        if any(hint in step for hint in _STATIC_RESET_HINTS):
-            dist = _num(row, "sent_focus_dist_m")
-            blur = _num(row, "sent_focus_blur")
-            if dist is not None and blur is not None:
-                return dist, blur
-    for row in reversed(scenario):
-        if (
-            row.get("ev") == "op"
-            and row.get("phase") == phase
-            and row.get("verb") == "scam_dof_set"
-            and row.get("status") == "ok"
-        ):
-            nk = _nk(row)
-            try:
-                return float(nk["sent_focus_dist_m"]), float(nk["sent_focus_blur"])
-            except (KeyError, TypeError, ValueError):
-                continue
-    return None
+    row = _state(scenario, phase, "post_reset")
+    if row is None:
+        return None
+    cap = _capture_event(samples, "dof_ctrl_far50m.bmp")
+    if cap is not None and _scenario_index(scenario, row) < _scenario_index(
+        scenario, cap
+    ):
+        return None
+    dist = _num(row, "sent_focus_dist_m")
+    blur = _num(row, "sent_focus_blur")
+    if dist is None or blur is None:
+        return None
+    return dist, blur
 
 
-def _path_reset_fields(samples: dict, phase: str):
+def _path_reset_fields(samples: dict, phase: str, which: str = "var"):
+    """Lectura tras la terminacion real de un camino de foco: step exacto
+    post_dof_var/post_dof_fix, cam_job_state vacio y frame posterior a la
+    ultima fila de ese camino."""
+    step = "post_dof_var" if which == "var" else "post_dof_fix"
+    dump = "path_dof_var" if which == "var" else "path_dof_fix"
     scenario = samples.get("scenario") or []
-    for step in _PATH_RESET_STEPS:
-        row = _state(scenario, phase, step)
-        if row is not None:
-            dist = _num(row, "sent_focus_dist_m")
-            blur = _num(row, "sent_focus_blur")
-            if dist is not None and blur is not None:
-                return dist, blur
-    for row in scenario:
-        if row.get("ev") != "state" or row.get("phase") != phase:
-            continue
-        step = str(row.get("step") or "").lower()
-        if not any(hint in step for hint in _PATH_RESET_HINTS):
-            continue
-        marker = any(word in step for word in ("post", "after", "end", "job", "done"))
-        target = "var" in step or "dof" in step
-        if not (marker and target):
-            continue
-        dist = _num(row, "sent_focus_dist_m")
-        blur = _num(row, "sent_focus_blur")
-        if dist is not None and blur is not None:
-            return dist, blur
-    return None
+    row = _state(scenario, phase, step)
+    if row is None:
+        return None
+    if _sk(row).get("cam_job_state") != "":
+        return None
+    rows = samples.get("paths", {}).get(dump) or []
+    if rows:
+        try:
+            last_frame = float(rows[-1]["frame"])
+            if float(_nk(row)["frame"]) <= last_frame:
+                return None
+        except (KeyError, TypeError, ValueError):
+            return None
+    dist = _num(row, "sent_focus_dist_m")
+    blur = _num(row, "sent_focus_blur")
+    if dist is None or blur is None:
+        return None
+    return dist, blur
 
 
 def _dof_config_accredited(samples: dict):
+    """Acreditacion DOF desde evidencia (brief:192), no desde la etiqueta.
+
+    Exige ventana >= 1280x720 y, ademas, mad >= 0,5 o un operator_done,
+    con el modo coherente con la build del manifiesto.
+    """
     rows = [
         row
         for row in samples.get("scenario") or []
@@ -908,7 +936,115 @@ def _dof_config_accredited(samples: dict):
     ]
     if not rows:
         return None
-    return any(row.get("accredited_b") is True for row in rows)
+    build = str((samples.get("manifest") or {}).get("build") or "")
+    operator_done = any(
+        row.get("ev") == "operator_done"
+        for row in samples.get("scenario") or []
+    )
+    for row in rows:
+        mode = str(row.get("mode") or "")
+        if build == "offline" and mode != "offline":
+            continue
+        if build in ("retail", "diag") and mode == "offline":
+            continue
+        try:
+            ok_window = float(row.get("window_w")) >= 1280.0 and float(
+                row.get("window_h")
+            ) >= 720.0
+            mad_v = float(row.get("mad_bg_50m"))
+        except (TypeError, ValueError):
+            continue
+        if ok_window and (mad_v >= 0.5 or operator_done):
+            return True
+    return False
+
+
+def _fixture_reading(samples: dict):
+    for row in samples.get("scenario") or []:
+        if (
+            row.get("ev") == "op"
+            and row.get("phase") == "SCAM-S0"
+            and row.get("verb") == "scam_fixture_setup"
+        ):
+            return row
+    return None
+
+
+def _anchor_y(samples: dict):
+    """Datum vertical: anchor_y_m de scam_fixture_setup (brief:99)."""
+    row = _fixture_reading(samples)
+    if row is None:
+        return None
+    value = _nk(row).get("anchor_y_m")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _y_datum(samples: dict, keys: list):
+    anchor_y = _anchor_y(samples)
+    if anchor_y is None or not keys:
+        return None
+    return anchor_y - float(keys[0]["pos"][1])
+
+
+def _bridge_index(samples: dict):
+    enq, result, inst = {}, {}, {}
+    for row in samples.get("bridge") or []:
+        ev = row.get("ev")
+        if ev == "hello":
+            args = row.get("args") or {}
+            if isinstance(args, dict) and args.get("inst"):
+                inst[str(row.get("peer") or "")] = str(args["inst"])
+        elif ev == "enq" and row.get("op_id"):
+            enq[str(row["op_id"])] = row
+        elif ev == "result" and row.get("op_id"):
+            result[str(row["op_id"])] = row
+    return enq, result, inst
+
+
+def _provenance_problem(samples: dict):
+    """Procedencia (punto 2): cada op/state enlaza con bridge.jsonl.
+
+    Devuelve (status, detail) o None si todo enlaza. Id "0", verbo o rol
+    que no casa con el enq, instancia distinta de la del hello, o una
+    observacion sin respuesta cruda nunca acreditan un PASA.
+    """
+    scenario = samples.get("scenario") or []
+    bridge = samples.get("bridge") or []
+    watched = [
+        r for r in scenario if r.get("ev") in ("op", "state")
+    ]
+    if watched and not bridge:
+        return "missing", "no_bridge_provenance"
+    enq, result, inst = _bridge_index(samples)
+    client_inst = inst.get("client")
+    if watched and not client_inst:
+        return "missing", "no_peer_instance"
+    for row in watched:
+        op_id = row.get("op_id")
+        if op_id is None or str(op_id) in ("", "0"):
+            return "fail", "provenance_id_zero"
+        key = str(op_id)
+        if key not in enq or key not in result:
+            return "missing", f"provenance_unlinked:{key}"
+        e = enq[key]
+        if row.get("ev") == "op":
+            if e.get("verb") != row.get("verb"):
+                return "fail", "provenance_verb_mismatch"
+            if str(e.get("peer") or "client") != "client":
+                return "fail", "provenance_peer_mismatch"
+            res = result[key].get("result") or {}
+            if isinstance(res, dict):
+                if res.get("status") != row.get("status"):
+                    return "fail", "provenance_status_mismatch"
+                if str(res.get("reason") or "") != str(row.get("reason") or ""):
+                    return "fail", "provenance_reason_mismatch"
+        peer_inst = row.get("peer_inst")
+        if peer_inst is not None and str(peer_inst) != client_inst:
+            return "fail", "provenance_instance_mismatch"
+    return None
 
 
 def _capture_ready(samples: dict, name: str, rois: dict, missing: list):
@@ -930,26 +1066,74 @@ def _capture_ready(samples: dict, name: str, rois: dict, missing: list):
 # pose_cells_equal, saved_count_n, saved_names_csv y cam_job_state vacío; y el
 # segundo camino recibe rejected/busy conservando job1 running. FAIL si no.
 def _check_cam_01(samples: dict) -> dict:
+    # fail antes que missing: se recogen primero los incumplimientos de
+    # lo presente y despues se clasifican las ausencias.
     scenario = samples.get("scenario") or []
+    fails: list[str] = []
+    missing: list[str] = []
+
+    def verdict() -> dict:
+        if fails:
+            return _chk("CAM-01", "fail", fails[0])
+        if missing:
+            return _chk("CAM-01", "missing", missing[0])
+        return _chk("CAM-01", "pass", "ok")
+
+    # N4: precondiciones observadas de S0.
+    fixture = _fixture_reading(samples)
+    if fixture is None:
+        missing.append("no_fixture_setup")
+    else:
+        if fixture.get("status") != "done":
+            fails.append("fixture_not_done")
+        fnk = _nk(fixture)
+        if _num(fixture, "active_b") != 1.0:
+            fails.append("fixture_cam_inactive")
+        if _num(fixture, "fov_rad") is None or abs(_num(fixture, "fov_rad") - 0.70) >= 0.001:
+            fails.append("fixture_fov")
+        if _num(fixture, "subj_present_b") != 1.0 or _num(fixture, "bg_present_b") != 1.0:
+            fails.append("fixture_scene_missing")
+        if fnk.get("anchor_y_m") is None:
+            missing.append("no_anchor_y")
+
     wire = _event(scenario, "wire_nan", "SCAM-S1", "wire")
     if wire is None:
-        return _chk("CAM-01", "missing", "no_wire_probe")
-    if not (wire.get("nan_rejected_b") is True and wire.get("inf_rejected_b") is True):
-        return _chk("CAM-01", "fail", "wire_nan_not_rejected")
-    if wire.get("bridge_lines_delta") != 0:
-        return _chk("CAM-01", "fail", "wire_nan_added_bridge_lines")
+        missing.append("no_wire_probe")
+    else:
+        if not (wire.get("nan_rejected_b") is True and wire.get("inf_rejected_b") is True):
+            fails.append("wire_nan_not_rejected")
+        if wire.get("bridge_lines_delta") != 0:
+            fails.append("wire_nan_added_bridge_lines")
 
     neg0 = _event(scenario, "op", "SCAM-S1", "neg_0")
     pre0 = _state(scenario, "SCAM-S1", "pre_0")
     post0 = _state(scenario, "SCAM-S1", "post_0")
     if neg0 is None or pre0 is None or post0 is None:
-        return _chk("CAM-01", "missing", "no_closed_cam_negative")
-    if neg0.get("status") != "rejected" or neg0.get("reason") != "no_active_cam":
-        return _chk("CAM-01", "fail", "closed_cam_not_rejected")
-    if _num(post0, "active_b") != 0.0:
-        return _chk("CAM-01", "fail", "closed_cam_active")
-    if not pose_cells_equal(_nk(pre0), _nk(post0)):
-        return _chk("CAM-01", "fail", "closed_cam_effects")
+        missing.append("no_closed_cam_negative")
+    else:
+        if neg0.get("status") != "rejected" or neg0.get("reason") != "no_active_cam":
+            fails.append("closed_cam_not_rejected")
+        if _num(post0, "active_b") != 0.0:
+            fails.append("closed_cam_active")
+        if not pose_cells_equal(_nk(pre0), _nk(post0)):
+            fails.append("closed_cam_effects")
+
+    # N8: negativa sin cliente ejecutable.
+    nc_steps = ("no_client_free", "no_client_pose", "no_client_hud",
+                "no_client_dof", "no_client_path", "no_client_sample")
+    pre_nc = _state(scenario, "SCAM-S1", "pre_nc")
+    post_nc = _state(scenario, "SCAM-S1", "post_nc")
+    if pre_nc is None or post_nc is None or any(
+        _event(scenario, "op", "SCAM-S1", s) is None for s in nc_steps
+    ):
+        missing.append("no_client_case")
+    else:
+        for step in nc_steps:
+            op = _event(scenario, "op", "SCAM-S1", step)
+            if op.get("status") != "rejected" or op.get("reason") != "client_not_in_game":
+                fails.append(f"{step}_not_rejected")
+        if not pose_cells_equal(_nk(pre_nc), _nk(post_nc)):
+            fails.append("no_client_effects")
 
     pose_negatives = {
         "neg_1": "empty_name",
@@ -972,33 +1156,41 @@ def _check_cam_01(samples: dict) -> dict:
             pre = _state(scenario, phase, f"pre_{step.split('_')[1]}")
             post = _state(scenario, phase, f"post_{step.split('_')[1]}")
             if op is None or pre is None or post is None:
-                return _chk("CAM-01", "missing", f"no_{phase}_{step}")
+                missing.append(f"no_{phase}_{step}")
+                continue
             if op.get("status") != "rejected" or op.get("reason") != reason:
-                return _chk("CAM-01", "fail", f"{phase}_{step}_not_rejected")
+                fails.append(f"{phase}_{step}_not_rejected")
+                continue
             if not pose_cells_equal(_nk(pre), _nk(post)):
-                return _chk("CAM-01", "fail", f"{phase}_{step}_pose_effect")
+                fails.append(f"{phase}_{step}_pose_effect")
             if _num(pre, "saved_count_n") != _num(post, "saved_count_n"):
-                return _chk("CAM-01", "fail", f"{phase}_{step}_saved_count_changed")
+                fails.append(f"{phase}_{step}_saved_count_changed")
             if _sk(pre).get("saved_names_csv") != _sk(post).get("saved_names_csv"):
-                return _chk("CAM-01", "fail", f"{phase}_{step}_saved_names_changed")
+                fails.append(f"{phase}_{step}_saved_names_changed")
             if _sk(post).get("cam_job_state") != "":
-                return _chk("CAM-01", "fail", f"{phase}_{step}_cam_job_not_idle")
+                fails.append(f"{phase}_{step}_cam_job_not_idle")
 
     busy_attempt = _event(scenario, "op", "SCAM-S2", "busy_attempt")
     busy_pre = _state(scenario, "SCAM-S2", "busy_pre")
     busy_post = _state(scenario, "SCAM-S2", "busy_post")
-    if busy_attempt is None or busy_pre is None or busy_post is None:
-        return _chk("CAM-01", "missing", "no_busy_probe")
-    job1_id = _sk(busy_pre).get("cam_job_id")
-    if not isinstance(job1_id, str) or not job1_id:
-        return _chk("CAM-01", "fail", "busy_without_active_job")
-    if busy_attempt.get("status") != "rejected" or busy_attempt.get("reason") != "busy":
-        return _chk("CAM-01", "fail", "busy_not_rejected")
-    if _sk(busy_post).get("cam_job_id") != job1_id:
-        return _chk("CAM-01", "fail", "busy_replaced_job")
-    if _sk(busy_post).get("cam_job_state") != "running":
-        return _chk("CAM-01", "fail", "busy_job_not_running")
-    return _chk("CAM-01", "pass", "ok")
+    start_op = _event(scenario, "op", "SCAM-S2", "path_1_start")
+    if busy_attempt is None or busy_pre is None or busy_post is None or start_op is None:
+        missing.append("no_busy_probe")
+    else:
+        # El trabajo ocupado se ata al que devolvio la Pasada 1.
+        job1_id = _sk(start_op).get("job")
+        if not isinstance(job1_id, str) or not job1_id or job1_id == "0":
+            fails.append("busy_job_id_unanchored")
+        else:
+            if _sk(busy_pre).get("cam_job_id") != job1_id:
+                fails.append("busy_pre_job_mismatch")
+            if busy_attempt.get("status") != "rejected" or busy_attempt.get("reason") != "busy":
+                fails.append("busy_not_rejected")
+            if _sk(busy_post).get("cam_job_id") != job1_id:
+                fails.append("busy_replaced_job")
+            if _sk(busy_post).get("cam_job_state") != "running":
+                fails.append("busy_job_not_running")
+    return verdict()
 
 
 # CAM-02: cámara libre por teclado local en 3 tramos con tiempos integrados
@@ -1090,24 +1282,41 @@ def _check_cam_02(samples: dict) -> dict:
         if _theta3d_cells(_nk(moved), _nk(s_0)) < 30.0:
             return _chk("CAM-02", "fail", "moved_less_than_30deg")
 
-        ref_roll = _matrix_dict(_ypr_matrix(35.0, -12.0, 18.0))
+        # La referencia es la lectura de scam_pose_save (brief:105), no
+        # los angulos pedidos ni la posicion de S_0.
+        save_roll = _event(scenario, "op", phase, "save_p_roll")
+        save_p0 = _event(scenario, "op", phase, "save_p0")
+        if save_roll is None or save_p0 is None:
+            return _chk("CAM-02", "missing", "no_saved_pose_reading")
+        roll_saved_pos = _row_pos(_nk(save_roll))
+        p0_saved_pos = _row_pos(_nk(save_p0))
         if _num(p_roll, "active_b") != 1.0:
             return _chk("CAM-02", "fail", "p_roll_inactive")
-        if _dist(_row_pos(_nk(p_roll), "eng_"), saved_pos) >= 0.05:
+        if _dist(_row_pos(_nk(p_roll), "eng_"), roll_saved_pos) >= 0.05:
             return _chk("CAM-02", "fail", "p_roll_eng_pos_err")
-        if _dist(_row_pos(_nk(p_roll)), saved_pos) >= 0.05:
+        if _dist(_row_pos(_nk(p_roll)), roll_saved_pos) >= 0.05:
             return _chk("CAM-02", "fail", "p_roll_cam_pos_err")
-        if _theta3d_cells(_nk(p_roll), ref_roll) >= 0.5:
+        if _theta3d_cells(_nk(p_roll), _nk(save_roll)) >= 0.5:
             return _chk("CAM-02", "fail", "p_roll_theta_deg")
+        if abs(_num(p_roll, "fov_rad") - _num(save_roll, "fov_rad")) >= 0.00873:
+            return _chk("CAM-02", "fail", "p_roll_fov_err")
+        if _angle_between(_row_dir(_nk(p_roll), "eng_"), _mat_forward(_nk(p_roll))) >= 0.05:
+            return _chk("CAM-02", "fail", "p_roll_direction_err")
+        if _dist(_row_pos(_nk(p_roll), "eng_"), _row_pos(_nk(p_roll))) >= 0.01:
+            return _chk("CAM-02", "fail", "p_roll_cam_identity")
 
         if _num(p0, "active_b") != 1.0:
             return _chk("CAM-02", "fail", "p0_inactive")
-        if _dist(_row_pos(_nk(p0), "eng_"), saved_pos) >= 0.05:
+        if _dist(_row_pos(_nk(p0), "eng_"), p0_saved_pos) >= 0.05:
             return _chk("CAM-02", "fail", "p0_eng_pos_err")
-        if _dist(_row_pos(_nk(p0)), saved_pos) >= 0.05:
+        if _dist(_row_pos(_nk(p0)), p0_saved_pos) >= 0.05:
             return _chk("CAM-02", "fail", "p0_cam_pos_err")
-        if _theta3d_cells(_nk(p0), _nk(s_0)) >= 0.5:
+        if _theta3d_cells(_nk(p0), _nk(save_p0)) >= 0.5:
             return _chk("CAM-02", "fail", "p0_theta_deg")
+        if abs(_num(p0, "fov_rad") - _num(save_p0, "fov_rad")) >= 0.00873:
+            return _chk("CAM-02", "fail", "p0_fov_err")
+        if _angle_between(_row_dir(_nk(p0), "eng_"), _mat_forward(_nk(p0))) >= 0.05:
+            return _chk("CAM-02", "fail", "p0_direction_err")
     except (KeyError, TypeError, ValueError):
         return _chk("CAM-02", "missing", "bad_columns")
     return _chk("CAM-02", "pass", "ok")
@@ -1123,6 +1332,8 @@ def _check_cam_02(samples: dict) -> dict:
 def _check_cam_03(samples: dict) -> dict:
     fixtures = (samples.get("fixtures_paths") or {}).get("paths") or {}
     for dump in ("path_catmull_scripted", "path_linear_hud"):
+        if (samples.get("path_bad_columns") or {}).get(dump):
+            return _chk("CAM-03", "missing", "bad_columns")
         rows = samples.get("paths", {}).get(dump) or []
         fpath = fixtures.get(PATH_FIXTURE[dump])
         if not rows or not isinstance(fpath, dict):
@@ -1134,10 +1345,9 @@ def _check_cam_03(samples: dict) -> dict:
         if not keys:
             return _chk("CAM-03", "missing", f"no_{dump}_keys")
         pos_mode = fpath.get("pos_mode", "linear")
-        try:
-            y_datum = float(rows[0]["eng_y_m"]) - keys[0]["pos"][1]
-        except (KeyError, TypeError, ValueError):
-            return _chk("CAM-03", "missing", f"bad_{dump}_columns")
+        y_datum = _y_datum(samples, keys)
+        if y_datum is None:
+            return _chk("CAM-03", "missing", "no_anchor_y")
         status, detail = _path_status(
             rows, keys, pos_mode, keys[-1]["t_s"], y_datum
         )
@@ -1153,6 +1363,8 @@ def _check_cam_03(samples: dict) -> dict:
 def _check_cam_04(samples: dict) -> dict:
     fixtures = (samples.get("fixtures_paths") or {}).get("paths") or {}
     for dump in ("path_catmull_scripted", "path_linear_hud"):
+        if (samples.get("path_bad_columns") or {}).get(dump):
+            return _chk("CAM-04", "missing", "bad_columns")
         rows = samples.get("paths", {}).get(dump) or []
         fpath = fixtures.get(PATH_FIXTURE[dump])
         if not rows or not isinstance(fpath, dict):
@@ -1161,16 +1373,16 @@ def _check_cam_04(samples: dict) -> dict:
         if not keys:
             return _chk("CAM-04", "missing", f"no_{dump}_keys")
         last = rows[-1]
-        first = rows[0]
         key_last = keys[-1]
-        key_first = keys[0]
+        anchor_y = _anchor_y(samples)
+        if anchor_y is None:
+            return _chk("CAM-04", "missing", "no_anchor_y")
         try:
             dtsum = float(last["dtsum_ms"])
             dx = float(last["eng_x_m"]) - float(key_last["pos_x_m"])
             dz = float(last["eng_z_m"]) - float(key_last["pos_z_m"])
-            dy = (
-                float(last["eng_y_m"]) - float(first["eng_y_m"])
-                - (float(key_last["pos_y_rel_m"]) - float(key_first["pos_y_rel_m"]))
+            dy = float(last["eng_y_m"]) - (
+                anchor_y + float(key_last["pos_y_rel_m"]) - float(keys[0]["pos_y_rel_m"])
             )
             fov = float(last["fov_rad"])
             fov_key = float(key_last["fov_rad"])
@@ -1280,6 +1492,8 @@ def _engine_keyed_dof(rows: list, keys: list[dict]) -> bool:
 
 
 def _check_cam_05(samples: dict) -> dict:
+    if (samples.get("path_bad_columns") or {}).get("path_catmull_scripted"):
+        return _chk("CAM-05", "missing", "bad_columns")
     rows = samples.get("paths", {}).get("path_catmull_scripted") or []
     fixtures = (samples.get("fixtures_paths") or {}).get("paths") or {}
     fpath = fixtures.get("short_arc_6s")
@@ -1330,6 +1544,10 @@ def _check_cam_05(samples: dict) -> dict:
     except (KeyError, TypeError, ValueError):
         return _chk("CAM-05", "missing", "bad_columns")
 
+    # N6: sin un ensayo optico nativo independiente, la capacidad queda
+    # desconocida (null) y el modo sigue en scripted. La comparativa es un
+    # informe: se escribe si se puede, pero CAM-05 no se comprueba a si
+    # mismo releyendo el fichero que acaba de escribir.
     engine_rows = samples.get("paths", {}).get("path_engine_interp") or []
     scripted_stats = _path_stats(rows, keys, fpath.get("pos_mode", "linear"))
     engine_stats = _path_stats(engine_rows, keys, "linear")
@@ -1338,46 +1556,21 @@ def _check_cam_05(samples: dict) -> dict:
     if engine_stats is None:
         return _chk("CAM-05", "missing", "no_path_engine_interp")
     engine_ok = _engine_b2_b(engine_rows, keys)
-    engine_dof = _engine_keyed_dof(engine_rows, keys)
-    selected_mode = (
-        "engine_interp"
-        if (
-            engine_ok
-            and engine_dof
-            and engine_stats["max_pos_err_m"] < scripted_stats["max_pos_err_m"]
-            and engine_stats["max_over_median_step"]
-            < scripted_stats["max_over_median_step"]
-        )
-        else "scripted"
-    )
     comparison = {
         "engine_max_over_median_step": engine_stats["max_over_median_step"],
         "engine_max_pos_err_m": engine_stats["max_pos_err_m"],
         "engine_passes_b2_b": bool(engine_ok),
-        "engine_supports_keyed_dof_b": bool(engine_dof),
+        "engine_supports_keyed_dof_b": None,
         "scripted_max_over_median_step": scripted_stats["max_over_median_step"],
         "scripted_max_pos_err_m": scripted_stats["max_pos_err_m"],
-        "selected_mode": selected_mode,
+        "selected_mode": "scripted",
     }
-    out = Path(samples["part_dir"]) / "samples" / "interp_comparison.json"
+    samples["_interp_comparison"] = comparison
     try:
+        out = Path(samples["part_dir"]) / "samples" / "interp_comparison.json"
         gate_core.write_json(out, comparison)
-        written = gate_core.read_json(out)
     except (OSError, ValueError):
-        return _chk("CAM-05", "missing", "interp_comparison_write")
-    required = (
-        "scripted_max_pos_err_m",
-        "engine_max_pos_err_m",
-        "scripted_max_over_median_step",
-        "engine_max_over_median_step",
-        "engine_passes_b2_b",
-        "engine_supports_keyed_dof_b",
-        "selected_mode",
-    )
-    if any(key not in written for key in required):
-        return _chk("CAM-05", "fail", "interp_comparison_incomplete")
-    if written.get("selected_mode") != selected_mode:
-        return _chk("CAM-05", "fail", "interp_comparison_mode_mismatch")
+        pass
     return _chk("CAM-05", "pass", "ok")
 
 
@@ -1436,6 +1629,10 @@ def _check_cam_06(samples: dict) -> dict:
             return _chk("CAM-06", "fail", f"neg_{j}_calls_changed")
         if not pose_cells_equal(pre_nk, post_nk):
             return _chk("CAM-06", "fail", f"neg_{j}_pose_effect")
+        if _capture_event(samples, "dof_before_reject.bmp") is None:
+            missing.append("no_capture_event:dof_before_reject.bmp")
+        if _capture_event(samples, f"dof_after_reject_{j}.bmp") is None:
+            missing.append(f"no_capture_event:dof_after_reject_{j}.bmp")
         gray_before = _capture_ready(samples, "dof_before_reject.bmp", rois, missing)
         gray_after = _capture_ready(samples, f"dof_after_reject_{j}.bmp", rois, missing)
         if gray_before is not None and gray_after is not None:
@@ -1553,9 +1750,7 @@ def _check_cam_07(samples: dict) -> dict:
     if gray_near is not None and gray_far is not None:
         if mad(gray_near, gray_far, roi_bg) < 0.5:
             return _chk("CAM-07", "fail", "far50m_no_optical_change")
-    if gray_noblur is not None and gray_far is not None and vn is not None:
-        if var_lap(gray_far, roi_bg) / vn <= 0.70:
-            return _chk("CAM-07", "fail", "bg_still_blurred_far50m")
+    # N5/D2: el ratio del fondo a 50 m es solo una metrica informativa.
 
     reset = _static_reset_fields(samples, "SCAM-S4")
     if reset is None:
@@ -1592,13 +1787,39 @@ def _phase_event_map(samples: dict, path: str) -> dict:
     return out
 
 
-def _phase_mid(event: dict):
-    try:
-        pre = float(event["pre_dtsum_ms"])
-        post = float(event["post_dtsum_ms"])
-    except (KeyError, TypeError, ValueError):
+def _phase_mid(samples: dict, event: dict):
+    """La fase sale de las lecturas de estado crudas nombradas en
+    pre_step/post_step (cam_dtsum_ms), no de las etiquetas del runner."""
+    scenario = samples.get("scenario") or []
+    pre_row = _state(scenario, "SCAM-S4", str(event.get("pre_step") or ""))
+    post_row = _state(scenario, "SCAM-S4", str(event.get("post_step") or ""))
+    if pre_row is None or post_row is None:
         return None
+    pre = _num(pre_row, "cam_dtsum_ms")
+    post = _num(post_row, "cam_dtsum_ms")
+    if pre is None or post is None:
+        return None
+    # Una etiqueta que discrepa de su lectura da missing, no credito.
+    for key, raw in (("pre_dtsum_ms", pre), ("post_dtsum_ms", post)):
+        if event.get(key) is not None:
+            try:
+                if abs(float(event[key]) - raw) > 1.0:
+                    return None
+            except (TypeError, ValueError):
+                return None
     return pre, post, (pre + post) / 2.0
+
+
+def _capture_hashes(samples: dict) -> dict:
+    import hashlib
+
+    out = {}
+    for name, path in (samples.get("captures") or {}).items():
+        try:
+            out[name] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        except OSError:
+            continue
+    return out
 
 
 def _check_cam_08(samples: dict) -> dict:
@@ -1690,8 +1911,7 @@ def _check_cam_08(samples: dict) -> dict:
         bg_ratio = ratio("var_t3", "fix_t3", roi_bg)
         if bg_ratio is None:
             missing.append("texture:t3")
-        elif bg_ratio <= 0.70:
-            return _chk("CAM-08", "fail", "bg_still_blurred_t3")
+        # N5/D2: sin umbral > 0,70 en el gate; queda como metrica.
     if gray["var_t3"] is not None and gray["var_t1"] is not None:
         if mad(gray["var_t3"], gray["var_t1"], roi_bg) < 0.5:
             return _chk("CAM-08", "fail", "t3_no_optical_change")
@@ -1709,6 +1929,52 @@ def _check_cam_08(samples: dict) -> dict:
     elif reset[0] != 0.0 or reset[1] != 0.0:
         return _chk("CAM-08", "fail", "reset_focus_not_zero")
 
+    # Cobertura y continuidad de los dos trabajos, variable y control.
+    fix_rows = samples.get("paths", {}).get("path_dof_fix") or []
+    if (samples.get("path_bad_columns") or {}).get("path_dof_fix"):
+        missing.append("bad_columns_fix")
+    if len(fix_rows) < 180:
+        missing.append("no_path_dof_fix_coverage")
+    else:
+        for i, row in enumerate(fix_rows):
+            try:
+                if abs(float(row["seq_n"]) - i) > 1e-6:
+                    return _chk("CAM-08", "fail", "fix_seq")
+                if i and abs(float(row["frame"]) - float(fix_rows[i - 1]["frame"]) - 1.0) > 1e-6:
+                    return _chk("CAM-08", "fail", "fix_frame")
+                if abs(float(row["sent_focus_dist_m"]) - 50.0) >= 0.25:
+                    return _chk("CAM-08", "fail", f"fix_dist_row_{i}")
+                if abs(float(row["sent_focus_blur"]) - 0.0) >= 0.02:
+                    return _chk("CAM-08", "fail", f"fix_blur_row_{i}")
+            except (KeyError, TypeError, ValueError):
+                missing.append("bad_columns_fix")
+                break
+    if rows and len(rows) < 180:
+        missing.append("no_path_dof_var_coverage")
+    # Cada captura de fase se enlaza con su evento y su horquilla.
+    hashes = _capture_hashes(samples)
+    phase_files = [f"{p}_t{k}.bmp" for p in ("var", "fix") for k in (1, 2, 3, 4)]
+    for name in phase_files:
+        if _capture_event(samples, name) is None:
+            missing.append(f"no_capture_event:{name}")
+    seen_hash = {}
+    for name in phase_files:
+        h = hashes.get(name)
+        if h is None:
+            continue
+        if h in seen_hash:
+            missing.append(f"capture_reused:{name}")
+        seen_hash[h] = name
+    if hashes.get("var_t1.bmp") in (hashes.get("dof_ctrl_near2m.bmp"),) and hashes.get("var_t1.bmp"):
+        missing.append("capture_reused:var_t1.bmp")
+    if hashes.get("var_t3.bmp") in (hashes.get("dof_ctrl_far50m.bmp"),) and hashes.get("var_t3.bmp"):
+        missing.append("capture_reused:var_t3.bmp")
+    fix_reset = _path_reset_fields(samples, "SCAM-S4", "fix")
+    if fix_reset is None:
+        missing.append("no_fix_reset_state")
+    elif fix_reset[0] != 0.0 or fix_reset[1] != 0.0:
+        return _chk("CAM-08", "fail", "fix_reset_focus_not_zero")
+
     windows = rois.get("phase_windows_ms") or {}
     span_max = float(rois.get("max_bracket_span_ms", 150.0))
     skew_max = float(rois.get("max_pair_skew_ms", 150.0))
@@ -1720,8 +1986,8 @@ def _check_cam_08(samples: dict) -> dict:
         if var_event is None or fix_event is None:
             missing.append("capture_phase_unaccredited")
             continue
-        var_mid = _phase_mid(var_event)
-        fix_mid = _phase_mid(fix_event)
+        var_mid = _phase_mid(samples, var_event)
+        fix_mid = _phase_mid(samples, fix_event)
         if var_mid is None or fix_mid is None:
             missing.append("capture_phase_unaccredited")
             continue
@@ -1843,8 +2109,12 @@ def _check_cam_09(samples: dict) -> dict:
     if cap_event is not None and not _capture_window_ok(cap_event, rois):
         missing.append("window:hud_during")
 
+    # N3: la pose efectiva es la fila del recorrido del frame de la
+    # captura (mecanismo explicito), no un promedio. Se admite la
+    # latencia normal: la horquilla puede separarse 4 frames. La
+    # horquilla se coteja con el recorrido (ancla); si no casa, missing.
     p_cap = None
-    if pre_cap is None or post_cap is None:
+    if pre_cap is None or post_cap is None or cap_event is None:
         missing.append("no_capture_bracket")
     else:
         if (
@@ -1860,16 +2130,50 @@ def _check_cam_09(samples: dict) -> dict:
             mid_dt = (pre_dt + post_dt) / 2.0
             if mid_dt < 1850.0 or mid_dt > 2150.0:
                 missing.append("capture_window")
-        p_cap = _avg_pose(pre_cap, post_cap)
-        if p_cap is None:
-            missing.append("bad_capture_pose")
-        try:
-            if _dist(_row_pos(_nk(post_cap)), _row_pos(_nk(pre_cap))) > 0.05:
-                missing.append("capture_moved")
-            if _theta3d_cells(_nk(post_cap), _nk(pre_cap)) > 0.2:
-                missing.append("capture_rotated")
-        except (KeyError, TypeError, ValueError):
-            missing.append("bad_capture_pose")
+        cap_frame = cap_event.get("frame")
+        eff_row = None
+        by_frame = {}
+        for row in rows:
+            try:
+                by_frame[float(row["frame"])] = row
+            except (KeyError, TypeError, ValueError):
+                continue
+        for state_row, label in ((pre_cap, "pre"), (post_cap, "post")):
+            frame_v = _num(state_row, "frame")
+            path_row = by_frame.get(frame_v) if frame_v is not None else None
+            if path_row is None:
+                missing.append(f"capture_{label}_not_anchored")
+                continue
+            try:
+                if _dist(_row_pos(_nk(state_row)), _row_pos(path_row)) > 0.05:
+                    missing.append(f"capture_{label}_not_anchored")
+                if _theta3d_cells(_nk(state_row), path_row) > 0.5:
+                    missing.append(f"capture_{label}_not_anchored")
+            except (KeyError, TypeError, ValueError):
+                missing.append(f"capture_{label}_not_anchored")
+        if cap_frame is not None:
+            try:
+                eff_row = by_frame.get(float(cap_frame))
+            except (TypeError, ValueError):
+                eff_row = None
+        if eff_row is None:
+            missing.append("capture_frame_not_anchored")
+        else:
+            p_cap = {k: float(eff_row[k]) for k in POSE_SCALARS}
+        # Capturas sin evento o reutilizadas entre pasos: nunca PASA.
+        for name in ("hud_during.bmp", "hud_clean_ref.bmp",
+                     "hud_clean_ref_repeat.bmp", "hud_visible_ref.bmp"):
+            if _capture_event(samples, name) is None:
+                missing.append(f"no_capture_event:{name}")
+        hashes = _capture_hashes(samples)
+        seen_h = {}
+        for name in ("hud_during.bmp", "hud_clean_ref.bmp",
+                     "hud_clean_ref_repeat.bmp", "hud_visible_ref.bmp"):
+            h = hashes.get(name)
+            if h is not None:
+                if h in seen_h:
+                    missing.append(f"capture_reused:{name}")
+                seen_h[h] = name
 
     clean_ref = _find_state(
         scenario, phase, "clean_ref_state", "clean_ref", "ref_state", "post_clean_ref"
@@ -1945,6 +2249,8 @@ def _check_cam_09(samples: dict) -> dict:
         and gray_visible is not None
         and gray_clean is not None
     ):
+        if mad(gray_visible, gray_clean, roi_full) >= 10.0:
+            return _chk("CAM-09", "fail", "hud_visible_other_scene")
         if mad(gray_during, gray_visible, roi_qb) < 4.0:
             return _chk("CAM-09", "fail", "quickbar_not_detected")
         if mad(gray_during, gray_clean, roi_full) >= 2.0:
@@ -1955,6 +2261,12 @@ def _check_cam_09(samples: dict) -> dict:
     post_hud = _find_state(
         scenario, phase, "post_path_hud", "post_path", "post_hud", "post_job_hud"
     )
+    # N7: la restauracion se compara con la observacion inicial
+    # congelada antes de ocultar; saved_aux solo es adicional.
+    preset = _state(scenario, phase, "hud_preset")
+    initial_aux = _num(preset, "aux_vis_mask") if preset is not None else None
+    if preset is None:
+        missing.append("no_initial_aux_observation")
     if post_hud is None:
         missing.append("no_post_path_hud")
     else:
@@ -1967,8 +2279,49 @@ def _check_cam_09(samples: dict) -> dict:
         else:
             if fm != 258.0 or sfm != 258.0:
                 return _chk("CAM-09", "fail", "flags_not_restored")
-            if av != sav or sav <= 0.0:
+            if initial_aux is not None and av != initial_aux:
                 return _chk("CAM-09", "fail", "aux_not_restored")
+            if av != sav:
+                return _chk("CAM-09", "fail", "aux_saved_mismatch")
+
+    # Deteccion de overlays calculada sobre el arbol crudo (brief:169):
+    # identidad de cada nodo, relaciones y visibilidad; no ovl_vis_b.
+    def tree_overlay(step_name: str):
+        tree = None
+        for row in scenario:
+            if row.get("ev") == "hud_tree" and row.get("step") == step_name:
+                tree = row
+                break
+        if tree is None:
+            return None
+        baseline = {str(v) for v in tree.get("baseline_ids") or []}
+        nodes = tree.get("nodes") or []
+        by_id = {str(n.get("id")): n for n in nodes if isinstance(n, dict)}
+        for node in nodes:
+            if not isinstance(node, dict) or not node.get("hierarchy"):
+                continue
+            nid = str(node.get("id"))
+            parent = node.get("parent")
+            if parent is not None and str(parent) not in by_id:
+                return None
+            if nid not in baseline:
+                return 1.0
+            if node.get("baseline") and not node.get("visible"):
+                pass
+            elif node.get("baseline") and node.get("visible") and nid in (
+                "crosshair", "stamina_bg",
+            ):
+                return 1.0
+        return 0.0
+
+    if tree_overlay("tree_pre_cap") is None:
+        missing.append("no_widget_tree")
+    elif tree_overlay("tree_pre_cap") != 0.0:
+        return _chk("CAM-09", "fail", "overlay_in_tree_pre_cap")
+    if tree_overlay("tree_control_ovl") is None:
+        missing.append("no_widget_tree_control")
+    elif tree_overlay("tree_control_ovl") != 1.0:
+        return _chk("CAM-09", "fail", "control_ovl_not_detected")
 
     controls = {}
     for row in scenario:
@@ -2056,16 +2409,28 @@ def _check_cam_10(samples: dict) -> dict:
     if missing:
         return _chk("CAM-10", "missing", missing[0])
 
+    # Rafagas completas: cada pulso con dx_px y seq; el signo se exige
+    # en todos los pulsos, y el acuse del peer cubre cada seq usado.
+    for burst, sign in (("A", 1.0), ("B", -1.0)):
+        for _issued, row in pulses[burst]:
+            if row.get("kind") != "mouse_move" or row.get("dx_px") is None or row.get("seq_n") is None:
+                return _chk("CAM-10", "missing", f"burst_{burst.lower()}_incomplete")
+            try:
+                if float(row["dx_px"]) * sign <= 0.0:
+                    return _chk("CAM-10", "fail", f"burst_{burst.lower()}_sign")
+            except (TypeError, ValueError):
+                return _chk("CAM-10", "missing", f"burst_{burst.lower()}_incomplete")
+    post_stop_ack = _find_state(scenario, phase, "post_stop_state")
+    ack_seq = _num(post_stop_ack, "input_ack_seq_n") if post_stop_ack is not None else None
+    if ack_seq is None:
+        missing.append("no_input_ack")
+    elif ack_seq <= 0.0:
+        # Sin consumo acreditado por el peer, los giros no se atribuyen.
+        return _chk("CAM-10", "fail", "input_not_acked")
+    if missing:
+        return _chk("CAM-10", "missing", missing[0])
     pulse_a_h = min((issued for issued, _ in pulses["A"]), default=None)
     pulse_b_h = min((issued for issued, _ in pulses["B"]), default=None)
-    if pulse_a_h is not None:
-        dx_a = [float(row.get("dx_px")) for _, row in pulses["A"] if row.get("dx_px") is not None]
-        if dx_a and not any(v > 0.0 for v in dx_a):
-            return _chk("CAM-10", "fail", "burst_a_sign")
-    if pulse_b_h is not None:
-        dx_b = [float(row.get("dx_px")) for _, row in pulses["B"] if row.get("dx_px") is not None]
-        if dx_b and not any(v < 0.0 for v in dx_b):
-            return _chk("CAM-10", "fail", "burst_b_sign")
 
     rec = []
     for i, row in enumerate(rows):
@@ -2077,17 +2442,23 @@ def _check_cam_10(samples: dict) -> dict:
         try:
             prev = float(rows[i - 1]["frame"])
             cur = float(rows[i]["frame"])
+            dtick = float(rows[i]["tick_ms"]) - float(rows[i - 1]["tick_ms"])
+            ddtsum = float(rows[i]["dtsum_ms"]) - float(rows[i - 1]["dtsum_ms"])
         except (KeyError, TypeError, ValueError):
             return _chk("CAM-10", "missing", "bad_frame_column")
         if abs(cur - prev - 1.0) > 1e-6:
             return _chk("CAM-10", "fail", f"frame_not_contiguous_{i}")
+        if dtick <= 0.0:
+            return _chk("CAM-10", "missing", "tick_not_increasing")
+        if abs(dtick - ddtsum) > 2.0:
+            return _chk("CAM-10", "missing", "tick_dtsum_mismatch")
 
     if t0 is None or pulse_a_h is None or pulse_b_h is None or u is None:
-        if missing:
-            return _chk("CAM-10", "missing", missing[0])
         return _chk("CAM-10", "missing", "no_stop_timing")
-    ack = float(stop["stop_ack_h_ms"])
-    pulse_a_min = t0 + (pulse_a_h - ack)
+    try:
+        ack = float(stop.get("stop_ack_h_ms"))
+    except (TypeError, ValueError):
+        return _chk("CAM-10", "missing", "no_stop_ack")
     pulse_b_min = t0 + (pulse_b_h - ack)
 
     def handoff(item):
@@ -2097,17 +2468,25 @@ def _check_cam_10(samples: dict) -> dict:
             and _angle_between(item["eng_dir"], item["pl_dir"]) < 0.2
         )
 
+    # N2: el handoff puede caer en cualquier instante antes de la cota
+    # de 1 s; no se exige antes del primer pulso.
     r0 = None
     for idx, item in enumerate(rec):
-        if t0 <= item["tick_ms"] < pulse_a_min and handoff(item):
+        if item["tick_ms"] >= t0 and handoff(item):
             r0 = idx
             break
     if r0 is None:
         return _chk("CAM-10", "fail", "no_handoff_row")
-
+    handoff_h = ack + (rec[r0]["tick_ms"] - t0)
+    # Estimulos identificables durante la ventana de recuperacion: al
+    # menos un pulso A emitido tras el handoff observado.
+    a_after = [issued for issued, _ in pulses["A"] if issued >= handoff_h]
+    if not a_after:
+        return _chk("CAM-10", "missing", "no_stimulus_after_handoff")
+    pulse_a_min = t0 + (min(a_after) - ack)
     pre_a = [idx for idx, item in enumerate(rec) if r0 <= idx and item["tick_ms"] < pulse_a_min]
     if not pre_a:
-        return _chk("CAM-10", "fail", "no_pre_pulse_window")
+        pre_a = [r0]
     psi0 = math.degrees(
         math.atan2(rec[r0]["pl_dir"][0], rec[r0]["pl_dir"][2])
     )
@@ -2174,32 +2553,77 @@ def _check_cam_10(samples: dict) -> dict:
         else:
             if fm != 258.0 or sfm != 258.0:
                 return _chk("CAM-10", "fail", "flags_not_restored")
-            if av != sav:
+            preset5 = _state(scenario, phase, "hud_preset")
+            initial_aux = _num(preset5, "aux_vis_mask") if preset5 is not None else None
+            if initial_aux is not None and av != initial_aux:
                 return _chk("CAM-10", "fail", "aux_not_restored")
+            if av != sav:
+                return _chk("CAM-10", "fail", "aux_saved_mismatch")
 
     if missing:
         return _chk("CAM-10", "missing", missing[0])
     return _chk("CAM-10", "pass", "ok")
 
 
+def _informative_metrics(samples: dict) -> dict:
+    """Metricas informativas fuera del gate (D2): ratios a 50 m y por fase."""
+    rois = samples.get("fixtures_rois") or {}
+    roi_bg = rois.get("roi_bg_50m")
+    metrics = {}
+    if roi_bg is None:
+        return metrics
+    noblur = _capture_gray(samples, "dof_ctrl_noblur.bmp")
+    far = _capture_gray(samples, "dof_ctrl_far50m.bmp")
+    if noblur is not None and far is not None:
+        denom = var_lap(noblur, roi_bg)
+        if denom > 0.0:
+            metrics["far50m_bg_ratio"] = var_lap(far, roi_bg) / denom
+    for k in (1, 2, 3, 4):
+        var_g = _capture_gray(samples, f"var_t{k}.bmp")
+        fix_g = _capture_gray(samples, f"fix_t{k}.bmp")
+        if var_g is not None and fix_g is not None:
+            denom = var_lap(fix_g, roi_bg)
+            if denom > 0.0:
+                metrics[f"phase_t{k}_bg_ratio"] = var_lap(var_g, roi_bg) / denom
+    comp = samples.get("_interp_comparison")
+    if isinstance(comp, dict):
+        metrics["interp_comparison"] = comp
+    return metrics
+
+
 def evaluate(part_dir) -> dict:
     samples = _load_samples(part_dir)
-    checks = [
-        _check_cam_01(samples),
-        _check_cam_02(samples),
-        _check_cam_03(samples),
-        _check_cam_04(samples),
-        _check_cam_05(samples),
-        _check_cam_06(samples),
-        _check_cam_07(samples),
-        _check_cam_08(samples),
-        _check_cam_09(samples),
-        _check_cam_10(samples),
-    ]
+    fns = (
+        _check_cam_01, _check_cam_02, _check_cam_03, _check_cam_04,
+        _check_cam_05, _check_cam_06, _check_cam_07, _check_cam_08,
+        _check_cam_09, _check_cam_10,
+    )
+    checks = []
+    for i, fn in enumerate(fns, start=1):
+        cid = f"CAM-{i:02d}"
+        try:
+            checks.append(fn(samples))
+        except Exception as exc:  # un campo ausente nunca es excepcion
+            checks.append(_chk(cid, "missing", f"internal:{type(exc).__name__}"))
+    prov = _provenance_problem(samples)
+    if prov is not None:
+        status, detail = prov
+        c01 = checks[0]
+        if c01["status"] == "pass":
+            checks[0] = _chk("CAM-01", status, detail)
+        elif c01["status"] == "missing" and status == "fail":
+            checks[0] = _chk("CAM-01", "fail", detail)
+    metrics = _informative_metrics(samples)
     failed = [c["id"] for c in checks if c["status"] == "fail"]
     if failed:
-        return gate_core.make_verdict(SPIKE_ID, 1, checks=checks, reasons=failed)
+        return gate_core.make_verdict(
+            SPIKE_ID, 1, checks=checks, metrics=metrics, reasons=failed
+        )
     missing = [c["id"] for c in checks if c["status"] != "pass"]
     if missing:
-        return gate_core.make_verdict(SPIKE_ID, 2, checks=checks, reasons=missing)
-    return gate_core.make_verdict(SPIKE_ID, 0, checks=checks, reasons=[])
+        return gate_core.make_verdict(
+            SPIKE_ID, 2, checks=checks, metrics=metrics, reasons=missing
+        )
+    return gate_core.make_verdict(
+        SPIKE_ID, 0, checks=checks, metrics=metrics, reasons=[]
+    )

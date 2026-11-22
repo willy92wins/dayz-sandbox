@@ -46,6 +46,9 @@ PATH_KEYS = (
     "set_focus_calls_n", "active_b", "elem_vis_mask", "flags_mask",
     "qb_vis_b", "menu_open_b", "ovl_vis_b",
 )
+# Enmienda 2026-11-18: 27 columnas + las 9 celdas crudas m00..m22 = 36.
+PATH_COLS_36 = PATH_KEYS + tuple(f"m{r}{c}" for r in range(3) for c in range(3))
+CLIENT_INST = "cd" * 16
 
 
 def _wrap180(angle):
@@ -382,6 +385,22 @@ def _write_jsonl(path, rows):
     path.write_text(text, encoding="utf-8")
 
 
+def _write_path_jsonl(path, dict_rows):
+    """Las filas del recorrido se escriben como listas de 36 columnas,
+    como las empaqueta la sonda; nunca dicts con claves de mas."""
+    _write_jsonl(path, [[row[c] for c in PATH_COLS_36] for row in dict_rows])
+
+
+def _read_path_dicts(path):
+    out = []
+    for row in _read_jsonl(path):
+        if isinstance(row, list):
+            out.append(dict(zip(PATH_COLS_36, row)))
+        else:
+            out.append(dict(row))
+    return out
+
+
 def _read_jsonl(path):
     p = Path(path)
     if not p.is_file():
@@ -511,6 +530,21 @@ def _capture(phase, step, file_name, pre_step, post_step):
     }
 
 
+def _hud_tree(phase, step, overlay=False):
+    """Arbol de widgets crudo: identidad, padre y visibilidad por nodo."""
+    nodes = [
+        {"id": "ws", "parent": None, "visible": True, "hierarchy": True, "baseline": True},
+        {"id": "hud_panel", "parent": "ws", "visible": True, "hierarchy": True, "baseline": True},
+        {"id": "crosshair", "parent": "hud_panel", "visible": False, "hierarchy": False, "baseline": True},
+        {"id": "stamina_bg", "parent": "hud_panel", "visible": False, "hierarchy": False, "baseline": True},
+    ]
+    if overlay:
+        nodes.append({"id": "test_overlay_20", "parent": "hud_panel",
+                      "visible": True, "hierarchy": True, "baseline": False})
+    return {"ev": "hud_tree", "phase": phase, "step": step, "nodes": nodes,
+            "baseline_ids": ["ws", "hud_panel", "crosshair", "stamina_bg"]}
+
+
 def _scenario():
     rows = []
 
@@ -524,7 +558,13 @@ def _scenario():
             "bridge_lines_delta": 0,
         }
     )
-    rows.append(_op("SCAM-S0", "fixture", "scam_fixture_setup", "done", nk={"player_in_veh_b": 0.0, "qb_items_n": 1.0}))
+    rows.append(_op("SCAM-S0", "fixture", "scam_fixture_setup", "done", nk={
+        "frame": float(FRAME_BASE), "tick_ms": TICK_BASE, "active_b": 1.0,
+        "anchor_x_m": 4500.0, "anchor_y_m": ANCHOR_Y, "anchor_z_m": 9800.0,
+        "subj_present_b": 1.0, "subj_dist_m": 2.0, "bg_present_b": 1.0,
+        "bg_dist_m": 50.0, "qb_items_n": 1.0, "player_in_veh_b": 0.0,
+        "fov_rad": 0.70,
+    }))
     rows.append(
         {
             "ev": "dof_config",
@@ -562,17 +602,32 @@ def _scenario():
     s_init = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, speed=4.0)
     s_a = _pose_nk(4500.0, ANCHOR_Y, 9802.0, 0.0, 0.0, 0.0, 0.70, speed=4.0, integrated=0.5, input_frames=30.0)
     s_b = _pose_nk(4500.0, ANCHOR_Y, 9806.0, 0.0, 0.0, 0.0, 0.70, speed=8.0, speed_steps=1.0, integrated=1.0, input_frames=60.0)
-    s_0 = _pose_nk(4500.0, ANCHOR_Y, 9806.0, 25.0, 15.0, 0.0, 0.70, speed=8.0, speed_steps=1.0, integrated=1.3, input_frames=90.0)
+    # P0 del protocolo: KC_RIGHT+KC_UP simultaneos 300 ms a igual velocidad
+    # dan 27/27 grados (simetrica); no una P0 inventada.
+    s_0 = _pose_nk(4500.0, ANCHOR_Y, 9806.0, 27.0, 27.0, 0.0, 0.70, speed=8.0, speed_steps=1.0, integrated=1.3, input_frames=90.0)
     moved = _pose_nk(4520.0, ANCHOR_Y, 9806.0, 60.0, 15.0, 0.0, 0.70, speed=8.0, speed_steps=1.0, integrated=1.6, input_frames=120.0)
     p_roll = _pose_nk(4500.0, ANCHOR_Y, 9806.0, 35.0, -12.0, 18.0, 0.85)
-    p0 = _pose_nk(4500.0, ANCHOR_Y, 9806.0, 25.0, 15.0, 0.0, 0.70)
+    p0 = _pose_nk(4500.0, ANCHOR_Y, 9806.0, 27.0, 27.0, 0.0, 0.70)
     rows.append(_state("SCAM-S1", "s_init", s_init))
     rows.append(_state("SCAM-S1", "s_a", s_a))
     rows.append(_state("SCAM-S1", "s_b", s_b))
     rows.append(_state("SCAM-S1", "s_0", s_0))
     rows.append(_state("SCAM-S1", "moved", moved))
+    # Lecturas de scam_pose_save: la referencia de la reaplicacion (brief:105).
+    rows.append(_op("SCAM-S1", "save_p0", "scam_pose_save", "done", nk=dict(s_0), sk={"name": "P0", "saved_names_csv": "P0,P_roll"}))
+    rows.append(_op("SCAM-S1", "save_p_roll", "scam_pose_save", "done", nk=dict(p_roll), sk={"name": "P_roll", "saved_names_csv": "P0,P_roll"}))
     rows.append(_state("SCAM-S1", "p_roll_applied", p_roll))
     rows.append(_state("SCAM-S1", "p0_applied", p0))
+    # N8: negativa sin cliente, provocada y con invariancia observada.
+    nc_pre = _pose_nk(4500.0, ANCHOR_Y, 9806.0, 27.0, 27.0, 0.0, 0.70, saved_count=2.0)
+    rows.append(_state("SCAM-S1", "pre_nc", nc_pre, {"saved_names_csv": "P0,P_roll", "cam_job_state": ""}))
+    for step, verb in (
+        ("no_client_free", "scam_free_op"), ("no_client_pose", "scam_pose_apply"),
+        ("no_client_hud", "scam_hud_op"), ("no_client_dof", "scam_dof_set"),
+        ("no_client_path", "scam_path_start"), ("no_client_sample", "scam_sample_start"),
+    ):
+        rows.append(_op("SCAM-S1", step, verb, "rejected", "client_not_in_game"))
+    rows.append(_state("SCAM-S1", "post_nc", nc_pre, {"saved_names_csv": "P0,P_roll", "cam_job_state": ""}))
 
     for step in ("neg_1", "neg_2", "neg_3", "neg_4", "neg_5", "neg_6"):
         idx = step.split("_")[1]
@@ -581,28 +636,48 @@ def _scenario():
         rows.append(_op("SCAM-S2", step, "scam_path_start", "rejected", "bad_args"))
         rows.append(_state("SCAM-S2", f"post_{idx}", nk, {"saved_names_csv": "P0,P_roll", "cam_job_state": ""}))
 
+    rows.append(_op("SCAM-S2", "path_1_start", "scam_path_start", "done", sk={"job": "job-1"}))
     busy_nk = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, cam_dtsum=900.0)
     rows.append(_state("SCAM-S2", "busy_pre", busy_nk, {"cam_job_id": "job-1", "cam_job_state": "running"}))
     rows.append(_op("SCAM-S2", "busy_attempt", "scam_path_start", "rejected", "busy"))
     rows.append(_state("SCAM-S2", "busy_post", busy_nk, {"cam_job_id": "job-1", "cam_job_state": "running"}))
 
-    pre_cap = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, cam_dtsum=2000.0, aux=0.0)
-    post_cap = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, cam_dtsum=2010.0, aux=0.0)
-    rows.append(_state("SCAM-S3", "pre_cap", pre_cap, {"cam_job_state": "running"}))
-    rows.append(_state("SCAM-S3", "post_cap", post_cap, {"cam_job_state": "running"}))
-    rows.append(_capture("SCAM-S3", "hud_during", "hud_during.bmp", "pre_cap", "post_cap"))
-    clean_ref = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, cam_dtsum=2010.0, aux=0.0)
+    # Horquilla honesta: dos filas reales del recorrido a 4 frames.
+    hud_rows = _path_rows("linear_hud_6s", "linear", "ypr", "linear_hud", PATH_DURATION_MS)
+    def _nk_from_path(row):
+        return _pose_nk(row["x_m"], row["y_m"], row["z_m"], row["yaw_deg"],
+                        row["pitch_deg"], row["roll_deg"], row["fov_rad"],
+                        cam_dtsum=row["dtsum_ms"], frame=int(row["frame"]),
+                        tick=row["tick_ms"], aux=0.0)
+    pre_cap = _nk_from_path(hud_rows[120])
+    post_cap = _nk_from_path(hud_rows[124])
+    cap_row = hud_rows[122]
+    rows.append(_state("SCAM-S3", "hud_preset", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, flags=258.0, saved_flags=258.0, aux=34.0, saved_aux=34.0), {"cam_job_state": ""}))
+    rows.append(_op("SCAM-S3", "path_hud_start", "scam_path_start", "done", sk={"job": "job-hud"}))
+    rows.append(_state("SCAM-S3", "pre_cap", pre_cap, {"cam_job_state": "running", "cam_job_id": "job-hud"}))
+    rows.append(_state("SCAM-S3", "post_cap", post_cap, {"cam_job_state": "running", "cam_job_id": "job-hud"}))
+    cap_ev = _capture("SCAM-S3", "hud_during", "hud_during.bmp", "pre_cap", "post_cap")
+    cap_ev["frame"] = float(cap_row["frame"])
+    rows.append(cap_ev)
+    clean_ref = _nk_from_path(cap_row)
     rows.append(_state("SCAM-S3", "clean_ref_state", clean_ref, {"cam_job_state": ""}))
-    post_path_hud = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, flags=258.0, saved_flags=258.0, aux=1.0, saved_aux=1.0)
+    rows.append(_capture("SCAM-S3", "hud_clean_ref", "hud_clean_ref.bmp", "clean_ref_state", "clean_ref_state"))
+    rows.append(_capture("SCAM-S3", "hud_clean_repeat", "hud_clean_ref_repeat.bmp", "clean_ref_state", "clean_ref_state"))
+    rows.append(_capture("SCAM-S3", "hud_visible_ref", "hud_visible_ref.bmp", "clean_ref_state", "clean_ref_state"))
+    rows.append(_hud_tree("SCAM-S3", "tree_pre_cap", overlay=False))
+    rows.append(_hud_tree("SCAM-S3", "tree_control_ovl", overlay=True))
+    post_path_hud = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, flags=258.0, saved_flags=258.0, aux=34.0, saved_aux=34.0)
     rows.append(_state("SCAM-S3", "post_path_hud", post_path_hud, {"cam_job_state": ""}))
     rows.append({"ev": "hud_control", "phase": "SCAM-S3", "step": "control_qb", "op_code": 4, "mode": 1, "read_nk": {"qb_vis_b": 1.0}})
     rows.append({"ev": "hud_control", "phase": "SCAM-S3", "step": "control_ovl", "op_code": 4, "mode": 2, "read_nk": {"ovl_vis_b": 1.0}})
 
+    rows.append(_capture("SCAM-S4", "dof_before", "dof_before_reject.bmp", "pre_1", "pre_1"))
     for j in range(1, 5):
         nk = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, enable=1.0, sent_dist=3.5, sent_blur=0.6, calls=5.0)
         rows.append(_state("SCAM-S4", f"pre_{j}", nk))
         rows.append(_op("SCAM-S4", f"neg_{j}", "scam_dof_set", "rejected", "bad_args"))
         rows.append(_state("SCAM-S4", f"post_{j}", nk))
+        rows.append(_capture("SCAM-S4", f"dof_after_{j}", f"dof_after_reject_{j}.bmp", f"post_{j}", f"post_{j}"))
 
     for name in ("noblur", "near2m", "far50m"):
         nk = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70)
@@ -617,6 +692,7 @@ def _scenario():
                 f"ctrl_{name}_post",
             )
         )
+    rows.append(_capture("SCAM-S4", "ctrl_noblur_repeat", "dof_ctrl_noblur_repeat.bmp", "ctrl_noblur_pre", "ctrl_noblur_post"))
     rows.append(_state("SCAM-S4", "post_reset", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70)))
 
     phases = {
@@ -627,6 +703,12 @@ def _scenario():
     }
     for path in ("dof_var_6s", "dof_fixed_6s"):
         for k, (pre, post) in phases.items():
+            for suffix, dtsum in (("pre", pre), ("post", post)):
+                nk = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70,
+                              cam_dtsum=dtsum, frame=FRAME_BASE + int(dtsum / 16.667))
+                rows.append(_state("SCAM-S4", f"{path}_t{k}_{suffix}", nk,
+                                   {"cam_job_state": "running",
+                                    "cam_job_id": "job-var" if path == "dof_var_6s" else "job-fix"}))
             rows.append(
                 {
                     "ev": "phase",
@@ -640,7 +722,11 @@ def _scenario():
                     "post_dtsum_ms": post,
                 }
             )
-    rows.append(_state("SCAM-S4", "post_dof_var", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70)))
+            prefix = "var" if path == "dof_var_6s" else "fix"
+            rows.append(_capture("SCAM-S4", f"{prefix}_t{k}", f"{prefix}_t{k}.bmp",
+                                 f"{path}_t{k}_pre", f"{path}_t{k}_post"))
+    rows.append(_state("SCAM-S4", "post_dof_var", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, frame=FRAME_BASE + 400), {"cam_job_state": ""}))
+    rows.append(_state("SCAM-S4", "post_dof_fix", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, frame=FRAME_BASE + 401), {"cam_job_state": ""}))
 
     rows.append(
         {
@@ -659,7 +745,8 @@ def _scenario():
         rows.append({"ev": "pulse", "phase": "SCAM-S5", "step": f"a{i}", "burst": "A", "seq_n": i, "dx_px": 40.0, "issued_h_ms": 650.0 + 40.0 * i, "kind": "mouse_move"})
     for i in range(5):
         rows.append({"ev": "pulse", "phase": "SCAM-S5", "step": f"b{i}", "burst": "B", "seq_n": 10 + i, "dx_px": -40.0, "issued_h_ms": 890.0 + 40.0 * i, "kind": "mouse_move"})
-    post_stop = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, flags=258.0, saved_flags=258.0, aux=1.0, saved_aux=1.0)
+    rows.append(_state("SCAM-S5", "hud_preset", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, flags=258.0, saved_flags=258.0, aux=34.0, saved_aux=34.0), {"cam_job_state": ""}))
+    post_stop = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, flags=258.0, saved_flags=258.0, aux=34.0, saved_aux=34.0, input_ack=14.0)
     rows.append(_state("SCAM-S5", "post_stop_state", post_stop))
 
     return rows
@@ -708,18 +795,13 @@ def _control_recovery():
 
 
 def _slow_stop_recovery():
-    """Control recuperado 1500 ms tarde (qa_fault cam_slow_stop): los pulsos A/B llegan
-    durante el bloqueo y solo se aplican tras PlayerControlEnable(true)."""
+    """brief:127: durante el retardo de cam_slow_stop los pulsos se
+    ignoran; llegan en la ventana y nunca producen giro."""
     rows = []
     tick = 1000.0
     frame = 5000.0
     while tick <= 2600.0:
-        if tick < 2450.0:
-            psi = 0.0
-        elif tick < 2550.0:
-            psi = 5.0
-        else:
-            psi = -2.0
+        psi = 0.0
         dx = math.sin(math.radians(psi))
         dz = math.cos(math.radians(psi))
         rows.append(
@@ -833,20 +915,69 @@ def _write_images(samples):
         "hud_clean_ref_repeat.bmp": hud,
         "hud_visible_ref.bmp": hud_visible,
     }
-    for name, img in files.items():
-        _write_bmp(samples / name, img)
+    # Cada BMP sale de su propia pose y evento: ningun contenido se
+    # reutiliza; una marca de pocos pixeles distingue cada captura sin
+    # mover las metricas (MAD entre pares emparejados sigue < 1).
+    for idx, (name, img) in enumerate(sorted(files.items())):
+        marked = bytearray(img)
+        for j in range(8):
+            marked[(idx * 131 + j * 977) % len(marked)] ^= 0x01
+        _write_bmp(samples / name, marked)
+
+
+def _link_scenario(scenario):
+    """Cada observacion lleva op_id unico y la instancia del peer."""
+    n = 0
+    for row in scenario:
+        if row.get("ev") in ("op", "state"):
+            if not row.get("op_id"):
+                n += 1
+                row["op_id"] = f"op-{n:04d}"
+            row["peer_inst"] = CLIENT_INST
+    return scenario
+
+
+def _write_bridge(samples, scenario):
+    """bridge.jsonl crudo: hello del peer y enq/result por observacion."""
+    rows = [
+        {
+            "ev": "hello", "peer": "client", "http": 200, "ok": True,
+            "args": {"build": "offline", "inst": CLIENT_INST, "peer": "client",
+                     "probe_ver": "fake-qa0", "proto": "qa0"},
+        }
+    ]
+    for row in scenario:
+        if row.get("ev") not in ("op", "state"):
+            continue
+        op_id = row["op_id"]
+        verb = row.get("verb") or "scam_state_read"
+        rows.append({"ev": "enq", "op_id": op_id, "verb": verb,
+                     "peer": "client", "args": {}})
+        rows.append({
+            "ev": "result", "op_id": op_id, "peer": "client",
+            "result": {
+                "status": row.get("status", "done"),
+                "reason": row.get("reason", ""),
+                "read": {"nk": row.get("read_nk") or {},
+                         "sk": row.get("read_sk") or {}},
+            },
+        })
+    _write_jsonl(Path(samples) / "bridge.jsonl", rows)
 
 
 def write_healthy(part_dir):
     part_dir = Path(part_dir)
     samples = part_dir / "samples"
     samples.mkdir(parents=True, exist_ok=True)
-    _write_jsonl(samples / "scenario.jsonl", _scenario())
-    _write_jsonl(samples / "path_catmull_scripted.jsonl", _path_rows("short_arc_6s", "catmull_rom", "slerp", "short_arc", PATH_DURATION_MS))
-    _write_jsonl(samples / "path_linear_hud.jsonl", _path_rows("linear_hud_6s", "linear", "ypr", "linear_hud", PATH_DURATION_MS))
-    _write_jsonl(samples / "path_engine_interp.jsonl", _path_rows("short_arc_6s", "linear", "slerp", "short_arc", PATH_DURATION_MS))
-    _write_jsonl(samples / "path_dof_var.jsonl", _dof_rows("dof_var_6s"))
-    _write_jsonl(samples / "path_dof_fix.jsonl", _dof_rows("dof_fixed_6s"))
+    scenario = _scenario()
+    _link_scenario(scenario)
+    _write_jsonl(samples / "scenario.jsonl", scenario)
+    _write_bridge(samples, scenario)
+    _write_path_jsonl(samples / "path_catmull_scripted.jsonl", _path_rows("short_arc_6s", "catmull_rom", "slerp", "short_arc", PATH_DURATION_MS))
+    _write_path_jsonl(samples / "path_linear_hud.jsonl", _path_rows("linear_hud_6s", "linear", "ypr", "linear_hud", PATH_DURATION_MS))
+    _write_path_jsonl(samples / "path_engine_interp.jsonl", _path_rows("short_arc_6s", "linear", "slerp", "short_arc", PATH_DURATION_MS))
+    _write_path_jsonl(samples / "path_dof_var.jsonl", _dof_rows("dof_var_6s"))
+    _write_path_jsonl(samples / "path_dof_fix.jsonl", _dof_rows("dof_fixed_6s"))
     _write_jsonl(samples / "control_recovery.jsonl", _control_recovery())
     _write_images(samples)
     _write_json(
@@ -897,12 +1028,14 @@ def apply_mutant(part_dir, name):
         return
 
     if name == "swap_axes":
+        # N1: se inyecta al reaplicar P_roll, una pose que discrimina.
         def mutate(rows):
             for row in rows:
-                if row.get("ev") == "state" and row.get("phase") == "SCAM-S1" and row.get("step") == "p0_applied":
+                if row.get("ev") == "state" and row.get("phase") == "SCAM-S1" and row.get("step") == "p_roll_applied":
                     nk = row["read_nk"]
                     nk["yaw_deg"], nk["pitch_deg"] = nk["pitch_deg"], nk["yaw_deg"]
                     m = ypr_matrix(nk["yaw_deg"], nk["pitch_deg"], nk["roll_deg"])
+                    nk["eng_dx"], nk["eng_dy"], nk["eng_dz"] = m[2][0], m[2][1], m[2][2]
                     for r in range(3):
                         for c in range(3):
                             nk[f"m{r}{c}"] = m[r][c]
@@ -915,27 +1048,31 @@ def apply_mutant(part_dir, name):
                 t = row["dtsum_ms"] / 1000.0
                 if t <= 3.0:
                     row["yaw_deg"] = _wrap180(179.0 - 358.0 * (t / 3.0))
-        _rewrite_jsonl(samples / "path_catmull_scripted.jsonl", mutate)
+        _mutate_path(part_dir, "path_catmull_scripted", mutate)
         return
 
     if name == "frozen_fov":
         def mutate(rows):
             for row in rows:
                 row["fov_rad"] = 0.65
-        _rewrite_jsonl(samples / "path_catmull_scripted.jsonl", mutate)
+        _mutate_path(part_dir, "path_catmull_scripted", mutate)
         return
 
     if name == "path_jump":
+        # brief:150: salto de un solo frame en t >= 3 s.
         def mutate(rows):
+            done = False
             for row in rows:
-                if row["dtsum_ms"] >= 3000.0:
+                if not done and row["dtsum_ms"] >= 3000.0:
                     row["x_m"] += 2.0
                     row["eng_x_m"] += 2.0
-        _rewrite_jsonl(samples / "path_catmull_scripted.jsonl", mutate)
+                    done = True
+        _mutate_path(part_dir, "path_catmull_scripted", mutate)
         return
 
     if name == "late_finish":
-        rows = _read_jsonl(samples / "path_catmull_scripted.jsonl")
+        path = samples / "path_catmull_scripted.jsonl"
+        rows = _read_path_dicts(path)
         last = dict(rows[-1])
         dt = last["dtsum_ms"] / max(1.0, last["seq_n"])
         seq = last["seq_n"]
@@ -953,7 +1090,7 @@ def apply_mutant(part_dir, name):
             row["tick_ms"] = tick
             row["dtsum_ms"] = dtsum
             rows.append(row)
-        _write_jsonl(samples / "path_catmull_scripted.jsonl", rows)
+        _write_path_jsonl(path, rows)
         return
 
     if name == "ignore_focus_keys":
@@ -961,7 +1098,7 @@ def apply_mutant(part_dir, name):
             for row in rows:
                 row["sent_focus_dist_m"] = 2.0
                 row["sent_focus_blur"] = 1.0
-        _rewrite_jsonl(samples / "path_dof_var.jsonl", mutate)
+        _mutate_path(part_dir, "path_dof_var", mutate)
 
         def mutate_states(rows):
             for row in rows:
@@ -988,7 +1125,7 @@ def apply_mutant(part_dir, name):
                 if row["dtsum_ms"] >= 1800.0:
                     row["qb_vis_b"] = 1.0
                     row["ovl_vis_b"] = 1.0
-        _rewrite_jsonl(samples / "path_linear_hud.jsonl", mutate)
+        _mutate_path(part_dir, "path_linear_hud", mutate)
         return
 
     if name == "hud_restore_corrupt":
@@ -1029,7 +1166,10 @@ def _set_state_nk(part_dir, phase, step, **changes):
 
 
 def _mutate_path(part_dir, name, mutate):
-    _rewrite_jsonl(_samples(part_dir) / f"{name}.jsonl", mutate)
+    path = _samples(part_dir) / f"{name}.jsonl"
+    rows = _read_path_dicts(path)
+    mutate(rows)
+    _write_path_jsonl(path, rows)
 
 
 def _checks_by_id(verdict):
@@ -1055,7 +1195,7 @@ def _neg_finish_late(part_dir):
     """Extiende el recorrido hasta 6301 ms con filas identicas a la ultima clave, sin
     cambiar la trayectoria: solo CAM-04 cae por el fin fuera de [6000, 6300]."""
     path = _samples(part_dir) / "path_catmull_scripted.jsonl"
-    rows = _read_jsonl(path)
+    rows = _read_path_dicts(path)
     last = dict(rows[-1])
     dt = last["dtsum_ms"] / max(1.0, last["seq_n"])
     seq = last["seq_n"]
@@ -1073,7 +1213,7 @@ def _neg_finish_late(part_dir):
         row["tick_ms"] = tick
         row["dtsum_ms"] = dtsum
         rows.append(row)
-    _write_jsonl(path, rows)
+    _write_path_jsonl(path, rows)
 
 
 def _neg_fov_off_lerp(part_dir):
@@ -1085,6 +1225,14 @@ def _neg_fov_off_lerp(part_dir):
 
 def _neg_dof_reject_accepted(part_dir):
     _set_event(part_dir, "op", "SCAM-S4", "neg_1", status="done", reason="")
+    # La respuesta cruda del bridge cuenta lo mismo que el resumen.
+    bridge = _samples(part_dir) / "bridge.jsonl"
+    rows = _read_jsonl(bridge)
+    for row in rows:
+        if row.get("ev") == "result" and row.get("op_id") == "SCAM-S4-neg_1":
+            row["result"]["status"] = "done"
+            row["result"]["reason"] = ""
+    _write_jsonl(bridge, rows)
 
 
 def _neg_dof_identical_frames(part_dir):
@@ -1159,284 +1307,6 @@ def _fab_hud_restored_without_widget_tree(part_dir):
     _set_state_nk(part_dir, "SCAM-S3", "post_path_hud", aux_vis_mask=0.0, saved_aux_vis_mask=1.0)
 
 
-CAM_STANDIN_VERBS = frozenset(
-    {
-        "scam_fixture_setup",
-        "scam_state_read",
-        "scam_free_op",
-        "scam_pose_save",
-        "scam_pose_apply",
-        "scam_path_start",
-        "scam_dof_set",
-        "scam_hud_op",
-        "scam_sample_start",
-    }
-)
-CAM_STANDIN_COLS = ("seq_n", "dtsum_ms", "active_b")
-
-
-def _cam_standin_module():
-    """Homologo minimo de fake_ext_cam para la negativa E1 del peer falso.
-
-    Modela la guarda del lease antes de cada efecto, el trabajo "cam" con
-    deadman="stop", el bloqueo de efectos fuera de trabajo y la limpieza que
-    corre siempre (soltar la camara y restaurar el HUD). El esqueleto real de
-    S-cam aun no entiende los verbos scam_*; el e2e de E1 usa el de verdad.
-    """
-
-    class CamStandIn(fake_peer.FakeExt):
-        def __init__(self):
-            super().__init__()
-            self.peer = None
-            self.jobs = None
-            self.active = 0.0
-            self.pose = {
-                "x_m": 4500.0,
-                "y_m": ANCHOR_Y,
-                "z_m": 9800.0,
-                "yaw_deg": 0.0,
-                "pitch_deg": 0.0,
-                "roll_deg": 0.0,
-                "fov_rad": 0.70,
-            }
-            self.saved = {}
-            self.saved_names = []
-            self.flags = 0.0
-            self.saved_flags = 0.0
-            self.aux = 0.0
-            self.saved_aux = 0.0
-            self.focus_dist = 0.0
-            self.focus_blur = 0.0
-            self.focus_calls = 0.0
-            self.cam_job_id = ""
-            self.sample_job_id = ""
-            self.dtsum = 0.0
-            self.duration_ms = 0.0
-            self.seq = 0.0
-
-        def init(self, peer, jobs):
-            self.peer = peer
-            self.jobs = jobs
-
-        def handles(self, verb, role):
-            return role == "client" and verb in CAM_STANDIN_VERBS
-
-        def _read(self):
-            nk = dict(self.pose)
-            nk.update(
-                {
-                    "active_b": self.active,
-                    "enable_b": 1.0 if self.focus_dist > 0.0 else 0.0,
-                    "flags_mask": self.flags,
-                    "saved_flags_mask": self.saved_flags,
-                    "aux_vis_mask": self.aux,
-                    "saved_aux_vis_mask": self.saved_aux,
-                    "sent_focus_dist_m": self.focus_dist,
-                    "sent_focus_blur": self.focus_blur,
-                    "set_focus_calls_n": self.focus_calls,
-                    "cam_dtsum_ms": self.dtsum,
-                    "speed_mps": 4.0,
-                }
-            )
-            sk = {
-                "cam_job_id": self.cam_job_id,
-                "cam_job_state": self.jobs.get_state(self.cam_job_id) if self.cam_job_id else "",
-                "sample_job_id": self.sample_job_id,
-                "sample_job_state": self.jobs.get_state(self.sample_job_id) if self.sample_job_id else "",
-                "saved_names_csv": ",".join(self.saved_names),
-            }
-            return wire.pack_payload(
-                scalars_str=sk,
-                scalars_num={key: float(value) for key, value in nk.items()},
-            )
-
-        def _cleanup(self):
-            self.active = 0.0
-            self.flags = self.saved_flags
-            self.aux = self.saved_aux
-            self.focus_dist = 0.0
-            self.focus_blur = 0.0
-
-        def _hide(self):
-            self.saved_flags = self.flags
-            self.saved_aux = self.aux
-            self.flags = 391.0
-            self.aux = 0.0
-
-        def _pose_from(self, nums):
-            for key in ("x_m", "y_m", "z_m", "yaw_deg", "pitch_deg", "roll_deg", "fov_rad"):
-                if key in nums:
-                    self.pose[key] = float(nums[key])
-
-        def on_start_op(self, op, args_unpacked, raw_args):
-            verb = op["verb"]
-            strs = args_unpacked.get("str") or {}
-            nums = args_unpacked.get("num") or {}
-            rows = args_unpacked.get("rows") or []
-            if verb == "scam_state_read":
-                return ("done", "", self._read())
-            if verb == "scam_hud_op" and int(nums.get("op_code", -1)) == 0:
-                return ("done", "", self._read())
-            if verb == "scam_hud_op" and int(nums.get("op_code", -1)) == 2:
-                self.flags = self.saved_flags
-                self.aux = self.saved_aux
-                return ("done", "", self._read())
-            if verb == "scam_free_op" and int(nums.get("op_code", -1)) == 3:
-                self._cleanup()
-                return ("done", "", self._read())
-            if not self.peer.lease_valid():
-                return ("error", "lease_expired", wire.empty_payload())
-
-            if verb == "scam_fixture_setup":
-                self.active = 1.0
-                self.pose = {
-                    "x_m": float(nums.get("anchor_x_m", 4500.0)),
-                    "y_m": ANCHOR_Y,
-                    "z_m": float(nums.get("anchor_z_m", 9800.0)),
-                    "yaw_deg": float(nums.get("anchor_yaw_deg", 0.0)),
-                    "pitch_deg": float(nums.get("anchor_pitch_deg", 0.0)),
-                    "roll_deg": float(nums.get("anchor_roll_deg", 0.0)),
-                    "fov_rad": float(nums.get("anchor_fov_rad", 0.70)),
-                }
-                self.focus_dist = 0.0
-                self.focus_blur = 0.0
-                return ("done", "", self._read())
-            if verb == "scam_free_op":
-                if int(nums.get("op_code", -1)) != 1:
-                    return ("rejected", "bad_args", wire.empty_payload())
-                if self.cam_job_id and self.jobs.get_state(self.cam_job_id) == "running":
-                    return ("rejected", "busy", wire.empty_payload())
-                self._pose_from(nums)
-                self.active = 1.0
-                self.focus_dist = 0.0
-                self.focus_blur = 0.0
-                return ("done", "", self._read())
-            if verb == "scam_pose_save":
-                name = str(strs.get("name", ""))
-                if name == "":
-                    return ("rejected", "empty_name", wire.empty_payload())
-                if name in self.saved and str(strs.get("overwrite", "0")) != "1":
-                    return ("rejected", "duplicate_name", wire.empty_payload())
-                self.saved[name] = dict(self.pose)
-                if name not in self.saved_names:
-                    self.saved_names.append(name)
-                return ("done", "", self._read())
-            if verb == "scam_pose_apply":
-                name = str(strs.get("name", ""))
-                if name:
-                    if name not in self.saved:
-                        return ("rejected", "unknown_pose", wire.empty_payload())
-                    self.pose = dict(self.saved[name])
-                else:
-                    self._pose_from(nums)
-                if self.active != 1.0:
-                    return ("rejected", "no_active_cam", wire.empty_payload())
-                return ("done", "", self._read())
-            if verb == "scam_hud_op":
-                code = int(nums.get("op_code", -1))
-                if code == 1:
-                    self._hide()
-                elif code == 5:
-                    preset = float(nums.get("preset_mask", 0.0))
-                    self.flags = preset
-                    self.aux = 1.0
-                    self.saved_flags = preset
-                    self.saved_aux = 1.0
-                elif code == 4:
-                    if int(nums.get("mode", 0)) == 1:
-                        self.flags = self.flags & ~(128.0 | 256.0 | 512.0)
-                    else:
-                        self.flags = self.flags | 256.0
-                else:
-                    return ("rejected", "bad_args", wire.empty_payload())
-                return ("done", "", self._read())
-            if verb == "scam_dof_set":
-                if float(nums.get("enable_b", 0.0)) == 1.0:
-                    self.focus_dist = float(nums.get("focus_dist_m", 0.0))
-                    self.focus_blur = float(nums.get("focus_blur", 0.0))
-                else:
-                    self.focus_dist = 0.0
-                    self.focus_blur = 0.0
-                self.focus_calls += 1.0
-                return ("done", "", self._read())
-            if verb == "scam_path_start":
-                if len(rows) < 2:
-                    return ("rejected", "bad_args", wire.empty_payload())
-                err = self.jobs.start_job(
-                    self,
-                    op["op_id"],
-                    "cam",
-                    list(CAM_STANDIN_COLS),
-                    [],
-                    4,
-                    4096,
-                    900000.0,
-                    "stop",
-                )
-                if err:
-                    return ("rejected", err, wire.empty_payload())
-                self.cam_job_id = op["op_id"]
-                self.seq = 0.0
-                self.dtsum = 0.0
-                self.duration_ms = float(rows[-1]["t_s"]) * 1000.0
-                first = rows[0]
-                self._pose_from(first)
-                self.active = 1.0
-                if str(strs.get("hide_hud", "0")) == "1":
-                    self._hide()
-                self.jobs.append_row(self.cam_job_id, [0.0, 0.0, 1.0], [])
-                return ("done", "", self.jobs.fill_start_read(self.cam_job_id, "cam"))
-            if verb == "scam_sample_start":
-                err = self.jobs.start_job(
-                    self,
-                    op["op_id"],
-                    "cam_sample",
-                    list(CAM_STANDIN_COLS),
-                    [],
-                    5,
-                    4096,
-                    900000.0,
-                    "stop",
-                )
-                if err:
-                    return ("rejected", err, wire.empty_payload())
-                self.sample_job_id = op["op_id"]
-                self.jobs.append_row(self.sample_job_id, [0.0, 0.0, self.active], [])
-                return ("done", "", self.jobs.fill_start_read(self.sample_job_id, "cam_sample"))
-            return ("rejected", "unknown_verb", wire.empty_payload())
-
-        def on_tick(self, timeslice_s):
-            if not self.cam_job_id:
-                return
-            if self.jobs.get_state(self.cam_job_id) != "running":
-                self.cam_job_id = ""
-                return
-            if not self.peer.lease_valid():
-                return
-            self.seq += 1.0
-            self.dtsum += float(timeslice_s) * 1000.0
-            self.jobs.append_row(self.cam_job_id, [self.seq, self.dtsum, self.active], [])
-            if self.dtsum >= self.duration_ms:
-                self.jobs.end_job(self.cam_job_id, "done", "")
-
-        def on_job_end(self, job_id, state, reason):
-            if job_id == self.cam_job_id:
-                self.cam_job_id = ""
-                self._cleanup()
-            if job_id == self.sample_job_id:
-                self.sample_job_id = ""
-
-        def on_shutdown(self):
-            self._cleanup()
-
-    module = types.ModuleType("fake_ext_cam")
-    module.CamStandIn = CamStandIn
-    module.PREFIX = "scam_"
-    module.RPC_BASE = 26102820
-    module.create_ext = lambda peer, jobs: CamStandIn()
-    return module
-
-
 def _tee_bridge_class(registry):
     """Subclase de QABridge que copia cada fila emitida (registro Tee del modelo de S-toma).
 
@@ -1483,10 +1353,9 @@ def _fabricated_evidence(ev_dir):
         part = write_healthy(ev / name)
         if name.startswith("mut-"):
             apply_mutant(part, name[len("mut-") :])
-        (part / "samples" / "bridge.jsonl").write_text(
-            '{"ev": "poll", "peer": "client", "http": 200, "t_ms": 0.0}\n',
-            encoding="utf-8",
-        )
+        bridge = part / "samples" / "bridge.jsonl"
+        with bridge.open("a", encoding="utf-8") as fh:
+            fh.write('{"ev": "poll", "peer": "client", "http": 200, "t_ms": 0.0}\n')
         gate_core.write_json(
             part / "verdict.json",
             {
@@ -1512,6 +1381,55 @@ def _fabricated_evidence(ev_dir):
         },
     )
     return ev
+
+
+def _r1_scenario(part, fn):
+    path = _scenario_path(part)
+    rows = _read_jsonl(path)
+    fn(rows)
+    _write_jsonl(path, rows)
+
+
+def _r1_state(part, phase, step, **nk_changes):
+    def fn(rows):
+        for row in rows:
+            if row.get("ev") == "state" and row.get("phase") == phase and row.get("step") == step:
+                row.setdefault("read_nk", {}).update(nk_changes)
+    _r1_scenario(part, fn)
+
+
+def _r1_op(part, phase, step, **changes):
+    def fn(rows):
+        for row in rows:
+            if row.get("ev") == "op" and row.get("phase") == phase and row.get("step") == step:
+                row.update(changes)
+    _r1_scenario(part, fn)
+
+
+def _r1_drop_events(part, pred):
+    def fn(rows):
+        rows[:] = [r for r in rows if not pred(r)]
+    _r1_scenario(part, fn)
+
+
+def _r1_recovery(handoff_ms=0.0, response_ms=200.0):
+    """Recuperacion con handoff en handoff_ms y respuesta tras el."""
+    rows = []
+    tick, frame = 1000.0, 5000.0
+    while tick <= 2200.0:
+        rel = tick - 1000.0
+        psi = 0.0
+        if rel >= handoff_ms + response_ms:
+            psi = 5.0
+        if rel >= handoff_ms + response_ms + 240.0:
+            psi = -2.0
+        mcam = 1.0 if rel < handoff_ms else 0.0
+        dx, dz = math.sin(math.radians(psi)), math.cos(math.radians(psi))
+        rows.append([float(len(rows)), frame, tick, rel, 4500.0, ANCHOR_Y, 9800.0,
+                     dx, 0.0, dz, 0.70, 4500.0, ANCHOR_Y, 9800.0, dx, 0.0, dz, mcam])
+        tick += 16.0
+        frame += 1.0
+    return rows
 
 
 class SCamOfflineTests(unittest.TestCase):
@@ -1549,6 +1467,9 @@ class SCamOfflineTests(unittest.TestCase):
                 statuses = {check["id"]: check["status"] for check in verdict["checks"]}
                 for check_id in spec["must_fail_checks"]:
                     self.assertEqual(statuses.get(check_id), "fail", f"{name}: {check_id} {verdict}")
+                details = {c["id"]: c["detail"] for c in verdict["checks"]}
+                for check_id, detail in (spec.get("must_fail_detail") or {}).items():
+                    self.assertEqual(details.get(check_id), detail, f"{name}: {check_id} {verdict}")
                 for check_id, status in statuses.items():
                     if check_id in spec["must_fail_checks"]:
                         continue
@@ -1612,7 +1533,7 @@ class SCamOfflineTests(unittest.TestCase):
                 _fab_expected_metrics_instead_of_calculated,
                 "CAM-09",
                 "fail",
-                "hud_visible_full_screen",
+                "hud_visible_other_scene",
             ),
             (
                 "fab_hud_restored_without_widget_tree",
@@ -1670,18 +1591,15 @@ class SCamOfflineTests(unittest.TestCase):
         self.assertEqual(verdict["exit_code"], 1, verdict)
         checks = _checks_by_id(verdict)
         self.assertEqual(checks["CAM-10"]["status"], "fail", verdict)
-        self.assertEqual(checks["CAM-10"]["detail"], "recovery_over_1s", verdict)
+        self.assertEqual(checks["CAM-10"]["detail"], "no_burst_a_response", verdict)
         failed = [cid for cid, check in checks.items() if check["status"] != "pass"]
         self.assertEqual(failed, ["CAM-10"], verdict)
 
-    def test_neg_e1_expired_lease_blocks_scam_effects_and_allows_cleanup(self):
-        """E1 (spikes-comun :47): con el lease caducado en el peer falso se bloquean los
-        efectos de S-cam (ordenes, trabajo y efectos fuera de trabajo) y corre la limpieza
-        (soltar la camara y restaurar el HUD). Modelo de S-persist
-        test_s_persist_offline.py:2918/:3102; el homologo de fake_ext_cam es un stand-in
-        porque el esqueleto aun no entiende scam_*."""
+    def test_e2e_e1_real_peer_expired_lease_blocks_effects(self):
+        """E1 contra el fake_ext_cam real (sin stand-in), con reloj
+        controlado: ordenes scam_*, trabajos cam/cam_sample, entrada libre
+        en on_tick y limpieza. Falla hoy porque el peer es un esqueleto."""
         import time
-        from unittest import mock
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tf:
             json.dump(
@@ -1696,16 +1614,14 @@ class SCamOfflineTests(unittest.TestCase):
             config_path = tf.name
         try:
             now_box = [1000.0]
-            standin = _cam_standin_module()
-            with mock.patch.dict(sys.modules, {"fake_ext_cam": standin}):
-                peer = fake_peer.Peer(
-                    config_path,
-                    "client",
-                    0,
-                    30.0,
-                    "",
-                    clock_ms_fn=lambda: now_box[0],
-                )
+            peer = fake_peer.Peer(
+                config_path,
+                "client",
+                0,
+                30.0,
+                "",
+                clock_ms_fn=lambda: now_box[0],
+            )
             peer.hello_ok = True
             peer.last_ok_ms = 1000.0
             self.assertTrue(peer.lease_valid())
@@ -1962,6 +1878,543 @@ class SCamOfflineTests(unittest.TestCase):
             self.assertEqual(state["num"]["aux_vis_mask"], 1.0)
         finally:
             Path(config_path).unlink()
+
+    # ---------------------------------------------------------------- ronda 1 (test_r1_*)
+    def _r1(self, label, mutate):
+        return self._verdict_with(f"r1_{label}", mutate)
+
+    def test_r1_01_columnas_36_y_27_dan_bad_columns(self):
+        """Claude 1/Sol 2 + enmienda: 36 columnas PASA; 27 dan missing."""
+        v = self._r1("cols_ok", lambda p: None)
+        self.assertEqual(v["exit_code"], 0, v)
+        def to27(part):
+            for name in ("path_catmull_scripted", "path_linear_hud", "path_engine_interp", "path_dof_var", "path_dof_fix"):
+                path = _samples(part) / f"{name}.jsonl"
+                rows = [r[:27] for r in _read_jsonl(path)]
+                _write_jsonl(path, rows)
+        v = self._r1("cols27", to27)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-03"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-03"]["detail"], "bad_columns", v)
+        self.assertNotEqual(v["verdict"], "PASA", v)
+
+    def test_r1_02_n1_swap_sobre_p_roll_cae(self):
+        """Sol 3/Claude 9 (N1): swap_axes sobre P_roll cae por CAM-02."""
+        v = self._verdict_with("r1_swap", lambda p: apply_mutant(p, "swap_axes"))
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-02"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-02"]["detail"], "p_roll_theta_deg", v)
+        non_pass = [c["id"] for c in v["checks"] if c["status"] != "pass"]
+        self.assertEqual(non_pass, ["CAM-02"], v)
+
+    def test_r1_03_n1_swap_sobre_p0_simetrica_no_cambia_nada(self):
+        """Variante honesta N1: permutar la P0 27/27 no mueve la pose."""
+        def swap_p0(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "state" and row.get("step") == "p0_applied":
+                        nk = row["read_nk"]
+                        nk["yaw_deg"], nk["pitch_deg"] = nk["pitch_deg"], nk["yaw_deg"]
+            _r1_scenario(part, fn)
+        v = self._r1("swap_p0", swap_p0)
+        self.assertEqual(_checks_by_id(v)["CAM-02"]["status"], "pass", v)
+        self.assertEqual(v["exit_code"], 0, v)
+
+    def _r1_n2(self, label, handoff_ms):
+        """Estimulos identificables desde ~100 ms y durante toda la
+        ventana de recuperacion; handoff tardio y respuesta < 1 s."""
+        def mut(part):
+            _write_jsonl(_samples(part) / "control_recovery.jsonl", _r1_recovery(handoff_ms, 200.0))
+            def fn(rows):
+                extra = []
+                for row in list(rows):
+                    if row.get("ev") == "pulse" and row.get("burst") == "A":
+                        row["issued_h_ms"] = 650.0 + 40.0 * float(row["seq_n"])
+                    if row.get("ev") == "pulse" and row.get("burst") == "B":
+                        row["issued_h_ms"] = 1500.0 + 40.0 * (float(row["seq_n"]) - 10.0)
+                for i in range(5, 18):
+                    extra.append({"ev": "pulse", "phase": "SCAM-S5", "step": f"a{i}",
+                                  "burst": "A", "seq_n": i, "dx_px": 40.0,
+                                  "issued_h_ms": 650.0 + 40.0 * i, "kind": "mouse_move"})
+                rows.extend(extra)
+                for row in rows:
+                    if row.get("ev") == "state" and row.get("step") == "post_stop_state":
+                        row["read_nk"]["input_ack_seq_n"] = 99.0
+            _r1_scenario(part, fn)
+        return self._r1(label, mut)
+
+    def test_r1_04_n2_recuperacion_500ms_pasa(self):
+        """Sol 4/Claude 2 (N2): handoff a 500 ms y respuesta < 1 s PASA."""
+        v = self._r1_n2("n2_500", 500.0)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "pass", v)
+        self.assertEqual(v["exit_code"], 0, v)
+
+    def test_r1_05_n2_recuperacion_300ms_pasa(self):
+        """Variante N2: handoff a 300 ms tambien PASA."""
+        v = self._r1_n2("n2_300", 300.0)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "pass", v)
+        self.assertEqual(v["exit_code"], 0, v)
+
+    def test_r1_06_n3_horquilla_a_100m_nunca_pasa(self):
+        """Claude 4 (N3): horquilla a 100 m del camino nunca PASA."""
+        def mut(part):
+            _r1_state(part, "SCAM-S3", "pre_cap", x_m=4600.0, eng_x_m=4600.0)
+            _r1_state(part, "SCAM-S3", "post_cap", x_m=4600.0, eng_x_m=4600.0)
+        v = self._r1("n3_100m", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
+        self.assertIn("not_anchored", checks["CAM-09"]["detail"], v)
+
+    def test_r1_07_n3_horquilla_desplazada_361m_nunca_pasa(self):
+        """Variante N3: horquilla a 3,61 m del camino tampoco PASA."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "state" and row.get("step") in ("pre_cap", "post_cap"):
+                        row["read_nk"]["x_m"] += 3.61
+                        row["read_nk"]["eng_x_m"] += 3.61
+            _r1_scenario(part, fn)
+        v = self._r1("n3_361", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
+        self.assertIn("not_anchored", checks["CAM-09"]["detail"], v)
+
+    def test_r1_08_n4_fixture_en_error_nunca_pasa(self):
+        """Sol 6 (N4): fixture en error con camara/FOV/escena mal cae."""
+        def mut(part):
+            _r1_op(part, "SCAM-S0", "fixture", status="error", reason="fixture_failed")
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("verb") == "scam_fixture_setup":
+                        row["read_nk"].update({"active_b": 0.0, "fov_rad": 2.8, "subj_present_b": 0.0, "bg_present_b": 0.0})
+            _r1_scenario(part, fn)
+        v = self._r1("n4_fixture", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "fail", v)
+
+    def test_r1_09_n4_lectura_tras_camino_vieja_nunca_pasa(self):
+        """Sol 6 variante (N4): post_dof_var con trabajo aun running cae."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "state" and row.get("step") == "post_dof_var":
+                        row["read_sk"] = {"cam_job_state": "running", "cam_job_id": "otro"}
+            _r1_scenario(part, fn)
+        v = self._r1("n4_stale", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-08"]["status"], "missing", v)
+        self.assertIn("reset", checks["CAM-08"]["detail"], v)
+
+    def test_r1_10_n5_ratio_069_pasa_con_metrica(self):
+        """Claude 5/Sol 7 (N5): ratio 0,69 con lo demas sano PASA."""
+        def mut(part):
+            src = _samples(part) / "dof_ctrl_far50m.bmp"
+            img = s_cam_eval.read_bmp_gray(src)
+            # fondo de far con contraste reducido: se reescribe desde noblur
+            # difuminado una pasada mas que near no; se usa blur del propio test
+            rois = _load_json(FIXTURES / "s_cam_rois.json")
+            noise = _noise_image()
+            far = _blur_region(noise, rois["roi_bg_50m"], passes=1)
+            marked = bytearray(far)
+            marked[12345] ^= 0x01
+            _write_bmp(src, marked)
+        v = self._r1("n5_069", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-07"]["status"], "pass", v)
+        self.assertIn("far50m_bg_ratio", v.get("metrics") or {}, v)
+
+    def test_r1_11_n6_capacidad_desconocida_y_modo_scripted(self):
+        """Sol 8/Claude 6 (N6): sin ensayo nativo, capacidad null y scripted."""
+        def mut(part):
+            def m(rows):
+                for row in rows:
+                    row["eng_x_m"] += 0.001
+            _mutate_path(part, "path_catmull_scripted", m)
+        v = self._r1("n6", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-05"]["status"], "pass", v)
+        comp = _load_json(_samples(self._root / "r1_n6") / "interp_comparison.json")
+        self.assertIsNone(comp["engine_supports_keyed_dof_b"], comp)
+        self.assertEqual(comp["selected_mode"], "scripted", comp)
+
+    def test_r1_12_n6_etiqueta_de_foco_no_cambia_el_modo(self):
+        """Variante N6: foco escalonado en engine tampoco acredita capacidad."""
+        def mut(part):
+            def m(rows):
+                for row in rows:
+                    row["sent_focus_dist_m"] = 2.0
+            _mutate_path(part, "path_engine_interp", m)
+        v = self._r1("n6_label", mut)
+        comp = _load_json(_samples(self._root / "r1_n6_label") / "interp_comparison.json")
+        self.assertIsNone(comp["engine_supports_keyed_dof_b"], comp)
+        self.assertEqual(comp["selected_mode"], "scripted", comp)
+
+    def test_r1_13_n7_aux_contra_inicial_no_contra_copia(self):
+        """Sol 9/Claude 7 (N7): 34 iniciales, 2 guardados y 2 restaurados FALLA."""
+        def mut(part):
+            _r1_state(part, "SCAM-S3", "post_path_hud", aux_vis_mask=2.0, saved_aux_vis_mask=2.0)
+        v = self._r1("n7", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-09"]["detail"], "aux_not_restored", v)
+
+    def test_r1_14_n7_variante_en_s5_tambien_falla(self):
+        """Variante N7 en SCAM-S5/CAM-10 con el mismo patron."""
+        def mut(part):
+            _r1_state(part, "SCAM-S5", "post_stop_state", aux_vis_mask=2.0, saved_aux_vis_mask=2.0)
+        v = self._r1("n7_s5", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "fail", v)
+
+    def test_r1_15_n8_sin_caso_da_missing(self):
+        """Claude 8 (N8): la sana sin el caso sin cliente da missing."""
+        def mut(part):
+            _r1_drop_events(part, lambda r: str(r.get("step") or "").startswith("no_client") or r.get("step") in ("pre_nc", "post_nc"))
+        v = self._r1("n8_missing", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-01"]["detail"], "no_client_case", v)
+
+    def test_r1_16_n8_orden_aceptada_sin_cliente_falla(self):
+        """Variante N8: una orden aceptada sin cliente que mueve la camara FALLA."""
+        def mut(part):
+            _r1_op(part, "SCAM-S1", "no_client_free", status="done", reason="")
+            _r1_state(part, "SCAM-S1", "post_nc", x_m=4510.0, eng_x_m=4510.0)
+        v = self._r1("n8_accepted", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "fail", v)
+
+    def test_r1_17_procedencia_ids_cero_nunca_pasa(self):
+        """Sol 1: ids de operacion a 0 nunca acreditan PASA."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op":
+                        row["op_id"] = "0"
+            _r1_scenario(part, fn)
+        v = self._r1("prov_zero", mut)
+        checks = _checks_by_id(v)
+        self.assertNotEqual(v["verdict"], "PASA", v)
+        self.assertEqual(checks["CAM-01"]["status"], "fail", v)
+
+    def test_r1_18_procedencia_verbo_sustituido_nunca_pasa(self):
+        """Variante Sol 1: verbos cambiados a qa_echo con rol server cae."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op":
+                        row["verb"] = "qa_echo"
+                        row["role"] = "server"
+            _r1_scenario(part, fn)
+        v = self._r1("prov_verb", mut)
+        self.assertNotEqual(v["verdict"], "PASA", v)
+        self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "fail", v)
+
+    def test_r1_19_procedencia_sin_bridge_nunca_pasa(self):
+        """Variante Sol 1: observaciones fabricadas sin bridge no pasan."""
+        def mut(part):
+            (_samples(part) / "bridge.jsonl").unlink()
+        v = self._r1("prov_nobridge", mut)
+        self.assertNotEqual(v["verdict"], "PASA", v)
+        self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "missing", v)
+
+    def test_r1_20_busy_id_cero_y_busy_distinto(self):
+        """Claude 13: id 0 o trabajo ocupado distinto del de Pasada 1 cae."""
+        def zero(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("step") == "path_1_start":
+                        row["read_sk"] = {"job": "0"}
+            _r1_scenario(part, fn)
+        v = self._r1("busy_zero", zero)
+        self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "fail", v)
+        def other(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "state" and row.get("step") in ("busy_pre", "busy_post"):
+                        row["read_sk"] = {"cam_job_id": "job-otro", "cam_job_state": "running"}
+            _r1_scenario(part, fn)
+        v = self._r1("busy_other", other)
+        self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "fail", v)
+
+    def test_r1_21_captura_sin_evento_y_reutilizada(self):
+        """Claude 12: captura sin evento da missing; reutilizada, missing."""
+        def noev(part):
+            _r1_drop_events(part, lambda r: r.get("ev") == "capture" and r.get("file") == "hud_during.bmp")
+        v = self._r1("cap_noev", noev)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
+        self.assertIn("capture", checks["CAM-09"]["detail"], v)
+        def reused(part):
+            shutil.copyfile(_samples(part) / "hud_clean_ref.bmp", _samples(part) / "hud_during.bmp")
+        v = self._r1("cap_reused", reused)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
+        self.assertIn("capture_reused", checks["CAM-09"]["detail"], v)
+
+    def test_r1_22_hud_visible_de_otra_escena_falla(self):
+        """Variante Claude 12: hud_visible_ref entera en blanco FALLA."""
+        def mut(part):
+            _write_bmp(_samples(part) / "hud_visible_ref.bmp", bytearray([255]) * (W * H))
+        v = self._r1("cap_blank", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-09"]["detail"], "hud_visible_other_scene", v)
+
+    def test_r1_23_cam08_fases_desde_lecturas_crudas(self):
+        """Claude 10/Sol 11: lecturas fuera de ventana con etiqueta sana cae."""
+        def mut(part):
+            for step, dt in (("dof_var_6s_t1_pre", 400.0), ("dof_var_6s_t1_post", 1300.0),
+                             ("dof_fixed_6s_t1_pre", 400.0), ("dof_fixed_6s_t1_post", 1300.0)):
+                _r1_state(part, "SCAM-S4", step, cam_dtsum_ms=dt)
+        v = self._r1("cam08_raw", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-08"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-08"]["detail"], "capture_phase_unaccredited", v)
+
+    def test_r1_24_cam08_sin_lecturas_de_fase_da_missing(self):
+        """Variante Claude 10: sin las lecturas citadas, missing."""
+        def mut(part):
+            _r1_drop_events(part, lambda r: r.get("ev") == "state" and "_t" in str(r.get("step") or "") and r.get("phase") == "SCAM-S4")
+        v = self._r1("cam08_nostates", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-08"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-08"]["detail"], "capture_phase_unaccredited", v)
+
+    def test_r1_25_cam08_control_fijo_se_juzga(self):
+        """Claude 19: control vacio da missing; blur del control mal da fail."""
+        def empty(part):
+            _write_path_jsonl(_samples(part) / "path_dof_fix.jsonl", [])
+        v = self._r1("fix_empty", empty)
+        self.assertEqual(_checks_by_id(v)["CAM-08"]["status"], "missing", v)
+        def blur(part):
+            def m(rows):
+                for row in rows:
+                    row["sent_focus_blur"] = 1.0
+            _mutate_path(part, "path_dof_fix", m)
+        v = self._r1("fix_blur", blur)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-08"]["status"], "fail", v)
+        self.assertIn("fix_blur", checks["CAM-08"]["detail"], v)
+
+    def test_r1_26_cam08_capturas_de_fase_reutilizadas(self):
+        """Sol 11 variante: var_t copiadas del par estatico dan missing."""
+        def mut(part):
+            shutil.copyfile(_samples(part) / "dof_ctrl_near2m.bmp", _samples(part) / "var_t1.bmp")
+        v = self._r1("cam08_reused", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-08"]["status"], "missing", v)
+        self.assertIn("capture_reused", checks["CAM-08"]["detail"], v)
+
+    def test_r1_27_reset_por_nombre_aproximado_no_vale(self):
+        """Claude 11: sin post_reset exacto, aunque haya ctrl_* sanos, missing."""
+        def mut(part):
+            _r1_drop_events(part, lambda r: r.get("step") == "post_reset")
+            _r1_state(part, "SCAM-S4", "ctrl_noblur_pre", sent_focus_dist_m=50.0, sent_focus_blur=1.0)
+        v = self._r1("reset_fuzzy", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-07"]["status"], "missing", v)
+
+    def test_r1_28_hud_arbol_crudo_y_dof_retail(self):
+        """Claude 22/Sol 12: sin arbol da missing; overlay en arbol falla;
+        dof_config incoherente con build retail da missing."""
+        def notree(part):
+            _r1_drop_events(part, lambda r: r.get("ev") == "hud_tree")
+        v = self._r1("hud_notree", notree)
+        self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "missing", v)
+        def ovl(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "hud_tree" and row.get("step") == "tree_pre_cap":
+                        row["nodes"].append({"id": "nuevo_20x20", "parent": "hud_panel", "visible": True, "hierarchy": True, "baseline": False})
+            _r1_scenario(part, fn)
+        v = self._r1("hud_tree_ovl", ovl)
+        self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "fail", v)
+        def retail(part):
+            man = _load_json(Path(part) / "manifest.json")
+            man["build"] = "retail"
+            _write_json(Path(part) / "manifest.json", man)
+        v = self._r1("dof_retail", retail)
+        self.assertEqual(_checks_by_id(v)["CAM-07"]["status"], "missing", v)
+
+    def test_r1_29_cam02_fov_y_direccion_renderizada(self):
+        """Sol 13/Claude 18: FOV 2,0 o direccion (1,0,0) al reaplicar FALLA."""
+        def fov(part):
+            _r1_state(part, "SCAM-S1", "p_roll_applied", fov_rad=2.0)
+            _r1_state(part, "SCAM-S1", "p0_applied", fov_rad=2.0)
+        v = self._r1("cam02_fov", fov)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-02"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-02"]["detail"], "p_roll_fov_err", v)
+        def dirv(part):
+            _r1_state(part, "SCAM-S1", "p_roll_applied", eng_dx=1.0, eng_dy=0.0, eng_dz=0.0)
+        v = self._r1("cam02_dir", dirv)
+        self.assertEqual(_checks_by_id(v)["CAM-02"]["status"], "fail", v)
+
+    def test_r1_30_cam02_pose_guardada_en_otra_posicion_pasa(self):
+        """Variante honesta Claude 18: P_roll guardada y reaplicada en el
+        ancla, comparada con su lectura de guardado, PASA."""
+        def mut(part):
+            _r1_state(part, "SCAM-S1", "p_roll_applied", x_m=4502.0, eng_x_m=4502.0)
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("step") == "save_p_roll":
+                        row["read_nk"]["x_m"] = 4502.0
+                        row["read_nk"]["eng_x_m"] = 4502.0
+            _r1_scenario(part, fn)
+        v = self._r1("cam02_anchor", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-02"]["status"], "pass", v)
+
+    def test_r1_31_cam10_sin_dx_da_missing(self):
+        """Sol 16: rafagas sin desplazamiento de raton nunca PASA."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "pulse":
+                        row.pop("dx_px", None)
+            _r1_scenario(part, fn)
+        v = self._r1("cam10_nodx", mut)
+        self.assertNotEqual(_checks_by_id(v)["CAM-10"]["status"], "pass", v)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "missing", v)
+
+    def test_r1_32_cam10_acuse_signo_y_relojes(self):
+        """Claude 20/15/23: acuse a 0 falla; signo mixto falla; tick que
+        no casa con dtsum da missing."""
+        def ack0(part):
+            _r1_state(part, "SCAM-S5", "post_stop_state", input_ack_seq_n=0.0)
+        v = self._r1("cam10_ack0", ack0)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "fail", v)
+        def mixed(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "pulse" and row.get("burst") == "A" and row.get("seq_n") == 4:
+                        row["dx_px"] = -40.0
+            _r1_scenario(part, fn)
+        v = self._r1("cam10_mixed", mixed)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-10"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-10"]["detail"], "burst_a_sign", v)
+        def clocks(part):
+            path = _samples(part) / "control_recovery.jsonl"
+            rows = _read_jsonl(path)
+            for row in rows:
+                row[3] = 0.0
+            _write_jsonl(path, rows)
+        v = self._r1("cam10_clocks", clocks)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "missing", v)
+
+    def test_r1_33_fail_antes_que_missing(self):
+        """Sol 15: sin wire_nan y con neg_0 en done, CAM-01 FALLA."""
+        def mut(part):
+            _r1_drop_events(part, lambda r: r.get("ev") == "wire_nan")
+            _r1_op(part, "SCAM-S1", "neg_0", status="done", reason="")
+        v = self._r1("fail_first", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-01"]["detail"], "closed_cam_not_rejected", v)
+
+    def test_r1_34_campo_ausente_da_missing_sin_excepcion(self):
+        """Claude 16: sin stop_ack_h_ms (con u_ms) no hay KeyError."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "stop":
+                        row.pop("stop_ack_h_ms", None)
+            _r1_scenario(part, fn)
+        v = self._r1("no_ack_field", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "missing", v)
+
+    def test_r1_35_altura_desde_fixture_no_desde_primera_fila(self):
+        """Claude 17: desfase constante +1 m en Y cae; con el datum de
+        fixture movido a la par, la variante honesta PASA."""
+        def shifted(part):
+            for name in ("path_catmull_scripted", "path_linear_hud"):
+                def m(rows):
+                    for row in rows:
+                        row["y_m"] += 1.0
+                        row["eng_y_m"] += 1.0
+                _mutate_path(part, name, m)
+        v = self._r1("height_shift", shifted)
+        self.assertEqual(_checks_by_id(v)["CAM-03"]["status"], "fail", v)
+        def honest(part):
+            shifted(part)
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("verb") == "scam_fixture_setup":
+                        row["read_nk"]["anchor_y_m"] = ANCHOR_Y + 1.0
+            _r1_scenario(part, fn)
+        v = self._r1("height_honest", honest)
+        self.assertEqual(_checks_by_id(v)["CAM-03"]["status"], "pass", v)
+
+    def test_r1_36_suite_casos_del_brief_314(self):
+        """Claude 21: los 11 casos de brief:314 que faltaban."""
+        # paginas con float32 dentro de WIRE_CAP y pose_cells a 27 grados
+        import struct as _st
+        def f32(v):
+            return _st.unpack("f", _st.pack("f", float(v)))[0]
+        payload = wire.pack_payload(
+            scalars_num={"page_n": 0},
+            num_cols=list(PATH_COLS_36),
+            row_dicts=[{c: f32(1.5) for c in PATH_COLS_36} for _ in range(3)],
+        )
+        self.assertLessEqual(len(json.dumps(payload).encode()), wire.WIRE_CAP)
+        a = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 27.0, 27.0, 0.0, 0.70)
+        self.assertTrue(s_cam_eval.pose_cells_equal(a, dict(a)))
+        # omision de KC_PRIOR: la velocidad no sube a 8
+        def no_prior(part):
+            _r1_state(part, "SCAM-S1", "s_b", speed_mps=4.0)
+        v = self._r1("suite_noprior", no_prior)
+        self.assertEqual(_checks_by_id(v)["CAM-02"]["status"], "fail", v)
+        # giro autonomo sin pulsos: deriva en la ventana quieta
+        def drift(part):
+            rows = _read_jsonl(_samples(part) / "control_recovery.jsonl")
+            for row in rows:
+                if 1030.0 <= row[2] < 1100.0:
+                    psi = math.radians(5.0)
+                    row[7], row[9] = math.sin(psi), math.cos(psi)
+                    row[14], row[16] = math.sin(psi), math.cos(psi)
+            _write_jsonl(_samples(part) / "control_recovery.jsonl", rows)
+        v = self._r1("suite_drift", drift)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "fail", v)
+        # menos de 180 muestras
+        def few(part):
+            def m(rows):
+                del rows[100:]
+            _mutate_path(part, "path_catmull_scripted", m)
+        v = self._r1("suite_few", few)
+        self.assertEqual(_checks_by_id(v)["CAM-03"]["status"], "missing", v)
+        # textura insuficiente var_lap < 25
+        def flat(part):
+            _write_bmp(_samples(part) / "dof_ctrl_noblur.bmp", bytearray([128]) * (W * H))
+        v = self._r1("suite_flat", flat)
+        self.assertEqual(_checks_by_id(v)["CAM-06"]["status"], "missing", v)
+        # u > 100 ms
+        def ubig(part):
+            _r1_scenario(part, lambda rows: [r.update({"stop_ack_h_ms": 700.0}) for r in rows if r.get("ev") == "stop"])
+        v = self._r1("suite_ubig", ubig)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "missing", v)
+        self.assertEqual(self._r1("suite_healthy", lambda p: None)["exit_code"], 0)
+
+    def test_r1_37_suite_lost_e_invariance(self):
+        """Claude 21 (resto): evento lost e invariancia de ids."""
+        def lost(part):
+            path = _samples(part) / "bridge.jsonl"
+            rows = [r for r in _read_jsonl(path) if not (r.get("ev") == "result" and r.get("op_id") == "SCAM-S1-neg_1")]
+            _write_jsonl(path, rows)
+        v = self._r1("suite_lost", lost)
+        self.assertNotEqual(v["verdict"], "PASA", v)
+        self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "missing", v)
+        def renamed(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("op_id"):
+                        row["op_id"] = "renamed-" + str(row["op_id"])
+            _r1_scenario(part, fn)
+            path = _samples(part) / "bridge.jsonl"
+            brows = _read_jsonl(path)
+            for row in brows:
+                if row.get("op_id"):
+                    row["op_id"] = "renamed-" + str(row["op_id"])
+                if row.get("ev") == "enq":
+                    row["args"] = {"qa_fault": "x" * 24}
+            _write_jsonl(path, brows)
+        v = self._r1("suite_renamed", renamed)
+        self.assertEqual(v["exit_code"], 0, v)
 
     # ---------------------------------------------------------------- testigo comun (E9)
     def _reevaluate_parts(self, ev_dir):
