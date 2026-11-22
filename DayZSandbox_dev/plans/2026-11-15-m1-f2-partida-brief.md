@@ -1248,3 +1248,19 @@ Donde esta sección precisa la tabla de §6, manda esta sección.
   - Los ganchos de F1b-peers (§4.2) se acordaron con la principal el 22-nov. El #19 está mergeado y no tiene sesión activa.
   - Las constantes de §4.4 se cotejaron con el veredicto de S-persist (#21, `90c6d6b`) y no cambian: `FLAGS_ROOT` = `FLAGS_STATIC` y `FLAGS_CREATURE` = `FLAGS_AI_A`, por la vía (a) de Q9.
   - El write-set de T3 (§8) suma `app/tests/test_mod_static.py`, que lista el árbol exacto de ficheros del mod (M1). Es un arreglo del orquestador.
+- **Precisiones de contrato de T3 (2026-11-22; decisiones de la principal, con revisión de Argon):**
+  - **Clases con `scope = 1` (T3-01).** El mod (`DSBX_SceneOps.c`) y el catálogo de F1b-peers (`DSBX_Catalog.c`) aceptan las clases con `scope >= 1`; las de `scope = 0` siguen fuera.
+    - Cambia el contrato de F1b-peers, que pedía `scope == 2` (`plans/2026-11-15-m1-f1b-peers-brief.md:328`).
+    - **Por qué:** la escena 1 de M1 (`fixtures/escena-sin-actores.json`) lleva cinco clases con `scope = 1` que vanilla crea por script: `Land_Wreck_Ikarus`, `Land_Wreck_V3S`, `Land_Wreck_Volha_Blue`, `Land_Container_1Aoh` y `Land_Container_1Bo` (`P:\DZ\structures\wrecks\config.cpp:448-450` y `P:\DZ\structures\industrial\config.cpp:2258-2260`, entre otras). Con `scope == 2`, el backend responde 422 `unknown_class` y P2 no empieza.
+    - Ningún test ni oráculo congelado afirma `scope == 2`.
+    - **En T4:** la partida comprueba que las cinco se crean sin errores en el RPT. Que pase el linter no lo demuestra.
+  - **La posición tras crear (T3-03).** Después de `CreateObjectEx`, el mod hace `SetPosition(Vector(x, gy, z))`, con `gy = SurfaceY(x, z)`, y luego `SetOrientation`.
+    - Es la receta de la vía (a) de Q9 que pasó PER-01 en S-persist (`plans/2026-11-14-m1-f0.3-s-persist-brief.md:162`). S-persist la usó con las criaturas; aquí vale para todas las raíces.
+    - Sustituye a la parte de §4.3 que dejaba la posición al motor (`:198-202`); `:203` ya remitía a S-persist.
+    - **El checkpoint** lee el origen en `(x, gy, z)`. El predicado del backend (distancia 3D menor de 498 mm, `app/backend/scene_plan.py:995-998`) ya no depende de dónde tenga el origen cada modelo.
+    - **El coste:** una clase con el origen por encima de su base queda hundida esa distancia; el `Land_Wreck_Ikarus`, 1,291 m (`:664`). El ajuste por clase queda fuera de M1.
+    - **La variante 2 de P2n (§5.5, `:359`)** ya no la produce el motor. El runner de T4 tiene que desplazar la entidad antes de la lectura del checkpoint, por ejemplo con un movimiento explícito tras la creación.
+    - **El oráculo congelado no cambia:** F2P-03 juzga el estado y el motivo de la variante declarada (`qa/f2p_eval.py:3106-3144`), no cómo se desplazó la entidad.
+  - **`now` fuera de rango.** En la fila `now` de `scene.observe` (M15), una raíz viva cuya lectura se sale de los rangos normativos (F2 sin juego §3.6, `:150`) va como en el checkpoint (`:117`): con la fila de nulos y los contadores a 0.
+    - Si se mandara la lectura, el backend rechazaría el resultado entero: `valid_obs_now_row` (`app/backend/scene_plan.py:773`) falla y `bridge.py:624-625` responde 400.
+    - Es lo que ya hace T3 (`DSBX_SceneOps.c:362`).

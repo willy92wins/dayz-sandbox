@@ -5,7 +5,6 @@ class DSBX_DelPending
 	int m_NetLow;
 	int m_NetHigh;
 	int m_TicksWaited;
-	bool m_Done;
 
 	void DSBX_DelPending(DSBX_SceneRecord rec, Object obj, int netLow, int netHigh)
 	{
@@ -14,7 +13,6 @@ class DSBX_DelPending
 		m_NetLow = netLow;
 		m_NetHigh = netHigh;
 		m_TicksWaited = 0;
-		m_Done = false;
 	}
 }
 
@@ -57,7 +55,6 @@ class DSBX_SceneOps
 	bool m_ClearGenOnFirstDelete;
 	bool m_OpScopeActive;
 	bool m_QueueEmptyAtStart;
-	bool m_BatchDeleteFailed;
 	string m_TargetSess;
 	string m_TargetOpId;
 	string m_Parada;
@@ -67,7 +64,7 @@ class DSBX_SceneOps
 	ref array<int> m_DelIsChild;
 	ref array<int> m_DelDepth;
 	int m_DelIdx;
-	ref array<ref DSBX_DelPending> m_InFlightDel;
+	ref DSBX_DelPending m_CurrentDel;
 	ref array<ref DSBX_CheckpointRow> m_CheckpointRows;
 
 	void DSBX_SceneOps(DSBX_World world, DSBX_Scene scene)
@@ -78,7 +75,7 @@ class DSBX_SceneOps
 		m_DelQueue = new array<DSBX_SceneRecord>();
 		m_DelIsChild = new array<int>();
 		m_DelDepth = new array<int>();
-		m_InFlightDel = new array<ref DSBX_DelPending>();
+		m_CurrentDel = null;
 		m_CheckpointRows = new array<ref DSBX_CheckpointRow>();
 		ResetActive();
 	}
@@ -104,7 +101,6 @@ class DSBX_SceneOps
 		m_ClearGenOnFirstDelete = false;
 		m_OpScopeActive = false;
 		m_QueueEmptyAtStart = false;
-		m_BatchDeleteFailed = false;
 		m_TargetSess = "";
 		m_TargetOpId = "";
 		m_Parada = "";
@@ -113,7 +109,7 @@ class DSBX_SceneOps
 		m_DelIsChild.Clear();
 		m_DelDepth.Clear();
 		m_DelIdx = 0;
-		m_InFlightDel.Clear();
+		m_CurrentDel = null;
 		m_CheckpointRows.Clear();
 	}
 
@@ -142,7 +138,7 @@ class DSBX_SceneOps
 			return false;
 		}
 		int scope = g_Game.ConfigGetInt("CfgVehicles " + clsName + " scope");
-		return scope == 2;
+		return scope >= 1;
 	}
 
 	void RecordEffect()
@@ -173,17 +169,17 @@ class DSBX_SceneOps
 		return DSBX_SceneWire.SceneReadJson(m_World.GetEpoch(), m_Scene, docId, obsJson);
 	}
 
-	bool IsGoneByNetId(int netLow, int netHigh, Object obj)
+	bool IsGoneByNetId(int netLow, int netHigh)
 	{
-		if (netLow != 0 || netHigh != 0)
+		if (netLow == 0 && netHigh == 0)
 		{
-			if (!g_Game)
-			{
-				return false;
-			}
-			return g_Game.GetObjectByNetworkId(netLow, netHigh) == null;
+			return false;
 		}
-		return obj == null;
+		if (!g_Game)
+		{
+			return false;
+		}
+		return g_Game.GetObjectByNetworkId(netLow, netHigh) == null;
 	}
 
 	// DP-6 y §5.4: registra las tres senales por tick para F2P-10.
@@ -206,7 +202,7 @@ class DSBX_SceneOps
 			sigPend = 1;
 		}
 		int sigNet = 0;
-		if (IsGoneByNetId(netLow, netHigh, obj))
+		if (IsGoneByNetId(netLow, netHigh))
 		{
 			sigNet = 1;
 		}
@@ -509,18 +505,16 @@ class DSBX_SceneOps
 			r = r + 1;
 		}
 
-		// M14: todas las clases de `classes` tienen que usarse si hay filas.
-		if (nRows > 0)
+		// M14: todas las clases de `classes` tienen que usarse (tambien con 0 filas:
+		// un plan v1.2.2 con `rows` y sin columnas llega con 0 filas y `classes` no vacio -> bad_plan).
+		int uc = 0;
+		while (uc < nClasses)
 		{
-			int uc = 0;
-			while (uc < nClasses)
+			if (usedCi.Get(uc) == 0)
 			{
-				if (usedCi.Get(uc) == 0)
-				{
-					return "bad_plan";
-				}
-				uc = uc + 1;
+				return "bad_plan";
 			}
+			uc = uc + 1;
 		}
 
 		// A6: falla cerrado sin caps validos.
@@ -777,25 +771,12 @@ class DSBX_SceneOps
 
 	void StepDeleteIssue(DSBX_Peer peer)
 	{
-		int issuedInBatch = 0;
-		bool hasBatchGroup = false;
-		int batchIsChild = 0;
-		int batchDepth = 0;
-
 		array<DSBX_SceneRecord> scopeRecs = new array<DSBX_SceneRecord>();
 		array<Object> delObjs = new array<Object>();
 		array<DSBX_SceneRecord> delObjRecs = new array<DSBX_SceneRecord>();
 
-		while (m_DelIdx < m_DelQueue.Count() && issuedInBatch < DSBX_SceneConst.SCENE_BATCH)
+		while (m_DelIdx < m_DelQueue.Count())
 		{
-			// M1: no mezclar pasada 1 (o niveles distintos de hijos) con pasada 2 en el mismo lote.
-			int curIsChild = m_DelIsChild.Get(m_DelIdx);
-			int curDepth = m_DelDepth.Get(m_DelIdx);
-			if (hasBatchGroup && (curIsChild != batchIsChild || (curIsChild == 1 && curDepth != batchDepth)))
-			{
-				break;
-			}
-
 			// M3: antes de cada efecto, comprobar epoch.
 			if (m_World.GetEpoch() != m_OrderEpoch)
 			{
@@ -826,6 +807,13 @@ class DSBX_SceneOps
 			Object obj = rec.ResolveLiveObject();
 			if (!obj)
 			{
+				// DP-6: sin net_id valido no se puede confirmar el borrado por GetObjectByNetworkId.
+				if (rec.m_NetLow == 0 && rec.m_NetHigh == 0)
+				{
+					LogDeleteSignal(peer, rec.m_Lid, 0, 0, null, 0, 1);
+					m_Parada = "delete_failed";
+					break;
+				}
 				m_Scene.RemoveRecord(rec);
 				RecordEffect();
 				if (m_ClearGenOnFirstDelete)
@@ -850,98 +838,80 @@ class DSBX_SceneOps
 				continue;
 			}
 
-			// DP-6: emitir Delete() y confirmar en ticks posteriores con GetObjectByNetworkId.
+			// DP-6: si net_id sigue siendo 0:0 tras RefreshNetworkId, no se da por confirmado -> delete_failed.
 			rec.RefreshNetworkId(obj);
 			int netLow = rec.m_NetLow;
 			int netHigh = rec.m_NetHigh;
+			if (netLow == 0 && netHigh == 0)
+			{
+				LogDeleteSignal(peer, rec.m_Lid, netLow, netHigh, obj, 0, 1);
+				m_Parada = "delete_failed";
+				break;
+			}
+
+			// DP-6 y §3.4 paso 3: emitir un solo Delete() y confirmar antes de emitir el siguiente.
 			obj.Delete();
 			LogDeleteSignal(peer, rec.m_Lid, netLow, netHigh, obj, 0, 0);
-			m_InFlightDel.Insert(new DSBX_DelPending(rec, obj, netLow, netHigh));
-			hasBatchGroup = true;
-			batchIsChild = curIsChild;
-			batchDepth = curDepth;
-			issuedInBatch = issuedInBatch + 1;
-		}
-
-		if (m_InFlightDel.Count() > 0)
-		{
+			m_CurrentDel = new DSBX_DelPending(rec, obj, netLow, netHigh);
 			m_Phase = PHASE_DEL_CONFIRM;
 			return;
 		}
-		if (m_Parada != "" || m_DelIdx >= m_DelQueue.Count())
-		{
-			m_Phase = PHASE_DEL_FINISH;
-			FinishDeletePhase(peer);
-		}
+
+		m_Phase = PHASE_DEL_FINISH;
+		FinishDeletePhase(peer);
 	}
 
 	void StepDeleteConfirm(DSBX_Peer peer)
 	{
 		if (m_World.GetEpoch() != m_OrderEpoch)
 		{
-			m_InFlightDel.Clear();
+			m_CurrentDel = null;
 			m_Parada = "stale_epoch";
 			m_Phase = PHASE_DEL_FINISH;
 			FinishDeletePhase(peer);
 			return;
 		}
-
-		bool stillPending = false;
-		int i = 0;
-		while (i < m_InFlightDel.Count())
+		if (!m_CurrentDel)
 		{
-			DSBX_DelPending item = m_InFlightDel.Get(i);
-			if (item && !item.m_Done)
-			{
-				item.m_TicksWaited = item.m_TicksWaited + 1;
-				if (IsGoneByNetId(item.m_NetLow, item.m_NetHigh, item.m_Obj))
-				{
-					LogDeleteSignal(peer, item.m_Rec.m_Lid, item.m_NetLow, item.m_NetHigh, item.m_Obj, 1, 0);
-					m_Scene.RemoveRecord(item.m_Rec);
-					RecordEffect();
-					if (m_ClearGenOnFirstDelete)
-					{
-						DSBX_SceneState stDel = m_Scene.GetSceneState(m_DocId, true);
-						stDel.ClearGeneration();
-					}
-					item.m_Done = true;
-				}
-				else if (item.m_TicksWaited >= DSBX_SceneConst.DEL_CONFIRM_TICKS)
-				{
-					LogDeleteSignal(peer, item.m_Rec.m_Lid, item.m_NetLow, item.m_NetHigh, item.m_Obj, 0, 1);
-					item.m_Done = true;
-					m_BatchDeleteFailed = true;
-				}
-				else
-				{
-					LogDeleteSignal(peer, item.m_Rec.m_Lid, item.m_NetLow, item.m_NetHigh, item.m_Obj, 0, 0);
-					stillPending = true;
-				}
-			}
-			i = i + 1;
-		}
-
-		if (stillPending)
-		{
+			m_Phase = PHASE_DEL_FINISH;
+			FinishDeletePhase(peer);
 			return;
 		}
 
-		m_InFlightDel.Clear();
-		if (m_BatchDeleteFailed)
+		m_CurrentDel.m_TicksWaited = m_CurrentDel.m_TicksWaited + 1;
+		if (IsGoneByNetId(m_CurrentDel.m_NetLow, m_CurrentDel.m_NetHigh))
 		{
+			LogDeleteSignal(peer, m_CurrentDel.m_Rec.m_Lid, m_CurrentDel.m_NetLow, m_CurrentDel.m_NetHigh, m_CurrentDel.m_Obj, 1, 0);
+			m_Scene.RemoveRecord(m_CurrentDel.m_Rec);
+			RecordEffect();
+			if (m_ClearGenOnFirstDelete)
+			{
+				DSBX_SceneState stDel = m_Scene.GetSceneState(m_DocId, true);
+				stDel.ClearGeneration();
+			}
+			m_CurrentDel = null;
+			if (m_DelIdx >= m_DelQueue.Count())
+			{
+				m_Phase = PHASE_DEL_FINISH;
+				FinishDeletePhase(peer);
+				return;
+			}
+			m_Phase = PHASE_DEL_ISSUE;
+			StepDeleteIssue(peer);
+			return;
+		}
+
+		if (m_CurrentDel.m_TicksWaited >= DSBX_SceneConst.DEL_CONFIRM_TICKS)
+		{
+			LogDeleteSignal(peer, m_CurrentDel.m_Rec.m_Lid, m_CurrentDel.m_NetLow, m_CurrentDel.m_NetHigh, m_CurrentDel.m_Obj, 0, 1);
+			m_CurrentDel = null;
 			m_Parada = "delete_failed";
 			m_Phase = PHASE_DEL_FINISH;
 			FinishDeletePhase(peer);
 			return;
 		}
-		if (m_Parada != "" || m_DelIdx >= m_DelQueue.Count())
-		{
-			m_Phase = PHASE_DEL_FINISH;
-			FinishDeletePhase(peer);
-			return;
-		}
-		m_Phase = PHASE_DEL_ISSUE;
-		StepDeleteIssue(peer);
+
+		LogDeleteSignal(peer, m_CurrentDel.m_Rec.m_Lid, m_CurrentDel.m_NetLow, m_CurrentDel.m_NetHigh, m_CurrentDel.m_Obj, 0, 0);
 	}
 
 	void CollectRetainedRecords(array<DSBX_SceneRecord> sourceRecs, array<DSBX_SceneRecord> outRetained)
@@ -1251,8 +1221,7 @@ class DSBX_SceneOps
 		m_TargetSess = m_Session;
 		m_TargetOpId = m_OpId;
 		m_Parada = "";
-		m_BatchDeleteFailed = false;
-		m_InFlightDel.Clear();
+		m_CurrentDel = null;
 		m_DelIdx = 0;
 
 		DSBX_Scene.ComputeRetention(opRecs, m_RetainedIds);
@@ -1356,6 +1325,7 @@ class DSBX_SceneOps
 				StartInOrderCompensation(peer, inBatch);
 				return;
 			}
+			obj.SetPosition(targetPos);
 			obj.SetOrientation(Vector(fyaw, 0.0, 0.0));
 
 			int netLow = 0;

@@ -797,7 +797,7 @@ class DSBX_Scene
 		while (i < items.Count())
 		{
 			EntityAI child = items.Get(i);
-			if (child && child != ent && !IsMarkedForDeletion(child))
+			if (child && child != ent)
 			{
 				if (!ContainsObject(deletableObjs, child))
 				{

@@ -134,7 +134,7 @@ class DSBX_Catalog
 			m_ScanIdx = m_ScanIdx + 1;
 			steps = steps + 1;
 			int scope = g_Game.ConfigGetInt("CfgVehicles " + clsName + " scope");
-			if (scope == 2)
+			if (scope >= 1)
 			{
 				string baseName = "";
 				g_Game.ConfigGetBaseName("CfgVehicles " + clsName, baseName);
