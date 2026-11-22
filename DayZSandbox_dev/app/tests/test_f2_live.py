@@ -614,8 +614,8 @@ class F2A2Apply(LiveBase):
         self.assertTrue(check_apply_predicate(order, read_ok))
 
     def test_predicado_checkpoint_objetos_apoyo_y_criaturas_3d(self):
-        # §6.1 (:664, R-13, V-10): objetos en horizontal (< 498 mm) + apoyo (|y - gy| <= 2000 mm);
-        # criaturas en 3D (< 498 mm).
+        # §6.1 (:664, R-13, V-10): objetos en horizontal (< 498 mm) + apoyo (|y - gy| <= 2000 - EPS_Q = 1998 mm,
+        # margen de D12); criaturas en 3D (< 498 mm).
         gen = {"session": "a" * 16, "op_id": "op-1", "rev": 1,
                "hash": "0" * 64, "plan_sha256": "0" * 64}
         last = {"session": "a" * 16, "op_id": "op-1",
@@ -641,14 +641,17 @@ class F2A2Apply(LiveBase):
 
         # Objeto con origen a +1291 mm sobre gy (Land_Wreck_Ikarus) y 0 en horizontal -> pasa
         self.assertTrue(check_apply_predicate(obj_order, obj_read(1000, gy + 1291, 1000)))
-        # Limite de apoyo vertical: |y - gy| == 2000 pasa, 2001 falla (en ambos signos)
-        self.assertTrue(check_apply_predicate(obj_order, obj_read(1000, gy + 2000, 1000)))
-        self.assertTrue(check_apply_predicate(obj_order, obj_read(1000, gy - 2000, 1000)))
-        self.assertFalse(check_apply_predicate(obj_order, obj_read(1000, gy + 2001, 1000)))
-        self.assertFalse(check_apply_predicate(obj_order, obj_read(1000, gy - 2001, 1000)))
+        # Limite de apoyo vertical con el margen de D12: |y - gy| == 1998 pasa, 1999 falla (en ambos signos)
+        self.assertTrue(check_apply_predicate(obj_order, obj_read(1000, gy + 1998, 1000)))
+        self.assertTrue(check_apply_predicate(obj_order, obj_read(1000, gy - 1998, 1000)))
+        self.assertFalse(check_apply_predicate(obj_order, obj_read(1000, gy + 1999, 1000)))
+        self.assertFalse(check_apply_predicate(obj_order, obj_read(1000, gy - 1999, 1000)))
+        self.assertFalse(check_apply_predicate(obj_order, obj_read(1000, gy + 2000, 1000)))
         # Limite horizontal en objetos: 497 mm pasa (aun con origen a +1291), 498 mm falla
         self.assertTrue(check_apply_predicate(obj_order, obj_read(1497, gy + 1291, 1000)))
         self.assertFalse(check_apply_predicate(obj_order, obj_read(1498, gy, 1000)))
+        # N-04: en diagonal la distancia es la euclidiana, no la suma de los ejes: (300, 300) da 424 mm -> pasa
+        self.assertTrue(check_apply_predicate(obj_order, obj_read(1300, gy, 1300)))
 
         zmb_order = {
             "session": "a" * 16, "op_id": "op-1", "epoch": "e" * 32,
@@ -673,6 +676,33 @@ class F2A2Apply(LiveBase):
         # Criatura a 497 mm exactos en 3D (142^2 + 213^2 + 426^2 = 497^2) -> pasa; a 498 -> falla
         self.assertTrue(check_apply_predicate(zmb_order, zmb_read(1142, gy + 213, 1426)))
         self.assertFalse(check_apply_predicate(zmb_order, zmb_read(1000, gy + 498, 1000)))
+        # N-04: la medida de las criaturas es 3D, no horizontal y vertical por separado: 400 mm en horizontal y
+        # +400 en vertical dan 566 mm en 3D -> falla
+        self.assertFalse(check_apply_predicate(zmb_order, zmb_read(1400, gy + 400, 1000)))
+
+        # N-04: los animales (prefijo ani) se juzgan como criaturas (3D), no como objetos
+        ani_order = {
+            "session": "a" * 16, "op_id": "op-1", "epoch": "e" * 32,
+            "verb": "scene.apply",
+            "args": {
+                "f2": 1, "doc_id": DOC_ID, "rev": 1, "hash": "0" * 64,
+                "plan_sha256": "0" * 64,
+                "caps": {"objeto": 0, "infectado": 0, "animal": 1, "total": -1},
+                "classes": ["Animal_CervusElaphus"],
+                "lid": ["ani-01"], "ci": [0], "x_mm": [1000], "z_mm": [1000], "yaw_mdeg": [0],
+            },
+            "expectation": {"ani-01": ("Animal_CervusElaphus", 1000.0, 1000.0)},
+        }
+
+        def ani_read(x, y, z):
+            return self.scene_read(
+                "e" * 32, generation=gen, n=1, last=last, obs_at="checkpoint",
+                rows=[["ani-01", 0, x, y, z, 0, gy]])
+
+        # control positivo: en su sitio y apoyado -> pasa
+        self.assertTrue(check_apply_predicate(ani_order, ani_read(1000, gy, 1000)))
+        # a +600 mm en vertical y 0 en horizontal -> falla, como el infectado (como objeto pasaria)
+        self.assertFalse(check_apply_predicate(ani_order, ani_read(1000, gy + 600, 1000)))
 
     def test_fila_omitida_y_ci_de_otra_clase(self):
         env = self.make_env()
