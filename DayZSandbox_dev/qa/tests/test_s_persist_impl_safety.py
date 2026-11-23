@@ -3558,6 +3558,194 @@ class TestP2fBlockedTerminalReceipt(_GuardedTestCase):
         self.assertTrue(any(ev.get("ev") == "purge_cold_stop" for ev in ctx.scenario))
 
 
+class TestP2gContradictoryPurge(_GuardedTestCase):
+    """BLOQ 1 de Sol: contradiccion o recurso ocupado exige cese acreditado.
+
+    Una respuesta terminal contradicha por una lectura posterior o un job_free
+    rejected/busy no dan la purga por parada; un arranque busy con unknown_job
+    tampoco. t6 (cold_stop_ok) solo se habilita si cesa por job_stop acreditado
+    o por una parada en frio confirmada por su predicado.
+    """
+
+    def _accredited(self):
+        return [{"pers_id": "3:0:0:0", "class_name": "WorkingGloves_Yellow",
+                 "logical_id": "g", "net_id": "1:10"}]
+
+    def _run(self, fake_issue, *, cold_ok=True, timeout_s=1.0, wait_idle="idle"):
+        ctx = _FakeCtxT4(now_ms=5000.0)
+        clock = _FakeClock()
+        with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue), \
+             mock.patch.object(f03_common, "wait_peer_idle", return_value=wait_idle), \
+             mock.patch.object(f03_common, "await_operator",
+                               return_value={"ok": cold_ok,
+                                             "step": "t4_purge_cold_stop"}):
+            result = s_persist_run._purge_start_t4(
+                ctx, self._accredited(), server_epoch_new="epoch-new",
+                director_uid="dir-uid", timeout_s=timeout_s, poll_s=1.0,
+                monotonic=clock.monotonic, sleep=clock.sleep,
+                storage_env=None,
+            )
+        return result, ctx
+
+    def test_injected_done_contradicted_by_running_read_and_busy_free_stops_job(self):
+        calls = []
+        stopped = {"v": False}
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append((verb, kwargs.get("target_inst")))
+            if verb == "per_purge_start":
+                return _op_outcome("done", "", "op-start", {
+                    "str": {"job": "op-start", "state": "running", "resource": "per_purge"},
+                    "num": {"pre_n": 1.0},
+                })
+            if verb == "job_read":
+                reads = [v for v, _t in calls].count("job_read")
+                if not stopped["v"]:
+                    if reads == 1:
+                        return _op_outcome("done", "", "op-read", {
+                            "str": {"job": "op-start", "state": "done",
+                                    "resource": "per_purge"},
+                            "num": {"page_n": 0.0, "pages_n": 1.0, "rows_total_n": 1.0},
+                            "rows": [{"phase": "result", "result": "deleted"}],
+                        })
+                    return _op_outcome("done", "", "op-read", {
+                        "str": {"job": "op-start", "state": "running",
+                                "resource": "per_purge"},
+                        "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
+                        "rows": [],
+                    })
+                return _op_outcome("done", "", "op-read", {
+                    "str": {"job": "op-start", "state": "stopped",
+                            "resource": "per_purge"},
+                    "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
+                    "rows": [],
+                })
+            if verb == "job_stop":
+                stopped["v"] = True
+                return _op_outcome("done", "", "op-stop", {
+                    "str": {"job": "op-start", "state": "stopped"},
+                    "num": {"rows_total_n": 0.0},
+                })
+            if verb == "job_free":
+                return _op_outcome("rejected", "busy", "op-free", None)
+            raise AssertionError(verb)
+
+        result, ctx = self._run(fake_issue)
+        self.assertFalse(result["done"])
+        self.assertTrue(result["cold_stop_ok"])
+        self.assertIn("job_stop", [v for v, _t in calls])
+        self.assertTrue(any(ev.get("ev") == "purge_contradiction" for ev in ctx.scenario))
+        self.assertTrue(any(ev.get("ev") == "purge_free"
+                            and ev.get("status") == "rejected" for ev in ctx.scenario))
+        self.assertFalse(any(ev.get("ev") == "purge_cold_stop" for ev in ctx.scenario))
+        self.assertTrue(all(t == "epoch-new" for v, t in calls
+                            if v in ("job_read", "job_stop", "job_free")))
+
+    def test_injected_done_with_unresolvable_stop_has_no_cold_stop_ok(self):
+        calls = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append(verb)
+            if verb == "per_purge_start":
+                return _op_outcome("done", "", "op-start", {
+                    "str": {"job": "op-start", "state": "running", "resource": "per_purge"},
+                    "num": {"pre_n": 1.0},
+                })
+            if verb == "job_read":
+                if calls.count("job_read") == 1:
+                    return _op_outcome("done", "", "op-read", {
+                        "str": {"job": "op-start", "state": "done", "resource": "per_purge"},
+                        "num": {"page_n": 0.0, "pages_n": 1.0, "rows_total_n": 1.0},
+                        "rows": [{"phase": "result", "result": "deleted"}],
+                    })
+                return _op_outcome("done", "", "op-read", {
+                    "str": {"job": "op-start", "state": "running", "resource": "per_purge"},
+                    "num": {"page_n": 0.0, "pages_n": 0.0, "rows_total_n": 0.0},
+                    "rows": [],
+                })
+            if verb == "job_free":
+                return _op_outcome("rejected", "busy", "op-free", None)
+            if verb == "job_stop":
+                return _op_outcome("timeout", "result_timeout", "op-stop", None)
+            raise AssertionError(verb)
+
+        result, ctx = self._run(fake_issue, cold_ok=False, wait_idle="timeout")
+        self.assertFalse(result["done"])
+        self.assertFalse(result["cold_stop_ok"])
+        self.assertTrue(any(ev.get("ev") == "purge_contradiction" for ev in ctx.scenario))
+        self.assertTrue(any(ev.get("ev") == "purge_cold_stop"
+                            and ev.get("accredited_b") == 0 for ev in ctx.scenario))
+
+    def test_busy_start_and_unknown_new_job_without_cold_stop_has_no_cold_stop_ok(self):
+        calls = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append(verb)
+            if verb == "per_purge_start":
+                return _op_outcome("rejected", "busy", "op-new", None)
+            if verb == "job_read":
+                return _op_outcome("rejected", "unknown_job", "op-read", None)
+            if verb == "job_stop":
+                return _op_outcome("rejected", "unknown_job", "op-stop", None)
+            raise AssertionError(verb)
+
+        result, ctx = self._run(fake_issue, cold_ok=False)
+        self.assertFalse(result["done"])
+        self.assertFalse(result["cold_stop_ok"])
+        self.assertTrue(any(ev.get("ev") == "purge_start_unaccredited"
+                            for ev in ctx.scenario))
+        self.assertTrue(any(ev.get("ev") == "purge_cold_stop"
+                            and ev.get("accredited_b") == 0 for ev in ctx.scenario))
+        self.assertFalse(any(ev.get("ev") == "purge_pages" for ev in ctx.scenario))
+
+    def test_busy_start_and_unknown_new_job_with_confirmed_cold_stop_allows_t6(self):
+        calls = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append(verb)
+            if verb == "per_purge_start":
+                return _op_outcome("rejected", "busy", "op-new", None)
+            if verb == "job_read":
+                return _op_outcome("rejected", "unknown_job", "op-read", None)
+            if verb == "job_stop":
+                return _op_outcome("rejected", "unknown_job", "op-stop", None)
+            raise AssertionError(verb)
+
+        result, ctx = self._run(fake_issue, cold_ok=True)
+        self.assertFalse(result["done"])
+        self.assertTrue(result["cold_stop_ok"])
+        self.assertTrue(any(ev.get("ev") == "purge_cold_stop"
+                            and ev.get("accredited_b") == 1 for ev in ctx.scenario))
+
+    def test_honest_done_still_opens_t5_and_t6(self):
+        calls = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            calls.append(verb)
+            if verb == "per_purge_start":
+                return _op_outcome("done", "", "op-start", {
+                    "str": {"job": "op-start", "state": "running", "resource": "per_purge"},
+                    "num": {"pre_n": 1.0},
+                })
+            if verb == "job_read":
+                return _op_outcome("done", "", "op-read", {
+                    "str": {"job": "op-start", "state": "done", "resource": "per_purge"},
+                    "num": {"page_n": 0.0, "pages_n": 1.0, "rows_total_n": 1.0},
+                    "rows": [{"phase": "result", "result": "deleted"}],
+                })
+            if verb == "job_free":
+                return _op_outcome("done", "", "op-free",
+                                   {"str": {"job": "op-start", "freed": "1"}})
+            raise AssertionError(verb)
+
+        result, ctx = self._run(fake_issue)
+        self.assertTrue(result["done"])
+        self.assertTrue(result["cold_stop_ok"])
+        self.assertNotIn("job_stop", calls)
+        self.assertFalse(any(ev.get("ev") == "purge_contradiction" for ev in ctx.scenario))
+        self.assertFalse(any(ev.get("ev") == "purge_cold_stop" for ev in ctx.scenario))
+
+
 class _HalfStepPeer(_ClockPeer):
     """Peer cuyo reloj avanza 0,5 ms por muestra, como el caso de Sol."""
 

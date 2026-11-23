@@ -1679,6 +1679,85 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
                 int(round(max(0.0, clock() - stop_deadline + 10.0) * 1000.0)), polls)
         return True, st, rs, None
 
+    def _cease_after_contradiction(trigger, waited_ms=0, polls=0):
+        """BLOQ 1: una contradiccion o un recurso ocupado no se dan por parados.
+
+        No se adopta el estado previo como prueba: la purga solo cuenta como
+        cesada si un job_stop acreditado (job == op_id, epoch nuevo) llega a un
+        estado terminal o si una lectura acreditada posterior lo confirma. Si
+        no, parada en frio; su cold_stop_ok sale solo del predicado.
+        Devuelve (ceased, state, reason, cold): si ceased es False, cold es el
+        dict de _cold_stop que el llamador debe devolver.
+        """
+        st = ""
+        rs = ""
+        stop = _purge_issue(
+            ctx, "job_stop",
+            wire.pack_payload(scalars_str={"job": job_id}),
+            target_inst=server_epoch_new,
+        )
+        if stop is None:
+            ctx.record_scenario({
+                "ev": "purge_stop_slot_busy",
+                "job": job_id,
+                "server_epoch": server_epoch_new,
+                "trigger": trigger,
+            })
+            return False, st, rs, _cold_stop(
+                f"{trigger}_stop_unissued", st, waited_ms, polls)
+        ctx.record_scenario({
+            "ev": "purge_stop",
+            "status": stop.status,
+            "reason": stop.reason,
+            "job": job_id,
+            "server_epoch": server_epoch_new,
+            "trigger": trigger,
+        })
+        stop_ok, stop_state, stop_reason = _purge_accredited_state(
+            stop, job_id, expected_epoch=server_epoch_new)
+        if stop_ok and stop_state in TERMINAL_STATES:
+            return True, stop_state, stop_reason, None
+        if not _purge_settle_timeout(ctx, stop):
+            ctx.record_scenario({
+                "ev": "purge_stop_slot_busy",
+                "job": job_id,
+                "server_epoch": server_epoch_new,
+                "trigger": trigger,
+            })
+            return False, st, rs, _cold_stop(
+                f"{trigger}_stop_timeout", st, waited_ms, polls)
+        deadline = clock() + 10.0
+        while clock() < deadline:
+            last = _purge_issue(
+                ctx, "job_read",
+                wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
+                target_inst=server_epoch_new,
+            )
+            polls += 1
+            if last is None:
+                return False, st, rs, _cold_stop(
+                    f"{trigger}_read_slot_busy", st, waited_ms, polls)
+            ok, s2, r2 = _purge_accredited_state(
+                last, job_id, require_resource=True, expected_epoch=server_epoch_new)
+            if ok:
+                st = s2
+                rs = r2
+            else:
+                ctx.record_scenario({
+                    "ev": "purge_read_unaccredited",
+                    "job": job_id,
+                    "server_epoch": server_epoch_new,
+                    "trigger": trigger,
+                })
+            if not _purge_settle_timeout(ctx, last):
+                return False, st, rs, _cold_stop(
+                    f"{trigger}_read_timeout", st, waited_ms, polls)
+            if st in TERMINAL_STATES:
+                return True, st, rs, None
+            sleeper(0.2)
+        return False, st, rs, _cold_stop(
+            f"{trigger}_no_terminal", st, waited_ms, polls)
+
     ack_ok_state, ack_state, ack_reason = _purge_accredited_state(
         start, job_id, require_resource=True, expected_epoch=server_epoch_new)
     if ack_ok_state:
@@ -1789,13 +1868,41 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
                     "server_epoch": server_epoch_new,
                 })
             else:
-                ctx.record_scenario({
-                    "ev": "purge_not_done",
-                    "reason": f"start_{start.status}_{start.reason}",
-                    "server_epoch": server_epoch_new,
-                })
-                return {"done": False, "state": "", "reason": start.reason, "rows": [],
-                        "job_id": "", "cold_stop_ok": True}
+                # BLOQ 1: solo un recurso ocupado en el arranque (busy) puede
+                # dejar una purga previa activa. Un rechazo sin busy (p. ej.
+                # stale_epoch) no ordeno purga: no hay nada que parar.
+                if str(start.reason or "") == "busy" or start.status == "busy":
+                    ctx.record_scenario({
+                        "ev": "purge_start_unaccredited",
+                        "start_status": start.status,
+                        "start_reason": start.reason,
+                        "probe_status": probe.status,
+                        "probe_reason": probe.reason,
+                        "server_epoch": server_epoch_new,
+                    })
+                    ceased, state, reason, cold = _cease_after_contradiction(
+                        f"start_{start.status}_{start.reason}")
+                    if not ceased:
+                        return cold
+                    start_ok = True
+                    # El acuse no probo ser del trabajo: no abre t5 por si solo.
+                    ack_ok = False
+                    ctx.record_scenario({
+                        "ev": "purge_start_probe",
+                        "job": job_id,
+                        "state": state,
+                        "start_status": start.status,
+                        "start_reason": start.reason,
+                        "server_epoch": server_epoch_new,
+                    })
+                else:
+                    ctx.record_scenario({
+                        "ev": "purge_not_done",
+                        "reason": f"start_{start.status}_{start.reason}",
+                        "server_epoch": server_epoch_new,
+                    })
+                    return {"done": False, "state": "", "reason": start.reason,
+                            "rows": [], "job_id": "", "cold_stop_ok": True}
 
     started = clock()
     deadline = started + max(0.0, timeout)
@@ -1912,6 +2019,7 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
             return _cold_stop("wait_expired_no_terminal", state, waited_ms, polls)
     rows = []
     pages = None
+    pages_error = ""
     if state in TERMINAL_STATES:
         try:
             # MEN 7/BLOQ 1: la rodaja contractual (page_size 8), el job/recurso
@@ -1934,11 +2042,12 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
                 "server_epoch": server_epoch_new,
             })
         except Exception as exc:
+            pages_error = str(exc)
             ctx.record_scenario({
                 "ev": "purge_pages_error",
                 "job": job_id,
                 "state": state,
-                "error": str(exc),
+                "error": pages_error,
                 "server_epoch": server_epoch_new,
             })
     free = None
@@ -1958,11 +2067,72 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
         "job": job_id,
         "server_epoch": server_epoch_new,
     })
+    pages_state = str((pages or {}).get("state") or "")
+    # BLOQ 1: evidencia contradictoria. Una lectura posterior que niega el
+    # terminal (la pagina exige terminal y no lo es) o un job_free rejected/busy
+    # obligan a acreditar el cese antes de dar la purga por parada. Una pagina
+    # incompleta o un terminal distinto (failed) ya prueban que la purga ceso:
+    # cierran t5, pero no exigen parar nada.
+    free_busy = (
+        free is not None
+        and free.status == "rejected"
+        and str(free.reason or "") != "unknown_job"
+    )
+    pages_contradict = (
+        state in TERMINAL_STATES
+        and pages is None
+        and "requires terminal" in pages_error
+    )
+    if free_busy or pages_contradict:
+        ctx.record_scenario({
+            "ev": "purge_contradiction",
+            "job": job_id,
+            "state": state,
+            "pages_state": pages_state,
+            "pages_error": pages_error,
+            "free_status": free.status if free is not None else "slot_busy",
+            "free_reason": free.reason if free is not None else "",
+            "server_epoch": server_epoch_new,
+        })
+        ceased, state2, reason2, cold = _cease_after_contradiction(
+            "contradiction", waited_ms, polls)
+        if not ceased:
+            return cold
+        state = state2 or state
+        reason = reason2 or reason
+        if pages_contradict and state in TERMINAL_STATES:
+            try:
+                pages = _read_job_pages_target(
+                    ctx, job_id, target_inst=server_epoch_new, timeout_ms=30000,
+                    page_size=PURGE_PAGE_SIZE, expected_resource=PURGE_RESOURCE,
+                    require_job=True, verify_reread=True,
+                )
+                rows = list(pages.get("rows") or [])
+                ctx.record_scenario({
+                    "ev": "purge_pages",
+                    "job": job_id,
+                    "state": pages.get("state", state),
+                    "reason": pages.get("reason", reason),
+                    "rows_total_n": pages.get("rows_total_n", 0),
+                    "pages_n": pages.get("pages_n", 0),
+                    "rows": rows,
+                    "raw_pages": pages.get("raw_pages", []),
+                    "server_epoch": server_epoch_new,
+                })
+            except Exception as exc:
+                pages_error = str(exc)
+                ctx.record_scenario({
+                    "ev": "purge_pages_error",
+                    "job": job_id,
+                    "state": state,
+                    "error": pages_error,
+                    "server_epoch": server_epoch_new,
+                })
+        pages_state = str((pages or {}).get("state") or "")
     pages_complete = (
         pages is not None
         and len(rows) == int(pages.get("rows_total_n", -1))
     )
-    pages_state = str((pages or {}).get("state") or "")
     # BLOQ 1: recibo terminal coherente. Solo un estado terminal no fallido
     # (done) en las paginas revalidadas abre t5; una pagina final failed no.
     done = (
