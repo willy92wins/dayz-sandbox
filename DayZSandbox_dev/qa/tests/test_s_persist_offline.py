@@ -7919,6 +7919,157 @@ class TestSPersistOracleOffline(unittest.TestCase):
                     verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
                     self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
 
+    # =========================================================================
+    # O4 (variante «solo el guante» que eligio Guillermo, 22-nov): el hallazgo 4 de Sol sobre `ba58eda`. Un guante
+    # acreditado que consta en `pre` puede salir del arbol del director sin baja y seguir vivo: el motor suelta lo que
+    # el director lleva en las manos al quedar inconsciente (`playerbase.c:3771-3774`), junto a el. Regla 1: el
+    # `pers_id` acreditado se busca en todas las ubicaciones de los censos posteriores a la purga (`:582`). Regla 2: su
+    # ausencia solo se acredita con los alrededores del director en t5 cubiertos (arbitraje 4, `:632`). Los
+    # reproductores de Sol son datos: estos tests se escriben desde cero.
+    # =========================================================================
+
+    # Posicion del director en t5 de la partida Diag real `run_20261117T061110Z`: en las 10 partidas archivadas con
+    # filas del director, todas sus filas comparten una posicion, a entre 7,7 y 11,1 km del disco mas cercano.
+    _O4_DIRECTOR_FAR = (8042.12, 3188.60)
+    # Censos posteriores a la purga que leen al director en el constructor (t5 de area_a y area_b, testigo y t6 de area_a)
+    _O4_DIRECTOR_TAGS = frozenset({
+        "t5_post_restart_census:area_a", "t5_post_restart_census:area_b", "t5_witness_pre_census:area_b",
+        "t5_witness_post_census:area_b", "t6_post_cleanup_census:area_a",
+    })
+
+    def _o4_place_director(self, part_dir: Path, builder: "_SyntheticPartBuilder", x: float, z: float) -> None:
+        """Pone en ``(x, z)`` las filas del inventario del director de los censos posteriores a la purga: su
+        `GetPosition()` es la del director (en una partida Diag real, todas sus filas comparten una sola posicion)."""
+        def edit(page: types.SimpleNamespace) -> None:
+            for row in self._e9_director_rows(page, builder):
+                row.update(pos_x_m=float(x), pos_y_m=_surface_y(x, z), pos_z_m=float(z))
+
+        self._e9_edit_pages(part_dir, set(self._O4_DIRECTOR_TAGS), edit)
+
+    def _o4_gloves_leave_the_tree(self, lids: tuple[str, ...]) -> Any:
+        """Gancho de la purga: los guantes ``lids`` constan en `pre` y salen del arbol antes de resolverse, sin baja."""
+        def hook(b: Any, plan: dict[str, Any]) -> None:
+            plan["rows"] = self._o3_rows_gloves_left_after_pre(b, plan, lids)
+        return hook
+
+    def _o4_glove_in_the_world(self, builder: "_SyntheticPartBuilder", part_dir: Path, lid: str, x: float, z: float,
+                               net_id: str = "") -> dict[str, Any]:
+        """Fila de censo del guante acreditado ``lid`` en el suelo en ``(x, z)``, fuera del director, con su `pers_id`
+        y el `net_id` con que consta en `pre` (o ``net_id`` si no consta)."""
+        ent = builder.entities_by_lid[lid]
+        pre = [r for r in self._e9_purge_rows(part_dir) if r["phase"] == "pre" and r["pers_id"] == ent["pers_id"]]
+        return self._t6_row(
+            class_name=ent["class_name"], pers_id=ent["pers_id"], net_id=pre[0]["net_id"] if pre else net_id,
+            ai_agent_b=0.0, max_hp=100.0, health_hp=100.0, yaw_deg=12.0,
+            pos_x_m=float(x), pos_y_m=_surface_y(x, z), pos_z_m=float(z),
+        )
+
+    def _o4_add_world_rows(self, part_dir: Path, tag: str, rows: list[dict[str, Any]]) -> None:
+        """Anade filas que no son del director al censo ``tag`` con sus contadores coherentes (el ayudante de e9 cuenta
+        cada fila tambien en `director_inv_count_n`)."""
+        self._e9_add_rows_to_census(part_dir, tag, rows)
+        self._e9_edit_start_reads(
+            part_dir, {tag}, lambda pg: pg.nums.update(director_inv_count_n=pg.nums["director_inv_count_n"] - len(rows))
+        )
+
+    def test_neg_o4_glove_out_of_the_tree_alive_or_out_of_coverage_never_passes(self) -> None:
+        """Hallazgo 4 de Sol sobre `ba58eda` (H1): que el guante falte en el arbol no acredita que falte en el mundo.
+        - Regla 2, sale del arbol despues de `pre` sin baja y nada lo ve: con el director fuera de todo disco t5 (donde
+          lo ponen las partidas reales), o dentro de un disco pero a menos de 15 m del borde -> PER-08 `missing`
+          (`purge_absent_uncovered`), nunca PASA.
+        - Regla 1, el `pers_id` acreditado aparece en el suelo de un censo posterior (en t5 de area_a, lejos de area_b,
+          que es la unica area donde PER-08 lo juzgaba por clase) -> remanente, PER-08 `fail`; tambien si nunca volvio al
+          arbol (`absent` sin estar en `pre`)."""
+        yellow = ("b_act_1_gloves_dir",)
+        variants = (
+            # el caso de Sol `YELLOW_LEFT_AFTER_PRE_OUTSIDE_COVERAGE` con el director donde lo ponen las partidas reales
+            ("director_outside_every_disc", yellow, None, self._O4_DIRECTOR_FAR, None,
+             {"PER-08": "missing"}, "purge_absent_uncovered:b_act_1_gloves_dir"),
+            ("director_inside_area_a_within_15_m_of_its_edge", yellow, None, (4550.0, 10200.0), None,
+             {"PER-08": "missing"}, "purge_absent_uncovered:b_act_1_gloves_dir"),
+            ("both_gloves_left_director_outside_every_disc", ("ac_act_1_gloves_dir", "b_act_1_gloves_dir"), None,
+             self._O4_DIRECTOR_FAR, None, {"PER-08": "missing"}, "purge_absent_uncovered:ac_act_1_gloves_dir"),
+            # el caso de Sol `AUTHORIZED_GLOVE_ON_GROUND_FAR_FROM_AREA_B_T5`: el guante, visible en el suelo solo en t5
+            ("glove_on_the_ground_of_area_a_only_in_t5", yellow, None, None, (4497.0, 10201.0),
+             {"PER-08": "fail"}, "purge_remnant_out_of_director:b_act_1_gloves_dir"),
+            ("glove_never_back_in_the_tree_on_the_ground_in_t5", (), ("ac_act_1_gloves_dir",), None, (4512.0, 10190.0),
+             {"PER-08": "fail"}, "purge_remnant_out_of_director:b_act_1_gloves_dir"),
+        )
+        for name, lids, returning, director_xz, ground_xz, expected, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    hook = self._o4_gloves_leave_the_tree(lids) if lids else None
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook, purge_returning=returning)
+                    rows = self._e9_purge_rows(part_dir)
+                    pre_pids = {r["pers_id"] for r in rows if r["phase"] == "pre"}
+                    for lid in lids:
+                        pid = builder.entities_by_lid[lid]["pers_id"]
+                        self.assertIn(pid, pre_pids, msg=name)
+                        self.assertNotIn(pid, {r["pers_id"] for r in rows if r["phase"] == "emit"}, msg=name)
+                        self.assertEqual([r["result"] for r in rows if r["phase"] == "result" and r["pers_id"] == pid],
+                                         ["absent"], msg=name)
+                    if director_xz is not None:
+                        self._o4_place_director(part_dir, builder, *director_xz)
+                    if ground_xz is not None:
+                        if returning is not None:
+                            self.assertNotIn(builder.entities_by_lid["b_act_1_gloves_dir"]["pers_id"], pre_pids, msg=name)
+                        glove = self._o4_glove_in_the_world(builder, part_dir, "b_act_1_gloves_dir", *ground_xz,
+                                                            net_id="1:9851")
+                        self._o4_add_world_rows(part_dir, "t5_post_restart_census:area_a", [glove])
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, expected, name, PER_08=needle)
+                    if name.startswith("both_gloves"):
+                        self.assertIn("purge_absent_uncovered:b_act_1_gloves_dir",
+                                      _checks_by_id(verdict)["PER-08"]["detail"], msg=name)
+
+    def test_pos_o4_legit_absent_after_pre_passes_and_the_visible_glove_control_still_fails(self) -> None:
+        """Controles del hallazgo 4. El caso legitimo de H1: el guante consta en `pre`, sale del arbol sin baja, los
+        alrededores del director en t5 estan cubiertos (director dentro de un disco t5 completo con 15 m de margen: en el
+        centro de area_a, como en el constructor y en el fake, en area_b, o justo en el margen) y no esta en ninguna
+        parte -> PASA. El `absent` de algo que no estaba en `pre` no cambia, ni la purga honesta, con el director fuera de
+        todo disco -> PASA. El control de Sol con el guante visible en el suelo de area_a en t5 y en t6 sigue en FALLA,
+        ahora tambien por identidad en PER-08."""
+        both = ("ac_act_1_gloves_dir", "b_act_1_gloves_dir")
+        variants = (
+            ("director_at_the_centre_of_area_a", ("b_act_1_gloves_dir",), None, None, False, {}),
+            ("director_inside_area_b_both_gloves_left", both, None, (4680.0, 10200.0), False, {}),
+            ("director_exactly_15_m_inside_the_edge_of_area_a", ("b_act_1_gloves_dir",), None, (4545.0, 10200.0), False, {}),
+            ("absent_never_in_pre_director_outside_every_disc", (), ("ac_act_1_gloves_dir",), self._O4_DIRECTOR_FAR, False, {}),
+            ("honest_purge_director_outside_every_disc", (), None, self._O4_DIRECTOR_FAR, False, {}),
+            # el control de Sol `SAME_GLOVE_T5_AND_T6_AREA_A`
+            ("control_glove_visible_on_the_ground_in_t5_and_t6", ("b_act_1_gloves_dir",), None, None, True,
+             {"PER-08": "fail", "PER-09": "fail"}),
+        )
+        for name, lids, returning, director_xz, visible, expected in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    hook = self._o4_gloves_leave_the_tree(lids) if lids else None
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook, purge_returning=returning)
+                    rows = self._e9_purge_rows(part_dir)
+                    results = {r["pers_id"]: r["result"] for r in rows if r["phase"] == "result"}
+                    pre_pids = {r["pers_id"] for r in rows if r["phase"] == "pre"}
+                    for lid in lids:
+                        pid = builder.entities_by_lid[lid]["pers_id"]
+                        self.assertIn(pid, pre_pids, msg=name)
+                        self.assertEqual(results[pid], "absent", msg=name)
+                    if returning is not None:
+                        yellow = builder.entities_by_lid["b_act_1_gloves_dir"]["pers_id"]
+                        self.assertNotIn(yellow, pre_pids, msg=name)
+                        self.assertEqual(results[yellow], "absent", msg=name)
+                    if director_xz is not None:
+                        self._o4_place_director(part_dir, builder, *director_xz)
+                    if visible:
+                        glove = self._o4_glove_in_the_world(builder, part_dir, "b_act_1_gloves_dir", 4503.0, 10196.0)
+                        for tag in ("t5_post_restart_census:area_a", "t6_post_cleanup_census:area_a"):
+                            self._o4_add_world_rows(part_dir, tag, [glove])
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    if expected:
+                        self._e9_expect(verdict, expected, name, PER_08="purge_remnant_out_of_director:b_act_1_gloves_dir",
+                                        PER_09="t6_cleanup_survivors:WorkingGloves_Yellow")
+                    else:
+                        self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+                        self.assertEqual(verdict["verdict"], "PASA", msg=name)
+
 
 if __name__ == "__main__":
     unittest.main()

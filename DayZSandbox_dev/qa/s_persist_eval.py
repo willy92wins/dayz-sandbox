@@ -102,7 +102,11 @@ Evidence contract consumed by ``evaluate(part_dir)``
        the raw order. The order, every waiting ``per_status`` and every read are tied to the new epoch by ``op_id``
        (``enq`` with that ``inst``, a delivery to it, and a ``result`` whose last accepted server ``hello`` is that
        epoch). Remnants and unattributable sentinels are judged in every post-purge census (t5 and t6); absence only
-       with t5.
+       with t5. A remnant is an accredited ``pers_id`` in any location of those censuses (ground, another owner or a
+       world container included); an accredited garment that is in ``pre`` and ends ``absent`` without a deletion
+       (it left the director's tree) needs every director position read in a post-purge t5 census (the
+       ``pos_x_m`` / ``pos_z_m`` of the director's inventory rows) inside a complete t5 disc with a 15 m inner
+       margin, or PER-08 is missing (O4).
      * ``per_status`` in t0 goes without ``director_uid`` and reports ``players_n``: two or more players ->
        ``director_ambiguous`` (2 INCONCLUSO); the uid is fixed only with exactly one ready player before the first
        baseline census (otherwise ``director_not_selected``, 2 INCONCLUSO; traces without ``players_n`` nor a runner
@@ -652,6 +656,10 @@ _ACCREDITATION_STAGES = frozenset({
     "t3_post_reset_census",
 })
 _PRE_RESTART_STAGES = _ACCREDITATION_STAGES | {"t0_baseline_census", "t1_pre_transition_census"}
+# O4 (hallazgo 4 de Sol sobre `ba58eda`): margen interior con el que un disco t5 cubre los alrededores del director, el
+# mismo que la cobertura post-reinicio de las criaturas (brief `:280`, N39: "margen interior >= 15,0 m"). El motor suelta
+# lo que el director lleva en las manos junto a el al quedar inconsciente (`playerbase.c:3771-3774`, `DropItem`).
+_O4_DIRECTOR_SURROUNDINGS_MARGIN_M = 15.0
 
 
 def _purge_row(r: dict[str, Any]) -> dict[str, Any]:
@@ -730,6 +738,10 @@ def _judge_runner_purge(
     y su identidad (H2, H4), la cronologia (H7), el trabajo de la orden y su rodaja de 8 filas (H8), toda la espera de
     `per_status` (H9), la unicidad antes del remanente (H3) y lo observado en t6 (H10); `absent` ya no da `missing` por
     estar en `pre` (H1). ``new_hello_idx`` es el indice del primer `hello` aceptado del servidor nuevo en la traza.
+
+    O4 (variante «solo el guante», hallazgo 4 de Sol sobre `ba58eda`): un remanente se busca en todas las ubicaciones de
+    los censos posteriores, no solo en el director; y una acreditada que consta en `pre` y acaba en `absent` sin baja
+    solo da PASA si los alrededores del director en t5 estan cubiertos (si no, `missing`).
     """
     fails: list[str] = []
     missings: list[str] = []
@@ -934,6 +946,10 @@ def _judge_runner_purge(
     identity_windows: list[list[dict[str, Any]]] = [
         [{"pers_id": str(r.get("pers_id") or ""), "net_id": str(r.get("net_id") or "")} for c in post_purge for r in c.get("rows") or []]
     ]
+    # O4 (hallazgo 4 de Sol sobre `ba58eda`): las acreditadas que constan en `pre` y acaban en `absent` sin baja salieron
+    # del arbol del director despues de la captura inicial. Que falten en el arbol no acredita que falten en el mundo:
+    # su ausencia se juzga en (5) con la cobertura de los alrededores del director en t5.
+    left_after_pre: set[str] = set()
 
     for o in orders:
         is_main = o is main
@@ -1236,6 +1252,7 @@ def _judge_runner_purge(
                 first_baja_of: dict[str, int] = {}
                 for bi in bajas_idx:
                     first_baja_of.setdefault(scan_rows[bi]["pers_id"], bi)
+                pre_pids = {r["pers_id"] for r in pre_rows}
                 for pid in sorted(order_pids):
                     vals = res_by_pid.get(pid, [])
                     if len(vals) != 1:
@@ -1265,6 +1282,9 @@ def _judge_runner_purge(
                     # implementacion resuelve `absent` sobre el arbol del tick de resolucion (P2c). Se contrasta con las
                     # emisiones (sin baja: arriba) y con la cobertura posterior (remanente o director sin cubrir en t5,
                     # abajo); ya no da `missing` por estar en `pre`.
+                    elif val == "absent" and pid in pre_pids and pid in accredited:
+                        # O4: salio del arbol despues de `pre` sin baja; su ausencia del mundo se juzga en (5)
+                        left_after_pre.add(pid)
                 if any(pid not in order_pids for pid in res_by_pid):
                     missings.append("purge_result_unordered")
         # (f) el estado: sin `done` del epoch validado, `missing` (`:584`); las bajas ya quedaron juzgadas
@@ -1362,11 +1382,47 @@ def _judge_runner_purge(
             for c in post_purge:
                 for r in c.get("rows") or []:
                     pid = str(r.get("pers_id") or "")
-                    if str(r.get("owner_uid") or "") == director_uid and pid in accredited:
-                        if pid in ambiguous_pids:
-                            missings.append(f"purge_remnant_ambiguous:{accredited[pid]['logical_id']}")
-                        else:
-                            fails.append(f"purge_remnant:{accredited[pid]['logical_id']}")
+                    if pid not in accredited:
+                        continue
+                    # O4 (regla 1, hallazgo 4 de Sol sobre `ba58eda`): el `pers_id` acreditado se busca en todas las
+                    # ubicaciones de los censos posteriores, suelo, otro dueno o un contenedor del mundo incluidos, no
+                    # solo en el director (`:582`: "en algun censo posterior a la purga aparece una entidad con un
+                    # `pers_id` acreditado"). Fuera del director se nombra aparte.
+                    if pid in ambiguous_pids:
+                        missings.append(f"purge_remnant_ambiguous:{accredited[pid]['logical_id']}")
+                    elif str(r.get("owner_uid") or "") == director_uid:
+                        fails.append(f"purge_remnant:{accredited[pid]['logical_id']}")
+                    else:
+                        fails.append(f"purge_remnant_out_of_director:{accredited[pid]['logical_id']}")
+            # O4 (regla 2): una acreditada que salio del arbol despues de `pre` sin baja puede seguir viva donde cayo. El
+            # motor suelta lo que hay en las manos junto al director al quedar inconsciente (`playerbase.c:3771-3774`;
+            # `move_to_director` coloca con `FindInventoryLocationType.ANY`, que incluye las manos). Su ausencia solo se
+            # acredita si los alrededores del director en t5 estan cubiertos: cada posicion del director leida en un
+            # censo t5 posterior a la purga (las filas de su inventario llevan `GetPosition()`, la del director), dentro
+            # de un disco t5 completo con el margen de N39. Sin posicion o sin cobertura, `missing` (arbitraje 4, `:632`:
+            # "Una ausencia fuera de cobertura da `missing`"); nunca PASA.
+            if left_after_pre:
+                dir_pos: list[tuple[float, float] | None] = []
+                for c in post_purge_t5:
+                    if int(c.get("include_director_b", 0)) != 1 or _director_census_identity_issue(c, director_uid, anchor):
+                        continue
+                    for r in c.get("rows") or []:
+                        if str(r.get("owner_uid") or "") == director_uid:
+                            px, pz = r.get("pos_x_m"), r.get("pos_z_m")
+                            dir_pos.append((float(px), float(pz)) if _is_finite_num(px) and _is_finite_num(pz) else None)
+                surroundings_covered = bool(dir_pos) and all(
+                    p is not None
+                    and any(
+                        math.hypot(p[0] - float(d["center_x_m"]), p[1] - float(d["center_z_m"]))
+                        + _O4_DIRECTOR_SURROUNDINGS_MARGIN_M
+                        <= float(d["radius_m"]) + 1e-6
+                        for d in post_purge_t5
+                    )
+                    for p in dir_pos
+                )
+                if not surroundings_covered:
+                    for pid in sorted(left_after_pre, key=lambda p: accredited[p]["logical_id"]):
+                        missings.append(f"purge_absent_uncovered:{accredited[pid]['logical_id']}")
         if not t5_director_ok:
             missings.append("purge_t5_director_uncovered")
 
