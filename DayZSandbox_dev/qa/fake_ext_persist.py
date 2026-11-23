@@ -2347,23 +2347,27 @@ class PersistFakeExt(FakeExt):
                 if self._purge_append("result", cand, "retained_foreign"):
                     self.purge_resolved[idx] = 1
                 continue
-            # MEN 4: la edad del lease que decide la baja y la que se registra
-            # salen de la misma muestra temporal que emit_tick_ms.
-            emit_tick = float(self.peer.local_ms())
+            # MEN 3: se prepara el subarbol antes de la guarda final y la
+            # muestra de la baja efectiva decide y se registra. Si el lease
+            # vencio, el trabajo acaba en failed/lease_expired sin baja y una
+            # renovacion posterior no lo reanuda.
+            emit_ents = list(self._purge_subtree(leaf))
+            delete_tick = float(self.peer.local_ms())
             if hasattr(self.peer, "lease_age_ms"):
-                age = self._lease_age_at_ms(emit_tick)
+                age = self._lease_age_at_ms(delete_tick)
                 limit = float(getattr(self.peer, "lease_ms", 3000) or 3000)
-                if age > limit:
-                    return
+                expired = age > limit
             else:
-                if not self.peer.lease_valid():
-                    return
+                expired = not self.peer.lease_valid()
                 age = 0.0
                 limit = 0.0
-            for sub in self._purge_subtree(leaf):
-                if not self._purge_append("emit", sub, "", emit_tick, age, limit):
+            if expired:
+                self.jobs.end_job(self.purge_job_id, "failed", "lease_expired")
+                return
+            for sub in emit_ents:
+                if not self._purge_append("emit", sub, "", delete_tick, age, limit):
                     return
-            self.purge_emit_tick = emit_tick
+            self.purge_emit_tick = delete_tick
             self.purge_confirm = leaf.get("pers_id", "")
             self.purge_confirm_ent = dict(leaf)
             self._delete_entity(leaf)

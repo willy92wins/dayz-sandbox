@@ -31,6 +31,7 @@ IN_SCOL = ["logical_id", "parent_id", "cat", "class_name", "slot_name"]
 IN_NCOL = ["req_x_m", "req_z_m", "req_yaw_deg", "health_mark_ratio", "must_vanish_b"]
 TERMINAL_STATES = ("done", "failed", "stopped", "expired")
 PURGE_PAGE_SIZE = 8
+PURGE_RESOURCE = "per_purge"
 # En partida el director puede tardar en entrar en el mundo tras el hello del
 # cliente (24 s medidos el 16-nov) y en volver tras el reinicio de t4 (hello a
 # los 65,7 s + unos 24 s hasta estar en el mundo): ambas esperas dan 300 s.
@@ -942,7 +943,8 @@ def _job_free(ctx, job_id, target_inst=None):
 
 
 def _read_job_pages_target(ctx, job_id, *, target_inst="", timeout_ms=30000,
-                           page_size=None, expected_resource=None, require_job=False):
+                           page_size=None, expected_resource=None, require_job=False,
+                           verify_reread=False):
     """read_job_pages no admite target_inst: pagina una a una con issue_one.
 
     MEN 7: con page_size/expected_resource/require_job se valida la rodaja
@@ -1015,6 +1017,24 @@ def _read_job_pages_target(ctx, job_id, *, target_inst="", timeout_ms=30000,
         raw_pages.append({"page_n": page_idx, "str": dict(pi.payload.get("str") or {}),
                           "num": dict(pi.payload.get("num") or {}),
                           "rows": list(pi.payload.get("rows") or [])})
+    if verify_reread:
+        # BLOQ 1: una relectura identica de la misma pagina es valida y no
+        # cuenta dos veces; si discrepa, no hay recibo (se lanza ValueError).
+        for page_idx in range(len(raw_pages)):
+            redo = f03_common.issue_one(
+                ctx, "server", "job_read",
+                wire.pack_payload({"job": job_id}, {"page_n": page_idx}),
+                timeout_ms=timeout_ms, target_inst=target_inst,
+            )
+            if redo.status != "done":
+                raise ValueError(f"job_read page {page_idx} reread returned {redo.status}/{redo.reason}")
+            _check_page(redo.payload, page_idx, state=state,
+                        rows_total_n=rows_total_n, pages_n=pages_n)
+            orig = raw_pages[page_idx]
+            if (dict(redo.payload.get("str") or {}) != orig["str"]
+                    or dict(redo.payload.get("num") or {}) != orig["num"]
+                    or list(redo.payload.get("rows") or []) != orig["rows"]):
+                raise ValueError(f"job_read page {page_idx} reread mismatch")
     return {
         "state": state,
         "reason": p0.payload["str"].get("reason", ""),
@@ -1422,6 +1442,66 @@ def _purge_cold_stop_predicate(storage_env):
     return lambda _ev: _server_state(storage_env) == "stopped"
 
 
+def _purge_slot_state(ctx, wait_ms=2000.0):
+    """MEN 2: espera acotada a que se resuelva el slot del peer."""
+    try:
+        return f03_common.wait_peer_idle(ctx, "server", float(wait_ms))
+    except Exception:
+        return "unknown"
+
+
+def _purge_settle_timeout(ctx, outcome, wait_ms=2000.0):
+    """MEN 2: tras un timeout el slot queda ocupado; se resuelve o se falla."""
+    if outcome is None or outcome.status != "timeout":
+        return True
+    return _purge_slot_state(ctx, wait_ms) != "timeout"
+
+
+def _purge_issue(ctx, verb, payload, *, target_inst, wait_ms=2000.0):
+    """Emite una orden resolviendo antes un slot ocupado.
+
+    MEN 2: si la orden anterior agoto su espera, el slot sigue ocupado y la
+    siguiente emision lanzaria 'peer slot busy'. Se espera de forma acotada y,
+    si el slot no se resuelve, se devuelve None para entrar en parada en frio.
+    """
+    try:
+        return f03_common.issue_one(ctx, "server", verb, payload, target_inst=target_inst)
+    except RuntimeError as exc:
+        if "slot busy" not in str(exc):
+            return None
+        if _purge_slot_state(ctx, wait_ms) == "timeout":
+            return None
+        try:
+            return f03_common.issue_one(ctx, "server", verb, payload, target_inst=target_inst)
+        except RuntimeError:
+            return None
+
+
+def _purge_accredited_state(resp, job_id, *, expected_resource=PURGE_RESOURCE,
+                            require_resource=False, expected_epoch=""):
+    """BLOQ 1: estado solo si la respuesta es del trabajo (job==op_id, recurso, epoch).
+
+    El epoch nuevo se garantiza porque todas las ordenes van con
+    target_inst=server_epoch_new: una respuesta de otra instancia vuelve como
+    rejected/stale_instance y no es 'done'. Ademas, si la respuesta trae
+    server_epoch, debe casar con el nuevo.
+    """
+    if resp is None or resp.status != "done" or not resp.payload:
+        return False, "", ""
+    s = resp.payload.get("str") or {}
+    if str(s.get("job") or "") != str(job_id):
+        return False, "", ""
+    resource = str(s.get("resource") or "")
+    if require_resource and resource != expected_resource:
+        return False, "", ""
+    if resource and resource != expected_resource:
+        return False, "", ""
+    resp_epoch = str(s.get("server_epoch") or "")
+    if resp_epoch and expected_epoch and resp_epoch != expected_epoch:
+        return False, "", ""
+    return True, str(s.get("state") or ""), str(s.get("reason") or "")
+
+
 def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
                     timeout_s=None, poll_s=None, monotonic=None, sleep=None,
                     storage_env=None):
@@ -1519,29 +1599,94 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
     pre_n = 0.0
     start_ok = False
     ack_ok = False
-    if start.status == "done" and start.payload:
-        reported_job = str(start.payload["str"].get("job") or "")
-        reported_resource = str(start.payload["str"].get("resource") or "")
-        if reported_job != job_id:
+    ack_invalid = False
+
+    def _resolve_unaccredited(start_status, initial_state):
+        """BLOQ 1/MEN 2: resuelve un estado sin acreditar por job_stop + sondeo.
+
+        Devuelve (ok, state, reason, cold_result). Si ok es False, cold_result
+        es el dict de _cold_stop que el llamador debe devolver; nunca se deja
+        la parada al finally.
+        """
+        st = initial_state
+        rs = ""
+        stop = _purge_issue(
+            ctx, "job_stop",
+            wire.pack_payload(scalars_str={"job": job_id}),
+            target_inst=server_epoch_new,
+        )
+        if stop is None:
             ctx.record_scenario({
-                "ev": "purge_job_mismatch",
-                "job": reported_job,
-                "op_id": job_id,
-                "server_epoch": server_epoch_new,
-            })
-        if reported_resource != "per_purge":
-            ctx.record_scenario({
-                "ev": "purge_resource_mismatch",
-                "resource": reported_resource,
+                "ev": "purge_stop_slot_busy",
                 "job": job_id,
                 "server_epoch": server_epoch_new,
             })
-        # MEN 7: el acuse con otro job o recurso no abre t5.
-        ack_ok = (reported_job == job_id and reported_resource == "per_purge")
+            return False, st, rs, _cold_stop(f"{start_status}_stop_unissued", st, 0, 0)
+        ctx.record_scenario({
+            "ev": "purge_stop",
+            "status": stop.status,
+            "reason": stop.reason,
+            "job": job_id,
+            "server_epoch": server_epoch_new,
+            "recovered_from": start_status,
+        })
+        stop_ok, stop_state, stop_reason = _purge_accredited_state(
+            stop, job_id, expected_epoch=server_epoch_new)
+        if stop_ok:
+            st = stop_state
+            rs = stop_reason
+        if not _purge_settle_timeout(ctx, stop):
+            ctx.record_scenario({
+                "ev": "purge_stop_slot_busy",
+                "job": job_id,
+                "server_epoch": server_epoch_new,
+            })
+            return False, st, rs, _cold_stop(f"{start_status}_stop_timeout", st, 0, 0)
+        stop_deadline = clock() + 10.0
+        polls = 0
+        while st not in TERMINAL_STATES and clock() < stop_deadline:
+            last = _purge_issue(
+                ctx, "job_read",
+                wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
+                target_inst=server_epoch_new,
+            )
+            polls += 1
+            if last is None:
+                return False, st, rs, _cold_stop(
+                    f"{start_status}_read_slot_busy", st,
+                    int(round(max(0.0, stop_deadline - clock()) * 1000.0)), polls)
+            ok, s2, r2 = _purge_accredited_state(
+                last, job_id, require_resource=True, expected_epoch=server_epoch_new)
+            if ok:
+                st = s2
+                rs = r2
+            else:
+                ctx.record_scenario({
+                    "ev": "purge_read_unaccredited",
+                    "job": job_id,
+                    "server_epoch": server_epoch_new,
+                })
+            if not _purge_settle_timeout(ctx, last):
+                return False, st, rs, _cold_stop(
+                    f"{start_status}_read_timeout", st,
+                    int(round(max(0.0, stop_deadline - clock()) * 1000.0)), polls)
+            if st in TERMINAL_STATES:
+                break
+            sleeper(0.2)
+        if st not in TERMINAL_STATES:
+            return False, st, rs, _cold_stop(
+                f"{start_status}_no_terminal", st,
+                int(round(max(0.0, clock() - stop_deadline + 10.0) * 1000.0)), polls)
+        return True, st, rs, None
+
+    ack_ok_state, ack_state, ack_reason = _purge_accredited_state(
+        start, job_id, require_resource=True, expected_epoch=server_epoch_new)
+    if ack_ok_state:
         pre_n = float(start.payload["num"].get("pre_n", 0.0))
-        state = str(start.payload["str"].get("state") or "")
-        reason = str(start.payload["str"].get("reason") or "")
+        state = ack_state
+        reason = ack_reason
         start_ok = True
+        ack_ok = True
         ctx.record_scenario({
             "ev": "purge_start",
             "job": job_id,
@@ -1550,16 +1695,36 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
             "server_epoch": server_epoch_new,
         })
     else:
-        if start.status in ("timeout", "lost"):
-            # MEN 3 (aclaracion 7): timeout/lost de la orden de purga se
+        if start.status == "done":
+            # BLOQ 1: un acuse done con otro job/recurso/epoch no se adopta.
+            ack_invalid = True
+            reported_job = str((start.payload or {}).get("str", {}).get("job") or "")
+            reported_resource = str((start.payload or {}).get("str", {}).get("resource") or "")
+            if reported_job != job_id:
+                ctx.record_scenario({
+                    "ev": "purge_job_mismatch",
+                    "job": reported_job,
+                    "op_id": job_id,
+                    "server_epoch": server_epoch_new,
+                })
+            if reported_resource != PURGE_RESOURCE:
+                ctx.record_scenario({
+                    "ev": "purge_resource_mismatch",
+                    "resource": reported_resource,
+                    "job": job_id,
+                    "server_epoch": server_epoch_new,
+                })
+            ctx.record_scenario({
+                "ev": "purge_ack_unaccredited",
+                "job": job_id,
+                "server_epoch": server_epoch_new,
+            })
+        if start.status in ("done", "timeout", "lost"):
+            # MEN 3 (aclaracion 7): timeout/lost (o done sin vinculo) se
             # recuperan con job_stop de ese op_id y target_inst; el slot se
             # resuelve con una espera acotada antes de la siguiente orden.
             if start.status == "timeout":
-                slot_state = "unknown"
-                try:
-                    slot_state = f03_common.wait_peer_idle(ctx, "server", 2000.0)
-                except Exception:
-                    slot_state = "unknown"
+                slot_state = _purge_slot_state(ctx)
                 if slot_state == "timeout":
                     ctx.record_scenario({
                         "ev": "purge_stop_slot_busy",
@@ -1567,54 +1732,12 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
                         "server_epoch": server_epoch_new,
                     })
                     return _cold_stop(f"start_{start.status}_{start.reason}", "", 0, 0)
-            stop = None
-            try:
-                stop = f03_common.issue_one(
-                    ctx, "server", "job_stop",
-                    wire.pack_payload(scalars_str={"job": job_id}),
-                    target_inst=server_epoch_new,
-                )
-            except Exception as exc:
-                ctx.record_scenario({
-                    "ev": "purge_stop_error",
-                    "job": job_id,
-                    "error": str(exc),
-                    "server_epoch": server_epoch_new,
-                })
-                return _cold_stop(f"start_{start.status}_stop_error", "", 0, 0)
-            ctx.record_scenario({
-                "ev": "purge_stop",
-                "status": stop.status,
-                "reason": stop.reason,
-                "job": job_id,
-                "server_epoch": server_epoch_new,
-                "recovered_from": start.status,
-            })
-            if stop.status == "done" and stop.payload:
-                state = str(stop.payload["str"].get("state") or "")
-                reason = str(stop.payload["str"].get("reason") or "")
-            stop_deadline = clock() + 10.0
-            polls = 0
-            while state not in TERMINAL_STATES and clock() < stop_deadline:
-                last = f03_common.issue_one(
-                    ctx, "server", "job_read",
-                    wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
-                    target_inst=server_epoch_new,
-                )
-                polls += 1
-                if last.status == "done" and last.payload:
-                    state = str(last.payload["str"].get("state") or "")
-                    reason = str(last.payload["str"].get("reason") or "")
-                if state in TERMINAL_STATES:
-                    break
-                sleeper(0.2)
-            if state not in TERMINAL_STATES:
-                return _cold_stop(
-                    f"start_{start.status}_no_terminal", state,
-                    int(round(max(0.0, clock() - stop_deadline + 10.0) * 1000.0)), polls,
-                )
+            ok, state, reason, cold = _resolve_unaccredited(start.status, state)
+            if not ok:
+                return cold
             start_ok = True
-            ack_ok = True
+            # Un alias en el acuse bloquea t5 aunque el trabajo sea op_id.
+            ack_ok = not ack_invalid
             ctx.record_scenario({
                 "ev": "purge_start_probe",
                 "job": job_id,
@@ -1626,17 +1749,35 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
         else:
             # Un rechazo que no prueba que no arranco: se mira el trabajo con
             # el op_id de la orden antes de darlo por perdido.
-            probe = f03_common.issue_one(
-                ctx, "server", "job_read",
+            probe = _purge_issue(
+                ctx, "job_read",
                 wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
                 target_inst=server_epoch_new,
             )
-            probe_state = ""
-            if probe.status == "done" and probe.payload:
-                probe_state = str(probe.payload["str"].get("state") or "")
-            if probe_state:
+            if probe is None:
+                return _cold_stop(f"start_{start.status}_probe_slot_busy", "", 0, 0)
+            if not _purge_settle_timeout(ctx, probe):
+                return _cold_stop(f"start_{start.status}_probe_timeout", "", 0, 0)
+            probe_ok, probe_state, probe_reason = _purge_accredited_state(
+                probe, job_id, require_resource=True, expected_epoch=server_epoch_new)
+            if probe_ok and probe_state:
                 state = probe_state
-                reason = str(probe.payload["str"].get("reason") or "")
+                reason = probe_reason
+                start_ok = True
+                ack_ok = True
+                ctx.record_scenario({
+                    "ev": "purge_start_probe",
+                    "job": job_id,
+                    "state": state,
+                    "start_status": start.status,
+                    "start_reason": start.reason,
+                    "server_epoch": server_epoch_new,
+                })
+            elif probe.status == "done":
+                # Respuesta done sin vinculo: resolver por job_stop o frio.
+                ok, state, reason, cold = _resolve_unaccredited(start.status, state)
+                if not ok:
+                    return cold
                 start_ok = True
                 ack_ok = True
                 ctx.record_scenario({
@@ -1662,15 +1803,45 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
     last = None
     if start_ok and state not in TERMINAL_STATES:
         while True:
-            last = f03_common.issue_one(
-                ctx, "server", "job_read",
+            last = _purge_issue(
+                ctx, "job_read",
                 wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
                 target_inst=server_epoch_new,
             )
             polls += 1
-            if last.status == "done" and last.payload:
-                state = str(last.payload["str"].get("state") or "")
-                reason = str(last.payload["str"].get("reason") or "")
+            if last is None:
+                ctx.record_scenario({
+                    "ev": "purge_read_slot_busy",
+                    "job": job_id,
+                    "server_epoch": server_epoch_new,
+                })
+                return _cold_stop("wait_read_slot_busy", state, 0, polls)
+            ok, s2, r2 = _purge_accredited_state(
+                last, job_id, require_resource=True, expected_epoch=server_epoch_new)
+            if ok:
+                state = s2
+                reason = r2
+            else:
+                # BLOQ 1: una lectura con otro job/recurso/epoch no cuenta.
+                ctx.record_scenario({
+                    "ev": "purge_read_unaccredited",
+                    "job": job_id,
+                    "server_epoch": server_epoch_new,
+                })
+            if last.status == "timeout":
+                ctx.record_scenario({
+                    "ev": "purge_read_timeout",
+                    "job": job_id,
+                    "server_epoch": server_epoch_new,
+                })
+            if not _purge_settle_timeout(ctx, last):
+                # MEN 2: el slot no se resolvio; se va a frio antes de t6.
+                ctx.record_scenario({
+                    "ev": "purge_read_slot_busy",
+                    "job": job_id,
+                    "server_epoch": server_epoch_new,
+                })
+                return _cold_stop("wait_read_timeout", state, 0, polls)
             if state in TERMINAL_STATES:
                 break
             if clock() >= deadline:
@@ -1679,12 +1850,19 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
     waited_ms = int(round(max(0.0, clock() - started) * 1000.0))
     stopped = False
     if state not in TERMINAL_STATES:
-        stop = f03_common.issue_one(
-            ctx, "server", "job_stop",
+        stop = _purge_issue(
+            ctx, "job_stop",
             wire.pack_payload(scalars_str={"job": job_id}),
             target_inst=server_epoch_new,
         )
         stopped = True
+        if stop is None:
+            ctx.record_scenario({
+                "ev": "purge_stop_slot_busy",
+                "job": job_id,
+                "server_epoch": server_epoch_new,
+            })
+            return _cold_stop("wait_stop_slot_busy", state, waited_ms, polls)
         ctx.record_scenario({
             "ev": "purge_stop",
             "status": stop.status,
@@ -1692,17 +1870,35 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
             "job": job_id,
             "server_epoch": server_epoch_new,
         })
+        stop_ok, stop_state, stop_reason = _purge_accredited_state(
+            stop, job_id, expected_epoch=server_epoch_new)
+        if stop_ok:
+            state = stop_state
+            reason = stop_reason
+        if not _purge_settle_timeout(ctx, stop):
+            ctx.record_scenario({
+                "ev": "purge_stop_slot_busy",
+                "job": job_id,
+                "server_epoch": server_epoch_new,
+            })
+            return _cold_stop("wait_stop_timeout", state, waited_ms, polls)
         stop_deadline = clock() + 10.0
         while clock() < stop_deadline:
-            last = f03_common.issue_one(
-                ctx, "server", "job_read",
+            last = _purge_issue(
+                ctx, "job_read",
                 wire.pack_payload(scalars_str={"job": job_id}, scalars_num={"page_n": 0.0}),
                 target_inst=server_epoch_new,
             )
             polls += 1
-            if last.status == "done" and last.payload:
-                state = str(last.payload["str"].get("state") or "")
-                reason = str(last.payload["str"].get("reason") or "")
+            if last is None:
+                return _cold_stop("wait_stop_read_slot_busy", state, waited_ms, polls)
+            ok, s2, r2 = _purge_accredited_state(
+                last, job_id, require_resource=True, expected_epoch=server_epoch_new)
+            if ok:
+                state = s2
+                reason = r2
+            if not _purge_settle_timeout(ctx, last):
+                return _cold_stop("wait_stop_read_timeout", state, waited_ms, polls)
             if state in TERMINAL_STATES:
                 break
             sleeper(0.2)
@@ -1718,11 +1914,12 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
     pages = None
     if state in TERMINAL_STATES:
         try:
-            # MEN 7: la rodaja contractual (page_size 8) y el job/recurso del
-            # trabajo antes de abrir t5; una relectura identica no cuenta dos veces.
+            # MEN 7/BLOQ 1: la rodaja contractual (page_size 8), el job/recurso
+            # del trabajo y relecturas identicas antes de abrir t5.
             pages = _read_job_pages_target(
                 ctx, job_id, target_inst=server_epoch_new, timeout_ms=30000,
-                page_size=PURGE_PAGE_SIZE, expected_resource="per_purge", require_job=True,
+                page_size=PURGE_PAGE_SIZE, expected_resource=PURGE_RESOURCE,
+                require_job=True, verify_reread=True,
             )
             rows = list(pages.get("rows") or [])
             ctx.record_scenario({
@@ -1744,11 +1941,20 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
                 "error": str(exc),
                 "server_epoch": server_epoch_new,
             })
-    free = _job_free(ctx, job_id, target_inst=server_epoch_new)
+    free = None
+    try:
+        free = _job_free(ctx, job_id, target_inst=server_epoch_new)
+    except RuntimeError:
+        slot_state = _purge_slot_state(ctx)
+        if slot_state != "timeout":
+            try:
+                free = _job_free(ctx, job_id, target_inst=server_epoch_new)
+            except RuntimeError:
+                free = None
     ctx.record_scenario({
         "ev": "purge_free",
-        "status": free.status,
-        "reason": free.reason,
+        "status": free.status if free is not None else "slot_busy",
+        "reason": free.reason if free is not None else "",
         "job": job_id,
         "server_epoch": server_epoch_new,
     })
@@ -1756,8 +1962,15 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
         pages is not None
         and len(rows) == int(pages.get("rows_total_n", -1))
     )
-    # MEN 7: un acuse con otro job/recurso o una rodaja invalida no abre t5.
-    done = state == "done" and pages_complete and ack_ok
+    pages_state = str((pages or {}).get("state") or "")
+    # BLOQ 1: recibo terminal coherente. Solo un estado terminal no fallido
+    # (done) en las paginas revalidadas abre t5; una pagina final failed no.
+    done = (
+        state == "done"
+        and pages_state == "done"
+        and pages_complete
+        and ack_ok
+    )
     if state == "done" and not pages_complete:
         ctx.record_scenario({
             "ev": "purge_pages_incomplete",
@@ -1766,10 +1979,19 @@ def _purge_start_t4(ctx, accredited, *, server_epoch_new, director_uid,
             "rows_total_n": (pages or {}).get("rows_total_n", 0),
             "server_epoch": server_epoch_new,
         })
+    if state == "done" and pages_state and pages_state != "done":
+        ctx.record_scenario({
+            "ev": "purge_page_not_done",
+            "job": job_id,
+            "page_state": pages_state,
+            "server_epoch": server_epoch_new,
+        })
     if not done:
         nd_reason = reason or state or "wait_expired"
         if state == "done" and not pages_complete:
             nd_reason = "pages_incomplete"
+        if state == "done" and pages_state and pages_state != "done":
+            nd_reason = f"page_{pages_state}"
         if state == "done" and pages_complete and not ack_ok:
             nd_reason = "ack_invalid"
         ctx.record_scenario({
