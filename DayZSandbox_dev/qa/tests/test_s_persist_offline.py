@@ -8028,13 +8028,18 @@ class TestSPersistOracleOffline(unittest.TestCase):
         centro de area_a, como en el constructor y en el fake, en area_b, o justo en el margen) y no esta en ninguna
         parte -> PASA. El `absent` de algo que no estaba en `pre` no cambia, ni la purga honesta, con el director fuera de
         todo disco -> PASA. El control de Sol con el guante visible en el suelo de area_a en t5 y en t6 sigue en FALLA,
-        ahora tambien por identidad en PER-08."""
+        ahora tambien por identidad en PER-08.
+        O5 (hallazgo 1 de Sol sobre `810d8a7`): el `absent` de algo que no estaba en `pre`, con el director fuera de todo
+        disco, ya no da PASA sino PER-08 `missing` (`purge_absent_uncovered`): pudo caer junto al director antes de
+        `pre`. La purga honesta con el director fuera de todo disco sigue en PASA."""
         both = ("ac_act_1_gloves_dir", "b_act_1_gloves_dir")
         variants = (
             ("director_at_the_centre_of_area_a", ("b_act_1_gloves_dir",), None, None, False, {}),
             ("director_inside_area_b_both_gloves_left", both, None, (4680.0, 10200.0), False, {}),
             ("director_exactly_15_m_inside_the_edge_of_area_a", ("b_act_1_gloves_dir",), None, (4545.0, 10200.0), False, {}),
-            ("absent_never_in_pre_director_outside_every_disc", (), ("ac_act_1_gloves_dir",), self._O4_DIRECTOR_FAR, False, {}),
+            # O5: de PASA a `missing` (el proposito de la O5)
+            ("absent_never_in_pre_director_outside_every_disc", (), ("ac_act_1_gloves_dir",), self._O4_DIRECTOR_FAR, False,
+             {"PER-08": "missing"}),
             ("honest_purge_director_outside_every_disc", (), None, self._O4_DIRECTOR_FAR, False, {}),
             # el control de Sol `SAME_GLOVE_T5_AND_T6_AREA_A`
             ("control_glove_visible_on_the_ground_in_t5_and_t6", ("b_act_1_gloves_dir",), None, None, True,
@@ -8063,12 +8068,231 @@ class TestSPersistOracleOffline(unittest.TestCase):
                         for tag in ("t5_post_restart_census:area_a", "t6_post_cleanup_census:area_a"):
                             self._o4_add_world_rows(part_dir, tag, [glove])
                     verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
-                    if expected:
+                    if expected == {"PER-08": "missing"}:
+                        # O5: `absent_never_in_pre_director_outside_every_disc`
+                        self._e9_expect(verdict, expected, name, PER_08="purge_absent_uncovered:b_act_1_gloves_dir")
+                    elif expected:
                         self._e9_expect(verdict, expected, name, PER_08="purge_remnant_out_of_director:b_act_1_gloves_dir",
                                         PER_09="t6_cleanup_survivors:WorkingGloves_Yellow")
                     else:
                         self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
                         self.assertEqual(verdict["verdict"], "PASA", msg=name)
+
+    # =========================================================================
+    # O5 (microronda aprobada por Guillermo, literal: «Microronda del oraculo»): la caida antes de `pre`, hallazgo 1 de
+    # Sol sobre `810d8a7` y aclaracion del orquestador del 23-nov al final del brief. Un `pers_id` acreditado con
+    # `absent`, sin baja y SIN `pre` exige lo mismo que la regla 2 de la O4 para el `absent` tras `pre`: cada posicion del
+    # director leida en un censo t5 posterior a la purga, dentro de un disco t5 completo con el margen de N39 (15 m). Sin
+    # cobertura, `missing` (`purge_absent_uncovered`), nunca PASA; con cobertura y sin el guante, PASA; si el guante
+    # aparece, `fail` por la regla 1. Los discos de la P2h (`t5_director_p<n>`, radio 30, `include_director_b = 1`,
+    # centrados en el director) son discos t5 como los demas. El reproductor de Sol es un dato: estos tests se escriben
+    # desde cero.
+    # =========================================================================
+
+    # Posicion Diag de la reproduccion de Sol (dentro de una zona de infectados activa de la mision archivada)
+    _O5_DIRECTOR_DIAG = (10884.61, 2750.33)
+    # Radio del disco de la P2h alrededor del director (aclaracion del 23-nov)
+    _O5_DISC_RADIUS_M = 30.0
+
+    def _o5_build(self, tmp: str, name: str, *, discs: tuple[tuple[str, float, float], ...] = (),
+                  rows_at: tuple[float, float] | None = None, **kw: Any) -> tuple["_SyntheticPartBuilder", Path]:
+        builder = _O5DirectorDiscBuilder("run", director_discs=discs, disc_radius_m=self._O5_DISC_RADIUS_M,
+                                         disc_rows_at=rows_at, **kw)
+        return builder, builder.build_into(Path(tmp) / name)
+
+    def _o5_place_director(self, part_dir: Path, builder: "_SyntheticPartBuilder", where: Any) -> None:
+        """Pone las filas del inventario del director de los censos posteriores a la purga (los de `_O4_DIRECTOR_TAGS`)
+        en ``where``: una posicion ``(x, z)`` para todos, o ``{etiqueta: (x, z)}`` con ``"*"`` para las demas."""
+        if isinstance(where, tuple):
+            self._o4_place_director(part_dir, builder, *where)
+            return
+        groups: dict[tuple[float, float], set[str]] = {}
+        for tag in self._O4_DIRECTOR_TAGS:
+            groups.setdefault(tuple(where.get(tag, where["*"])), set()).add(tag)
+        for (x, z), tags in groups.items():
+            def edit(page: types.SimpleNamespace, x: float = x, z: float = z) -> None:
+                for row in self._e9_director_rows(page, builder):
+                    row.update(pos_x_m=float(x), pos_y_m=_surface_y(x, z), pos_z_m=float(z))
+
+            self._e9_edit_pages(part_dir, tags, edit)
+
+    def _o5_bare_tag(self, part_dir: Path, disc: str) -> None:
+        """Deja desnuda la etiqueta del disco (``t5_director_p<n>``, sin ``t5_post_restart_census:``) en su orden y en sus
+        lecturas, como las pistas ``t5_track_*`` de etiqueta desnuda."""
+        staged = f"t5_post_restart_census:{disc}"
+
+        def walk(x: Any) -> Any:
+            if isinstance(x, dict):
+                return {k: walk(v) for k, v in x.items()}
+            if isinstance(x, list):
+                return [walk(v) for v in x]
+            return disc if x == staged else x
+
+        events = _read_events(part_dir)
+        self.assertTrue(any(json.dumps(staged) in json.dumps(e) for e in events), msg=disc)
+        events = [walk(e) for e in events]
+        self.assertFalse(any(json.dumps(staged) in json.dumps(e) for e in events), msg=disc)
+        _write_events(part_dir, events)
+
+    def test_neg_o5_absent_without_pre_and_the_director_uncovered_never_passes(self) -> None:
+        """Hallazgo 1 de Sol sobre `810d8a7`: el guante cae junto al director ANTES de `pre` (el inconsciente suelta lo
+        que lleva en las manos, `playerbase.c:3771`), la purga solo ve `absent` y ningun censo mira alrededor del director.
+        Sin cobertura de sus alrededores en t5 -> PER-08 `missing` (`purge_absent_uncovered`), nunca PASA:
+        - el director donde lo ponen las partidas reales (7-11 km de todo disco) o en la posicion Diag de Sol;
+        - no vuelve ningun guante (los dos `absent` sin `pre`);
+        - hay disco del director, pero su centro esta a 20 m del director (20 + 15 > 30);
+        - el director se movio 40 m entre censos t5 y solo hay disco para la primera posicion."""
+        far, diag = self._O4_DIRECTOR_FAR, self._O5_DIRECTOR_DIAG
+        moved = (diag[0] + 40.0, diag[1])
+        yellow = ("b_act_1_gloves_dir",)
+        variants = (
+            dict(name="director_outside_every_disc_as_in_the_real_runs", returning=("ac_act_1_gloves_dir",), director=far,
+                 discs=(), rows_at=None, lids=yellow),
+            dict(name="director_at_the_diag_position_of_sol", returning=("ac_act_1_gloves_dir",), director=diag,
+                 discs=(), rows_at=None, lids=yellow),
+            dict(name="no_glove_back_in_the_tree_director_outside_every_disc", returning=(), director=far, discs=(),
+                 rows_at=None, lids=("ac_act_1_gloves_dir", "b_act_1_gloves_dir")),
+            dict(name="director_disc_20_m_off_the_director", returning=("ac_act_1_gloves_dir",), director=diag,
+                 discs=(("t5_director_p0", diag[0] + 20.0, diag[1]),), rows_at=diag, lids=yellow),
+            dict(name="director_moved_40_m_one_disc_only", returning=("ac_act_1_gloves_dir",),
+                 director={"t5_post_restart_census:area_a": diag, "*": moved},
+                 discs=(("t5_director_p0", *diag),), rows_at=None, lids=yellow),
+        )
+        for v in variants:
+            name = v["name"]
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._o5_build(tmp, name, discs=v["discs"], rows_at=v["rows_at"],
+                                                       purge_returning=v["returning"])
+                    rows = self._e9_purge_rows(part_dir)
+                    for lid in v["lids"]:
+                        pid = builder.entities_by_lid[lid]["pers_id"]
+                        self.assertNotIn(pid, {r["pers_id"] for r in rows if r["phase"] in ("pre", "emit")}, msg=name)
+                        self.assertEqual([r["result"] for r in rows if r["phase"] == "result" and r["pers_id"] == pid],
+                                         ["absent"], msg=name)
+                    self._o5_place_director(part_dir, builder, v["director"])
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name)
+                    for lid in v["lids"]:
+                        self.assertIn(f"purge_absent_uncovered:{lid}", _checks_by_id(verdict)["PER-08"]["detail"], msg=name)
+
+    def test_pos_o5_absent_without_pre_covered_by_a_director_disc_passes_and_the_glove_in_it_fails(self) -> None:
+        """Controles de la O5:
+        - el mismo `absent` sin `pre`, con un disco `t5_director_p0` completo de radio 30 centrado en el director (la
+          posicion Diag de Sol) y sin el guante -> PASA; con la etiqueta desnuda, igual;
+        - con el guante visible en ese disco -> FALLA por la regla 1 de la O4 (PER-08
+          `purge_remnant_out_of_director`);
+        - el H1 legitimo tras `pre` (director en el centro de area_a) sigue en PASA;
+        - el director en el centro de area_a, como en el constructor y en el fake, con su disco de radio 30 ahi
+          mismo: el disco no ocupa el lugar del censo t5 de area_a -> PASA;
+        - el director se movio 40 m entre censos t5 y hay un disco por posicion -> PASA."""
+        diag = self._O5_DIRECTOR_DIAG
+        moved = (diag[0] + 40.0, diag[1])
+        p0 = "t5_director_p0"
+        variants = (
+            dict(name="director_disc_at_the_diag_position_no_glove", returning=("ac_act_1_gloves_dir",), hook=None,
+                 director=diag, discs=((p0, *diag),), bare=False, glove=False, expected={}),
+            dict(name="director_disc_at_the_diag_position_glove_visible_in_it", returning=("ac_act_1_gloves_dir",),
+                 hook=None, director=diag, discs=((p0, *diag),), bare=False, glove=True, expected={"PER-08": "fail"}),
+            dict(name="h1_legit_glove_left_after_pre_director_at_the_centre_of_area_a", returning=None,
+                 hook=self._o4_gloves_leave_the_tree(("b_act_1_gloves_dir",)), director=None, discs=(), bare=False,
+                 glove=False, expected={}),
+            dict(name="director_disc_with_the_bare_tag", returning=("ac_act_1_gloves_dir",), hook=None, director=diag,
+                 discs=((p0, *diag),), bare=True, glove=False, expected={}),
+            dict(name="director_at_the_centre_of_area_a_with_its_disc_as_in_the_fake", returning=("ac_act_1_gloves_dir",),
+                 hook=None, director=None, discs=((p0, 4500.0, 10200.0),), bare=False, glove=False, expected={}),
+            dict(name="director_moved_40_m_one_disc_per_position", returning=("ac_act_1_gloves_dir",), hook=None,
+                 director={"t5_post_restart_census:area_a": diag, "*": moved},
+                 discs=((p0, *diag), ("t5_director_p1", *moved)), bare=False, glove=False, expected={}),
+        )
+        for v in variants:
+            name = v["name"]
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._o5_build(tmp, name, discs=v["discs"], purge_returning=v["returning"],
+                                                       purge_hook=v["hook"])
+                    rows = self._e9_purge_rows(part_dir)
+                    yellow = builder.entities_by_lid["b_act_1_gloves_dir"]["pers_id"]
+                    in_pre = yellow in {r["pers_id"] for r in rows if r["phase"] == "pre"}
+                    self.assertEqual(in_pre, v["hook"] is not None, msg=name)
+                    self.assertEqual([r["result"] for r in rows if r["phase"] == "result" and r["pers_id"] == yellow],
+                                     ["absent"], msg=name)
+                    if v["director"] is not None:
+                        self._o5_place_director(part_dir, builder, v["director"])
+                    if v["bare"]:
+                        self._o5_bare_tag(part_dir, p0)
+                    if v["glove"]:
+                        glove = self._o4_glove_in_the_world(builder, part_dir, "b_act_1_gloves_dir", diag[0] + 1.5,
+                                                            diag[1] - 1.0, net_id="1:9851")
+                        self._o4_add_world_rows(part_dir, f"t5_post_restart_census:{p0}", [glove])
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    if v["expected"]:
+                        self._e9_expect(verdict, v["expected"], name,
+                                        PER_08="purge_remnant_out_of_director:b_act_1_gloves_dir")
+                    else:
+                        self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+                        self.assertEqual(verdict["verdict"], "PASA", msg=name)
+
+    def test_neg_o5_director_disc_never_stands_in_for_the_census_of_an_area(self) -> None:
+        """El disco de la P2h es su propio disco t5. Centrado en el director cuando este esta en el centro de un area
+        (area_a en el constructor y en el fake), no se toma por el censo t5 de esa area: si en ese censo el director
+        falta o no se lee, PER-07/08/09 lo siguen viendo igual que sin disco (como en `test_e9_a_*`), nunca lo tapa el
+        disco."""
+        variants = (
+            ("director_absent_in_t5_of_area_a_disc_at_its_centre", "area_a", (4500.0, 10200.0), 0, 0,
+             {"PER-07": "missing", "PER-09": "missing"}),
+            ("director_unreadable_in_t5_of_area_b_disc_at_its_centre", "area_b", (4680.0, 10200.0), 1, 0,
+             {"PER-08": "missing", "PER-09": "missing"}),
+        )
+        for name, area, centre, present, readable, expected in variants:
+            with self.subTest(name):
+                seen = []
+                for discs in ((), (("t5_director_p0", *centre),)):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        builder, part_dir = self._o5_build(tmp, name, discs=discs)
+                        self._o5_place_director(part_dir, builder, centre)
+                        self._e9_director_gone(part_dir, (area,), present=present, readable=readable)
+                        verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                        self._e9_expect(verdict, expected, f"{name}:discs={len(discs)}",
+                                        PER_09=f"t5_director_unreadable:{area}")
+                        seen.append(_only_non_pass(verdict))
+                self.assertEqual(seen[0], seen[1], msg=name)
+
+
+class _O5DirectorDiscBuilder(_SyntheticPartBuilder):
+    """O5: el constructor sintetico con los discos de la P2h; el constructor base no cambia.
+
+    Tras el censo t5 de area_c emite, por cada disco ``(etiqueta, x, z)``, un censo completo de la etapa
+    ``t5_post_restart_census`` centrado en ``(x, z)``, de radio ``disc_radius_m`` y con ``include_director_b = 1``. Lleva
+    las filas del inventario del director (las del censo t5 de area_a), en ``disc_rows_at`` o, si no se da, en el centro
+    del disco. La etiqueta sale como la del runner (`_census_tag`): ``t5_post_restart_census:t5_director_p<n>``."""
+
+    def __init__(self, *args: Any, director_discs: tuple[tuple[str, float, float], ...] = (),
+                 disc_radius_m: float = 30.0, disc_rows_at: tuple[float, float] | None = None, **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self.o5_director_discs = tuple(director_discs)
+        self.o5_disc_radius_m = float(disc_radius_m)
+        self.o5_disc_rows_at = disc_rows_at
+        self.o5_director_rows: list[dict[str, Any]] = []
+
+    def _emit_census(self, inst: str, stage: str, area_id: str, center_x: float, center_z: float,
+                     rows: list[dict[str, Any]], **kw: Any) -> str:
+        job = super()._emit_census(inst, stage, area_id, center_x, center_z, rows, **kw)
+        if stage == "t5_post_restart_census" and area_id == "area_a":
+            self.o5_director_rows = [copy.deepcopy(r) for r in rows if r.get("owner_uid") == self.director_uid]
+        if stage == "t5_post_restart_census" and area_id == "area_c":
+            for disc, x, z in self.o5_director_discs:
+                rx, rz = self.o5_disc_rows_at if self.o5_disc_rows_at is not None else (x, z)
+                disc_rows = copy.deepcopy(self.o5_director_rows)
+                for r in disc_rows:
+                    r.update(pos_x_m=float(rx), pos_y_m=_surface_y(rx, rz), pos_z_m=float(rz))
+                saved = self.t5_radius_m
+                self.t5_radius_m = self.o5_disc_radius_m
+                try:
+                    super()._emit_census(inst, stage, disc, float(x), float(z), disc_rows, include_director_b=1)
+                finally:
+                    self.t5_radius_m = saved
+        return job
 
 
 if __name__ == "__main__":

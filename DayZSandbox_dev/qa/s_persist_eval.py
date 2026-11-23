@@ -103,10 +103,12 @@ Evidence contract consumed by ``evaluate(part_dir)``
        (``enq`` with that ``inst``, a delivery to it, and a ``result`` whose last accepted server ``hello`` is that
        epoch). Remnants and unattributable sentinels are judged in every post-purge census (t5 and t6); absence only
        with t5. A remnant is an accredited ``pers_id`` in any location of those censuses (ground, another owner or a
-       world container included); an accredited garment that is in ``pre`` and ends ``absent`` without a deletion
-       (it left the director's tree) needs every director position read in a post-purge t5 census (the
-       ``pos_x_m`` / ``pos_z_m`` of the director's inventory rows) inside a complete t5 disc with a 15 m inner
-       margin, or PER-08 is missing (O4).
+       world container included); an accredited garment that ends ``absent`` without a deletion, whether it is in
+       ``pre`` (it left the director's tree, O4) or not (it may have dropped next to the director before ``pre``,
+       O5), needs every director position read in a post-purge t5 census (the ``pos_x_m`` / ``pos_z_m`` of the
+       director's inventory rows) inside a complete t5 disc with a 15 m inner margin, or PER-08 is missing. The
+       runner's discs around the director (``t5_director_p<n>``, stage ``t5_post_restart_census``,
+       ``include_director_b = 1``) are t5 discs like the others, with their own area id, as a ``t5_track_*`` disc.
      * ``per_status`` in t0 goes without ``director_uid`` and reports ``players_n``: two or more players ->
        ``director_ambiguous`` (2 INCONCLUSO); the uid is fixed only with exactly one ready player before the first
        baseline census (otherwise ``director_not_selected``, 2 INCONCLUSO; traces without ``players_n`` nor a runner
@@ -949,7 +951,9 @@ def _judge_runner_purge(
     # O4 (hallazgo 4 de Sol sobre `ba58eda`): las acreditadas que constan en `pre` y acaban en `absent` sin baja salieron
     # del arbol del director despues de la captura inicial. Que falten en el arbol no acredita que falten en el mundo:
     # su ausencia se juzga en (5) con la cobertura de los alrededores del director en t5.
-    left_after_pre: set[str] = set()
+    # O5 (hallazgo 1 de Sol sobre `810d8a7`, aclaracion del 23-nov, "la caida antes de `pre`"): tambien las que acaban
+    # en `absent` sin baja y SIN `pre`: pudieron caer junto al director antes de la captura inicial.
+    absent_without_baja: set[str] = set()
 
     for o in orders:
         is_main = o is main
@@ -1252,7 +1256,6 @@ def _judge_runner_purge(
                 first_baja_of: dict[str, int] = {}
                 for bi in bajas_idx:
                     first_baja_of.setdefault(scan_rows[bi]["pers_id"], bi)
-                pre_pids = {r["pers_id"] for r in pre_rows}
                 for pid in sorted(order_pids):
                     vals = res_by_pid.get(pid, [])
                     if len(vals) != 1:
@@ -1282,9 +1285,12 @@ def _judge_runner_purge(
                     # implementacion resuelve `absent` sobre el arbol del tick de resolucion (P2c). Se contrasta con las
                     # emisiones (sin baja: arriba) y con la cobertura posterior (remanente o director sin cubrir en t5,
                     # abajo); ya no da `missing` por estar en `pre`.
-                    elif val == "absent" and pid in pre_pids and pid in accredited:
-                        # O4: salio del arbol despues de `pre` sin baja; su ausencia del mundo se juzga en (5)
-                        left_after_pre.add(pid)
+                    elif val == "absent" and pid in accredited:
+                        # O4: con `pre`, salio del arbol despues de la captura inicial sin baja. O5: sin `pre`, pudo caer
+                        # antes de la captura (el inconsciente suelta lo que lleva en las manos, `playerbase.c:3771`, y
+                        # la sonda admite un director inconsciente). En los dos casos su ausencia del mundo se juzga
+                        # en (5) con la misma regla.
+                        absent_without_baja.add(pid)
                 if any(pid not in order_pids for pid in res_by_pid):
                     missings.append("purge_result_unordered")
         # (f) el estado: sin `done` del epoch validado, `missing` (`:584`); las bajas ya quedaron juzgadas
@@ -1401,7 +1407,11 @@ def _judge_runner_purge(
             # censo t5 posterior a la purga (las filas de su inventario llevan `GetPosition()`, la del director), dentro
             # de un disco t5 completo con el margen de N39. Sin posicion o sin cobertura, `missing` (arbitraje 4, `:632`:
             # "Una ausencia fuera de cobertura da `missing`"); nunca PASA.
-            if left_after_pre:
+            # O5 (aclaracion del 23-nov, "la caida antes de `pre`"): la misma regla para el `absent` sin baja y sin
+            # `pre`; si el guante aparece, ya es `fail` por la regla 1 de arriba. Los discos de la P2h
+            # (`t5_director_p<n>`, etapa `t5_post_restart_census`, `include_director_b = 1`, centrados en el director)
+            # son discos t5 como los demas: cuentan aqui y en la busqueda de la regla 1.
+            if absent_without_baja:
                 dir_pos: list[tuple[float, float] | None] = []
                 for c in post_purge_t5:
                     if int(c.get("include_director_b", 0)) != 1 or _director_census_identity_issue(c, director_uid, anchor):
@@ -1421,7 +1431,7 @@ def _judge_runner_purge(
                     for p in dir_pos
                 )
                 if not surroundings_covered:
-                    for pid in sorted(left_after_pre, key=lambda p: accredited[p]["logical_id"]):
+                    for pid in sorted(absent_without_baja, key=lambda p: accredited[p]["logical_id"]):
                         missings.append(f"purge_absent_uncovered:{accredited[pid]['logical_id']}")
         if not t5_director_ok:
             missings.append("purge_t5_director_uncovered")
@@ -1627,7 +1637,9 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]] | None:
 
 def _infer_area_id(area_tag: str, cx: float | None, cz: float | None, fixture: dict[str, Any]) -> str:
     tag_low = (area_tag or "").lower()
-    if "t5_track_" in tag_low:
+    # O5: el disco de la P2h alrededor del director (`t5_director_p<n>`) es su propio disco, como una pista: centrado en
+    # el director, que en el constructor y en el fake esta en el centro de area_a, no ocupa el lugar del censo del area.
+    if "t5_track_" in tag_low or "t5_director_p" in tag_low:
         return area_tag
     for aid in ("area_a_mut", "area_a", "area_b", "area_c", "area_d"):
         if aid in tag_low:
