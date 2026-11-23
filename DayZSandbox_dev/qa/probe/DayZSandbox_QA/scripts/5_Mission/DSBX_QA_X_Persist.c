@@ -1642,28 +1642,57 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				ResolvePurgeResult(a, "retained_foreign", pid, cls, ParentPersIdOf(cand), ParentNetIdOf(cand), FormatNetId(cand), candOwner2, 0.0);
 				continue;
 			}
-			if (!m_Probe.LeaseOk())
-				return;
-			float emitTick = m_Probe.NowMs();
-			int leaseAge = (int)m_Probe.LeaseAgeMs();
-			int leaseLimit = m_Probe.GetLeaseMs();
+			// P2i: preparar las filas emit y los datos de la hoja antes de la
+			// muestra E1; la muestra se toma junto a la baja y decide.
 			array<EntityAI> leafSub = new array<EntityAI>();
 			CollectPurgeSubtree(leaf, leafSub);
+			array<string> emitPers = new array<string>();
+			array<string> emitClass = new array<string>();
+			array<string> emitParentPers = new array<string>();
+			array<string> emitParentNet = new array<string>();
+			array<string> emitOwner = new array<string>();
+			array<string> emitNet = new array<string>();
+			array<int> emitDepth = new array<int>();
+			array<float> emitMaxHp = new array<float>();
+			array<float> emitHealthHp = new array<float>();
 			for (int s = 0; s < leafSub.Count(); s++)
 			{
 				EntityAI se = leafSub.Get(s);
 				if (!se || !IsObjectAlive(se))
 					continue;
-				AppendPurgeTreeRow("emit", se, director, m_PurgeDirectorUid, "", PurgeDepthOf(se, director), emitTick, (float)leaseAge, (float)leaseLimit);
-				if (m_Jobs.GetState(m_PurgeJobId) != "running")
-					return;
+				float rowMaxHp = -1.0;
+				float rowHealthHp = -1.0;
+				if (IsQaCreated(se)) ReadQaHealth(se, rowMaxHp, rowHealthHp); else ReadHealth(se, rowMaxHp, rowHealthHp);
+				string rowOwnerUid = "";
+				if (director && se.GetHierarchyRootPlayer() == director) rowOwnerUid = m_PurgeDirectorUid;
+				emitPers.Insert(FormatPersId(se));
+				emitClass.Insert(se.GetType());
+				emitParentPers.Insert(ParentPersIdOf(se));
+				emitParentNet.Insert(ParentNetIdOf(se));
+				emitOwner.Insert(rowOwnerUid);
+				emitNet.Insert(FormatNetId(se));
+				emitDepth.Insert(PurgeDepthOf(se, director));
+				emitMaxHp.Insert(rowMaxHp);
+				emitHealthHp.Insert(rowHealthHp);
 			}
 			string leafPers = FormatPersId(leaf);
 			string leafClass = leaf.GetType();
 			string leafNet = FormatNetId(leaf);
 			string leafParentPers = ParentPersIdOf(leaf);
 			string leafParentNet = ParentNetIdOf(leaf);
+			float emitTick = m_Probe.NowMs();
+			float leaseAgeMs = m_Probe.LeaseAgeMs();
+			int leaseLimit = m_Probe.GetLeaseMs();
+			if (leaseAgeMs > (float)leaseLimit)
+				return;
+			if (m_Jobs.GetState(m_PurgeJobId) != "running")
+				return;
 			g_Game.ObjectDelete(leaf);
+			// P2i: publicar la emision solo si la baja se ejecuto, con la muestra E1.
+			for (int e = 0; e < emitPers.Count(); e++)
+			{
+				AppendPurgeRow("emit", emitPers.Get(e), emitClass.Get(e), emitParentPers.Get(e), emitParentNet.Get(e), emitOwner.Get(e), "", emitNet.Get(e), emitDepth.Get(e), emitTick, leaseAgeMs, (float)leaseLimit, emitMaxHp.Get(e), emitHealthHp.Get(e), 0.0);
+			}
 			m_PurgeConfirmPersId = leafPers;
 			m_PurgeConfirmClass = leafClass;
 			m_PurgeConfirmNetId = leafNet;

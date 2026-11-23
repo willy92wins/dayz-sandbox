@@ -1212,6 +1212,8 @@ def _director_t5_positions(censuses, director_uid):
     for c in censuses or []:
         if not c or not c.get("job_complete"):
             continue
+        if str(c.get("state") or "") != "done":
+            continue
         if int(c.get("include_director_b", 0) or 0) != 1:
             continue
         stage = str(c.get("stage") or "")

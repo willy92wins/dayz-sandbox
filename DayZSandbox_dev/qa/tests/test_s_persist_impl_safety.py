@@ -3897,6 +3897,7 @@ class TestP2hDirectorCensus(_GuardedTestCase):
             "area_id": tag.split(":", 1)[-1],
             "area_tag": tag,
             "include_director_b": int(include_dir),
+            "state": job["state"],
             "job_complete": job["state"] == "done",
             "rows": _job_rows(job),
             "center_x_m": cx,
@@ -3909,6 +3910,7 @@ class TestP2hDirectorCensus(_GuardedTestCase):
         t5_rec = {
             "stage": "t5_post_restart_census",
             "include_director_b": 1,
+            "state": "done",
             "job_complete": True,
             "rows": [
                 {"owner_uid": "dir-1", "pos_x_m": 10884.61, "pos_z_m": 2750.33},
@@ -3987,7 +3989,7 @@ class TestP2hDirectorCensus(_GuardedTestCase):
                     "center_z_m": center_override[1], "radius_m": radius_override}
 
         far = {"stage": "t5_post_restart_census", "include_director_b": 1,
-               "job_complete": True, "rows": [
+               "state": "done", "job_complete": True, "rows": [
                    {"owner_uid": "dir-1", "pos_x_m": 100.0, "pos_z_m": 100.0},
                    {"owner_uid": "dir-1", "pos_x_m": 120.0, "pos_z_m": 100.0},
                ]}
@@ -4002,7 +4004,7 @@ class TestP2hDirectorCensus(_GuardedTestCase):
         calls.clear()
         ctx_close = _ScenarioCtx()
         close = {"stage": "t5_post_restart_census", "include_director_b": 1,
-                 "job_complete": True, "rows": [
+                 "state": "done", "job_complete": True, "rows": [
                      {"owner_uid": "dir-1", "pos_x_m": 100.0, "pos_z_m": 100.0},
                      {"owner_uid": "dir-1", "pos_x_m": 110.0, "pos_z_m": 100.0},
                  ]}
@@ -4021,15 +4023,15 @@ class TestP2hDirectorCensus(_GuardedTestCase):
             return {"job_complete": True}
 
         t0_rec = {"stage": "t0_baseline_census", "include_director_b": 1,
-                  "job_complete": True, "rows": [
+                  "state": "done", "job_complete": True, "rows": [
                       {"owner_uid": "dir-1", "pos_x_m": 5.0, "pos_z_m": 6.0},
                   ]}
         no_dir_rows = {"stage": "t5_post_restart_census", "include_director_b": 1,
-                       "job_complete": True, "rows": [
+                       "state": "done", "job_complete": True, "rows": [
                            {"owner_uid": "otro", "pos_x_m": 1.0, "pos_z_m": 2.0},
                        ]}
         excluded = {"stage": "t5_post_restart_census", "include_director_b": 0,
-                    "job_complete": True, "rows": [
+                    "state": "done", "job_complete": True, "rows": [
                         {"owner_uid": "dir-1", "pos_x_m": 7.0, "pos_z_m": 8.0},
                     ]}
         with mock.patch.object(s_persist_run, "_census", side_effect=fake_census):
@@ -4099,6 +4101,142 @@ class TestP2hDirectorCensus(_GuardedTestCase):
         self.assertEqual(recs[0]["radius_m"], 30.0)
         self.assertTrue(any(str(r.get("net_id") or "") == glove["net_id"]
                             for r in recs[0]["rows"]))
+
+
+class TestP2iLeaseGuardAndDoneCensus(_GuardedTestCase):
+    """P2i: la guarda del lease junto a la baja y centros solo de censos done."""
+
+    def _gloves(self, peer, jobs, ext):
+        status, _, _ = ext.on_start_op(
+            {"op_id": "op-apply", "verb": "per_apply_scene", "qa_fault": ""},
+            _apply_args("scene_b", "scop-1", 1, _ACTOR_ROWS), {},
+        )
+        self.assertEqual(status, "done")
+        status, _, _ = ext.on_start_op(
+            {"op_id": "op-trans", "verb": "per_child_transition", "qa_fault": ""},
+            _unpacked(strings={"scene_id": "scene_b", "logical_id": "b_act_1_gloves_dir",
+                               "action": "move_to_director", "expect_epoch": "epoch-1",
+                               "target_scene_id": "", "target_parent_id": "",
+                               "director_uid": ext.director_uid}), {},
+        )
+        self.assertEqual(status, "done")
+        rec = ext._record_by("scene_b", "b_act_1_gloves_dir")
+        return rec["ent"]["pers_id"], rec["ent"]["class_name"], rec["ent"]["net_id"]
+
+    def _start(self, ext, pers, cls):
+        status, reason, _ = ext.on_start_op(
+            {"op_id": "op-purge", "verb": "per_purge_start", "qa_fault": ""},
+            _purge_args([{"pers_id": pers, "class_name": cls}], ext.director_uid), {},
+        )
+        self.assertEqual((status, reason), ("done", ""))
+
+    def _tick(self, peer, jobs, ext, n):
+        for _ in range(n):
+            jobs.tick_jobs(0.016, peer.local_ms())
+            ext.on_tick(0.016)
+            if ext.purge_job_id == "":
+                break
+
+    def _rows(self, jobs):
+        return _job_rows(jobs.jobs_by_id["op-purge"])
+
+    def test_blockq_clock_advance_between_preparation_and_delete(self):
+        peer, jobs, ext = _make_halfstep_fake()
+        pers, cls, net = self._gloves(peer, jobs, ext)
+        self._start(ext, pers, cls)
+        jobs.configure_job_faults("op-purge", ext_handles_deadman=True)
+        # La muestra anterior daria edad 3000; la de la baja, 3000,5.
+        peer.last_ok_ms = float(peer.now) - 3000.0
+        self._tick(peer, jobs, ext, n=1)
+        self.assertEqual(jobs.get_state("op-purge"), "failed")
+        self.assertEqual(jobs.jobs_by_id["op-purge"]["reason"], "lease_expired")
+        self.assertIn(net, ext.world)
+        rows = self._rows(jobs)
+        self.assertEqual([r for r in rows if r["phase"] == "emit"], [])
+        self.assertEqual([r for r in rows
+                          if r["phase"] == "result" and r["result"] == "deleted"], [])
+        # La renovacion posterior no reanuda el trabajo vencido.
+        peer.renew()
+        self._tick(peer, jobs, ext, n=6)
+        self.assertEqual(jobs.get_state("op-purge"), "failed")
+        self.assertIn(net, ext.world)
+        rows = self._rows(jobs)
+        self.assertEqual([r for r in rows if r["phase"] == "emit"], [])
+        self.assertEqual([r for r in rows
+                          if r["phase"] == "result" and r["result"] == "deleted"], [])
+
+    def test_control_below_limit_deletes_and_emit_carries_delete_sample(self):
+        peer, jobs, ext = _make_halfstep_fake()
+        pers, cls, net = self._gloves(peer, jobs, ext)
+        self._start(ext, pers, cls)
+        jobs.configure_job_faults("op-purge", ext_handles_deadman=True)
+        base = float(peer.now)
+        peer.last_ok_ms = base - 2000.0
+        self._tick(peer, jobs, ext, n=6)
+        self.assertEqual(jobs.get_state("op-purge"), "done")
+        self.assertNotIn(net, ext.world)
+        rows = self._rows(jobs)
+        emits = [r for r in rows if r["phase"] == "emit" and r["emit_tick_ms"] > 0.0]
+        self.assertTrue(emits)
+        self.assertTrue([r for r in rows
+                         if r["phase"] == "result" and r["result"] == "deleted"])
+        for row in emits:
+            self.assertAlmostEqual(row["emit_tick_ms"], base + 0.5, places=6)
+            self.assertAlmostEqual(row["lease_age_ms"], 2000.5, places=6)
+            self.assertAlmostEqual(
+                row["lease_age_ms"], row["emit_tick_ms"] - peer.last_ok_ms, places=6)
+
+    def test_failed_census_with_director_row_gives_no_center_nor_disc(self):
+        failed = {"stage": "t5_post_restart_census", "include_director_b": 1,
+                  "state": "failed", "job_complete": True,
+                  "rows": [{"owner_uid": "dir-1", "pos_x_m": 100.0,
+                            "pos_z_m": 100.0}]}
+        self.assertEqual(
+            s_persist_run._director_t5_positions([failed], "dir-1"), [])
+        ctx = _ScenarioCtx()
+        calls = []
+
+        def fake_census(*args, **kwargs):
+            calls.append((args, kwargs))
+            return {"job_complete": True}
+
+        with mock.patch.object(s_persist_run, "_census", side_effect=fake_census):
+            recs = s_persist_run._director_t5_censuses(ctx, {}, [failed], "dir-1")
+        self.assertEqual(recs, [])
+        self.assertEqual(calls, [])
+        missing = [ev for ev in ctx.scenario
+                   if ev.get("ev") == "t5_director_census_missing"]
+        self.assertEqual(len(missing), 1)
+
+    def test_done_census_with_director_row_gives_center_and_disc(self):
+        done = {"stage": "t5_post_restart_census", "include_director_b": 1,
+                "state": "done", "job_complete": True,
+                "rows": [{"owner_uid": "dir-1", "pos_x_m": 100.0,
+                          "pos_z_m": 100.0}]}
+        self.assertEqual(
+            s_persist_run._director_t5_positions([done], "dir-1"), [(100.0, 100.0)])
+        ctx = _ScenarioCtx()
+        calls = []
+
+        def fake_census(ctx_arg, fixture, stage, area_id, include_dir, *,
+                        center_override=None, radius_override=None,
+                        director_uid="", target_inst=None, **kwargs):
+            calls.append((stage, area_id, int(include_dir), center_override,
+                          radius_override, director_uid))
+            return {"stage": stage, "area_id": area_id,
+                    "include_director_b": int(include_dir), "state": "done",
+                    "job_complete": True, "rows": [],
+                    "center_x_m": center_override[0],
+                    "center_z_m": center_override[1], "radius_m": radius_override}
+
+        with mock.patch.object(s_persist_run, "_census", side_effect=fake_census):
+            recs = s_persist_run._director_t5_censuses(ctx, {}, [done], "dir-1")
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1], "t5_director_p0")
+        self.assertEqual(calls[0][3], (100.0, 100.0))
+        self.assertEqual(recs[0]["area_id"], "t5_director_p0")
+        self.assertTrue(any(ev.get("ev") == "t5_director_disc" for ev in ctx.scenario))
 
 
 def _op_outcome(status, reason, op_id, payload):

@@ -1021,10 +1021,10 @@ class PersistFakeExt(FakeExt):
     def _purge_parent_net(self, ent):
         return ent.get("parent_net_id") or ""
 
-    def _purge_append(self, phase, ent, result, emit_tick=0.0, lease_age=0.0, lease_limit=0.0, confirm_tick=0.0):
+    def _purge_row_dict(self, phase, ent, result, emit_tick=0.0, lease_age=0.0, lease_limit=0.0, confirm_tick=0.0):
         # MENOR 13: owner_uid medido por la raiz del arbol, no una constante de la orden.
         owner_uid = self.director_uid if self._root_owner_uid(ent) == self.director_uid else ""
-        row = {
+        return {
             "phase": phase,
             "pers_id": ent.get("pers_id", ZERO_PERS_ID),
             "class_name": ent.get("class_name", ""),
@@ -1041,9 +1041,16 @@ class PersistFakeExt(FakeExt):
             "health_hp": float(ent.get("health_hp", 0.0)),
             "confirm_tick_ms": float(confirm_tick),
         }
+
+    def _purge_append_row(self, row):
         numeric = [row[name] for name in PURGE_NCOL]
         textual = [row[name] for name in PURGE_SCOL]
         return self.jobs.append_row(self.purge_job_id, numeric, textual)
+
+    def _purge_append(self, phase, ent, result, emit_tick=0.0, lease_age=0.0, lease_limit=0.0, confirm_tick=0.0):
+        return self._purge_append_row(
+            self._purge_row_dict(phase, ent, result, emit_tick, lease_age, lease_limit, confirm_tick)
+        )
 
     def _purge_authorized_index(self, pers_id):
         for idx, pid in enumerate(self.purge_auth_pers):
@@ -2347,11 +2354,13 @@ class PersistFakeExt(FakeExt):
                 if self._purge_append("result", cand, "retained_foreign"):
                     self.purge_resolved[idx] = 1
                 continue
-            # MEN 3: se prepara el subarbol antes de la guarda final y la
-            # muestra de la baja efectiva decide y se registra. Si el lease
-            # vencio, el trabajo acaba en failed/lease_expired sin baja y una
-            # renovacion posterior no lo reanuda.
-            emit_ents = list(self._purge_subtree(leaf))
+            # P2i: se preparan las filas emit sin publicarlas, se toma una
+            # unica muestra E1 junto a la baja y decide; la emision solo se
+            # publica si la baja se ejecuto. Si el lease vencio, el trabajo
+            # acaba en failed/lease_expired sin baja y una renovacion posterior
+            # no lo reanuda.
+            emit_rows = [self._purge_row_dict("emit", sub, "")
+                         for sub in self._purge_subtree(leaf)]
             delete_tick = float(self.peer.local_ms())
             if hasattr(self.peer, "lease_age_ms"):
                 age = self._lease_age_at_ms(delete_tick)
@@ -2364,13 +2373,18 @@ class PersistFakeExt(FakeExt):
             if expired:
                 self.jobs.end_job(self.purge_job_id, "failed", "lease_expired")
                 return
-            for sub in emit_ents:
-                if not self._purge_append("emit", sub, "", delete_tick, age, limit):
-                    return
+            if self.jobs.get_state(self.purge_job_id) != "running":
+                return
             self.purge_emit_tick = delete_tick
             self.purge_confirm = leaf.get("pers_id", "")
             self.purge_confirm_ent = dict(leaf)
             self._delete_entity(leaf)
+            for row in emit_rows:
+                row["emit_tick_ms"] = float(delete_tick)
+                row["lease_age_ms"] = float(age)
+                row["lease_limit_ms"] = float(limit)
+                if not self._purge_append_row(row):
+                    return
             return
         if all(self.purge_resolved):
             self.jobs.end_job(self.purge_job_id, "done", "ok")
