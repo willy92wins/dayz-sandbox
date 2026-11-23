@@ -11,6 +11,9 @@ y `_oracle_check_ok`. Todas las comprobaciones consumen esas funciones.
 Reloj (R-03): los `t_ms` solo se comparan con `t_ms`; los ticks del motor (`snap_tick_ms`,
 `start_tick_ms` y `tick_ms`) solo se comparan con ticks del mismo epoch.
 
+Identidad (enmienda del brief:1296-1313, 2026-11-23): la sonda y el producto se casan por la vida
+del servidor (`_server_lives`, `_job_life_problem` y `_job_epoch`), no por igualdad de ids.
+
 Códigos de salida: 0 PASA, 1 FALLA, 2 INCONCLUSO (`gate_core.py:73-82`).
 """
 
@@ -970,6 +973,198 @@ def _world_size(tap: dict[str, Any], t_ms: float) -> int:
     return 16384
 
 
+# ---------------------------------------------------------------------------------------------------
+# Enmienda de identidad (brief:1296-1313, 2026-11-23; descongela F2P): la sonda y el producto se
+# casan por la VIDA DEL SERVIDOR, no por igualdad de ids. En el juego son UUID independientes: la
+# sonda genera su `inst` y la da como `server_epoch` (`DSBX_QA_Probe.c:264-274`, en la #22); el
+# producto genera su `inst` (`DayZSandbox/scripts/3_Game/DSBX_Peer.c:199`) y su epoch
+# (`DSBX_World.c:34`) por separado. El oráculo de 98c7a78 exigía la igualdad (`_measurement` con
+# `_tap_epoch_for_inst`, el censo del control y F2P-10) y una partida honesta daba INCONCLUSO en todo.
+# ---------------------------------------------------------------------------------------------------
+
+def _server_lives(probe: dict[str, Any], tap: dict[str, Any],
+                  backend: dict[str, Any]) -> dict[str, Any]:
+    """Vidas del servidor y la identidad de cada lado en cada una (brief:1304-1308).
+
+    - Vida (brief:1304): el tramo entre dos `restart` con `target: server` del runner (§5.4), o
+      desde el principio hasta el primero y desde el último hasta el final, en el reloj común
+      (R-03). Cada vida es `[lo, hi)`, como los tramos del backend (`_backend_session_segments`).
+    - Producto (brief:1305): la `(inst, epoch)` de sus `/hello` de servidor ACEPTADOS del `tap`, a la
+      hora de su respuesta (`_hello_resp_time`). Un `/hello` repetido con la misma identidad no
+      cuenta como otro: el producto vuelve a saludar tras cada reinicio del backend (P3, P4a, P5).
+    - Sonda (brief:1305): la `inst` de sus `hello` de servidor aceptados (`bridge.jsonl`) y la
+      `(inst, server_epoch)` de la lectura de arranque de cada trabajo (`per_census_start` o
+      `per_witness_start`), a la hora de su entrega (`deliver`).
+
+    Qué cuenta como identidad (INTERPRETACIÓN, ninguna abre un PASA):
+    - solo valores de 32 hex. Una `inst` o un epoch vacíos o mal formados no casan con nada
+      (v1.3.14) y no son la identidad de nadie: no cuentan como otra identidad de la vida; el
+      `/hello` o el trabajo que los lleva no casa por su cuenta;
+    - de la sonda, solo los trabajos de una instancia que había saludado antes de la entrega (el
+      bridge solo entrega a una instancia registrada). Un trabajo de una `inst` que no saludó no es
+      de la sonda: no cuenta como identidad suya y no casa (ya fallaba `_hello_before`). Así un censo
+      espurio no tapa un FALLA de su vida (Sol r1, `sol_confirmed_alive_hidden`).
+
+    Una vida CASA si (brief:1305-1308):
+    - cada lado tiene UNA sola identidad (la sonda: una `inst` y, si tiene trabajos, un epoch);
+    - la sonda saludó en ella;
+    - ningún valor de esas identidades (la `inst` o el epoch de un lado) apareció en una vida
+      ANTERIOR del mismo lado (cada vida, identidades nuevas). INTERPRETACIÓN: la enmienda dice «la
+      vida anterior» (brief:1306); aquí cuenta cualquiera anterior, que es más estricto. La vida
+      anterior no se invalida por lo que traiga la siguiente.
+
+    Si una vida no casa, sus trabajos no se juzgan: las comprobaciones que los usan dan INCONCLUSO
+    (brief:1308). La igualdad de ids ENTRE lados no se pide ni se prohíbe.
+    """
+    edges = sorted(float(r["t_ms"]) for r in backend.get("restarts") or []
+                   if str((r.get("data") or {}).get("target") or "") == "server")
+    bounds = [float("-inf")] + edges + [float("inf")]
+    lives: list[dict[str, Any]] = []
+    for i in range(len(bounds) - 1):
+        lives.append({"lo": bounds[i], "hi": bounds[i + 1], "prod_ids": set(),
+                      "prod_hello_t": [], "probe_insts": set(), "probe_epochs": set(),
+                      "probe_hello": False})
+
+    def at(t: float) -> dict[str, Any]:
+        for life in lives:
+            if life["lo"] <= t < life["hi"]:
+                return life
+        return lives[-1]
+
+    for h in tap.get("hellos") or []:
+        if str(h.get("peer") or "") != "server" or not h.get("accepted"):
+            continue
+        rt = _hello_resp_time(h)
+        inst = str(h.get("inst") or "")
+        epoch = str(h.get("epoch") or "")
+        if rt is None or not _HEX32.match(inst) or not _HEX32.match(epoch):
+            continue
+        life = at(float(rt))
+        life["prod_ids"].add((inst, epoch))
+        life["prod_hello_t"].append(float(rt))
+    probe_hello_t: dict[str, list[float]] = {}
+    for h in probe.get("hellos") or []:
+        inst = str(h.get("inst") or "")
+        if str(h.get("peer") or "") != "server" or not _finite(h.get("t_ms")) or \
+                not _HEX32.match(inst):
+            continue
+        probe_hello_t.setdefault(inst, []).append(float(h["t_ms"]))
+        life = at(float(h["t_ms"]))
+        life["probe_insts"].add(inst)
+        life["probe_hello"] = True
+    for job in (probe.get("jobs") or {}).values():
+        t = job.get("deliver_t")
+        inst = str(job.get("inst") or "")
+        epoch = str(job.get("epoch") or "")
+        if t is None or not _finite(t) or not _HEX32.match(inst) or not _HEX32.match(epoch):
+            continue
+        if not any(ht < float(t) for ht in probe_hello_t.get(inst) or ()):
+            continue
+        life = at(float(t))
+        life["probe_insts"].add(inst)
+        life["probe_epochs"].add(epoch)
+
+    first: dict[str, dict[str, int]] = {"prod_inst": {}, "prod_epoch": {},
+                                        "probe_inst": {}, "probe_epoch": {}}
+
+    def values_of(life: dict[str, Any]) -> tuple[tuple[str, set[str]], ...]:
+        return (("prod_inst", {i for i, _e in life["prod_ids"]}),
+                ("prod_epoch", {e for _i, e in life["prod_ids"]}),
+                ("probe_inst", set(life["probe_insts"])),
+                ("probe_epoch", set(life["probe_epochs"])))
+
+    for idx, life in enumerate(lives):
+        for key, values in values_of(life):
+            for v in values:
+                first[key].setdefault(v, idx)
+    for idx, life in enumerate(lives):
+        problems: list[str] = []
+        if len(life["prod_ids"]) != 1:
+            problems.append(f"product_ids={len(life['prod_ids'])}")
+        if len(life["probe_insts"]) != 1:
+            problems.append(f"probe_insts={len(life['probe_insts'])}")
+        if len(life["probe_epochs"]) > 1:
+            problems.append(f"probe_epochs={len(life['probe_epochs'])}")
+        if not life["probe_hello"]:
+            problems.append("probe_hello_missing")
+        for key, values in values_of(life):
+            if any(first[key][v] < idx for v in values):
+                problems.append(f"repeated:{key}")
+        life["ok"] = not problems
+        life["reason"] = ",".join(problems)
+        life["prod"] = next(iter(life["prod_ids"])) if len(life["prod_ids"]) == 1 else None
+        life["probe"] = ((next(iter(life["probe_insts"])),
+                          next(iter(life["probe_epochs"])) if life["probe_epochs"] else "")
+                         if len(life["probe_insts"]) == 1 and len(life["probe_epochs"]) <= 1
+                         else None)
+        life["prod_hello_t"].sort()
+    return {"edges": edges, "lives": lives}
+
+
+def _life_at(probe: dict[str, Any], t_ms: float) -> dict[str, Any] | None:
+    """Vida del servidor que contiene `t_ms` (`[lo, hi)`), o None sin vidas calculadas."""
+    lives = probe.get("lives")
+    if not isinstance(lives, dict) or not _finite(t_ms):
+        return None
+    for life in lives.get("lives") or []:
+        if life["lo"] <= float(t_ms) < life["hi"]:
+            return life
+    return None
+
+
+def _job_life_problem(probe: dict[str, Any], job: dict[str, Any]) -> str:
+    """'' si el trabajo de la sonda casa con la vida en que se entregó (brief:1307-1308).
+
+    - El trabajo se ata a la vida de su entrega; sin entrega o sin vidas calculadas no casa (las
+      calcula `evaluate`; una llamada sin ellas falla cerrada).
+    - La vida casa (`_server_lives`) y la `(inst, server_epoch)` de su lectura de arranque es la de
+      la sonda en esa vida.
+    - El producto saludó en esa vida antes de la entrega: un `/hello` suyo aceptado, con respuesta
+      anterior a la entrega. Es lo que ya pedía `_tap_epoch_for_inst` (un `/hello` del producto en
+      vigor antes de la entrega), sin la igualdad de ids.
+    """
+    t = job.get("deliver_t")
+    if t is None or not _finite(t):
+        return "no_delivery"
+    life = _life_at(probe, float(t))
+    if life is None:
+        return "no_life"
+    if not life.get("ok"):
+        return "life_unbound:" + str(life.get("reason") or "")
+    if life.get("probe") is None or \
+            (str(job.get("inst") or ""), str(job.get("epoch") or "")) != tuple(life["probe"]):
+        return "probe_identity_mismatch"
+    if not any(float(rt) < float(t) for rt in life.get("prod_hello_t") or []):
+        return "product_hello_after_delivery"
+    return ""
+
+
+def _job_epoch(probe: dict[str, Any], job: dict[str, Any] | None) -> str:
+    """Epoch con que se juzga un trabajo de la sonda: el del producto en su vida (brief:1307).
+
+    Vacío si el trabajo no casa: un epoch vacío no casa con nada (v1.3.14).
+    """
+    if job is None or _job_life_problem(probe, job) != "":
+        return ""
+    life = _life_at(probe, float(job["deliver_t"]))
+    return str(life["prod"][1]) if life is not None and life.get("prod") else ""
+
+
+def _lives_metric(lives: dict[str, Any]) -> list[dict[str, Any]]:
+    """Resumen de las vidas para `metrics.server_lives` (diagnóstico; no decide nada)."""
+    out: list[dict[str, Any]] = []
+    for life in lives.get("lives") or []:
+        out.append({
+            "desde_t_ms": life["lo"] if math.isfinite(life["lo"]) else None,
+            "hasta_t_ms": life["hi"] if math.isfinite(life["hi"]) else None,
+            "casa": bool(life.get("ok")),
+            "motivo": str(life.get("reason") or ""),
+            "producto": list(life["prod"]) if life.get("prod") else None,
+            "sonda": list(life["probe"]) if life.get("probe") else None,
+        })
+    return out
+
+
 def _measurement(job: dict[str, Any], *, manifest: dict[str, Any], probe: dict[str, Any],
                  tap: dict[str, Any] | None = None, part: str,
                  judged_t: float | None = None, fresh: bool = False) -> str:
@@ -980,6 +1175,9 @@ def _measurement(job: dict[str, Any], *, manifest: dict[str, Any], probe: dict[s
     frescura se mide con `t_ms` de la entrega frente al terminal (también `t_ms`); los ticks solo se
     validan contra sí mismos y contra su ventana. El epoch es por evento (punto 8): sale del trabajo
     y tiene que casar con el `/hello` de su instancia en vigor antes de la entrega.
+    Enmienda de identidad (brief:1296-1313): ese casado ya no es por igualdad de ids con el `/hello`
+    del producto, sino por la vida del servidor (`_job_life_problem`), y se exige SIEMPRE, con `tap`
+    o sin él; el parámetro `tap` se conserva por las llamadas, pero la identidad no depende de él.
     """
     if not job.get("valid"):
         return "unbacked_rows"
@@ -1004,7 +1202,11 @@ def _measurement(job: dict[str, Any], *, manifest: dict[str, Any], probe: dict[s
     pv = "dsbx-qa1+" + str(ident.get("probe_stamp") or "")
     if not _hello_before(probe, job.get("inst") or "", pv, float(deliver_t)):
         return "unbacked_rows"
-    if tap is not None and _tap_epoch_for_inst(tap, job.get("inst") or "", float(deliver_t)) != epoch:
+    # Enmienda de identidad (brief:1296-1313). Antes: el epoch del trabajo igual al del `/hello` del
+    # producto con la MISMA `inst` (`_tap_epoch_for_inst`), solo con `tap`. Ahora: el trabajo se ata
+    # a la vida del servidor en que se entregó, su identidad es la de la sonda en esa vida y la vida
+    # casa con una sola identidad del producto, que saludó antes de la entrega. Si no casa, nunca PASA.
+    if _job_life_problem(probe, job) != "":
         return "unbacked_rows"
     # v1.3.11 (F-01): el epoch del trabajo es el de su lectura de arranque; las páginas no lo traen.
     if job.get("min_page_t") is not None and job.get("start_t") is not None and \
@@ -1366,7 +1568,8 @@ def _last_known_positions(probe: dict[str, Any], manifest: dict[str, Any],
         if job.get("deliver_t") is None or float(job["deliver_t"]) >= before_t:
             continue
         # v1.3.11 (F-11): la identidad es `(epoch, net_id)`; el seguimiento no cruza un reinicio.
-        if epoch and str(job.get("epoch") or "") != epoch:
+        # Enmienda de identidad (brief:1307): el epoch del censo es el del producto en su vida.
+        if epoch and _job_epoch(probe, job) != epoch:
             continue
         if _measurement(job, manifest=manifest, probe=probe, part=job["part"]) != "":
             continue
@@ -1481,15 +1684,39 @@ def _covered(pos: tuple[float, float], disks: list[tuple[float, float, float]],
     return True
 
 
-def _backend_valid_read(read: Any, world_size: int) -> bool:
-    """S-08: el validador del consumidor real, importado y usado tal cual (sin exigir `obs`)."""
+def _backend_validator() -> Any:
+    """S-08: el validador del consumidor real (`app.backend.scene_live._valid_read_compat`), o None si
+    no se puede importar.
+
+    Re-congelado de 2026-11-23 (decisión de la principal, brief:1314-1315): un import que falla es un
+    error de montaje, no una lectura no válida. `evaluate` lo mira antes de juzgar nada y da INCONCLUSO
+    `backend_validator_unavailable`, nunca FALLA. Hasta 98c7a78 el fallo del import salía como lectura no
+    válida: `_reconciliation_ok` daba False y F2P-05 o F2P-08 daban FALLA. No se guarda entre llamadas:
+    cada evaluación mira el import de su momento.
+    """
     import sys
     root = str(Path(__file__).resolve().parents[1])
     if root not in sys.path:
         sys.path.insert(0, root)
     try:
         from app.backend.scene_live import _valid_read_compat
-        return bool(_valid_read_compat(read, require_obs=None, world_size=world_size))
+    except Exception:
+        return None
+    return _valid_read_compat if callable(_valid_read_compat) else None
+
+
+def _backend_valid_read(read: Any, world_size: int) -> bool:
+    """S-08: el validador del consumidor real, importado y usado tal cual (sin exigir `obs`).
+
+    Una excepción del propio validador, ya importado, cuenta como lectura no válida, como antes. Sin
+    validador (import roto) también da False, pero `evaluate` ya ha dado INCONCLUSO antes de llegar
+    aquí (`_backend_validator`); una llamada suelta falla cerrada.
+    """
+    validator = _backend_validator()
+    if validator is None:
+        return False
+    try:
+        return bool(validator(read, require_obs=None, world_size=world_size))
     except Exception:
         return False
 
@@ -2564,6 +2791,9 @@ def _control_census_ok(probe: dict[str, Any], manifest: dict[str, Any], part: st
     `|health_hp / max_hp - 0,845| <= 0,01`; si da `-1/-1`, bastan la clase y la posición.
     v1.3.11 (F-08): el censo propio tiene que ser de la instancia y el epoch vigentes después del
     reinicio; un censo de la instancia anterior no vale.
+    Enmienda de identidad (brief:1296-1313): «la instancia y el epoch vigentes» son los de la vida
+    del servidor; el censo casa con su vida en `_measurement`, y el `/hello` vigente del producto en
+    su entrega tiene que ser de esa misma vida y con su identidad.
     """
     job = _census(probe, f"{part}:control")
     if job is None:
@@ -2578,10 +2808,15 @@ def _control_census_ok(probe: dict[str, Any], manifest: dict[str, Any], part: st
         # v1.3.13 (T2f-11, C-04): la instancia y el epoch del trabajo salen del MISMO `/hello`
         # aceptado vigente en su entrega; un `/hello` rechazado no aporta ninguno de los dos
         # (brief:546, 660, 662).
+        # Enmienda de identidad (brief:1296-1313): antes, la `inst` y el epoch del censo iguales a
+        # los de ese `/hello` del producto (en el juego nunca lo son). Ahora, ese `/hello` es de la
+        # vida del censo (por la hora de su respuesta) y lleva la identidad del producto en ella.
         vig = _server_hello_at(tap, float(deliver_t))
-        if vig is None or \
-                str(job.get("epoch") or "") != str(vig.get("epoch") or "") or \
-                str(job.get("inst") or "") != str(vig.get("inst") or ""):
+        life = _life_at(probe, float(deliver_t))
+        _vig_t = _hello_resp_time(vig) if vig is not None else None
+        if vig is None or life is None or not life.get("ok") or not life.get("prod") or \
+                _vig_t is None or not (life["lo"] <= float(_vig_t) < life["hi"]) or \
+                (str(vig.get("inst") or ""), str(vig.get("epoch") or "")) != tuple(life["prod"]):
             return False
         # v1.3.13 (T2f-12, D-05; brief:660, 662): el `/hello` vigente del control tiene que ser
         # ACEPTADO despues del reinicio del servidor que se juzga, por su respuesta. Un censo de la
@@ -2882,8 +3117,20 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         reasons.append(oracle_reason)
         return gate_core.make_verdict(SPIKE_ID, 2, checks=_checks_as_list(checks),
                                       metrics=metrics, reasons=reasons)
+    # S-08 (re-congelado de 2026-11-23, brief:1314-1315): sin el validador del backend no se puede
+    # juzgar ninguna lectura de reconciliación. Un import que falla es un error de montaje: INCONCLUSO
+    # `backend_validator_unavailable`, nunca FALLA (antes daba FALLA en F2P-05 o F2P-08).
+    if _backend_validator() is None:
+        reasons.append("backend_validator_unavailable")
+        return gate_core.make_verdict(SPIKE_ID, 2, checks=_checks_as_list(checks),
+                                      metrics=metrics, reasons=reasons)
 
     _assign_witness_tags(probe, manifest)
+    # Enmienda de identidad (brief:1296-1313): vidas del servidor y casado de las identidades de la
+    # sonda y del producto en cada una. Las usan todas las mediciones (`_measurement`), el censo del
+    # control, F2P-07 y F2P-10. El resumen va a las métricas para diagnosticar un INCONCLUSO.
+    probe["lives"] = _server_lives(probe, tap, backend)
+    metrics["server_lives"] = _lives_metric(probe["lives"])
 
     doc1 = _load_doc1(repo_root)
     doc2 = _load_doc2(repo_root)
@@ -2919,6 +3166,13 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     p1_u = union("P1:base", "P1")
     p1 = {"rows": list(p1_u["rows"].values())} if p1_u["ok"] else None
     baseline_classes = {str(r.get("class_name")) for r in (p1["rows"] if p1 else [])}
+    # Enmienda de identidad (brief:1308): el censo base de P1 da a comprobaciones de otras vidas
+    # (F2P-07 y F2P-09) las clases de la CE en la zona y los `net_id` de la base. Si la vida en que
+    # se entregó no casa, esas comprobaciones lo usan y no pueden juzgar con él: lo que dependa de la
+    # base da INCONCLUSO `server_life_unbound`, nunca PASA ni un FALLA por la base vacía.
+    _p1_base_job = _census(probe, "P1:base")
+    baseline_life_bad = _p1_base_job is not None and \
+        _job_life_problem(probe, _p1_base_job).startswith("life_unbound")
     p2_u = union("P2:post", "P2", judged_t=_p2_terminal_t(tap, backend, manifest), fresh=True)
     p2 = {"rows": list(p2_u["rows"].values())} if p2_u["ok"] else None
     wit2 = _witness(probe, "P2:apply")
@@ -3557,6 +3811,16 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                                        epoch=epoch_b) if restart_b else {}
         last_c = _last_known_positions(probe, manifest, restart_c, doc1, doc2,
                                        epoch=epoch_c) if restart_c else {}
+        # Enmienda de identidad (brief:1308): las últimas posiciones conocidas (R-09) salen de la vida
+        # anterior a cada reinicio del servidor. Si esa vida no casa, sus censos no cuentan en
+        # `_last_known_positions` y la reaparición no se puede juzgar entera. Un reinicio que falta
+        # lo sigue juzgando `_server_restart_ok` (`restart_unbacked`), no esta regla.
+        _lives_before_ok = all(
+            _rt is None or bool((_life_at(probe, float(_rt) - 1e-6) or {}).get("ok"))
+            for _rt in (restart_b, restart_c))
+        # Lo que solo da FALLA porque la base de P1 no lo exime (criatura o clase de la CE) no se
+        # puede decidir sin la base: con su vida sin casar va aparte y da INCONCLUSO.
+        unbound_hits: list[str] = []
         # §6.1 punto 9 (S-13): las clases que la CE crea en la zona son las del censo de P1 fuera de
         # toda generación. El control persistente está fuera de la zona y no exime a nada dentro.
         ce_classes_in_zone = set(baseline_classes)
@@ -3571,6 +3835,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if cls in creature_classes and ai == 1:
                     if cls in ce_classes_in_zone:
                         botin.append(f"{r.get('net_id')}:{cls}:criatura")
+                    elif baseline_life_bad:
+                        unbound_hits.append(f"{r.get('net_id')}:{cls}:criatura")
                     else:
                         fails.append(f"{r.get('net_id')}:creature_reappeared")
                 if _exact_reappearance(r, last):
@@ -3581,6 +3847,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if _near_last_known(r, last):
                     if cls in ce_classes_in_zone:
                         botin.append(f"{r.get('net_id')}:{cls}")
+                    elif baseline_life_bad:
+                        unbound_hits.append(f"{r.get('net_id')}:{cls}")
                     else:
                         fails.append(f"{r.get('net_id')}:near_last_known")
         if creation is None:
@@ -3655,6 +3923,12 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             fail("F2P-07", ";".join((fails + gen4_bad)[:5]))
         elif botin:
             missing("F2P-07", "posible_botin_ce:" + ";".join(botin[:5]))
+        elif unbound_hits or baseline_life_bad or not _lives_before_ok:
+            # Enmienda de identidad (brief:1308): F2P-07 usa la base de P1 y los censos de la vida
+            # anterior a cada reinicio; si esas vidas no casan, INCONCLUSO, nunca PASA. Va después
+            # de los FALLA que no dependen de ellas, como el botín de la CE.
+            missing("F2P-07", "server_life_unbound" +
+                    (":" + ";".join(unbound_hits[:5]) if unbound_hits else ""))
         elif not _server_restart_ok(tap, backend, manifest, "P4b") or \
                 not _server_restart_ok(tap, backend, manifest, "P4c"):
             missing("F2P-07", "restart_unbacked")
@@ -4071,8 +4345,16 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         extra_at_pose.append(net)
                 if extra_at_pose:
                     bad.append("extras:" + ",".join(sorted(extra_at_pose)[:5]))
+                if baseline_life_bad:
+                    # Enmienda de identidad (brief:1308): sin la base de P1 (su vida no casa), un
+                    # extra no se distingue del botín de la CE ni de la base, y la reutilización de
+                    # la base no se puede ver. Esos motivos no deciden; los demás FALLA, sí.
+                    bad = [b for b in bad
+                           if not str(b).startswith(("extras=", "extras:", "reuses_baseline_nets"))]
                 if bad:
                     fail("F2P-09", ";".join(bad[:5]))
+                elif baseline_life_bad:
+                    missing("F2P-09", "server_life_unbound")
                 elif ce_extra:
                     missing("F2P-09", "posible_botin_ce")
                 elif live != len(doc1["entities"]):
@@ -4098,7 +4380,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             gen = _generation_rebuild(probe, manifest, p, s, d)
             if not gen["ok"]:
                 continue
-            ge = _generation_epoch(probe, p, s)
+            # Enmienda de identidad (brief:1307): el epoch con que se juzga la generación es el del
+            # producto en la vida de su testigo, el mismo con que se buscan los censos de abajo.
+            ge = _job_epoch(probe, _witness(probe, f"{p}:{s}"))
             kinds = {str(e["id"]): str(e["kind"]) for e in d["entities"]}
             for lid, net in gen["pairs"].items():
                 net_kind[(ge, net)] = kinds.get(lid, "")
@@ -4135,9 +4419,11 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 gaps.append(f"{net}:no_epoch")
                 continue
             # Última posición válida anterior al borrado (mismo epoch), validada por la UNIÓN.
+            # Enmienda de identidad (brief:1307): el epoch de cada censo es el del producto en su
+            # vida (`_job_epoch`), no el `server_epoch` de la sonda, que en el juego es otro UUID.
             prev_tags = sorted({str(j["tag"]) for j in census_jobs
                                 if ":disk:" not in str(j["tag"]) and
-                                str(j.get("epoch") or "") == epoch and
+                                _job_epoch(probe, j) == epoch and
                                 j.get("part") == part and
                                 j.get("deliver_t") is not None and float(j["deliver_t"]) < t},
                                key=lambda tag: max(float(j["deliver_t"]) for j in census_jobs
@@ -4156,10 +4442,11 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 continue
             pos = (float(last_row["pos_x_m"]), float(last_row["pos_z_m"]))
             last_tick = pu["row_tick"].get(net)
-            # Siguiente censo válido posterior al borrado, del mismo epoch.
+            # Siguiente censo válido posterior al borrado, del mismo epoch (el del producto en la
+            # vida del censo; enmienda de identidad, brief:1307).
             next_tags = sorted({str(j["tag"]) for j in census_jobs
                                 if ":disk:" not in str(j["tag"]) and
-                                str(j.get("epoch") or "") == epoch and
+                                _job_epoch(probe, j) == epoch and
                                 j.get("part") == part and
                                 j.get("deliver_t") is not None and float(j["deliver_t"]) > t},
                                key=lambda tag: min(float(j["deliver_t"]) for j in census_jobs

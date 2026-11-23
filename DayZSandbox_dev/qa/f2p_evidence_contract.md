@@ -55,7 +55,9 @@ Se leen **solo** estas claves: `schema`, `id` (=`"F2P"`), `kind` (=`"spike"`), `
      **v1.3.11 (F-15):** el epoch **no** es de la parte. Cada evento se juzga con el epoch de su
      instancia (`/hello`) y de su tramo de backend; una parte puede abarcar dos. El `server_epoch` de
      la parte, si está, solo sirve para acreditar el reinicio del servidor (§6.1 punto 8), nunca para
-     juzgar los eventos de la sonda ni del `tap`.
+     juzgar los eventos de la sonda ni del `tap`. **Enmienda de identidad (2026-11-23,
+     brief:1296-1313):** el epoch con que se juzga un trabajo de la sonda es el del producto en la
+     vida del servidor en que se entregó (§2, «Casado por la vida del servidor»).
      **v1.3.12 (Sol r4c, W-01):** el `server_epoch` de la parte **no es obligatorio**. Los manifests
      reales del arnés de F0.3 no lo llevan. Si está, son 32 hex; si no está, no falta nada y el
      reinicio del servidor se acredita por el epoch del `/hello` nuevo y el `restart` (§6.1 punto 8).
@@ -151,6 +153,43 @@ tiene que ser **posterior** al arranque del trabajo y al efecto que juzga (resul
 apply/reset/reinicio). Si no hay página válida → INCONCLUSO (`unbacked_rows`); si la página es anterior
 al efecto → INCONCLUSO (`unbacked_rows`), porque una medición no respaldada no es una FALLA (§6.1
 punto 1 del brief v1.3.11).
+
+**Casado por la vida del servidor (enmienda de identidad, 2026-11-23, brief:1296-1313).** La sonda y
+el producto **no** comparten ids: en el juego son UUID independientes. La sonda da su `inst` como
+`server_epoch` (`DSBX_QA_Probe.c:264-274`, #22); el producto genera su `inst` y su epoch por separado
+(`DayZSandbox/scripts/3_Game/DSBX_Peer.c:199`, `DSBX_World.c:34`). Hasta `98c7a78` el oráculo exigía
+la igualdad, y una partida honesta daba INCONCLUSO en todo. Ahora el evaluador no compara ids entre
+los dos lados; los casa por la vida del servidor (`_server_lives`, `_job_life_problem`, `_job_epoch`):
+- **Vida del servidor:** el tramo entre dos `restart` con `target: "server"` de `backend.jsonl`, y
+  desde el principio hasta el primero y desde el último hasta el final: `[desde, hasta)` en el reloj
+  común, como los tramos del backend.
+- **Una identidad por lado y por vida:** el producto, una sola `(inst, epoch)` en sus `/hello` de
+  servidor aceptados del `tap` (a la hora de su respuesta); la sonda, una sola `(inst,
+  server_epoch)` en sus `hello` de servidor aceptados y en las lecturas de arranque de sus trabajos (a
+  la hora de su entrega). Un `/hello` repetido con la misma identidad no cuenta como otro: el producto
+  vuelve a saludar tras cada reinicio del backend (P3, P4a y P5).
+  - Solo cuentan valores de 32 hex: una `inst` o un epoch vacíos o mal formados no casan con nada
+    (v1.3.14) y no son la identidad de nadie; el `/hello` o el trabajo que los lleva no casa por sí.
+  - De la sonda solo cuentan los trabajos de una `inst` que había saludado antes de su entrega (el
+    bridge solo entrega a una instancia registrada). Un trabajo de una `inst` que no saludó no es de la
+    sonda: no casa y no tapa nada de su vida (`sol_confirmed_alive_hidden` sigue en FALLA).
+- **Cada vida, identidades nuevas:** ningún valor de la identidad de un lado (su `inst` o su epoch)
+  apareció en una vida **anterior** de ese lado. Es más estricto que «distinta de la vida anterior»
+  (brief:1306), y la repetición la paga la vida nueva: la anterior no se invalida por ella.
+- **Cada trabajo** (censo o testigo) **se ata a la vida de su entrega:** su vida casa, su `(inst,
+  server_epoch)` es la de la sonda en ella, la sonda saludó en ella y el producto también, con un
+  `/hello` aceptado antes de la entrega (lo que ya pedía el `/hello` en vigor antes de la entrega).
+  **Para juzgarlo, su epoch es el del producto en esa vida:** con él se buscan las últimas posiciones
+  de F2P-07, los censos y las generaciones de F2P-10, y el `/hello` vigente del censo del control.
+- **Si no casa, nunca PASA:** la medición no vale y lo que la usa da INCONCLUSO (`unbacked_rows` o el
+  motivo de su comprobación). Se exige en todas las mediciones, también en las que antes no miraban
+  el `tap`. F2P-07 y F2P-09 usan además la base de P1 (clases de la CE y `net_id` de la base) y F2P-07
+  los censos de la vida anterior a cada reinicio del servidor: si esas vidas no casan, dan INCONCLUSO
+  `server_life_unbound`, después de sus FALLA que no dependen de ellas; un extra o una reaparición
+  que solo fallaría porque la base vacía no lo exime no da FALLA.
+- `metrics.server_lives` resume cada vida (`desde_t_ms`, `hasta_t_ms`, `casa`, `motivo`, `producto`
+  y `sonda`); es diagnóstico y no decide nada.
+- Los estímulos crudos (`per_spawn_raw`, `per_cleanup_qa`) no son trabajos: se validan como antes.
 
 Los **estímulos crudos** (`per_spawn_raw` y `per_cleanup_qa`) pasan por la misma validación de origen:
 `deliver` presente, `/hello` con el sello antes de la entrega y dentro de la ventana de su parte. Sin
@@ -323,7 +362,12 @@ reconciliado: tras **cada** reinicio del backend (P3, P4a y P5) hay una lectura 
 nueva y antes de la primera entrega de escena. El bloque `scene` de una lectura (`generation`,
 `pending` y `last`) nombra ops de escena, nunca la propia lectura; en P5 la lectura nombra el apply
 cortado, con la sesión vieja. Si falta la lectura de reconciliación antes de `P5:apply2`, F2P-09 da
-**FALLA** (§6.1 F2P-09: «Si falta, FALLA»).
+**FALLA** (§6.1 F2P-09: «Si falta, FALLA»). **El validador de la lectura (S-08, re-congelado de
+2026-11-23, brief:1314-1315):** la lectura vale si la acepta el consumidor real, `_valid_read_compat` de
+`app/backend/scene_live.py`, importado por el evaluador (`qa/f2p_eval.py`, `_backend_validator`). Si
+ese import falla, es un error de montaje: el veredicto entero es INCONCLUSO
+`backend_validator_unavailable`, nunca FALLA (hasta `98c7a78` salía como lectura no válida y daba FALLA
+en F2P-05 o F2P-08). Una excepción del propio validador, ya importado, sigue siendo lectura no válida.
 
 Entregas: toda orden `scene.apply`/`scene.reset`/`scene.observe`/`state.read` aparece en una respuesta
 `/poll` (con su `session` y `op_id`); su resultado aparece en un POST `/result`. El evaluador exige
@@ -403,7 +447,9 @@ la distancia 3D al suelo del documento: un desplazamiento horizontal de 0,4 m so
   `ack_t` o un `/hello` por su `resp_t`), no solo tras el `cut` de P5. El epoch vigente y el tamaño
   del mundo salen solo de `/hello` aceptados; el del mundo, además, es el vigente antes de la lectura.
   La instancia y el epoch del censo del control salen del MISMO `/hello` aceptado vigente en su
-  entrega. **v1.3.13
+  entrega (enmienda de identidad, brief:1296-1313: ese `/hello` del producto es de la vida del
+  servidor del censo y lleva la identidad del producto en ella; los ids de la sonda no se comparan
+  con los suyos, §2). **v1.3.13
   (Y-07/Z-06):** el censo `P2n:clean` se juzga fresco frente
   al máximo del terminal del apply y del reset; si se entregó antes, INCONCLUSO `unbacked_rows`.
   **v1.3.13 (Y-08/Z-02):** la etapa de P4c es el reset con el `doc_id` de la escena 1 antes del
@@ -453,7 +499,9 @@ vivo → FALLA (`delete_not_observed`). Un `delete_failed_b==1` que falta → FA
 Si la posición de la entidad no se puede situar dentro del disco del censo siguiente → INCONCLUSO
 (`not_covered`), nunca «borrada». **v1.3.11 (F-15):** la posición sale del último censo válido anterior
 que tenga la entidad (la unión validada de sus componentes, del mismo epoch); **la posición del
-documento nunca hace de posición observada**. Sin esa posición → INCONCLUSO.
+documento nunca hace de posición observada**. Sin esa posición → INCONCLUSO. El epoch del borrado es el
+del producto vigente a su hora, y el de cada censo y cada generación, el del producto en la vida del
+servidor en que se entregó su trabajo (enmienda de identidad, §2).
 
 **Criaturas (R-04, v1.3.11 F-02).** Para una criatura confirmada como borrada y ausente, la ausencia
 se concluye solo si **un único componente** de la unión, el principal o un disco, no la tiene y cubre
@@ -484,7 +532,8 @@ propia línea confirmatoria.
   (aunque no case con el documento) → FALLA. Los reinicios se acreditan con el epoch del `/hello`
   nuevo, el evento de reinicio del runner y el mismo `storage.id`; el `server_epoch` de la parte, si
   está, tiene que coincidir con ese `/hello`; si no está, no falta nada. Reutilizar el epoch anterior
-  → INCONCLUSO.
+  → INCONCLUSO. Esa «última medición válida» es de la vida del servidor anterior al reinicio, con el
+  epoch del producto en ella; si esa vida no casa (§2), F2P-07 da INCONCLUSO `server_life_unbound`.
 - `surface_y_m` tiene que salir en las filas y variar con la posición; constante o ausente → FALLA
   (`surface_y_constant` / `surface_y_missing`), y F2P-11 no PASA.
 - `net_id=="0:0"` en una entidad creada → FALLA (`net_id_zero`).
@@ -504,7 +553,13 @@ El oráculo lleva estas negativas, y las pruebas offline comprueban que dan FALL
 - un censo vacío o sin los edificios conocidos del baseline por clase y pose (`empty_census`,
   `baseline_missing`);
 - filas de censo copiadas de una observación del backend sin respuesta cruda de la sonda que las
-  respalde, aunque sean geométricamente aceptables (`unbacked_rows`, R-16).
+  respalde, aunque sean geométricamente aceptables (`unbacked_rows`, R-16);
+- **identidades que no casan con la vida del servidor** (enmienda de identidad, §2): dos identidades
+  del producto o de la sonda en una misma vida, una vida sin el `hello` de la sonda, una identidad
+  repetida en dos vidas, un trabajo con la identidad de otra vida, un reinicio del servidor sin su
+  `restart` o un `restart` del servidor sin reinicio (`ID_NEGATIVES`, INCONCLUSO). La positiva con los
+  ids del juego (la sonda con los suyos y el producto con una `inst` y un epoch distintos) da PASA
+  (`ID_POSITIVES`).
 
 `qa/f2p_mutants.py` expone `SECTION6_MUTANTS` y `SECTION6_NEGATIVES`: el mapa explícito de cada punto de
 §6 del brief a los mutantes/negativas reales que lo tumban. Las pruebas offline verifican que no falta

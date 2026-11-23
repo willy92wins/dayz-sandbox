@@ -10627,6 +10627,357 @@ for _name, _spec in SOL_POSITIVES_R15.items():
     SOL_CASES_R15[_name] = {"kind": "positive", "name": _name, "check": "T2f-15"}
     SOL_CASES[_name] = SOL_CASES_R15[_name]
 
+
+# ---------------------------------------------------------------------------------------------------
+# Enmienda de identidad (brief:1296-1313, 2026-11-23): la sonda y el producto se casan por la vida
+# del servidor. La fixture lleva los mismos ids en los dos lados (e1, e2 y e3 por vida); en el juego
+# son UUID independientes: la sonda da su `inst` como `server_epoch` (DSBX_QA_Probe.c:264-274, #22) y
+# el producto genera su `inst` (DSBX_Peer.c:199) y su epoch (DSBX_World.c:34) por separado.
+# ---------------------------------------------------------------------------------------------------
+
+_ID_E = ("e1" * 16, "e2" * 16, "e3" * 16)            # ids de la fixture, uno por vida
+_ID_PROBE = ("9a1a" * 8, "9b2b" * 8, "9c3c" * 8)     # sonda: inst = server_epoch
+_ID_PROBE_CLIENT = "9d4d" * 8                         # inst del cliente de la sonda
+_ID_PROD_INST = ("1f1f" * 8, "2f2f" * 8, "3f3f" * 8)  # producto: inst del servidor
+_ID_PROD_EPOCH = ("5e5e" * 8, "6e6e" * 8, "7e7e" * 8)  # producto: epoch del mundo
+# Vidas del servidor en la fixture: los `restart` con `target: server` de P4b y P4c.
+_ID_RESTART_B = 621300.0
+_ID_RESTART_C = 700800.0
+
+
+def _id_map_exact(node: Any, mapping: dict[str, str]) -> Any:
+    """Cambia los valores de texto que son EXACTAMENTE un id (nunca un trozo de otro texto)."""
+    if isinstance(node, dict):
+        return {k: _id_map_exact(v, mapping) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_id_map_exact(v, mapping) for v in node]
+    if isinstance(node, str):
+        return mapping.get(node, node)
+    return node
+
+
+def _id_map_product(node: Any, inst_map: dict[str, str], epoch_map: dict[str, str]) -> Any:
+    """Producto: su `inst` y su epoch son UUID distintos; se cambian por el nombre de la clave.
+
+    Un id de la fixture en otra clave para en seco: el caso no estaría probando lo que dice.
+    """
+    if isinstance(node, dict):
+        out = {}
+        for k, v in node.items():
+            if isinstance(v, str) and k == "inst":
+                out[k] = inst_map.get(v, v)
+            elif isinstance(v, str) and k in ("epoch", "server_epoch"):
+                out[k] = epoch_map.get(v, v)
+            else:
+                out[k] = _id_map_product(v, inst_map, epoch_map)
+        return out
+    if isinstance(node, list):
+        return [_id_map_product(v, inst_map, epoch_map) for v in node]
+    if isinstance(node, str) and (node in inst_map or node in epoch_map):
+        raise ValueError(f"id del producto en una clave desconocida: {node}")
+    return node
+
+
+def _id_probe_only(c: dict[str, Any]) -> None:
+    """Q1 (T4_preguntas.md, apéndice A): solo los ids de la sonda cambian, coherentes en la sonda."""
+    mapping = dict(zip(_ID_E, _ID_PROBE))
+    mapping["c" * 32] = _ID_PROBE_CLIENT
+    c["samples"]["bridge.jsonl"] = _id_map_exact(c["samples"]["bridge.jsonl"], mapping)
+
+
+def _id_three_uuids(c: dict[str, Any]) -> None:
+    """Como en el juego: por vida, la `inst`/`server_epoch` de la sonda, la `inst` del producto y
+    su epoch son tres UUID distintos entre sí y distintos en cada vida."""
+    _id_probe_only(c)
+    inst_map = dict(zip(_ID_E, _ID_PROD_INST))
+    epoch_map = dict(zip(_ID_E, _ID_PROD_EPOCH))
+    s = c["samples"]
+    s["bridge_tap.jsonl"] = _id_map_product(s["bridge_tap.jsonl"], inst_map, epoch_map)
+    s["backend.jsonl"] = _id_map_product(s["backend.jsonl"], inst_map, epoch_map)
+    c["manifest"] = _id_map_product(c["manifest"], inst_map, epoch_map)
+
+
+def _id_three_uuids_no_part_epoch(c: dict[str, Any]) -> None:
+    """Los manifests reales de F0.3 no llevan el `server_epoch` de la parte (§6.1 punto 8)."""
+    _id_three_uuids(c)
+    for p in c["manifest"]["f2p"]["parts"]:
+        p.pop("server_epoch", None)
+
+
+def _id_probe_rehello_same_identity(c: dict[str, Any]) -> None:
+    """La sonda vuelve a saludar en la vida 1 con su MISMA `inst`: no cuenta como otra identidad."""
+    _id_three_uuids(c)
+    _add_bridge_hello(c, "server", _ID_PROBE[0], 551050.0)
+
+
+def _id_product_two_in_one_life(c: dict[str, Any]) -> None:
+    """Dos identidades del producto en una misma vida: desde su `/hello` tras el reinicio del
+    backend de P4a, el producto se presenta con otra `inst` y otro epoch sin `restart` del servidor
+    (un reinicio del servidor sin registrar). La traza del producto sigue coherente."""
+    _id_three_uuids(c)
+    new_inst = {_ID_PROD_INST[0]: "4f4f" * 8}
+    new_epoch = {_ID_PROD_EPOCH[0]: "8e8e" * 8}
+    tap = c["samples"]["bridge_tap.jsonl"]
+    for i, ev in enumerate(tap):
+        t = ev.get("t_ms")
+        if isinstance(t, (int, float)) and 551100.0 <= float(t) < _ID_RESTART_B:
+            tap[i] = _id_map_product(ev, new_inst, new_epoch)
+
+
+def _id_probe_no_hello_in_life(c: dict[str, Any]) -> None:
+    """Una vida sin la identidad de la sonda: no saluda en la vida 2 (falta su `hello`)."""
+    _id_three_uuids(c)
+    c["samples"]["bridge.jsonl"] = [
+        ev for ev in c["samples"]["bridge.jsonl"]
+        if not (ev.get("ev") == "hello" and ev.get("peer") == "server" and
+                ev.get("inst") == _ID_PROBE[1])]
+
+
+def _id_probe_hello_outside_its_life(c: dict[str, Any]) -> None:
+    """El `hello` de la sonda de la vida 2 cae antes del `restart` del servidor (en la vida 1):
+    la vida 2 se queda sin su `hello` y la vida 1 con dos identidades de la sonda."""
+    _id_three_uuids(c)
+    for ev in c["samples"]["bridge.jsonl"]:
+        if ev.get("ev") == "hello" and ev.get("peer") == "server" and \
+                ev.get("inst") == _ID_PROBE[1]:
+            ev["t_ms"] = _ID_RESTART_B - 100.0
+
+
+def _id_probe_repeated_two_lives(c: dict[str, Any]) -> None:
+    """La identidad de la sonda repetida en dos vidas: en la vida 2 la sonda sigue con la de la
+    vida 1 (no se reinició con el servidor, o la evidencia es de otra vida)."""
+    _id_three_uuids(c)
+    for i, ev in enumerate(c["samples"]["bridge.jsonl"]):
+        t = ev.get("t_ms")
+        if isinstance(t, (int, float)) and _ID_RESTART_B <= float(t) < _ID_RESTART_C:
+            c["samples"]["bridge.jsonl"][i] = _id_map_exact(ev, {_ID_PROBE[1]: _ID_PROBE[0]})
+
+
+def _id_job_identity_of_other_life(c: dict[str, Any]) -> None:
+    """Un trabajo de la sonda con una identidad que no es la de su vida: el censo
+    `P4b:post_restart` (segunda vida, después del reinicio) trae la `inst` y el `server_epoch` de la
+    sonda de la vida anterior, que sí saludó antes. Con los ids iguales en los dos lados, el oráculo
+    de 98c7a78 lo aceptaba: buscaba el último `/hello` del producto con esa `inst` (el de antes del
+    reinicio) y su epoch casaba."""
+    _id_three_uuids(c)
+    _set_job_inst(c, "P4b:post_restart", _ID_PROBE[0])
+
+    def fn(s: dict[str, Any], n: dict[str, Any]) -> None:
+        s["server_epoch"] = _ID_PROBE[0]
+    _edit_start_read(c, "P4b:post_restart", fn)
+
+
+def _id_equal_ids_spurious_restart(c: dict[str, Any]) -> None:
+    """Con los ids IGUALES de la fixture: un `restart` del servidor de más en P3, sin reinicio de
+    verdad. El oráculo de 98c7a78 no lo veía (solo mira los `restart` de P4b y P4c); con el casado
+    por vidas, la vida que abre repite las identidades de la anterior."""
+    seq = max(int(ev.get("seq") or 0) for ev in c["samples"]["backend.jsonl"]) + 1
+    c["samples"]["backend.jsonl"].append({
+        "seq": seq, "t_ms": 450000.0, "kind": "restart",
+        "data": {"target": "server", "epoch": _ID_E[0]}})
+
+
+def _id_probe_two_in_one_life(c: dict[str, Any]) -> None:
+    """Dos identidades de la sonda en una misma vida: desde el reinicio del backend de P4a la sonda
+    saluda con otra `inst` y sus trabajos la llevan, sin `restart` del servidor."""
+    _id_three_uuids(c)
+    other = "9e5e" * 8
+    for i, ev in enumerate(c["samples"]["bridge.jsonl"]):
+        t = ev.get("t_ms")
+        if isinstance(t, (int, float)) and 551000.0 <= float(t) < _ID_RESTART_B:
+            c["samples"]["bridge.jsonl"][i] = _id_map_exact(ev, {_ID_PROBE[0]: other})
+    _add_bridge_hello(c, "server", other, 551000.0)
+
+
+def _id_product_repeated_two_lives(c: dict[str, Any]) -> None:
+    """La identidad del producto repetida en dos vidas: tras el reinicio del servidor de P4b el
+    producto sigue con la `inst` y el epoch de la vida 1 (también en el `restart` y el manifest)."""
+    _id_three_uuids(c)
+    inst_map = {_ID_PROD_INST[1]: _ID_PROD_INST[0]}
+    epoch_map = {_ID_PROD_EPOCH[1]: _ID_PROD_EPOCH[0]}
+    s = c["samples"]
+    s["bridge_tap.jsonl"] = _id_map_product(s["bridge_tap.jsonl"], inst_map, epoch_map)
+    s["backend.jsonl"] = _id_map_product(s["backend.jsonl"], inst_map, epoch_map)
+    c["manifest"] = _id_map_product(c["manifest"], inst_map, epoch_map)
+
+
+def _id_server_restart_unlogged(c: dict[str, Any]) -> None:
+    """El runner no registra el reinicio del servidor de P4b: las vidas 1 y 2 quedan en una sola,
+    con dos identidades de cada lado."""
+    _id_three_uuids(c)
+    c["samples"]["backend.jsonl"] = [
+        ev for ev in c["samples"]["backend.jsonl"]
+        if not (ev.get("kind") == "restart" and
+                str((ev.get("data") or {}).get("target") or "") == "server" and
+                float(ev.get("t_ms") or 0.0) == _ID_RESTART_B)]
+
+
+def _id_server_restart_spurious(c: dict[str, Any]) -> None:
+    """Un `restart` del servidor de más, en P3, sin reinicio de verdad: la vida que abre repite las
+    identidades de la anterior."""
+    _id_three_uuids(c)
+    seq = max(int(ev.get("seq") or 0) for ev in c["samples"]["backend.jsonl"]) + 1
+    c["samples"]["backend.jsonl"].append({
+        "seq": seq, "t_ms": 450000.0, "kind": "restart",
+        "data": {"target": "server", "epoch": _ID_PROD_EPOCH[0]}})
+
+
+# Positivas: la partida honesta con los ids del juego da PASA.
+ID_POSITIVES: dict[str, dict[str, Any]] = {
+    "id_sonda_ids_propios_q1": {"apply": _id_probe_only},
+    "id_tres_uuid_por_vida": {"apply": _id_three_uuids},
+    "id_tres_uuid_sin_epoch_de_parte": {"apply": _id_three_uuids_no_part_epoch},
+    "id_sonda_rehello_misma_identidad": {"apply": _id_probe_rehello_same_identity},
+}
+
+# Negativas: nunca PASA. `lives` da las vidas (0, 1, 2…) que no casan en `metrics.server_lives`, con
+# un trozo de su motivo, y `ok_lives` las que sí; `missing`, comprobaciones que quedan en INCONCLUSO.
+# La primera vida no se invalida por lo que traiga una posterior (la repetición la paga la nueva).
+ID_NEGATIVES: dict[str, dict[str, Any]] = {
+    "id_producto_dos_identidades_en_una_vida": {
+        "apply": _id_product_two_in_one_life, "expected_exit_code": 2,
+        "lives": {0: "product_ids=2"}, "ok_lives": [1, 2],
+        "missing": ["F2P-01", "F2P-05", "F2P-07", "F2P-08", "F2P-09", "F2P-13"]},
+    "id_vida_sin_hello_de_la_sonda": {
+        "apply": _id_probe_no_hello_in_life, "expected_exit_code": 2,
+        "lives": {1: "probe_hello_missing"}, "ok_lives": [0, 2],
+        "missing": ["F2P-07", "F2P-10", "F2P-13"]},
+    "id_hello_de_la_sonda_fuera_de_su_vida": {
+        "apply": _id_probe_hello_outside_its_life, "expected_exit_code": 2,
+        "lives": {0: "probe_insts=2", 1: "probe_hello_missing"}, "ok_lives": [2],
+        "missing": ["F2P-01", "F2P-07", "F2P-09", "F2P-13"]},
+    "id_sonda_repetida_en_dos_vidas": {
+        "apply": _id_probe_repeated_two_lives, "expected_exit_code": 2,
+        "lives": {1: "repeated:probe_inst"}, "ok_lives": [0, 2],
+        "missing": ["F2P-07", "F2P-10", "F2P-13"]},
+    "id_trabajo_con_identidad_de_otra_vida": {
+        "apply": _id_job_identity_of_other_life, "expected_exit_code": 2,
+        "lives": {1: "probe_insts=2"}, "ok_lives": [0, 2],
+        "missing": ["F2P-07", "F2P-10", "F2P-13"]},
+    "id_sonda_dos_identidades_en_una_vida": {
+        "apply": _id_probe_two_in_one_life, "expected_exit_code": 2,
+        "lives": {0: "probe_insts=2"}, "ok_lives": [1, 2],
+        "missing": ["F2P-01", "F2P-07", "F2P-08", "F2P-09", "F2P-13"]},
+    "id_producto_repetido_en_dos_vidas": {
+        "apply": _id_product_repeated_two_lives, "expected_exit_code": 2,
+        "lives": {1: "repeated:prod_inst"}, "ok_lives": [0, 2],
+        "missing": ["F2P-07", "F2P-10", "F2P-13"]},
+    "id_reinicio_de_servidor_sin_evento": {
+        "apply": _id_server_restart_unlogged, "expected_exit_code": 2,
+        "lives": {0: "product_ids=2"}, "ok_lives": [1],
+        "missing": ["F2P-01", "F2P-07", "F2P-09", "F2P-13"]},
+    "id_reinicio_de_servidor_espurio": {
+        "apply": _id_server_restart_spurious, "expected_exit_code": 2,
+        "lives": {1: "repeated:prod_inst"}, "ok_lives": [0, 2, 3],
+        "missing": ["F2P-07", "F2P-08", "F2P-13"]},
+    "id_ids_iguales_reinicio_espurio": {
+        "apply": _id_equal_ids_spurious_restart, "expected_exit_code": 2,
+        "lives": {1: "repeated:prod_inst"}, "ok_lives": [0, 2, 3],
+        "missing": ["F2P-07", "F2P-08", "F2P-13"]},
+}
+
+
+# Casos de Sol cuya evidencia lleva una identidad que no casa con su vida del servidor. La evidencia
+# NO cambia (el comparador contra 98c7a78 lo comprueba por sha); cambia lo que esperan, porque la
+# enmienda deja en INCONCLUSO lo que usa esa vida (brief:1308). `old` es lo que esperaban en 98c7a78
+# y se comprueba antes de cambiarlo; `new`, lo que esperan ahora. Ninguno pasa a PASA.
+def _id_respec(table: dict[str, dict[str, Any]], name: str, old: dict[str, Any],
+               new: dict[str, Any]) -> None:
+    spec = table[name]
+    for key, value in old.items():
+        assert spec.get(key) == value, (name, key, spec.get(key), value)
+    spec.update(new)
+
+
+def _ID_ALL_BUT(*keep: str) -> dict[str, list[str]]:
+    """Todas las comprobaciones menos `keep`, admitidas en INCONCLUSO."""
+    return {f"F2P-{i:02d}": ["missing"] for i in range(1, 14) if f"F2P-{i:02d}" not in keep}
+
+# Sin `restart` del servidor, las tres vidas son una con tres identidades de cada lado: todo lo que
+# usa censos o testigos queda INCONCLUSO, no solo F2P-07.
+_id_respec(SOL_MUTANTS, "sol_no_server_restart",
+           {"expected_exit_code": 2, "must_fail_status": {"F2P-07": "missing"},
+            "allowed_non_pass": {}},
+           {"allowed_non_pass": _ID_ALL_BUT("F2P-07")})
+# El epoch de la vida anterior reutilizado tras los reinicios: las vidas 2 y 3 repiten identidad.
+_id_respec(SOL_MUTANTS_R2, "r2_same_epoch_restart",
+           {"expected_exit_code": 2, "must_fail_status": {"F2P-07": "missing"},
+            "allowed_non_pass": {}},
+           {"allowed_non_pass": {"F2P-09": ["missing"], "F2P-13": ["missing"]}})
+# El censo del control con la identidad de la vida anterior: la vida de P4b tiene dos identidades
+# de la sonda, y su censo posterior al reinicio tampoco casa (`missing_census`, antes que el control).
+_id_respec(SOL_MUTANTS_R4, "r4_F08_control_prev_instance",
+           {"expected_exit_code": 2, "must_fail_status": {"F2P-07": "missing"},
+            "must_detail": {"F2P-07": "persistent_control_missing"}, "allowed_non_pass": {}},
+           {"must_detail": {"F2P-07": "missing_census"},
+            "allowed_non_pass": {"F2P-10": ["missing"], "F2P-13": ["missing"]}})
+# Un `restart` del servidor en P5 sin identidades nuevas: la vida que abre repite la anterior y lo
+# que se entrega en ella (el testigo `P5:apply2` y el censo de P5) no casa. El control era una
+# positiva (la reconexión con `/hello` como causa c); sin ese `restart`, la causa c ya la cubre
+# `r9_a03_ctrl_legit_misma_instancia`, que sigue en PASA.
+_id_respec(SOL_MUTANTS_R7, "r7_w11_terminal_y_restart_servidor",
+           {"expected_exit_code": 1, "must_fail_status": {"F2P-09": "fail"},
+            "must_detail": {"F2P-09": "cut_op_terminal=observado/reconciliada"}},
+           {"expected_exit_code": 2, "must_fail_status": {"F2P-09": "missing"},
+            "must_detail": {"F2P-09": "missing_cut_evidence"},
+            "allowed_non_pass": {"F2P-13": ["missing"]}})
+SOL_MUTANTS_R7["r7_w11_ctrl_reconexion_servidor_con_hello"] = \
+    SOL_POSITIVES_R7.pop("r7_w11_ctrl_reconexion_servidor_con_hello")
+_id_respec(SOL_MUTANTS_R7, "r7_w11_ctrl_reconexion_servidor_con_hello",
+           {"expected_exit_code": 0},
+           {"expected_exit_code": 2, "must_fail_status": {"F2P-09": "missing"},
+            "must_detail": {"F2P-09": "missing_cut_evidence"},
+            "allowed_non_pass": {"F2P-13": ["missing"]}})
+SOL_CASES_R7["r7_w11_ctrl_reconexion_servidor_con_hello"]["kind"] = "mutant"
+# Un `/hello` aceptado del producto con otra identidad en la vida de P5: dos identidades del
+# producto en una vida. La causa c ya no se puede juzgar con esa evidencia: INCONCLUSO en P5; si la
+# traza ya rompía, F2P-09 sigue en FALLA por la traza.
+for _name, _exit, _status, _detail in (
+        ("r8_z04d_hello_otra_instancia", 2, "missing", "missing_cut_evidence"),
+        ("r9_a03b_inst_de_la_entrega_falsificado", 1, "fail", "tap_trace_mismatch"),
+        ("r9_a03c_misma_inst_otro_epoch", 2, "missing", "missing_cut_evidence"),
+        ("r10_b04_ctrl_sin_previo", 1, "fail", "tap_trace_mismatch"),
+        ("r10_b04a_hello_previo_rechazado_ok_false", 1, "fail", "tap_trace_mismatch"),
+        ("r10_b04b_hello_previo_sin_respuesta", 1, "fail", "tap_trace_mismatch"),
+        ("r10_b04c_hello_previo_409", 1, "fail", "tap_trace_mismatch")):
+    _table = (SOL_MUTANTS_R8 if _name.startswith("r8_") else
+              SOL_MUTANTS_R9 if _name.startswith("r9_") else SOL_MUTANTS_R10)
+    _id_respec(_table, _name,
+               {"expected_exit_code": 1, "must_fail_status": {"F2P-09": "fail"},
+                "must_detail": {"F2P-09": "cut_op_terminal=observado/reconciliada"}},
+               {"expected_exit_code": _exit, "must_fail_status": {"F2P-09": _status},
+                "must_detail": {"F2P-09": _detail},
+                "allowed_non_pass": {"F2P-07": ["missing"], "F2P-13": ["missing"]}})
+for _name in ("r12_d03a_p5_hello_e5_de_otra_inst", "r12_d03d_p5_e3_tarde_y_otra_inst_antes"):
+    _id_respec(SOL_MUTANTS_R12, _name,
+               {"expected_exit_code": 1, "must_fail_status": {"F2P-09": "fail"},
+                "must_detail": {"F2P-09": "tap_trace_mismatch"}},
+               {"allowed_non_pass": {"F2P-07": ["missing"], "F2P-13": ["missing"]}})
+# El mismo `/hello` de otra instancia en P3 o en P4a: la primera vida tiene dos identidades del
+# producto; F2P-05 o F2P-08 siguen en FALLA por la traza y lo demás de esa vida queda INCONCLUSO.
+_id_respec(SOL_MUTANTS_R12, "r12_d03b_p3_hello_b2_de_otra_inst",
+           {"expected_exit_code": 1, "must_fail_status": {"F2P-05": "fail"},
+            "must_detail": {"F2P-05": "tap_trace_mismatch"}},
+           {"allowed_non_pass": _ID_ALL_BUT("F2P-05")})
+_id_respec(SOL_MUTANTS_R12, "r12_d03c_p4a_hello_d4_de_otra_inst",
+           {"expected_exit_code": 1, "must_fail_status": {"F2P-08": "fail"},
+            "must_detail": {"F2P-08": "tap_trace_mismatch"}},
+           {"allowed_non_pass": _ID_ALL_BUT("F2P-08")})
+# El censo del control con el `server_epoch` de la vida anterior: su vida tiene dos identidades de
+# la sonda y el censo posterior al reinicio no casa (`missing_census`, antes que el control).
+for _table, _name, _also in (
+        (SOL_MUTANTS_R11, "r11_c04a_p4c_control_epoch_e2_con_hello_409_inst_e3", "F2P-09"),
+        (SOL_MUTANTS_R11, "r11_c04b_p4c_control_epoch_e2_con_hello_409_inst_e2", "F2P-09"),
+        (SOL_MUTANTS_R11, "r11_c04c_ctrl_p4c_control_epoch_e2_sin_hello", "F2P-09"),
+        (SOL_MUTANTS_R12, "r12_d05a_p4c_control_de_e2_entre_restart_y_hello_e3", "F2P-09"),
+        (SOL_MUTANTS_R12, "r12_d05b_p4b_control_de_e1_entre_restart_y_hello_e2", "F2P-10"),
+        (SOL_MUTANTS_R12, "r12_d05c_ctrl_p4c_control_e2_en_su_sitio", "F2P-09")):
+    _id_respec(_table, _name,
+               {"expected_exit_code": 2, "must_fail_status": {"F2P-07": "missing"},
+                "must_detail": {"F2P-07": "persistent_control_missing"}},
+               {"must_detail": {"F2P-07": "missing_census"},
+                "allowed_non_pass": {_also: ["missing"], "F2P-13": ["missing"]}})
+
 MUTANTS: dict[str, dict[str, Any]] = {
     "creation_suppressed": {"apply": _m_creation_suppressed, "expected_exit_code": 1,
                             "must_fail_checks": ["F2P-01"],
@@ -10780,7 +11131,8 @@ def mutate(campaign: dict[str, Any], name: str) -> dict[str, Any]:
             SOL_NEGATIVES_R13.get(name) or SOL_POSITIVES_R13.get(name) or
             SOL_MUTANTS_R14.get(name) or SOL_NEGATIVES_R14.get(name) or
             SOL_POSITIVES_R14.get(name) or SOL_MUTANTS_R15.get(name) or
-            SOL_NEGATIVES_R15.get(name) or SOL_POSITIVES_R15.get(name))
+            SOL_NEGATIVES_R15.get(name) or SOL_POSITIVES_R15.get(name) or
+            ID_POSITIVES.get(name) or ID_NEGATIVES.get(name))
     if spec is None:
         raise KeyError(name)
     spec["apply"](c)

@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import f2p_eval
 import f2p_mutants
@@ -1422,6 +1423,135 @@ class TestF2POracleOffline(unittest.TestCase):
                                  msg=(name, json.dumps(v, indent=2)))
                 self.assertEqual(v["verdict"], "PASA")
 
+    # --- Enmienda de identidad (brief:1296-1313, 2026-11-23): casado por la vida del servidor ---
+
+    def test_identity_life_positives_pass(self) -> None:
+        # brief:1311: con los ids reales de la sonda, distintos de los del producto (y la `inst` del
+        # producto distinta de su epoch), la partida honesta da PASA; también sin el `server_epoch`
+        # de la parte y con un `hello` repetido de la sonda con la misma identidad (brief:1305).
+        base = _load_fixture()
+        for name in f2p_mutants.ID_POSITIVES:
+            with self.subTest(positive=name):
+                campaign = f2p_mutants.mutate(base, name)
+                self.assertNotEqual(campaign, base, msg=(name, "no cambia la campaña"))
+                with tempfile.TemporaryDirectory() as tmp:
+                    pdir = _build(campaign, Path(tmp) / name)
+                    v = f2p_eval.evaluate(pdir, repo_root=REPO_ROOT)
+                self.assertEqual(v["exit_code"], 0, msg=(name, json.dumps(v, indent=2)))
+                self.assertEqual(v["verdict"], "PASA")
+                lives = v["metrics"]["server_lives"]
+                self.assertEqual(len(lives), 3, msg=(name, lives))
+                self.assertTrue(all(life["casa"] for life in lives), msg=(name, lives))
+
+    def test_identity_life_negatives_never_pass(self) -> None:
+        # brief:1308 y :1312: dos identidades de un lado en una vida, una vida sin la identidad de la
+        # sonda, una identidad repetida de otra vida o un trabajo sin la identidad de su vida dan
+        # INCONCLUSO en lo que los usa; nunca PASA, y la vida que no casa sale con su motivo.
+        base = _load_fixture()
+        for name, spec in f2p_mutants.ID_NEGATIVES.items():
+            with self.subTest(negative=name):
+                campaign = f2p_mutants.mutate(base, name)
+                self.assertNotEqual(campaign, base, msg=(name, "no cambia la campaña"))
+                with tempfile.TemporaryDirectory() as tmp:
+                    pdir = _build(campaign, Path(tmp) / name)
+                    v = f2p_eval.evaluate(pdir, repo_root=REPO_ROOT)
+                self.assertNotEqual(v["exit_code"], 0, msg=(name, json.dumps(v, indent=2)))
+                self.assertEqual(v["exit_code"], spec["expected_exit_code"],
+                                 msg=(name, json.dumps(v, indent=2)))
+                c_map = _checks(v)
+                for cid in spec["missing"]:
+                    self.assertEqual(c_map[cid]["status"], "missing", msg=(name, cid, c_map[cid]))
+                lives = v["metrics"]["server_lives"]
+                for idx, motive in spec["lives"].items():
+                    self.assertFalse(lives[idx]["casa"], msg=(name, idx, lives))
+                    self.assertIn(motive, lives[idx]["motivo"], msg=(name, idx, lives))
+                # Lo que no toca la negativa sigue casando: la repetición la paga la vida nueva.
+                for idx in spec["ok_lives"]:
+                    self.assertTrue(lives[idx]["casa"], msg=(name, idx, lives))
+
+    def test_identity_lives_and_judged_epoch(self) -> None:
+        # brief:1304-1307: las vidas las parten los `restart` del servidor; cada lado tiene su
+        # identidad en cada vida, y el epoch con que se juzga un trabajo de la sonda es el del
+        # producto en la vida de su entrega, no su `server_epoch`.
+        campaign = f2p_mutants.mutate(_load_fixture(), "id_tres_uuid_por_vida")
+        probe = f2p_eval._parse_probe(campaign["samples"]["bridge.jsonl"])
+        tap = f2p_eval._parse_tap(campaign["samples"]["bridge_tap.jsonl"])
+        backend = f2p_eval._parse_backend(campaign["samples"]["backend.jsonl"])
+        probe["lives"] = f2p_eval._server_lives(probe, tap, backend)
+        lives = probe["lives"]["lives"]
+        self.assertEqual(probe["lives"]["edges"], [621300.0, 700800.0])
+        self.assertEqual(len(lives), 3)
+        for i, life in enumerate(lives):
+            self.assertTrue(life["ok"], msg=(i, life["reason"]))
+            self.assertEqual(life["prod"], (f2p_mutants._ID_PROD_INST[i],
+                                            f2p_mutants._ID_PROD_EPOCH[i]))
+            self.assertEqual(life["probe"], (f2p_mutants._ID_PROBE[i], f2p_mutants._ID_PROBE[i]))
+        for tag, life_idx in (("P1:base", 0), ("P4b:post_restart", 1), ("P4c:post_restart", 2)):
+            job = f2p_eval._census(probe, tag)
+            self.assertIsNotNone(job, msg=tag)
+            self.assertEqual(job["epoch"], f2p_mutants._ID_PROBE[life_idx], msg=tag)
+            self.assertEqual(f2p_eval._job_life_problem(probe, job), "", msg=tag)
+            self.assertEqual(f2p_eval._job_epoch(probe, job), f2p_mutants._ID_PROD_EPOCH[life_idx],
+                             msg=tag)
+
+    def test_identity_measurement_fails_closed_without_lives(self) -> None:
+        # Sin las vidas calculadas (las calcula `evaluate`), ninguna medición casa: INCONCLUSO.
+        campaign = _load_fixture()
+        manifest = campaign["manifest"]
+        probe = f2p_eval._parse_probe(campaign["samples"]["bridge.jsonl"])
+        f2p_eval._assign_witness_tags(probe, manifest)
+        doc1 = f2p_eval._load_doc1(REPO_ROOT)
+        self.assertFalse(f2p_eval._generation_rebuild(probe, manifest, "P2", "apply", doc1)["ok"])
+        job = f2p_eval._census(probe, "P2:post")
+        self.assertEqual(f2p_eval._measurement(job, manifest=manifest, probe=probe, part="P2"),
+                         "unbacked_rows")
+
+    # --- S-08 en el re-congelado (2026-11-23, brief:1314-1315): el import del validador del backend ---
+
+    def test_backend_validator_import_broken_is_inconcluso(self) -> None:
+        # Un import roto del validador del backend es un error de montaje: INCONCLUSO
+        # `backend_validator_unavailable`, nunca FALLA (en 98c7a78 daba FALLA en F2P-05 y F2P-08).
+        # Se rompe con `sys.modules`: un `None` en el nombre del módulo bloquea su import.
+        campaign = _load_fixture()
+        name = "app.backend.scene_live"
+        saved = sys.modules.get(name, mock.sentinel.absent)
+        sys.modules[name] = None  # type: ignore[assignment]
+        try:
+            self.assertIsNone(f2p_eval._backend_validator())
+            with tempfile.TemporaryDirectory() as tmp:
+                pdir = _build(campaign, Path(tmp) / "no_validator")
+                v = f2p_eval.evaluate(pdir, repo_root=REPO_ROOT)
+        finally:
+            if saved is mock.sentinel.absent:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = saved
+        self.assertEqual(v["exit_code"], 2, msg=json.dumps(v, indent=2))
+        self.assertEqual(v["verdict"], "INCONCLUSO")
+        self.assertIn("backend_validator_unavailable", v["reasons"])
+        self.assertFalse(any(c["status"] == "fail" for c in v["checks"]), msg=v["checks"])
+        # Con el import de vuelta, el validador está y la misma evidencia PASA.
+        self.assertIsNotNone(f2p_eval._backend_validator())
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = _build(campaign, Path(tmp) / "with_validator")
+            self.assertEqual(f2p_eval.evaluate(pdir, repo_root=REPO_ROOT)["exit_code"], 0)
+
+    def test_backend_validator_exception_is_invalid_read(self) -> None:
+        # Una excepción del propio validador, ya importado, sigue contando como lectura no válida
+        # (puede dar FALLA en la reconciliación): no es el motivo de montaje y nunca da PASA.
+        repo = str(REPO_ROOT)
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        campaign = _load_fixture()
+        with mock.patch("app.backend.scene_live._valid_read_compat",
+                        side_effect=RuntimeError("validador roto")):
+            self.assertIsNotNone(f2p_eval._backend_validator())
+            with tempfile.TemporaryDirectory() as tmp:
+                pdir = _build(campaign, Path(tmp) / "validator_raises")
+                v = f2p_eval.evaluate(pdir, repo_root=REPO_ROOT)
+        self.assertNotEqual(v["exit_code"], 0, msg=json.dumps(v, indent=2))
+        self.assertNotIn("backend_validator_unavailable", v["reasons"])
+
     def test_tap_req_id_matches_real_proxy_capture(self) -> None:
         # v1.3.14 (§5.4): el tap numera cada peticion con un req_id unico y repite el mismo en su
         # respuesta. Contraste con las partidas reales de F1b-peers (HECHOS.txt) y con la fixture.
@@ -1682,6 +1812,9 @@ class TestF2POracleOffline(unittest.TestCase):
         probe = f2p_eval._parse_probe(campaign["samples"]["bridge.jsonl"])
         tap = f2p_eval._parse_tap(campaign["samples"]["bridge_tap.jsonl"])
         backend = f2p_eval._parse_backend(campaign["samples"]["backend.jsonl"])
+        # Enmienda de identidad (brief:1296-1313): las mediciones casan por la vida del servidor, que
+        # calcula `evaluate`; esta prueba llama a los ayudantes sueltos y las calcula igual.
+        probe["lives"] = f2p_eval._server_lives(probe, tap, backend)
         doc1 = f2p_eval._load_doc1(REPO_ROOT)
         censuses = sorted([j for j in probe["jobs"].values() if j["kind"] == "census"],
                           key=lambda j: float(j["deliver_t"]))
