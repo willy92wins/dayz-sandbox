@@ -32,11 +32,16 @@ fase), ``t_ms``/``h_ms`` (ms, reloj de pared del arnés, de
   ``reason``, ``recv_ms``, ``done_ms``, ``frame_recv``, ``frame_done``
   (de ``f03_common.issue_one``/``OpOutcome``), ``read_nk`` (dict nombre→float)
   y ``read_sk`` (dict nombre→str) del verbo (columnas de §3.1 del brief).
-- ``ev="state"``: ``read_nk`` con las 45 columnas numéricas y ``read_sk`` con
+  ``peer_inst`` (instancia del peer del ``hello``) si esta presente.
+- ``ev="state"``: ``op_id`` (id de la orden ``scam_state_read`` que lo
+  produjo; ausente da ``missing``, vacio o ``"0"`` da ``fail``), ``peer_inst``,
+  ``read_nk`` con las 45 columnas numéricas y ``read_sk`` con
   las 5 cadenas de ``scam_state_read`` (§3.1, §3.7).
 - ``ev="capture"``: ``file`` (nombre ``.bmp``), ``window_w``, ``window_h``
   (px), ``pre_step``/``post_step`` (etiquetas de ``ev="state"``),
-  ``capture_tick_ms``, ``capture_h_ms``.
+  ``capture_tick_ms``, ``capture_h_ms`` y ``frame`` (frame efectivo de la
+  captura en el recorrido, si el runner lo publica; en su defecto se usa
+  ``capture_tick_ms`` para localizar la fila del recorrido).
 - ``ev="stop"``: ``job_id``, ``stop_send_h_ms``, ``stop_ack_h_ms``,
   ``stop_recv_ms``, ``stop_done_ms``, ``u_ms`` (``job_stop`` y respuesta).
 - ``ev="pulse"``: ``burst`` (``"A"|"B"``), ``seq_n``, ``dx_px``,
@@ -47,9 +52,46 @@ fase), ``t_ms``/``h_ms`` (ms, reloj de pared del arnés, de
 - ``ev="dof_config"``: ``accredited_b`` (bool), ``mode``
   (``"offline"|"operator"|"optical"``), ``window_w``, ``window_h``,
   ``mad_bg_50m``.
-- ``ev="hud_control"``: ``op_code`` (4), ``mode`` (0|1|2), ``read_nk``.
 - ``ev="operator_done"``/``ev="operator_timeout"``: de
-  ``f03_common.await_operator``.
+  ``f03_common.await_operator``; solo acredita DOF el de ``SCAM-S0`` con
+  accion ``confirm_dof_and_windowed``.
+- Las filas ``ev="hud_tree"`` y ``ev="hud_control"`` no las produce ningun
+  verbo del brief (§3.1): el evaluador no las exige ni las acredita. El
+  overlay se juzga por ``ovl_vis_b`` (§3.6 del brief) y los controles de
+  CAM-09 por las respuestas ``ev="op"`` de ``scam_hud_op`` enlazadas.
+
+``samples/bridge.jsonl``
+-------------------------
+Lo escribe el bridge (``bridge_qa``): ``hello`` (``peer``, ``args.inst``),
+``enq`` (``op_id``, ``verb``, ``peer``, ``t_ms`` en reloj del arnes) y
+``result`` (``op_id``, ``result.status``/``reason``/``read``,
+``result.recv_ms``/``done_ms`` en reloj del peer y ``t_ms`` del arnes al
+recibir). Cada ``ev="op"``/``ev="state"`` de ``scenario.jsonl`` enlaza con
+su ``enq``/``result`` por ``op_id`` unico: el verbo del ``enq`` tiene que
+ser el del ``ev="op"`` (o ``scam_state_read`` en ``ev="state"``) y las
+claves de ``read_nk``/``read_sk`` tienen que casar con el ``read`` crudo
+desempaquetado del ``result``. Un ``result`` ausente con evento ``lost``
+del bridge para ese ``op_id`` es ausencia de resultado (``missing``).
+
+Pasos buscados por nombre exacto (``phase``/``step``)
+-----------------------------------------------------
+``SCAM-S0``: ``fixture`` (op ``scam_fixture_setup``) y cualquier
+``ev="state"`` posterior con ``fov_rad`` para acreditar el FOV de la
+camara preparada. ``SCAM-S1``: ``wire``, ``pre_0``/``neg_0``/``post_0``,
+``pre_nc``/``post_nc``, ``no_client_free``/``no_client_pose``/
+``no_client_hud``/``no_client_dof``/``no_client_path``/``no_client_sample``,
+``pre_1..5``/``neg_1..5``/``post_1..5``, ``s_init``, ``s_a``, ``s_b``,
+``s_0``, ``moved``, ``save_p0``, ``save_p_roll``, ``p_roll_applied``,
+``p0_applied``. ``SCAM-S2``: ``pre_1..6``/``neg_1..6``/``post_1..6``,
+``path_1_start``, ``busy_pre``, ``busy_attempt``, ``busy_post``.
+``SCAM-S3``: ``hud_preset``, ``path_hud_start``, ``pre_cap``, ``post_cap``,
+``clean_ref_state``, ``post_path_hud`` y los ``ev="op"`` de control de
+``scam_hud_op``. ``SCAM-S4``: ``pre_1..4``/``neg_1..4``/``post_1..4``,
+``ctrl_noblur_pre/post``, ``ctrl_near2m_pre/post``,
+``ctrl_far50m_pre/post``, ``post_reset``, ``dof_var_6s_t1..t4_pre/post``,
+``dof_fixed_6s_t1..t4_pre/post``, ``post_dof_var``, ``post_dof_fix``.
+``SCAM-S5``: ``hud_preset``, ``stop_op`` (op ``job_stop``), ``stop``,
+pulsos ``a*``/``b*``, ``post_stop_state``.
 
 ``samples/scenario.jsonl``: ``read_nk`` de ``ev="state"`` (45 columnas)
 -----------------------------------------------------------------------
@@ -85,14 +127,17 @@ sinónimos en mayúsculas y variantes listadas en ``_find_state``.
 ``path_engine_interp.jsonl``, ``path_dof_var.jsonl``, ``path_dof_fix.jsonl``
 ----------------------------------------------------------------------------
 Páginas de ``job_read`` del trabajo ``"cam"`` concatenadas; una fila JSON por
-frame, como lista de 27 floats en este orden (§3.1, §3.4): ``seq_n``,
+frame, como lista de 36 floats (enmienda 2026-11-18: 27 mas las 9 celdas
+crudas ``m00..m22``) o dict con esas 36 claves, en este orden (§3.1, §3.4):
+``seq_n``,
 ``frame``, ``tick_ms`` (ms), ``dtsum_ms`` (ms), ``x_m,y_m,z_m`` (m, nodo),
 ``yaw_deg,pitch_deg,roll_deg`` (deg, nodo), ``eng_x_m,eng_y_m,eng_z_m`` (m,
 vista renderizada), ``eng_dx,eng_dy,eng_dz`` (unitario), ``fov_rad`` (rad),
 ``calc_focus_dist_m`` (m, lerp de claves), ``sent_focus_dist_m`` (m),
 ``sent_focus_blur`` (0..1), ``set_focus_calls_n`` (contador), ``active_b``
 (bool), ``elem_vis_mask``, ``flags_mask``, ``qb_vis_b``, ``menu_open_b``,
-``ovl_vis_b``. Las 27 lecturas salen de las mismas API que ``scam_state_read``;
+``ovl_vis_b``, ``m00,m01,m02,m10,m11,m12,m20,m21,m22``. Las lecturas salen
+de las mismas API que ``scam_state_read``;
 ``calc_focus_*`` de ``Math.Lerp`` sobre las claves y ``sent_focus_*``/
 ``set_focus_calls_n`` de ``ApplyCamFocus``/``Camera.SetFocus``.
 
@@ -148,6 +193,7 @@ from pathlib import Path
 
 import f03_common
 import gate_core
+import wire
 
 SPIKE_ID = "S-cam"
 CHECK_IDS = tuple(f"CAM-{i:02d}" for i in range(1, 11))
@@ -806,68 +852,9 @@ def _capture_window_ok(event: dict | None, rois: dict) -> bool:
 
 
 def _state_indexed(scenario: list, phase: str, prefix: str, idx: int) -> dict | None:
-    for name in (
-        f"{prefix}_{idx}",
-        f"{prefix}{idx}",
-        f"dof_{prefix}_{idx}",
-        f"{idx}_{prefix}",
-        f"{idx}{prefix}",
-    ):
-        row = _state(scenario, phase, name)
-        if row is not None:
-            return row
-    patterns = (
-        f"{prefix}_{idx}",
-        f"{prefix}{idx}",
-        f"_{idx}_{prefix}",
-        f"_{idx}{prefix}",
-        f"{idx}_{prefix}",
-        f"{idx}{prefix}",
-    )
-    for cand in scenario:
-        if cand.get("ev") != "state" or cand.get("phase") != phase:
-            continue
-        step = str(cand.get("step") or "").lower()
-        if any(pattern in step for pattern in patterns):
-            return cand
-    return None
-
-
-_STATIC_RESET_STEPS = (
-    "post_reset",
-    "reset",
-    "dof_reset",
-    "post_dof_reset",
-    "post_static",
-    "post_static_reset",
-    "post_ctrl",
-)
-_STATIC_RESET_HINTS = ("reset", "static", "ctrl")
-_PATH_RESET_STEPS = (
-    "post_dof_var",
-    "post_var",
-    "after_dof_var",
-    "dof_var_end",
-    "post_path_var",
-    "post_var_path",
-    "post_job_var",
-    "post_dof",
-    "post_path",
-    "after_path",
-    "job_end",
-    "post_job",
-)
-_PATH_RESET_HINTS = (
-    "post_dof_var",
-    "post_var",
-    "after_dof_var",
-    "dof_var_end",
-    "post_path",
-    "after_path",
-    "post_dof",
-    "job_end",
-    "post_job",
-)
+    # Solo el nombre exacto pre_<j>/post_<j>: una coincidencia aproximada
+    # podria tomar la lectura de otra fase como si fuera la de la negativa.
+    return _state(scenario, phase, f"{prefix}_{idx}")
 
 
 def _scenario_index(scenario: list, row) -> int:
@@ -923,11 +910,57 @@ def _path_reset_fields(samples: dict, phase: str, which: str = "var"):
     return dist, blur
 
 
-def _dof_config_accredited(samples: dict):
-    """Acreditacion DOF desde evidencia (brief:192), no desde la etiqueta.
+def _initial_aux(samples: dict, phase: str, boundary_ev: str, boundary_step: str):
+    """Mascara inicial de N7: la observacion anterior a ocultar.
 
-    Exige ventana >= 1280x720 y, ademas, mad >= 0,5 o un operator_done,
-    con el modo coherente con la build del manifiesto.
+    Vale el read de la scam_hud_op(5) enlazada de esa fase o la lectura
+    hud_preset si precede en scenario a la orden limite (el arranque del
+    camino en S3, el stop en S5). Una hud_preset posterior a restaurar no
+    acredita nada. Devuelve (valor, detail): valor None -> missing.
+    """
+    scenario = samples.get("scenario") or []
+    boundary_idx = None
+    for i, row in enumerate(scenario):
+        if row.get("phase") != phase:
+            continue
+        if boundary_ev == "stop":
+            if row.get("ev") == "stop":
+                boundary_idx = i
+                break
+        elif row.get("ev") == "op" and row.get("step") == boundary_step:
+            boundary_idx = i
+            break
+    preset_ops = [
+        (i, r)
+        for i, r in enumerate(scenario)
+        if r.get("ev") == "op"
+        and r.get("phase") == phase
+        and r.get("verb") == "scam_hud_op"
+        and _num(r, "aux_vis_mask") is not None
+        and (boundary_idx is None or i < boundary_idx)
+    ]
+    if preset_ops:
+        return _num(preset_ops[-1][1], "aux_vis_mask"), None
+    preset = _state(scenario, phase, "hud_preset")
+    if preset is None:
+        return None, "no_initial_aux_observation"
+    if boundary_idx is not None:
+        preset_idx = _scenario_index(scenario, preset)
+        if preset_idx < 0 or preset_idx >= boundary_idx:
+            return None, "initial_aux_not_before_hide"
+    value = _num(preset, "aux_vis_mask")
+    if value is None:
+        return None, "no_initial_aux_observation"
+    return value, None
+
+
+def _dof_config_accredited(samples: dict):
+    """Acreditacion DOF por build (brief:192), no por la etiqueta.
+
+    Offline basta el modo ``offline``. En retail/diag hacen falta ventana
+    >= 1280x720 y, ademas, ``mad_bg_50m >= 0,5`` del par preliminar o el
+    OPERATOR_DONE de SCAM-S0/confirm_dof_and_windowed. Cada pieza se lee
+    por separado: su ausencia nunca acredita.
     """
     rows = [
         row
@@ -939,23 +972,38 @@ def _dof_config_accredited(samples: dict):
     build = str((samples.get("manifest") or {}).get("build") or "")
     operator_done = any(
         row.get("ev") == "operator_done"
+        and str(row.get("phase")) == "SCAM-S0"
+        and (
+            str(row.get("action") or "") == "confirm_dof_and_windowed"
+            or str(row.get("step") or "") == "SCAM-S0"
+        )
         for row in samples.get("scenario") or []
     )
     for row in rows:
         mode = str(row.get("mode") or "")
-        if build == "offline" and mode != "offline":
+        if build == "offline":
+            if mode == "offline":
+                return True
             continue
-        if build in ("retail", "diag") and mode == "offline":
-            continue
-        try:
-            ok_window = float(row.get("window_w")) >= 1280.0 and float(
-                row.get("window_h")
-            ) >= 720.0
-            mad_v = float(row.get("mad_bg_50m"))
-        except (TypeError, ValueError):
-            continue
-        if ok_window and (mad_v >= 0.5 or operator_done):
-            return True
+        if build in ("retail", "diag"):
+            if mode == "offline":
+                continue
+            try:
+                ok_window = float(row.get("window_w")) >= 1280.0 and float(
+                    row.get("window_h")
+                ) >= 720.0
+            except (TypeError, ValueError):
+                continue
+            if not ok_window:
+                continue
+            if operator_done:
+                return True
+            try:
+                mad_v = float(row.get("mad_bg_50m"))
+            except (TypeError, ValueError):
+                continue
+            if mad_v >= 0.5:
+                return True
     return False
 
 
@@ -1004,46 +1052,109 @@ def _bridge_index(samples: dict):
     return enq, result, inst
 
 
-def _provenance_problem(samples: dict):
-    """Procedencia (punto 2): cada op/state enlaza con bridge.jsonl.
+def _bridge_read(row: dict, result_row: dict):
+    """Lectura cruda de un RESULT como (nk, sk): desempaqueta el payload
+    wire si lo trae, o usa los dicts nk/sk si el bridge ya los trae."""
+    res = result_row.get("result") or {}
+    if not isinstance(res, dict):
+        return {}, {}
+    raw = res.get("read") or {}
+    if not isinstance(raw, dict) or not raw:
+        return {}, {}
+    if isinstance(raw.get("nk"), dict) or isinstance(raw.get("sk"), dict):
+        return dict(raw.get("nk") or {}), dict(raw.get("sk") or {})
+    if raw.get("has") == ["payload"]:
+        try:
+            unpacked = wire.unpack_payload(raw)
+        except Exception:
+            return {}, {}
+        return dict(unpacked.get("num") or {}), dict(unpacked.get("str") or {})
+    return {}, {}
 
-    Devuelve (status, detail) o None si todo enlaza. Id "0", verbo o rol
-    que no casa con el enq, instancia distinta de la del hello, o una
-    observacion sin respuesta cruda nunca acreditan un PASA.
+
+def _read_matches(row: dict, result_row: dict) -> bool:
+    cand_nk, cand_sk = _bridge_read(row, result_row)
+    for key, value in (_nk(row) or {}).items():
+        if key not in cand_nk:
+            return False
+        try:
+            if abs(float(value) - float(cand_nk[key])) > 1e-6:
+                return False
+        except (TypeError, ValueError):
+            return False
+    for key, value in (_sk(row) or {}).items():
+        if key not in cand_sk or str(cand_sk[key]) != str(value):
+            return False
+    return True
+
+
+def _provenance_problem(samples: dict):
+    """Procedencia: cada op/state enlaza con su RESULT crudo del bridge.
+
+    Id ausente da missing; id vacio o "0", verbo, instancia o lectura que
+    no casa con la respuesta cruda da fail. Cada op_id y cada paso son
+    unicos, y pre_<j> precede a neg_<j> y post_<j> la sigue. Un op sin
+    result pero con evento lost del bridge es ausencia, no fabricacion.
     """
     scenario = samples.get("scenario") or []
     bridge = samples.get("bridge") or []
-    watched = [
-        r for r in scenario if r.get("ev") in ("op", "state")
-    ]
+    watched = [r for r in scenario if r.get("ev") in ("op", "state")]
     if watched and not bridge:
         return "missing", "no_bridge_provenance"
     enq, result, inst = _bridge_index(samples)
+    lost_ids = {
+        str(r.get("op_id")) for r in bridge if r.get("ev") == "lost" and r.get("op_id")
+    }
     client_inst = inst.get("client")
     if watched and not client_inst:
         return "missing", "no_peer_instance"
+    seen_ids: dict = {}
+    seen_steps: dict = {}
     for row in watched:
+        step_key = (str(row.get("phase") or ""), str(row.get("step") or ""))
+        if step_key in seen_steps:
+            return "missing", "provenance_duplicate_step"
+        seen_steps[step_key] = row
         op_id = row.get("op_id")
-        if op_id is None or str(op_id) in ("", "0"):
+        if op_id is None:
+            return "missing", "provenance_id_absent"
+        if str(op_id) in ("", "0"):
             return "fail", "provenance_id_zero"
         key = str(op_id)
+        if key in seen_ids:
+            return "missing", "provenance_duplicate_id"
+        seen_ids[key] = row
+        if key in lost_ids and key not in result:
+            continue
         if key not in enq or key not in result:
             return "missing", f"provenance_unlinked:{key}"
         e = enq[key]
-        if row.get("ev") == "op":
-            if e.get("verb") != row.get("verb"):
-                return "fail", "provenance_verb_mismatch"
-            if str(e.get("peer") or "client") != "client":
-                return "fail", "provenance_peer_mismatch"
-            res = result[key].get("result") or {}
-            if isinstance(res, dict):
-                if res.get("status") != row.get("status"):
-                    return "fail", "provenance_status_mismatch"
-                if str(res.get("reason") or "") != str(row.get("reason") or ""):
-                    return "fail", "provenance_reason_mismatch"
+        expected_verb = row.get("verb") if row.get("ev") == "op" else "scam_state_read"
+        if e.get("verb") != expected_verb:
+            return "fail", "provenance_verb_mismatch"
+        if str(e.get("peer") or "client") != "client":
+            return "fail", "provenance_peer_mismatch"
+        res = result[key].get("result") or {}
+        if isinstance(res, dict) and row.get("ev") == "op":
+            if res.get("status") != row.get("status"):
+                return "fail", "provenance_status_mismatch"
+            if str(res.get("reason") or "") != str(row.get("reason") or ""):
+                return "fail", "provenance_reason_mismatch"
+        if not _read_matches(row, result[key]):
+            return "fail", "provenance_read_mismatch"
         peer_inst = row.get("peer_inst")
         if peer_inst is not None and str(peer_inst) != client_inst:
             return "fail", "provenance_instance_mismatch"
+    # Orden inmediato pre < neg < post en las negativas observadas.
+    index = {id(r): i for i, r in enumerate(scenario)}
+    for phase in ("SCAM-S1", "SCAM-S2", "SCAM-S4"):
+        for j in range(0, 7):
+            pre = _state(scenario, phase, f"pre_{j}")
+            neg = _event(scenario, "op", phase, f"neg_{j}")
+            post = _state(scenario, phase, f"post_{j}")
+            if pre is not None and neg is not None and post is not None:
+                if not (index[id(pre)] < index[id(neg)] < index[id(post)]):
+                    return "missing", "provenance_order"
     return None
 
 
@@ -1079,18 +1190,35 @@ def _check_cam_01(samples: dict) -> dict:
             return _chk("CAM-01", "missing", missing[0])
         return _chk("CAM-01", "pass", "ok")
 
-    # N4: precondiciones observadas de S0.
+    # N4: precondiciones observadas de S0. El FOV no lo publica
+    # scam_fixture_setup (brief:99): lo acredita una lectura de estado
+    # posterior de SCAM-S0, o el propio read si lo trae.
     fixture = _fixture_reading(samples)
     if fixture is None:
         missing.append("no_fixture_setup")
     else:
-        if fixture.get("status") != "done":
+        if fixture.get("status") == "lost":
+            missing.append("fixture_lost")
+        elif fixture.get("status") != "done":
             fails.append("fixture_not_done")
         fnk = _nk(fixture)
         if _num(fixture, "active_b") != 1.0:
             fails.append("fixture_cam_inactive")
-        if _num(fixture, "fov_rad") is None or abs(_num(fixture, "fov_rad") - 0.70) >= 0.001:
-            fails.append("fixture_fov")
+        s0_fovs = [
+            _num(r, "fov_rad")
+            for r in scenario
+            if r.get("ev") == "state" and r.get("phase") == "SCAM-S0"
+        ]
+        s0_fovs = [v for v in s0_fovs if v is not None]
+        fixture_fov = _num(fixture, "fov_rad")
+        if s0_fovs:
+            if not any(abs(v - 0.70) < 0.001 for v in s0_fovs):
+                fails.append("fixture_fov")
+        elif fixture_fov is not None:
+            if abs(fixture_fov - 0.70) >= 0.001:
+                fails.append("fixture_fov")
+        else:
+            missing.append("no_fixture_fov_reading")
         if _num(fixture, "subj_present_b") != 1.0 or _num(fixture, "bg_present_b") != 1.0:
             fails.append("fixture_scene_missing")
         if fnk.get("anchor_y_m") is None:
@@ -1105,34 +1233,55 @@ def _check_cam_01(samples: dict) -> dict:
         if wire.get("bridge_lines_delta") != 0:
             fails.append("wire_nan_added_bridge_lines")
 
+    # El resultado terminal presente se juzga antes que las ausencias:
+    # una aceptacion observada es fail aunque falte la horquilla, y un
+    # lost es ausencia de resultado (missing), nunca fail.
     neg0 = _event(scenario, "op", "SCAM-S1", "neg_0")
     pre0 = _state(scenario, "SCAM-S1", "pre_0")
     post0 = _state(scenario, "SCAM-S1", "post_0")
-    if neg0 is None or pre0 is None or post0 is None:
+    if neg0 is None:
+        missing.append("no_closed_cam_negative")
+    elif neg0.get("status") == "lost":
+        missing.append("closed_cam_lost")
+    elif neg0.get("status") != "rejected" or neg0.get("reason") != "no_active_cam":
+        fails.append("closed_cam_not_rejected")
+    elif pre0 is None or post0 is None:
         missing.append("no_closed_cam_negative")
     else:
-        if neg0.get("status") != "rejected" or neg0.get("reason") != "no_active_cam":
-            fails.append("closed_cam_not_rejected")
         if _num(post0, "active_b") != 0.0:
             fails.append("closed_cam_active")
         if not pose_cells_equal(_nk(pre0), _nk(post0)):
             fails.append("closed_cam_effects")
 
-    # N8: negativa sin cliente ejecutable.
-    nc_steps = ("no_client_free", "no_client_pose", "no_client_hud",
-                "no_client_dof", "no_client_path", "no_client_sample")
+    # N8: seis ordenes sin cliente, cada una con su verbo y su resultado
+    # propios, y 0 efectos en toda la lectura (no solo en la pose).
+    nc_expected = {
+        "no_client_free": "scam_free_op",
+        "no_client_pose": "scam_pose_apply",
+        "no_client_hud": "scam_hud_op",
+        "no_client_dof": "scam_dof_set",
+        "no_client_path": "scam_path_start",
+        "no_client_sample": "scam_sample_start",
+    }
     pre_nc = _state(scenario, "SCAM-S1", "pre_nc")
     post_nc = _state(scenario, "SCAM-S1", "post_nc")
-    if pre_nc is None or post_nc is None or any(
-        _event(scenario, "op", "SCAM-S1", s) is None for s in nc_steps
-    ):
+    nc_ops = {s: _event(scenario, "op", "SCAM-S1", s) for s in nc_expected}
+    if pre_nc is None or post_nc is None or any(op is None for op in nc_ops.values()):
         missing.append("no_client_case")
     else:
-        for step in nc_steps:
-            op = _event(scenario, "op", "SCAM-S1", step)
+        nc_ids = [str(op.get("op_id")) for op in nc_ops.values()]
+        if len(set(nc_ids)) != len(nc_ids) or any(i in ("", "0") for i in nc_ids):
+            fails.append("no_client_shared_result")
+        for step, verb in nc_expected.items():
+            op = nc_ops[step]
+            if op.get("status") == "lost":
+                missing.append(f"{step}_lost")
+                continue
+            if op.get("verb") != verb:
+                fails.append(f"{step}_verb_mismatch")
             if op.get("status") != "rejected" or op.get("reason") != "client_not_in_game":
                 fails.append(f"{step}_not_rejected")
-        if not pose_cells_equal(_nk(pre_nc), _nk(post_nc)):
+        if _nk(pre_nc) != _nk(post_nc) or _sk(pre_nc) != _sk(post_nc):
             fails.append("no_client_effects")
 
     pose_negatives = {
@@ -1155,11 +1304,20 @@ def _check_cam_01(samples: dict) -> dict:
             op = _event(scenario, "op", phase, step)
             pre = _state(scenario, phase, f"pre_{step.split('_')[1]}")
             post = _state(scenario, phase, f"post_{step.split('_')[1]}")
-            if op is None or pre is None or post is None:
+            if op is None:
                 missing.append(f"no_{phase}_{step}")
+                continue
+            if op.get("status") == "lost":
+                missing.append(f"{phase}_{step}_lost")
                 continue
             if op.get("status") != "rejected" or op.get("reason") != reason:
                 fails.append(f"{phase}_{step}_not_rejected")
+                continue
+            if pre is None or post is None:
+                missing.append(f"no_{phase}_{step}")
+                continue
+            if pre.get("op_id") is not None and pre.get("op_id") == post.get("op_id"):
+                missing.append(f"no_{phase}_{step}")
                 continue
             if not pose_cells_equal(_nk(pre), _nk(post)):
                 fails.append(f"{phase}_{step}_pose_effect")
@@ -1282,12 +1440,30 @@ def _check_cam_02(samples: dict) -> dict:
         if _theta3d_cells(_nk(moved), _nk(s_0)) < 30.0:
             return _chk("CAM-02", "fail", "moved_less_than_30deg")
 
-        # La referencia es la lectura de scam_pose_save (brief:105), no
-        # los angulos pedidos ni la posicion de S_0.
+        # La referencia es la lectura de scam_pose_save (brief:105: 10
+        # campos, sin matriz), no los angulos pedidos ni S_0. Si el read
+        # no trae celdas, la matriz de referencia se reconstruye con los
+        # Euler guardados y se compara con la matriz cruda reaplicada.
         save_roll = _event(scenario, "op", phase, "save_p_roll")
         save_p0 = _event(scenario, "op", phase, "save_p0")
         if save_roll is None or save_p0 is None:
             return _chk("CAM-02", "missing", "no_saved_pose_reading")
+        for save_row, want_name in ((save_roll, "P_roll"), (save_p0, "P0")):
+            if save_row.get("status") == "lost":
+                return _chk("CAM-02", "missing", "saved_pose_lost")
+            if save_row.get("status") != "done":
+                return _chk("CAM-02", "fail", "saved_pose_not_done")
+            saved_name = _sk(save_row).get("name")
+            if saved_name is not None and saved_name != want_name:
+                return _chk("CAM-02", "fail", "saved_pose_name_mismatch")
+
+        def _saved_ref(save_row):
+            nk = _nk(save_row)
+            if all(k in nk for k in POSE_CELLS):
+                return {k: float(nk[k]) for k in POSE_CELLS}
+            m = _ypr_matrix(nk["yaw_deg"], nk["pitch_deg"], nk["roll_deg"])
+            return _matrix_dict(m)
+
         roll_saved_pos = _row_pos(_nk(save_roll))
         p0_saved_pos = _row_pos(_nk(save_p0))
         if _num(p_roll, "active_b") != 1.0:
@@ -1296,7 +1472,7 @@ def _check_cam_02(samples: dict) -> dict:
             return _chk("CAM-02", "fail", "p_roll_eng_pos_err")
         if _dist(_row_pos(_nk(p_roll)), roll_saved_pos) >= 0.05:
             return _chk("CAM-02", "fail", "p_roll_cam_pos_err")
-        if _theta3d_cells(_nk(p_roll), _nk(save_roll)) >= 0.5:
+        if _theta3d_cells(_nk(p_roll), _saved_ref(save_roll)) >= 0.5:
             return _chk("CAM-02", "fail", "p_roll_theta_deg")
         if abs(_num(p_roll, "fov_rad") - _num(save_roll, "fov_rad")) >= 0.00873:
             return _chk("CAM-02", "fail", "p_roll_fov_err")
@@ -1311,7 +1487,7 @@ def _check_cam_02(samples: dict) -> dict:
             return _chk("CAM-02", "fail", "p0_eng_pos_err")
         if _dist(_row_pos(_nk(p0)), p0_saved_pos) >= 0.05:
             return _chk("CAM-02", "fail", "p0_cam_pos_err")
-        if _theta3d_cells(_nk(p0), _nk(save_p0)) >= 0.5:
+        if _theta3d_cells(_nk(p0), _saved_ref(save_p0)) >= 0.5:
             return _chk("CAM-02", "fail", "p0_theta_deg")
         if abs(_num(p0, "fov_rad") - _num(save_p0, "fov_rad")) >= 0.00873:
             return _chk("CAM-02", "fail", "p0_fov_err")
@@ -1393,7 +1569,14 @@ def _check_cam_04(samples: dict) -> dict:
         pos_err = math.sqrt(dx * dx + dy * dy + dz * dz)
         if pos_err >= 0.05:
             return _chk("CAM-04", "fail", f"{dump}_pos_err_m={pos_err:.4f}")
-        theta = _theta3d_euler(last, key_last)
+        # La orientacion final se juzga con las celdas crudas m00..m22
+        # de la ultima fila frente a la clave final, no con sus Euler.
+        if not all(k in last for k in POSE_CELLS):
+            return _chk("CAM-04", "missing", f"{dump}_no_matrix_cells")
+        ref_cells = _matrix_dict(
+            _ypr_matrix(key_last["yaw_deg"], key_last["pitch_deg"], key_last["roll_deg"])
+        )
+        theta = _theta3d_cells(last, ref_cells)
         if theta >= 0.5:
             return _chk("CAM-04", "fail", f"{dump}_theta_deg={theta:.3f}")
         if abs(fov - fov_key) >= 0.00873:
@@ -1511,16 +1694,16 @@ def _check_cam_05(samples: dict) -> dict:
             t = _row_time(row, t_end)
             if t is None:
                 return _chk("CAM-05", "missing", "bad_dtsum")
-            if _angle_between(_row_dir(row, "eng_"), _mat_forward(row)) >= 0.05:
-                return _chk("CAM-05", "fail", "engine_direction_vs_matrix")
-            if _theta3d(_q_from_row(row), _ref_quat(keys, t)) >= 2.0:
-                return _chk("CAM-05", "fail", "orientation_vs_slerp")
-        for row in rows:
-            t = _row_time(row, t_end)
             if t <= 3.0 + 1e-9:
                 yaw = _col(row, "yaw_deg")
                 if yaw is None or abs(yaw) < 178.5:
                     return _chk("CAM-05", "fail", "short_arc_yaw_deg")
+        for row in rows:
+            t = _row_time(row, t_end)
+            if _angle_between(_row_dir(row, "eng_"), _mat_forward(row)) >= 0.05:
+                return _chk("CAM-05", "fail", "engine_direction_vs_matrix")
+            if _theta3d(_q_from_row(row), _ref_quat(keys, t)) >= 2.0:
+                return _chk("CAM-05", "fail", "orientation_vs_slerp")
         for target, expected, tol, label in (
             (1.5, 180.0, 1.0, "mid_1_5s"),
             (3.0, -179.0, 1.0, "end_3_0s"),
@@ -1595,11 +1778,17 @@ def _check_cam_06(samples: dict) -> dict:
         if op is None:
             missing.append(f"no_neg_{j}")
             continue
+        if op.get("status") == "lost":
+            missing.append(f"neg_{j}_lost")
+            continue
         if op.get("status") != "rejected" or op.get("reason") != "bad_args":
             return _chk("CAM-06", "fail", f"neg_{j}_not_rejected")
         pre = _state_indexed(scenario, phase, "pre", j)
         post = _state_indexed(scenario, phase, "post", j)
         if pre is None or post is None:
+            missing.append(f"no_state_neg_{j}")
+            continue
+        if pre.get("op_id") is not None and pre.get("op_id") == post.get("op_id"):
             missing.append(f"no_state_neg_{j}")
             continue
         try:
@@ -1791,6 +1980,14 @@ def _phase_mid(samples: dict, event: dict):
     """La fase sale de las lecturas de estado crudas nombradas en
     pre_step/post_step (cam_dtsum_ms), no de las etiquetas del runner."""
     scenario = samples.get("scenario") or []
+    for key in ("pre_step", "post_step"):
+        step = str(event.get(key) or "")
+        matches = [
+            r for r in scenario
+            if r.get("ev") == "state" and r.get("phase") == "SCAM-S4" and r.get("step") == step
+        ]
+        if len(matches) != 1:
+            return None
     pre_row = _state(scenario, "SCAM-S4", str(event.get("pre_step") or ""))
     post_row = _state(scenario, "SCAM-S4", str(event.get("post_step") or ""))
     if pre_row is None or post_row is None:
@@ -1810,19 +2007,8 @@ def _phase_mid(samples: dict, event: dict):
     return pre, post, (pre + post) / 2.0
 
 
-def _capture_hashes(samples: dict) -> dict:
-    import hashlib
-
-    out = {}
-    for name, path in (samples.get("captures") or {}).items():
-        try:
-            out[name] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
-        except OSError:
-            continue
-    return out
-
-
 def _check_cam_08(samples: dict) -> dict:
+    scenario = samples.get("scenario") or []
     rois = samples.get("fixtures_rois") or {}
     roi_bg = rois.get("roi_bg_50m")
     roi_subj = rois.get("roi_subject_2m")
@@ -1882,7 +2068,7 @@ def _check_cam_08(samples: dict) -> dict:
             prev_calls = calls
 
     gray = {}
-    for k in (1, 3, 4):
+    for k in (1, 2, 3, 4):
         gray[f"var_t{k}"] = _capture_ready(samples, f"var_t{k}.bmp", rois, missing)
         gray[f"fix_t{k}"] = _capture_ready(samples, f"fix_t{k}.bmp", rois, missing)
 
@@ -1951,24 +2137,42 @@ def _check_cam_08(samples: dict) -> dict:
                 break
     if rows and len(rows) < 180:
         missing.append("no_path_dof_var_coverage")
-    # Cada captura de fase se enlaza con su evento y su horquilla.
-    hashes = _capture_hashes(samples)
+    # Cobertura hasta cada fase: 180 filas que no llegan a t3/t4 no
+    # acreditan las fases tardias de ninguno de los dos caminos.
+    for label, dump_rows in (("var", rows), ("fix", fix_rows)):
+        if dump_rows:
+            try:
+                last_dt = max(float(r["dtsum_ms"]) for r in dump_rows)
+            except (KeyError, TypeError, ValueError):
+                last_dt = 0.0
+            if last_dt < 5600.0:
+                missing.append(f"no_path_dof_{label}_coverage")
+    # Cada captura de fase se enlaza con su evento y con las lecturas
+    # pre/post de su fase. El contenido identico entre tomas
+    # independientes (mismo estado optico, render determinista) no es
+    # reutilizacion: la identidad sale del evento y de su horquilla.
     phase_files = [f"{p}_t{k}.bmp" for p in ("var", "fix") for k in (1, 2, 3, 4)]
     for name in phase_files:
-        if _capture_event(samples, name) is None:
+        cap = _capture_event(samples, name)
+        if cap is None:
             missing.append(f"no_capture_event:{name}")
-    seen_hash = {}
-    for name in phase_files:
-        h = hashes.get(name)
-        if h is None:
             continue
-        if h in seen_hash:
-            missing.append(f"capture_reused:{name}")
-        seen_hash[h] = name
-    if hashes.get("var_t1.bmp") in (hashes.get("dof_ctrl_near2m.bmp"),) and hashes.get("var_t1.bmp"):
-        missing.append("capture_reused:var_t1.bmp")
-    if hashes.get("var_t3.bmp") in (hashes.get("dof_ctrl_far50m.bmp"),) and hashes.get("var_t3.bmp"):
-        missing.append("capture_reused:var_t3.bmp")
+        for key in ("pre_step", "post_step"):
+            step = cap.get(key)
+            if not isinstance(step, str) or _state(scenario, "SCAM-S4", step) is None:
+                missing.append(f"no_capture_bracket:{name}")
+                break
+    # Los resets de cada camino son lecturas distintas tras su propio
+    # OnJobEnd: una misma lectura no acredita los dos.
+    var_reset_row = _state(scenario, "SCAM-S4", "post_dof_var")
+    fix_reset_row = _state(scenario, "SCAM-S4", "post_dof_fix")
+    if (
+        var_reset_row is not None
+        and fix_reset_row is not None
+        and var_reset_row.get("op_id") is not None
+        and var_reset_row.get("op_id") == fix_reset_row.get("op_id")
+    ):
+        missing.append("no_reset_state")
     fix_reset = _path_reset_fields(samples, "SCAM-S4", "fix")
     if fix_reset is None:
         missing.append("no_fix_reset_state")
@@ -2006,6 +2210,9 @@ def _check_cam_08(samples: dict) -> dict:
             missing.append("capture_phase_unaccredited")
 
     if missing:
+        # Una fase sin acreditar manda sobre cualquier otra ausencia.
+        if "capture_phase_unaccredited" in missing:
+            return _chk("CAM-08", "missing", "capture_phase_unaccredited")
         return _chk("CAM-08", "missing", missing[0])
     return _chk("CAM-08", "pass", "ok")
 
@@ -2029,17 +2236,6 @@ def _num_any(scenario: list, key: str, phases: tuple) -> float | None:
                 except (TypeError, ValueError):
                     continue
     return None
-
-
-def _avg_pose(a: dict, b: dict):
-    out = {}
-    for key in POSE_SCALARS:
-        va = _num(a, key)
-        vb = _num(b, key)
-        if va is None or vb is None:
-            return None
-        out[key] = (va + vb) / 2.0
-    return out
 
 
 def _path_row_hidden(row: dict):
@@ -2110,9 +2306,10 @@ def _check_cam_09(samples: dict) -> dict:
         missing.append("window:hud_during")
 
     # N3: la pose efectiva es la fila del recorrido del frame de la
-    # captura (mecanismo explicito), no un promedio. Se admite la
-    # latencia normal: la horquilla puede separarse 4 frames. La
-    # horquilla se coteja con el recorrido (ancla); si no casa, missing.
+    # captura (o la de su capture_tick_ms), no un promedio. La horquilla
+    # pre/post es del mismo trabajo, cae en la ventana, no supera
+    # max_bracket_span_ms ni se mueve mas de 0,05 m / 0,2 grados entre
+    # sus extremos (brief:261), y el frame efectivo cae dentro de ella.
     p_cap = None
     if pre_cap is None or post_cap is None or cap_event is None:
         missing.append("no_capture_bracket")
@@ -2122,11 +2319,19 @@ def _check_cam_09(samples: dict) -> dict:
             or _sk(post_cap).get("cam_job_state") != "running"
         ):
             missing.append("capture_job_not_running")
+        start_op = _event(scenario, "op", phase, "path_hud_start")
+        if start_op is not None:
+            job_id = _sk(start_op).get("job")
+            if not job_id or _sk(pre_cap).get("cam_job_id") != job_id or _sk(post_cap).get("cam_job_id") != job_id:
+                missing.append("capture_job_mismatch")
         pre_dt = _num(pre_cap, "cam_dtsum_ms")
         post_dt = _num(post_cap, "cam_dtsum_ms")
         if pre_dt is None or post_dt is None:
             missing.append("bad_capture_dtsum")
         else:
+            span_max = float(rois.get("max_bracket_span_ms", 150.0))
+            if post_dt - pre_dt > span_max or post_dt < pre_dt:
+                missing.append("capture_bracket_span")
             mid_dt = (pre_dt + post_dt) / 2.0
             if mid_dt < 1850.0 or mid_dt > 2150.0:
                 missing.append("capture_window")
@@ -2151,29 +2356,44 @@ def _check_cam_09(samples: dict) -> dict:
                     missing.append(f"capture_{label}_not_anchored")
             except (KeyError, TypeError, ValueError):
                 missing.append(f"capture_{label}_not_anchored")
+        pre_frame = _num(pre_cap, "frame")
+        post_frame = _num(post_cap, "frame")
         if cap_frame is not None:
             try:
                 eff_row = by_frame.get(float(cap_frame))
             except (TypeError, ValueError):
                 eff_row = None
+            if eff_row is not None and pre_frame is not None and post_frame is not None:
+                if not (pre_frame <= float(cap_frame) <= post_frame):
+                    missing.append("capture_frame_not_anchored")
+                    eff_row = None
+        if eff_row is None and cap_event.get("capture_tick_ms") is not None:
+            try:
+                tick_v = float(cap_event["capture_tick_ms"])
+                eff_row = min(
+                    rows,
+                    key=lambda r: abs(float(r["tick_ms"]) - tick_v),
+                    default=None,
+                )
+                if eff_row is not None and abs(float(eff_row["tick_ms"]) - tick_v) > 17.0:
+                    eff_row = None
+                if eff_row is not None and pre_frame is not None and post_frame is not None:
+                    if not (pre_frame <= float(eff_row["frame"]) <= post_frame):
+                        missing.append("capture_frame_not_anchored")
+                        eff_row = None
+            except (KeyError, TypeError, ValueError):
+                eff_row = None
         if eff_row is None:
-            missing.append("capture_frame_not_anchored")
+            if "capture_frame_not_anchored" not in missing:
+                missing.append("capture_frame_not_anchored")
         else:
             p_cap = {k: float(eff_row[k]) for k in POSE_SCALARS}
-        # Capturas sin evento o reutilizadas entre pasos: nunca PASA.
+        # Capturas sin evento: nunca PASA. El contenido identico entre
+        # tomas independientes no es reutilizacion (ver CAM-08).
         for name in ("hud_during.bmp", "hud_clean_ref.bmp",
                      "hud_clean_ref_repeat.bmp", "hud_visible_ref.bmp"):
             if _capture_event(samples, name) is None:
                 missing.append(f"no_capture_event:{name}")
-        hashes = _capture_hashes(samples)
-        seen_h = {}
-        for name in ("hud_during.bmp", "hud_clean_ref.bmp",
-                     "hud_clean_ref_repeat.bmp", "hud_visible_ref.bmp"):
-            h = hashes.get(name)
-            if h is not None:
-                if h in seen_h:
-                    missing.append(f"capture_reused:{name}")
-                seen_h[h] = name
 
     clean_ref = _find_state(
         scenario, phase, "clean_ref_state", "clean_ref", "ref_state", "post_clean_ref"
@@ -2250,12 +2470,14 @@ def _check_cam_09(samples: dict) -> dict:
         and gray_clean is not None
     ):
         if mad(gray_visible, gray_clean, roi_full) >= 10.0:
-            return _chk("CAM-09", "fail", "hud_visible_other_scene")
-        if mad(gray_during, gray_visible, roi_qb) < 4.0:
+            # Sin un ancla de escena en el brief, esto es ausencia de
+            # acreditacion (missing), nunca un fail con umbral propio.
+            missing.append("hud_visible_other_scene")
+        elif mad(gray_during, gray_visible, roi_qb) < 4.0:
             return _chk("CAM-09", "fail", "quickbar_not_detected")
-        if mad(gray_during, gray_clean, roi_full) >= 2.0:
+        elif mad(gray_during, gray_clean, roi_full) >= 2.0:
             return _chk("CAM-09", "fail", "hud_visible_full_screen")
-        if mad(gray_during, gray_clean, roi_qb) >= 1.5:
+        elif mad(gray_during, gray_clean, roi_qb) >= 1.5:
             return _chk("CAM-09", "fail", "quickbar_visible")
 
     post_hud = _find_state(
@@ -2263,10 +2485,9 @@ def _check_cam_09(samples: dict) -> dict:
     )
     # N7: la restauracion se compara con la observacion inicial
     # congelada antes de ocultar; saved_aux solo es adicional.
-    preset = _state(scenario, phase, "hud_preset")
-    initial_aux = _num(preset, "aux_vis_mask") if preset is not None else None
-    if preset is None:
-        missing.append("no_initial_aux_observation")
+    initial_aux, aux_detail = _initial_aux(samples, phase, "op", "path_hud_start")
+    if initial_aux is None:
+        missing.append(aux_detail or "no_initial_aux_observation")
     if post_hud is None:
         missing.append("no_post_path_hud")
     else:
@@ -2284,66 +2505,34 @@ def _check_cam_09(samples: dict) -> dict:
             if av != sav:
                 return _chk("CAM-09", "fail", "aux_saved_mismatch")
 
-    # Deteccion de overlays calculada sobre el arbol crudo (brief:169):
-    # identidad de cada nodo, relaciones y visibilidad; no ovl_vis_b.
-    def tree_overlay(step_name: str):
-        tree = None
-        for row in scenario:
-            if row.get("ev") == "hud_tree" and row.get("step") == step_name:
-                tree = row
-                break
-        if tree is None:
-            return None
-        baseline = {str(v) for v in tree.get("baseline_ids") or []}
-        nodes = tree.get("nodes") or []
-        by_id = {str(n.get("id")): n for n in nodes if isinstance(n, dict)}
-        for node in nodes:
-            if not isinstance(node, dict) or not node.get("hierarchy"):
-                continue
-            nid = str(node.get("id"))
-            parent = node.get("parent")
-            if parent is not None and str(parent) not in by_id:
-                return None
-            if nid not in baseline:
-                return 1.0
-            if node.get("baseline") and not node.get("visible"):
-                pass
-            elif node.get("baseline") and node.get("visible") and nid in (
-                "crosshair", "stamina_bg",
-            ):
-                return 1.0
-        return 0.0
+    # El overlay se juzga por ovl_vis_b (brief:170), que la sonda
+    # calcula con su barrido: ya esta en cada fila del recorrido (todas
+    # a 0 arriba) y en pre_cap. Ningun verbo produce un arbol de
+    # widgets, asi que no se exige ni se acredita ninguna fila de arbol.
+    if pre_cap is not None:
+        ovl_cap = _num(pre_cap, "ovl_vis_b")
+        if ovl_cap is None:
+            missing.append("no_ovl_vis_pre_cap")
+        elif ovl_cap != 0.0:
+            return _chk("CAM-09", "fail", "overlay_visible_pre_cap")
 
-    if tree_overlay("tree_pre_cap") is None:
-        missing.append("no_widget_tree")
-    elif tree_overlay("tree_pre_cap") != 0.0:
-        return _chk("CAM-09", "fail", "overlay_in_tree_pre_cap")
-    if tree_overlay("tree_control_ovl") is None:
-        missing.append("no_widget_tree_control")
-    elif tree_overlay("tree_control_ovl") != 1.0:
-        return _chk("CAM-09", "fail", "control_ovl_not_detected")
-
-    controls = {}
-    for row in scenario:
-        if row.get("ev") != "hud_control" or row.get("phase") != phase:
-            continue
-        try:
-            mode = int(float(row.get("mode")))
-        except (TypeError, ValueError):
-            continue
-        if mode in (1, 2) and mode not in controls:
-            controls[mode] = row
-    for mode, key, label in ((1, "qb_vis_b", "qb"), (2, "ovl_vis_b", "ovl")):
-        row = controls.get(mode)
-        if row is None:
-            missing.append(f"no_hud_control_mode_{mode}")
-            continue
-        value = _num(row, key)
-        if value is None:
-            missing.append(f"bad_hud_control_mode_{mode}")
-            continue
-        if value != 1.0:
-            return _chk("CAM-09", "fail", f"control_{label}_not_detected")
+    # Controles negativos (brief:217-218): la lectura scam_hud_op(0)
+    # tras forzar cada modo, como ev=op enlazada. Una fila hud_control
+    # del runner no acredita nada.
+    hud_ops = [
+        row
+        for row in scenario
+        if row.get("ev") == "op"
+        and row.get("phase") == phase
+        and row.get("verb") == "scam_hud_op"
+    ]
+    if not hud_ops:
+        missing.append("no_hud_control_ops")
+    else:
+        if not any(_num(row, "qb_vis_b") == 1.0 for row in hud_ops):
+            return _chk("CAM-09", "fail", "control_qb_not_detected")
+        if not any(_num(row, "ovl_vis_b") == 1.0 for row in hud_ops):
+            return _chk("CAM-09", "fail", "control_ovl_not_detected")
 
     if missing:
         return _chk("CAM-09", "missing", missing[0])
@@ -2364,30 +2553,51 @@ def _check_cam_10(samples: dict) -> dict:
     if not rows:
         return _chk("CAM-10", "missing", "no_control_recovery")
 
+    # La base temporal sale del job_stop real (op enlazada y su bridge:
+    # enq.t_ms, result.t_ms y result.recv_ms), no del resumen ev=stop.
+    # El resumen, si esta, tiene que casar con ellos a +-1 ms.
     stop = _first_event(scenario, "stop", phase)
-    if stop is None:
-        missing.append("no_stop_event")
+    stop_op = _event(scenario, "op", phase, "stop_op")
     u = None
     t0 = None
-    if stop is not None:
-        try:
-            send = float(stop["stop_send_h_ms"])
-            ack = float(stop["stop_ack_h_ms"])
-            u = ack - send
-        except (KeyError, TypeError, ValueError):
+    send = None
+    ack = None
+    if stop_op is None or stop_op.get("verb") != "job_stop":
+        missing.append("no_stop_anchor")
+    else:
+        enq, result, _inst = _bridge_index(samples)
+        op_key = str(stop_op.get("op_id") or "")
+        enq_row = enq.get(op_key)
+        res_row = result.get(op_key)
+        if enq_row is None or res_row is None:
+            missing.append("no_stop_anchor")
+        else:
+            res = res_row.get("result") or {}
             try:
-                u = float(stop["u_ms"])
+                send = float(enq_row["t_ms"])
+                ack = float(res_row.get("t_ms"))
+                t0 = float(res["recv_ms"])
             except (KeyError, TypeError, ValueError):
-                u = None
-        try:
-            t0 = float(stop["stop_recv_ms"])
-        except (KeyError, TypeError, ValueError):
-            t0 = None
+                missing.append("no_stop_anchor")
+            else:
+                u = ack - send
+                if stop is not None:
+                    try:
+                        summary = (
+                            float(stop["stop_send_h_ms"]),
+                            float(stop["stop_ack_h_ms"]),
+                            float(stop["stop_recv_ms"]),
+                        )
+                        if any(abs(a - b) > 1.0 for a, b in zip(summary, (send, ack, t0))):
+                            missing.append("stop_summary_mismatch")
+                    except (KeyError, TypeError, ValueError):
+                        pass
     if u is None:
-        missing.append("no_stop_u")
+        if "no_stop_anchor" not in missing:
+            missing.append("no_stop_u")
     elif u > 100.0:
         missing.append("u_over_100ms")
-    if t0 is None:
+    if t0 is None and "no_stop_anchor" not in missing:
         missing.append("no_stop_recv")
 
     pulses = {"A": [], "B": []}
@@ -2420,13 +2630,24 @@ def _check_cam_10(samples: dict) -> dict:
                     return _chk("CAM-10", "fail", f"burst_{burst.lower()}_sign")
             except (TypeError, ValueError):
                 return _chk("CAM-10", "missing", f"burst_{burst.lower()}_incomplete")
-    post_stop_ack = _find_state(scenario, phase, "post_stop_state")
-    ack_seq = _num(post_stop_ack, "input_ack_seq_n") if post_stop_ack is not None else None
-    if ack_seq is None:
-        missing.append("no_input_ack")
-    elif ack_seq <= 0.0:
-        # Sin consumo acreditado por el peer, los giros no se atribuyen.
-        return _chk("CAM-10", "fail", "input_not_acked")
+    # El acuse solo tiene productor en offline (brief:127). En offline
+    # tiene que cubrir los seq_n de los pulsos usados en A y en B; su
+    # ausencia o un 0 es missing, nunca fail. En retail/diag no entra.
+    build = str((samples.get("manifest") or {}).get("build") or "")
+    if build == "offline":
+        post_stop_ack = _find_state(scenario, phase, "post_stop_state")
+        ack_seq = _num(post_stop_ack, "input_ack_seq_n") if post_stop_ack is not None else None
+        used_seqs = []
+        for burst in ("A", "B"):
+            for _issued, row in pulses[burst]:
+                try:
+                    used_seqs.append(float(row["seq_n"]))
+                except (TypeError, ValueError):
+                    pass
+        if ack_seq is None:
+            missing.append("no_input_ack")
+        elif used_seqs and ack_seq < max(used_seqs):
+            missing.append("input_ack_not_covering")
     if missing:
         return _chk("CAM-10", "missing", missing[0])
     pulse_a_h = min((issued for issued, _ in pulses["A"]), default=None)
@@ -2438,28 +2659,42 @@ def _check_cam_10(samples: dict) -> dict:
         if parsed is None:
             return _chk("CAM-10", "missing", f"bad_control_row_{i}")
         rec.append(parsed)
+    # tick_ms y dtsum_ms se miden en puntos distintos del frame (el peer
+    # calcula dt antes de procesar ordenes y muestrea despues): se
+    # compara la deriva acumulada entre ambos relojes, con 5 ms de
+    # tolerancia, no cada incremento aislado.
+    tick0 = dtsum0 = None
+    try:
+        tick0 = float(rows[0]["tick_ms"])
+        dtsum0 = float(rows[0]["dtsum_ms"])
+    except (KeyError, TypeError, ValueError):
+        return _chk("CAM-10", "missing", "bad_frame_column")
     for i in range(1, len(rec)):
         try:
             prev = float(rows[i - 1]["frame"])
             cur = float(rows[i]["frame"])
             dtick = float(rows[i]["tick_ms"]) - float(rows[i - 1]["tick_ms"])
-            ddtsum = float(rows[i]["dtsum_ms"]) - float(rows[i - 1]["dtsum_ms"])
+            drift = abs(
+                (float(rows[i]["tick_ms"]) - tick0)
+                - (float(rows[i]["dtsum_ms"]) - dtsum0)
+            )
         except (KeyError, TypeError, ValueError):
             return _chk("CAM-10", "missing", "bad_frame_column")
         if abs(cur - prev - 1.0) > 1e-6:
             return _chk("CAM-10", "fail", f"frame_not_contiguous_{i}")
         if dtick <= 0.0:
             return _chk("CAM-10", "missing", "tick_not_increasing")
-        if abs(dtick - ddtsum) > 2.0:
+        if drift > 5.0:
             return _chk("CAM-10", "missing", "tick_dtsum_mismatch")
 
-    if t0 is None or pulse_a_h is None or pulse_b_h is None or u is None:
+    if t0 is None or pulse_a_h is None or pulse_b_h is None or u is None or send is None or ack is None:
         return _chk("CAM-10", "missing", "no_stop_timing")
-    try:
-        ack = float(stop.get("stop_ack_h_ms"))
-    except (TypeError, ValueError):
-        return _chk("CAM-10", "missing", "no_stop_ack")
-    pulse_b_min = t0 + (pulse_b_h - ack)
+    # Conversion acotada entre relojes: el stop llego al peer en un
+    # instante del arnes dentro de [send, ack], asi que un pulso emitido
+    # en h llega al peer en [t0+(h-ack), t0+(h-send)]. Un pulso cuyo
+    # intervalo solapa el handoff no puede contar como anterior a el.
+    def _arrival(issued_h):
+        return t0 + (issued_h - ack), t0 + (issued_h - send)
 
     def handoff(item):
         return (
@@ -2477,13 +2712,14 @@ def _check_cam_10(samples: dict) -> dict:
             break
     if r0 is None:
         return _chk("CAM-10", "fail", "no_handoff_row")
-    handoff_h = ack + (rec[r0]["tick_ms"] - t0)
-    # Estimulos identificables durante la ventana de recuperacion: al
-    # menos un pulso A emitido tras el handoff observado.
-    a_after = [issued for issued, _ in pulses["A"] if issued >= handoff_h]
-    if not a_after:
+    handoff_tick = rec[r0]["tick_ms"]
+    a_candidates = [
+        issued for issued, _ in pulses["A"] if _arrival(issued)[1] >= handoff_tick
+    ]
+    if not a_candidates:
         return _chk("CAM-10", "missing", "no_stimulus_after_handoff")
-    pulse_a_min = t0 + (min(a_after) - ack)
+    pulse_a_min = _arrival(min(a_candidates))[0]
+    pulse_b_min = _arrival(pulse_b_h)[0]
     pre_a = [idx for idx, item in enumerate(rec) if r0 <= idx and item["tick_ms"] < pulse_a_min]
     if not pre_a:
         pre_a = [r0]
@@ -2553,9 +2789,10 @@ def _check_cam_10(samples: dict) -> dict:
         else:
             if fm != 258.0 or sfm != 258.0:
                 return _chk("CAM-10", "fail", "flags_not_restored")
-            preset5 = _state(scenario, phase, "hud_preset")
-            initial_aux = _num(preset5, "aux_vis_mask") if preset5 is not None else None
-            if initial_aux is not None and av != initial_aux:
+            initial_aux, aux_detail = _initial_aux(samples, phase, "stop", "stop_op")
+            if initial_aux is None:
+                missing.append(aux_detail or "no_initial_aux_observation")
+            elif av != initial_aux:
                 return _chk("CAM-10", "fail", "aux_not_restored")
             if av != sav:
                 return _chk("CAM-10", "fail", "aux_saved_mismatch")

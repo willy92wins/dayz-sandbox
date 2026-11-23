@@ -670,6 +670,10 @@ def _scenario():
     rows.append(_state("SCAM-S3", "post_path_hud", post_path_hud, {"cam_job_state": ""}))
     rows.append({"ev": "hud_control", "phase": "SCAM-S3", "step": "control_qb", "op_code": 4, "mode": 1, "read_nk": {"qb_vis_b": 1.0}})
     rows.append({"ev": "hud_control", "phase": "SCAM-S3", "step": "control_ovl", "op_code": 4, "mode": 2, "read_nk": {"ovl_vis_b": 1.0}})
+    # Lecturas scam_hud_op(0) de los controles (brief:217-218): son las
+    # que acredita el evaluador; las filas hud_control son solo resumen.
+    rows.append(_op("SCAM-S3", "control_read_qb", "scam_hud_op", "done", nk={"frame": 1500.0, "tick_ms": 9000.0, "elem_vis_mask": 0.0, "flags_mask": 391.0, "saved_flags_mask": 258.0, "aux_vis_mask": 0.0, "saved_aux_vis_mask": 34.0, "qb_vis_b": 1.0, "qb_items_n": 1.0, "menu_open_b": 0.0, "ovl_vis_b": 0.0, "player_in_veh_b": 0.0}))
+    rows.append(_op("SCAM-S3", "control_read_ovl", "scam_hud_op", "done", nk={"frame": 1501.0, "tick_ms": 9016.0, "elem_vis_mask": 0.0, "flags_mask": 391.0, "saved_flags_mask": 258.0, "aux_vis_mask": 0.0, "saved_aux_vis_mask": 34.0, "qb_vis_b": 0.0, "qb_items_n": 1.0, "menu_open_b": 0.0, "ovl_vis_b": 1.0, "player_in_veh_b": 0.0}))
 
     rows.append(_capture("SCAM-S4", "dof_before", "dof_before_reject.bmp", "pre_1", "pre_1"))
     for j in range(1, 5):
@@ -728,6 +732,10 @@ def _scenario():
     rows.append(_state("SCAM-S4", "post_dof_var", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, frame=FRAME_BASE + 400), {"cam_job_state": ""}))
     rows.append(_state("SCAM-S4", "post_dof_fix", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, frame=FRAME_BASE + 401), {"cam_job_state": ""}))
 
+    # La mascara inicial de S5 se observa antes de ocultar/parar, y el
+    # job_stop real va como op enlazada antes de su resumen ev=stop.
+    rows.append(_state("SCAM-S5", "hud_preset", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, flags=258.0, saved_flags=258.0, aux=34.0, saved_aux=34.0), {"cam_job_state": ""}))
+    rows.append(_op("SCAM-S5", "stop_op", "job_stop", "done", sk={"job": "cam-job"}))
     rows.append(
         {
             "ev": "stop",
@@ -745,7 +753,6 @@ def _scenario():
         rows.append({"ev": "pulse", "phase": "SCAM-S5", "step": f"a{i}", "burst": "A", "seq_n": i, "dx_px": 40.0, "issued_h_ms": 650.0 + 40.0 * i, "kind": "mouse_move"})
     for i in range(5):
         rows.append({"ev": "pulse", "phase": "SCAM-S5", "step": f"b{i}", "burst": "B", "seq_n": 10 + i, "dx_px": -40.0, "issued_h_ms": 890.0 + 40.0 * i, "kind": "mouse_move"})
-    rows.append(_state("SCAM-S5", "hud_preset", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, flags=258.0, saved_flags=258.0, aux=34.0, saved_aux=34.0), {"cam_job_state": ""}))
     post_stop = _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70, flags=258.0, saved_flags=258.0, aux=34.0, saved_aux=34.0, input_ack=14.0)
     rows.append(_state("SCAM-S5", "post_stop_state", post_stop))
 
@@ -927,18 +934,23 @@ def _write_images(samples):
 
 def _link_scenario(scenario):
     """Cada observacion lleva op_id unico y la instancia del peer."""
+    used = {str(r.get("op_id")) for r in scenario if r.get("op_id")}
     n = 0
     for row in scenario:
         if row.get("ev") in ("op", "state"):
             if not row.get("op_id"):
                 n += 1
+                while f"op-{n:04d}" in used:
+                    n += 1
                 row["op_id"] = f"op-{n:04d}"
+                used.add(row["op_id"])
             row["peer_inst"] = CLIENT_INST
     return scenario
 
 
 def _write_bridge(samples, scenario):
     """bridge.jsonl crudo: hello del peer y enq/result por observacion."""
+    _link_scenario(scenario)
     rows = [
         {
             "ev": "hello", "peer": "client", "http": 200, "ok": True,
@@ -946,14 +958,15 @@ def _write_bridge(samples, scenario):
                      "probe_ver": "fake-qa0", "proto": "qa0"},
         }
     ]
+    stop_ev = next((r for r in scenario if r.get("ev") == "stop"), None)
     for row in scenario:
         if row.get("ev") not in ("op", "state"):
             continue
         op_id = row["op_id"]
         verb = row.get("verb") or "scam_state_read"
-        rows.append({"ev": "enq", "op_id": op_id, "verb": verb,
-                     "peer": "client", "args": {}})
-        rows.append({
+        enq = {"ev": "enq", "op_id": op_id, "verb": verb,
+               "peer": "client", "args": {}}
+        result = {
             "ev": "result", "op_id": op_id, "peer": "client",
             "result": {
                 "status": row.get("status", "done"),
@@ -961,7 +974,18 @@ def _write_bridge(samples, scenario):
                 "read": {"nk": row.get("read_nk") or {},
                          "sk": row.get("read_sk") or {}},
             },
-        })
+        }
+        if row.get("step") == "stop_op" and stop_ev is not None:
+            # Tiempos del job_stop real en el bridge (arnes y peer).
+            try:
+                enq["t_ms"] = float(stop_ev["stop_send_h_ms"])
+                result["t_ms"] = float(stop_ev["stop_ack_h_ms"])
+                result["result"]["recv_ms"] = float(stop_ev["stop_recv_ms"])
+                result["result"]["done_ms"] = float(stop_ev["stop_recv_ms"]) + 1.0
+            except (KeyError, TypeError, ValueError):
+                pass
+        rows.append(enq)
+        rows.append(result)
     _write_jsonl(Path(samples) / "bridge.jsonl", rows)
 
 
@@ -1012,6 +1036,12 @@ def _rewrite_jsonl(path, mutate):
     rows = _read_jsonl(path)
     mutate(rows)
     _write_jsonl(path, rows)
+    if Path(path).name == "scenario.jsonl":
+        # La evidencia mutada es coherente: el bridge refleja las
+        # lecturas que el peer habria devuelto.
+        _link_scenario(rows)
+        _write_jsonl(path, rows)
+        _write_bridge(Path(path).parent, rows)
 
 
 def apply_mutant(part_dir, name):
@@ -1043,11 +1073,19 @@ def apply_mutant(part_dir, name):
         return
 
     if name == "long_arc":
+        # Las tres lecturas coherentes con el yaw mutado (matriz y
+        # direccion renderizada), para que CAM-05 caiga por el yaw del
+        # arco largo y no por una incoherencia entre lecturas.
         def mutate(rows):
             for row in rows:
                 t = row["dtsum_ms"] / 1000.0
                 if t <= 3.0:
                     row["yaw_deg"] = _wrap180(179.0 - 358.0 * (t / 3.0))
+                    m = ypr_matrix(row["yaw_deg"], row["pitch_deg"], row["roll_deg"])
+                    row["eng_dx"], row["eng_dy"], row["eng_dz"] = m[2][0], m[2][1], m[2][2]
+                    for r in range(3):
+                        for c in range(3):
+                            row[f"m{r}{c}"] = m[r][c]
         _mutate_path(part_dir, "path_catmull_scripted", mutate)
         return
 
@@ -1387,7 +1425,9 @@ def _r1_scenario(part, fn):
     path = _scenario_path(part)
     rows = _read_jsonl(path)
     fn(rows)
+    _link_scenario(rows)
     _write_jsonl(path, rows)
+    _write_bridge(_samples(part), rows)
 
 
 def _r1_state(part, phase, step, **nk_changes):
@@ -1532,7 +1572,7 @@ class SCamOfflineTests(unittest.TestCase):
                 "fab_expected_metrics_instead_of_calculated",
                 _fab_expected_metrics_instead_of_calculated,
                 "CAM-09",
-                "fail",
+                "missing",
                 "hud_visible_other_scene",
             ),
             (
@@ -1702,8 +1742,10 @@ class SCamOfflineTests(unittest.TestCase):
             state = read(call("scam_state_read", wire.pack_payload()))
             self.assertEqual(state["num"]["flags_mask"], 258.0)
             self.assertEqual(state["num"]["saved_flags_mask"], 258.0)
-            self.assertEqual(state["num"]["aux_vis_mask"], 1.0)
-            self.assertEqual(state["num"]["saved_aux_vis_mask"], 1.0)
+            # brief:176: scam_hud_op(5) asegura PermanentCrossHair (bit 1)
+            # y StaminaBackground (bit 5) y guarda esa mascara: 34.
+            self.assertEqual(state["num"]["aux_vis_mask"], 34.0)
+            self.assertEqual(state["num"]["saved_aux_vis_mask"], 34.0)
             self.assertEqual(state["num"]["sent_focus_dist_m"], 2.0)
             self.assertEqual(state["num"]["sent_focus_blur"], 1.0)
 
@@ -1781,12 +1823,15 @@ class SCamOfflineTests(unittest.TestCase):
             )
             self.assertEqual(out["status"], "error", out)
             self.assertEqual(out["reason"], "lease_expired", out)
-            self.assertEqual(read(call("scam_state_read", wire.pack_payload()))["num"]["sent_focus_dist_m"], 2.0)
+            # Tras dos ticks de 50 ms el camino ya aplico el lerp de foco
+            # (brief:147-152): 2,0 + (50-2,0) * 0,1/6 = 2,8, no 2,0.
+            self.assertEqual(read(call("scam_state_read", wire.pack_payload()))["num"]["sent_focus_dist_m"], 2.8)
 
             out = call("scam_pose_apply", wire.pack_payload(scalars_str={"name": "P0"}))
             self.assertEqual(out["status"], "error", out)
             self.assertEqual(out["reason"], "lease_expired", out)
-            self.assertEqual(read(call("scam_state_read", wire.pack_payload()))["num"]["x_m"], 4500.0)
+            # El camino avanzo en esos dos ticks: x = 4500 + 6 * 0,1/6.
+            self.assertEqual(read(call("scam_state_read", wire.pack_payload()))["num"]["x_m"], 4500.1)
 
             out = call("scam_sample_start", wire.pack_payload(scalars_num={"duration_ms": 3500.0}))
             self.assertEqual(out["status"], "error", out)
@@ -1824,7 +1869,8 @@ class SCamOfflineTests(unittest.TestCase):
             self.assertEqual(state["str"]["cam_job_state"], "")
             self.assertEqual(state["num"]["active_b"], 0.0)
             self.assertEqual(state["num"]["flags_mask"], 258.0)
-            self.assertEqual(state["num"]["aux_vis_mask"], 1.0)
+            # OnJobEnd restaura la mascara guardada al ocultar (34).
+            self.assertEqual(state["num"]["aux_vis_mask"], 34.0)
             self.assertEqual(state["num"]["sent_focus_dist_m"], 0.0)
             self.assertEqual(state["num"]["sent_focus_blur"], 0.0)
 
@@ -1850,7 +1896,8 @@ class SCamOfflineTests(unittest.TestCase):
             self.assertEqual(out["reason"], "lease_expired", out)
             state = read(call("scam_state_read", wire.pack_payload()))
             self.assertEqual(state["num"]["active_b"], 0.0)
-            self.assertEqual(state["num"]["x_m"], 4500.0)
+            # Con m_Cam destruida la pose ya no esta definida: no se
+            # afirma x_m contra el valor de antes del camino.
 
             out = call("scam_hud_op", wire.pack_payload(scalars_num={"op_code": 1.0}))
             self.assertEqual(out["status"], "error", out)
@@ -1875,7 +1922,7 @@ class SCamOfflineTests(unittest.TestCase):
             state = read(call("scam_state_read", wire.pack_payload()))
             self.assertEqual(state["num"]["active_b"], 0.0)
             self.assertEqual(state["num"]["flags_mask"], 258.0)
-            self.assertEqual(state["num"]["aux_vis_mask"], 1.0)
+            self.assertEqual(state["num"]["aux_vis_mask"], 34.0)
         finally:
             Path(config_path).unlink()
 
@@ -2096,12 +2143,26 @@ class SCamOfflineTests(unittest.TestCase):
     def test_r1_18_procedencia_verbo_sustituido_nunca_pasa(self):
         """Variante Sol 1: verbos cambiados a qa_echo con rol server cae."""
         def mut(part):
+            orig = {
+                r["op_id"]: r.get("verb")
+                for r in _read_jsonl(_scenario_path(part))
+                if r.get("ev") == "op"
+            }
+
             def fn(rows):
                 for row in rows:
                     if row.get("ev") == "op":
                         row["verb"] = "qa_echo"
                         row["role"] = "server"
             _r1_scenario(part, fn)
+            # El bridge conserva los verbos scam_* reales: el resumen
+            # sustituido no casa con su enq.
+            bridge = _samples(part) / "bridge.jsonl"
+            brows = _read_jsonl(bridge)
+            for brow in brows:
+                if brow.get("ev") == "enq" and brow.get("op_id") in orig:
+                    brow["verb"] = orig[brow["op_id"]]
+            _write_jsonl(bridge, brows)
         v = self._r1("prov_verb", mut)
         self.assertNotEqual(v["verdict"], "PASA", v)
         self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "fail", v)
@@ -2134,7 +2195,10 @@ class SCamOfflineTests(unittest.TestCase):
         self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "fail", v)
 
     def test_r1_21_captura_sin_evento_y_reutilizada(self):
-        """Claude 12: captura sin evento da missing; reutilizada, missing."""
+        """Claude 12 cambiado en r2 (Sol 6): sin evento da missing; dos
+        tomas independientes con contenido identico son el caso ideal
+        de CAM-09 (3) y pasan: la identidad sale del evento y de la
+        horquilla, nunca de que el contenido sea distinto."""
         def noev(part):
             _r1_drop_events(part, lambda r: r.get("ev") == "capture" and r.get("file") == "hud_during.bmp")
         v = self._r1("cap_noev", noev)
@@ -2145,16 +2209,16 @@ class SCamOfflineTests(unittest.TestCase):
             shutil.copyfile(_samples(part) / "hud_clean_ref.bmp", _samples(part) / "hud_during.bmp")
         v = self._r1("cap_reused", reused)
         checks = _checks_by_id(v)
-        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
-        self.assertIn("capture_reused", checks["CAM-09"]["detail"], v)
+        self.assertEqual(checks["CAM-09"]["status"], "pass", v)
 
     def test_r1_22_hud_visible_de_otra_escena_falla(self):
-        """Variante Claude 12: hud_visible_ref entera en blanco FALLA."""
+        """Variante Claude 12 cambiada en r2 (nuevo 10): una referencia
+        de otra escena da missing, nunca fail con un umbral sin cita."""
         def mut(part):
             _write_bmp(_samples(part) / "hud_visible_ref.bmp", bytearray([255]) * (W * H))
         v = self._r1("cap_blank", mut)
         checks = _checks_by_id(v)
-        self.assertEqual(checks["CAM-09"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
         self.assertEqual(checks["CAM-09"]["detail"], "hud_visible_other_scene", v)
 
     def test_r1_23_cam08_fases_desde_lecturas_crudas(self):
@@ -2194,13 +2258,14 @@ class SCamOfflineTests(unittest.TestCase):
         self.assertIn("fix_blur", checks["CAM-08"]["detail"], v)
 
     def test_r1_26_cam08_capturas_de_fase_reutilizadas(self):
-        """Sol 11 variante: var_t copiadas del par estatico dan missing."""
+        """Sol 11 variante cambiada en r2 (Sol 6): var_t1 con el mismo
+        estado optico que el par estatico puede dar los mismos bytes;
+        pasa, porque la identidad sale de su evento y de su fase."""
         def mut(part):
             shutil.copyfile(_samples(part) / "dof_ctrl_near2m.bmp", _samples(part) / "var_t1.bmp")
         v = self._r1("cam08_reused", mut)
         checks = _checks_by_id(v)
-        self.assertEqual(checks["CAM-08"]["status"], "missing", v)
-        self.assertIn("capture_reused", checks["CAM-08"]["detail"], v)
+        self.assertEqual(checks["CAM-08"]["status"], "pass", v)
 
     def test_r1_27_reset_por_nombre_aproximado_no_vale(self):
         """Claude 11: sin post_reset exacto, aunque haya ctrl_* sanos, missing."""
@@ -2211,18 +2276,17 @@ class SCamOfflineTests(unittest.TestCase):
         self.assertEqual(_checks_by_id(v)["CAM-07"]["status"], "missing", v)
 
     def test_r1_28_hud_arbol_crudo_y_dof_retail(self):
-        """Claude 22/Sol 12: sin arbol da missing; overlay en arbol falla;
+        """Claude 22/Sol 12 cambiado en r2 (nuevo 2): ningun verbo
+        produce el arbol, asi que sin el CAM-09 pasa por ovl_vis_b;
         dof_config incoherente con build retail da missing."""
         def notree(part):
             _r1_drop_events(part, lambda r: r.get("ev") == "hud_tree")
         v = self._r1("hud_notree", notree)
-        self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "missing", v)
+        self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "pass", v)
         def ovl(part):
-            def fn(rows):
-                for row in rows:
-                    if row.get("ev") == "hud_tree" and row.get("step") == "tree_pre_cap":
-                        row["nodes"].append({"id": "nuevo_20x20", "parent": "hud_panel", "visible": True, "hierarchy": True, "baseline": False})
-            _r1_scenario(part, fn)
+            # El overlay se observa en ovl_vis_b de la lectura, no en un
+            # arbol que ningun verbo produce.
+            _r1_state(part, "SCAM-S3", "pre_cap", ovl_vis_b=1.0)
         v = self._r1("hud_tree_ovl", ovl)
         self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "fail", v)
         def retail(part):
@@ -2273,12 +2337,13 @@ class SCamOfflineTests(unittest.TestCase):
         self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "missing", v)
 
     def test_r1_32_cam10_acuse_signo_y_relojes(self):
-        """Claude 20/15/23: acuse a 0 falla; signo mixto falla; tick que
-        no casa con dtsum da missing."""
+        """Claude 20/15/23 cambiado en r2 (nuevo 4): el acuse a 0 da
+        missing, nunca fail; signo mixto falla; tick que no casa con
+        dtsum da missing."""
         def ack0(part):
             _r1_state(part, "SCAM-S5", "post_stop_state", input_ack_seq_n=0.0)
         v = self._r1("cam10_ack0", ack0)
-        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "fail", v)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "missing", v)
         def mixed(part):
             def fn(rows):
                 for row in rows:
@@ -2309,15 +2374,32 @@ class SCamOfflineTests(unittest.TestCase):
         self.assertEqual(checks["CAM-01"]["detail"], "closed_cam_not_rejected", v)
 
     def test_r1_34_campo_ausente_da_missing_sin_excepcion(self):
-        """Claude 16: sin stop_ack_h_ms (con u_ms) no hay KeyError."""
+        """Claude 16 cambiado en r2 (nuevo 6): la base temporal sale
+        del job_stop del bridge, asi que el resumen sin stop_ack_h_ms
+        ya no es la fuente y la sana pasa sin excepcion."""
         def mut(part):
             def fn(rows):
                 for row in rows:
                     if row.get("ev") == "stop":
                         row.pop("stop_ack_h_ms", None)
             _r1_scenario(part, fn)
+            # El bridge real trae los tiempos del job_stop con
+            # independencia del resumen: se sellan como en la sana.
+            bridge = _samples(part) / "bridge.jsonl"
+            brows = _read_jsonl(bridge)
+            op_id = next(r["op_id"] for r in _read_jsonl(_scenario_path(part)) if r.get("step") == "stop_op")
+            for brow in brows:
+                if brow.get("op_id") != op_id:
+                    continue
+                if brow.get("ev") == "enq":
+                    brow["t_ms"] = 500.0
+                if brow.get("ev") == "result":
+                    brow["t_ms"] = 550.0
+                    brow["result"]["recv_ms"] = 1000.0
+                    brow["result"]["done_ms"] = 1001.0
+            _write_jsonl(bridge, brows)
         v = self._r1("no_ack_field", mut)
-        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "missing", v)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "pass", v)
 
     def test_r1_35_altura_desde_fixture_no_desde_primera_fila(self):
         """Claude 17: desfase constante +1 m en Y cae; con el datum de
@@ -2405,16 +2487,756 @@ class SCamOfflineTests(unittest.TestCase):
                     if row.get("op_id"):
                         row["op_id"] = "renamed-" + str(row["op_id"])
             _r1_scenario(part, fn)
+            # _r1_scenario ya refleja los ids renombrados en el bridge;
+            # aqui solo cambia el qa_fault de los enq.
             path = _samples(part) / "bridge.jsonl"
             brows = _read_jsonl(path)
             for row in brows:
-                if row.get("op_id"):
-                    row["op_id"] = "renamed-" + str(row["op_id"])
                 if row.get("ev") == "enq":
                     row["args"] = {"qa_fault": "x" * 24}
             _write_jsonl(path, brows)
         v = self._r1("suite_renamed", renamed)
         self.assertEqual(v["exit_code"], 0, v)
+
+    # ---------------------------------------------------------------- ronda 2 (test_r2_*)
+    def _r2(self, label, mutate):
+        return self._verdict_with(f"r2_{label}", mutate)
+
+    def _r2_scenario_direct(self, part, fn):
+        """Edita scenario sin reflejarlo en el bridge (desajuste real)."""
+        path = _scenario_path(part)
+        rows = _read_jsonl(path)
+        fn(rows)
+        _write_jsonl(path, rows)
+
+    def test_r2_01_fixture_con_los_12_campos_y_estado_pasa(self):
+        """Sol 2: fixture sin fov_rad (brief:99) y estado posterior a 0,70."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("step") == "fixture":
+                        row["read_nk"] = {k: v for k, v in row["read_nk"].items() if k != "fov_rad"}
+                idx = next(i for i, r in enumerate(rows) if r.get("step") == "fixture")
+                rows.insert(idx + 1, _state("SCAM-S0", "post_fixture", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 0.70), {"cam_job_state": ""}))
+            _r1_scenario(part, fn)
+        v = self._r2("fixture12", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "pass", v)
+        self.assertEqual(v["exit_code"], 0, v)
+
+    def test_r2_02_fixture_sin_lectura_de_fov_da_missing(self):
+        """Sol 2 variante: sin fov en el fixture ni en ningun estado S0."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("step") == "fixture":
+                        row["read_nk"] = {k: v for k, v in row["read_nk"].items() if k != "fov_rad"}
+            _r1_scenario(part, fn)
+        v = self._r2("fixture_no_fov", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-01"]["detail"], "no_fixture_fov_reading", v)
+
+    def test_r2_03_fixture_fov_mal_en_estado_da_fail(self):
+        """Control deshonesto Sol 2: el fixture trae 0,70 pero el estado
+        posterior de la camara preparada dice 1,40."""
+        def mut(part):
+            def fn(rows):
+                idx = next(i for i, r in enumerate(rows) if r.get("step") == "fixture")
+                rows.insert(idx + 1, _state("SCAM-S0", "post_fixture", _pose_nk(4500.0, ANCHOR_Y, 9800.0, 0.0, 0.0, 0.0, 1.40), {"cam_job_state": ""}))
+            _r1_scenario(part, fn)
+        v = self._r2("fixture_fov_mal", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-01"]["detail"], "fixture_fov", v)
+
+    _SAVE10 = ("frame", "tick_ms", "saved_count_n", "x_m", "y_m", "z_m", "yaw_deg", "pitch_deg", "roll_deg", "fov_rad")
+
+    def _r2_save10(self, part):
+        def fn(rows):
+            for row in rows:
+                if row.get("ev") == "op" and row.get("step") in ("save_p0", "save_p_roll"):
+                    nk = dict(row["read_nk"])
+                    nk["saved_count_n"] = 2.0
+                    row["read_nk"] = {k: nk[k] for k in self._SAVE10}
+        _r1_scenario(part, fn)
+
+    def test_r2_04_guardado_con_los_10_campos_pasa(self):
+        """Sol 3: scam_pose_save sin matriz (brief:105) y reaplicacion sana."""
+        v = self._r2("save10", self._r2_save10)
+        self.assertEqual(_checks_by_id(v)["CAM-02"]["status"], "pass", v)
+        self.assertEqual(v["exit_code"], 0, v)
+
+    def test_r2_05_guardado_con_nombre_cambiado_da_fail(self):
+        """Control deshonesto Sol 3: el guardado dice llamarse otro."""
+        def mut(part):
+            self._r2_save10(part)
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("step") == "save_p_roll":
+                        row["read_sk"] = {"name": "OTRA", "saved_names_csv": "P0,OTRA"}
+            _r1_scenario(part, fn)
+        v = self._r2("save_name", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-02"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-02"]["detail"], "saved_pose_name_mismatch", v)
+
+    def test_r2_06_guardado_no_completado_da_fail(self):
+        """Control deshonesto Sol 3: save_p_roll no llego a done y la
+        reaplicacion, sana en apariencia, no tiene guardado valido."""
+        def mut(part):
+            _r1_op(part, "SCAM-S1", "save_p_roll", status="error", reason="save_failed")
+        v = self._r2("save_notdone", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-02"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-02"]["detail"], "saved_pose_not_done", v)
+
+    def _r2_recovery(self, turn_a_tick, turn_b_tick, handoff_tick=1000.0):
+        rows = []
+        tick, frame = 1000.0, 5000.0
+        while tick <= 2000.0:
+            psi = 0.0
+            if tick >= turn_a_tick:
+                psi = 5.0
+            if tick >= turn_b_tick:
+                psi = -2.0
+            dx, dz = math.sin(math.radians(psi)), math.cos(math.radians(psi))
+            if tick >= handoff_tick:
+                eng = [4500.0, ANCHOR_Y, 9800.0, dx, 0.0, dz]
+                mcam = 0.0
+            else:
+                eng = [4503.0, ANCHOR_Y + 0.4, 9802.0, math.sin(0.5), 0.0, math.cos(0.5)]
+                mcam = 1.0
+            rows.append([float(len(rows)), frame, tick, tick - 1000.0] + eng + [0.70, 4500.0, ANCHOR_Y, 9800.0, dx, 0.0, dz, mcam])
+            tick += 16.0
+            frame += 1.0
+        return rows
+
+    def _r2_cam10_gap(self, part, turn_a_tick, handoff_tick=1300.0, a_h=845.0):
+        _write_jsonl(_samples(part) / "control_recovery.jsonl", self._r2_recovery(turn_a_tick, 1800.0, handoff_tick))
+        def fn(rows):
+            for row in rows:
+                if row.get("ev") == "pulse" and row.get("burst") == "A":
+                    row["issued_h_ms"] = a_h
+                if row.get("ev") == "pulse" and row.get("burst") == "B":
+                    row["issued_h_ms"] = 1245.0
+                if row.get("ev") == "state" and row.get("step") == "post_stop_state":
+                    row["read_nk"]["input_ack_seq_n"] = 64.0
+        _r1_scenario(part, fn)
+
+    def test_r2_07_cam10_pulso_en_el_hueco_de_reloj_pasa(self):
+        """Sol 4: con el handoff en el tick 1300, el pulso de 845 cae en
+        el hueco entre el handoff real y el estimado y su giro vale."""
+        v = self._r2("cam10_gap", lambda p: self._r2_cam10_gap(p, 1312.0))
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "pass", v)
+
+    def test_cam10_r2_giro_antes_de_la_llegada_posible_da_fail(self):
+        """Control deshonesto Sol 4: el pulso A se emite en 1000 (su
+        llegada mas temprana al peer es 1450) y la camara gira en 1336,
+        dentro de la ventana quieta posterior al handoff (1300)."""
+        v = self._r2("cam10_early", lambda p: self._r2_cam10_gap(p, 1336.0, a_h=1000.0))
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-10"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-10"]["detail"], "pre_pulse_drift", v)
+
+    def test_r2_09_cam10_desfase_tick_dtsum_de_3ms_pasa(self):
+        """Sol 4/Claude 15: un incremento 16/13 ms entre relojes pasa."""
+        def mut(part):
+            path = _samples(part) / "control_recovery.jsonl"
+            rows = _read_jsonl(path)
+            for row in rows[6:]:
+                row[3] -= 3.0
+            _write_jsonl(path, rows)
+        v = self._r2("cam10_3ms", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "pass", v)
+
+    def test_r2_10_cam10_deriva_de_reloj_grande_da_missing(self):
+        """Control Sol 4: dtsum avanza 15 ms por frame frente a 16 de
+        tick; la deriva acumulada entre relojes crece sin cota."""
+        def mut(part):
+            path = _samples(part) / "control_recovery.jsonl"
+            rows = _read_jsonl(path)
+            for i, row in enumerate(rows):
+                row[3] = float(i) * 15.0
+            _write_jsonl(path, rows)
+        v = self._r2("cam10_drift", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-10"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-10"]["detail"], "tick_dtsum_mismatch", v)
+
+    def test_r2_11_hashes_durante_igual_a_limpia_pasa(self):
+        """Sol 6: hud_during identica a hud_clean_ref es el caso ideal."""
+        def mut(part):
+            shutil.copyfile(_samples(part) / "hud_clean_ref.bmp", _samples(part) / "hud_during.bmp")
+        v = self._r2("hash_ideal", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "pass", v)
+
+    def test_r2_12_hashes_fijas_identicas_pasan(self):
+        """Sol 6 variante: fix_t1..t4 identicas (control fijo) pasan."""
+        def mut(part):
+            for k in (2, 3, 4):
+                shutil.copyfile(_samples(part) / "fix_t1.bmp", _samples(part) / f"fix_t{k}.bmp")
+        v = self._r2("hash_fix", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-08"]["status"], "pass", v)
+
+    def test_r2_13_hashes_repetida_igual_a_la_limpia_pasa(self):
+        """Sol 6 variante: hud_clean_ref_repeat identica a la limpia
+        (MAD 0 entre repeticiones) tambien pasa."""
+        def mut(part):
+            shutil.copyfile(_samples(part) / "hud_clean_ref.bmp", _samples(part) / "hud_clean_ref_repeat.bmp")
+        v = self._r2("hash_repeat", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "pass", v)
+
+    def test_r2_14_dof_offline_sin_ventana_ni_mad_pasa(self):
+        """Nuevo 3: en offline basta el modo (brief:192)."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "dof_config":
+                        row.pop("window_w", None)
+                        row.pop("window_h", None)
+                        row.pop("mad_bg_50m", None)
+            _r1_scenario(part, fn)
+        v = self._r2("dof_offline", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-07"]["status"], "pass", v)
+        self.assertEqual(checks["CAM-08"]["status"], "pass", v)
+
+    def test_r2_15_dof_retail_operador_correcto_pasa(self):
+        """Sol 12: OPERATOR_DONE de SCAM-S0/confirm_dof_and_windowed."""
+        def mut(part):
+            man = _load_json(Path(part) / "manifest.json")
+            man["build"] = "retail"
+            _write_json(Path(part) / "manifest.json", man)
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "dof_config":
+                        row.update({"mode": "operator", "window_w": 1280, "window_h": 720})
+                        row.pop("mad_bg_50m", None)
+                rows.insert(0, {"ev": "operator_done", "phase": "SCAM-S0", "step": "SCAM-S0", "action": "confirm_dof_and_windowed"})
+            _r1_scenario(part, fn)
+        v = self._r2("dof_operator", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-07"]["status"], "pass", v)
+        self.assertEqual(checks["CAM-08"]["status"], "pass", v)
+
+    def test_r2_16_dof_retail_operador_de_otro_paso_da_missing(self):
+        """Control deshonesto Sol 12: operator_done ajeno y mad 0."""
+        def mut(part):
+            man = _load_json(Path(part) / "manifest.json")
+            man["build"] = "retail"
+            _write_json(Path(part) / "manifest.json", man)
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "dof_config":
+                        row.update({"mode": "operator", "window_w": 1280, "window_h": 720, "mad_bg_50m": 0.0})
+                rows.insert(0, {"ev": "operator_done", "phase": "SCAM-S5", "step": "SCAM-S5", "action": "otra_cosa"})
+            _r1_scenario(part, fn)
+        v = self._r2("dof_operator_bad", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-07"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-07"]["detail"], "dof_config_unaccredited", v)
+
+    def test_e1_r2_los_asertos_salen_del_brief(self):
+        """Nuevo 1: el E1 afirma 34 tras el preset, 2,8 y 4500,1 tras
+        dos ticks, y no afirma la pose con la camara destruida."""
+        src = Path(__file__).read_text(encoding="utf-8")
+        seg = src[src.index("def test_e2e_e1_real_peer"):src.index("# ---------------------------------------------------------------- ronda 1")]
+        self.assertIn('["aux_vis_mask"], 34.0', seg)
+        self.assertNotIn('["aux_vis_mask"], 1.0', seg)
+        self.assertIn('["sent_focus_dist_m"], 2.8', seg)
+        self.assertIn('["x_m"], 4500.1', seg)
+        # Aritmetica del brief sobre la secuencia del propio test.
+        self.assertEqual((1 << 1) | (1 << 5), 34)
+        self.assertAlmostEqual(2.0 + (50.0 - 2.0) * (0.1 / 6.0), 2.8)
+        self.assertAlmostEqual(4500.0 + 6.0 * (0.1 / 6.0), 4500.1)
+
+    def test_r2_18_cam09_sin_arbol_de_widgets_pasa(self):
+        """Nuevo 2: sin ev=hud_tree, ovl_vis_b acredita el overlay."""
+        def mut(part):
+            _r1_drop_events(part, lambda r: r.get("ev") == "hud_tree")
+        v = self._r2("cam09_notree", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "pass", v)
+        self.assertEqual(v["exit_code"], 0, v)
+
+    def test_r2_19_cam09_frame_fuera_de_la_horquilla_da_missing(self):
+        """Sol 5: capture.frame en otra fila, lejos de pre/post."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "capture" and row.get("file") == "hud_during.bmp":
+                        row["frame"] = 1040.0
+            _r1_scenario(part, fn)
+        v = self._r2("cam09_frame_out", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-09"]["detail"], "capture_frame_not_anchored", v)
+
+    def test_r2_20_cam09_horquilla_de_un_segundo_da_missing(self):
+        """Pasada c16: horquilla de 1 s / 1,8 m no acredita la captura."""
+        def mut(part):
+            hud = _read_path_dicts(_samples(part) / "path_linear_hud.jsonl")
+            def from_row(r):
+                return _pose_nk(r["x_m"], r["y_m"], r["z_m"], r["yaw_deg"], r["pitch_deg"], r["roll_deg"], r["fov_rad"], cam_dtsum=r["dtsum_ms"], frame=int(r["frame"]), tick=r["tick_ms"], aux=0.0)
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "state" and row.get("step") == "pre_cap":
+                        row["read_nk"] = from_row(hud[90])
+                    if row.get("ev") == "state" and row.get("step") == "post_cap":
+                        row["read_nk"] = from_row(hud[150])
+            _r1_scenario(part, fn)
+        v = self._r2("cam09_span", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-09"]["detail"], "capture_bracket_span", v)
+
+    def test_r2_21_cam09_horquilla_de_otro_trabajo_da_missing(self):
+        """Sol 5 variante: pre/post dicen ser de otro cam_job_id."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "state" and row.get("step") in ("pre_cap", "post_cap"):
+                        row["read_sk"] = {"cam_job_state": "running", "cam_job_id": "job-otro"}
+            _r1_scenario(part, fn)
+        v = self._r2("cam09_job", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-09"]["detail"], "capture_job_mismatch", v)
+
+    def test_r2_22_cam09_captura_solo_con_tick_pasa(self):
+        """Sol 5 variante: sin frame, el capture_tick_ms localiza la fila."""
+        def mut(part):
+            hud = _read_path_dicts(_samples(part) / "path_linear_hud.jsonl")
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "capture" and row.get("file") == "hud_during.bmp":
+                        row.pop("frame", None)
+                        row["capture_tick_ms"] = hud[122]["tick_ms"]
+            _r1_scenario(part, fn)
+        v = self._r2("cam09_tick", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "pass", v)
+
+    def test_r2_23_cam09_controles_reales_a_cero_da_fail(self):
+        """Nuevo 6: las lecturas scam_hud_op del control dicen 0."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("step") in ("control_read_qb", "control_read_ovl"):
+                        row["read_nk"]["qb_vis_b"] = 0.0
+                        row["read_nk"]["ovl_vis_b"] = 0.0
+            _r1_scenario(part, fn)
+        v = self._r2("cam09_ctrl0", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-09"]["detail"], "control_qb_not_detected", v)
+
+    def test_r2_24_cam09_solo_filas_hud_control_da_missing(self):
+        """Nuevo 6 variante: quedan las filas hud_control a 1, pero
+        ninguna lectura scam_hud_op enlazada."""
+        def mut(part):
+            _r1_drop_events(part, lambda r: r.get("ev") == "op" and r.get("step") in ("control_read_qb", "control_read_ovl"))
+        v = self._r2("cam09_ctrlrows", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-09"]["detail"], "no_hud_control_ops", v)
+
+    def test_r2_25_cam09_overlay_basal_visible_da_fail(self):
+        """Sol 11: un auxiliar basal visible se ve en ovl_vis_b."""
+        def mut(part):
+            _r1_state(part, "SCAM-S3", "pre_cap", ovl_vis_b=1.0)
+        v = self._r2("cam09_basal", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-09"]["detail"], "overlay_visible_pre_cap", v)
+
+    def test_r2_26_cam10_en_retail_sin_acuse_pasa(self):
+        """Nuevo 4: en retail el acuse no tiene productor ni se exige."""
+        def mut(part):
+            man = _load_json(Path(part) / "manifest.json")
+            man["build"] = "retail"
+            _write_json(Path(part) / "manifest.json", man)
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "dof_config":
+                        row.update({"mode": "optical", "window_w": 1280, "window_h": 720, "mad_bg_50m": 10.0})
+            _r1_scenario(part, fn)
+            _r1_state(part, "SCAM-S5", "post_stop_state", input_ack_seq_n=0.0)
+        v = self._r2("cam10_retail", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-10"]["status"], "pass", v)
+
+    def test_r2_27_cam10_acuse_que_no_cubre_los_pulsos_da_missing(self):
+        """Sol 10: pulsos con seq 100.. y acuse 14 en offline."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "pulse":
+                        row["seq_n"] = int(row["seq_n"]) + 100
+            _r1_scenario(part, fn)
+        v = self._r2("cam10_ackcover", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-10"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-10"]["detail"], "input_ack_not_covering", v)
+
+    def test_r2_28_estado_sin_op_id_da_missing_no_fail(self):
+        """Nuevo 5: los ev=state sin op_id son ausencia, no FALLA."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "state":
+                        row.pop("op_id", None)
+            self._r2_scenario_direct(part, fn)
+        v = self._r2("state_no_opid", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-01"]["detail"], "provenance_id_absent", v)
+
+    def test_estado_con_op_id_cero_explicito_da_fail(self):
+        """Control deshonesto nuevo 5: un id "0" explicito si es fail."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "state" and row.get("step") == "pre_0":
+                        row["op_id"] = "0"
+            self._r2_scenario_direct(part, fn)
+        v = self._r2("state_zero", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-01"]["detail"], "provenance_id_zero", v)
+
+    def test_r2_30_procedencia_resultados_qa_echo_en_bridge_da_fail(self):
+        """Sol 1: los RESULT de estado se sustituyen por qa_echo."""
+        def mut(part):
+            bridge = _samples(part) / "bridge.jsonl"
+            rows = _read_jsonl(bridge)
+            state_ids = {r["op_id"] for r in _read_jsonl(_scenario_path(part)) if r.get("ev") == "state"}
+            for row in rows:
+                if row.get("op_id") in state_ids and row.get("ev") == "enq":
+                    row["verb"] = "qa_echo"
+                if row.get("op_id") in state_ids and row.get("ev") == "result":
+                    row["result"] = {"status": "done", "reason": "", "read": {"has": [], "frame": 0}}
+            _write_jsonl(bridge, rows)
+        v = self._r2("prov_echo", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "fail", v)
+        self.assertIn("provenance", checks["CAM-01"]["detail"], v)
+
+    def test_r2_31_procedencia_job_cambiado_solo_en_scenario_da_fail(self):
+        """Sol 1 variante: el job de path_1_start y de busy cambia solo
+        en el resumen; el bridge sigue diciendo job-1."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("step") == "path_1_start":
+                        row["read_sk"] = {"job": "job-falso"}
+                    if row.get("ev") == "state" and row.get("step") in ("busy_pre", "busy_post"):
+                        row["read_sk"] = {"cam_job_id": "job-falso", "cam_job_state": "running"}
+            self._r2_scenario_direct(part, fn)
+        v = self._r2("prov_job", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-01"]["detail"], "provenance_read_mismatch", v)
+
+    def test_r2_32_procedencia_lectura_cruda_distinta_da_fail(self):
+        """Sol 1 variante: una lectura de estado no casa con su RESULT."""
+        def mut(part):
+            bridge = _samples(part) / "bridge.jsonl"
+            rows = _read_jsonl(bridge)
+            target = next(r["op_id"] for r in _read_jsonl(_scenario_path(part)) if r.get("step") == "s_init")
+            for row in rows:
+                if row.get("ev") == "result" and row.get("op_id") == target:
+                    row["result"]["read"]["nk"]["x_m"] = 9999.0
+            _write_jsonl(bridge, rows)
+        v = self._r2("prov_read", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-01"]["detail"], "provenance_read_mismatch", v)
+
+    def test_r2_33_misma_lectura_de_pre_y_post_da_missing(self):
+        """Nuevo 7: post_1 es la misma lectura que pre_1 (mismo op_id)."""
+        def mut(part):
+            def fn(rows):
+                pre = next(r for r in rows if r.get("step") == "pre_1" and r.get("phase") == "SCAM-S1")
+                for row in rows:
+                    if row.get("step") == "post_1" and row.get("phase") == "SCAM-S1":
+                        row["read_nk"] = dict(pre["read_nk"])
+                        row["read_sk"] = dict(pre["read_sk"])
+                        row["op_id"] = pre["op_id"]
+            self._r2_scenario_direct(part, fn)
+        v = self._r2("prepost_same", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "missing", v)
+
+    def test_r2_34_post_antes_de_la_orden_da_missing(self):
+        """Nuevo 7 variante: post_1 va delante de neg_1 en scenario."""
+        def mut(part):
+            def fn(rows):
+                idx_pre = next(i for i, r in enumerate(rows) if r.get("step") == "pre_1" and r.get("phase") == "SCAM-S1")
+                idx_post = next(i for i, r in enumerate(rows) if r.get("step") == "post_1" and r.get("phase") == "SCAM-S1")
+                post = rows.pop(idx_post)
+                rows.insert(idx_pre, post)
+            _r1_scenario(part, fn)
+        v = self._r2("post_before", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "missing", v)
+
+    def test_r2_35_paso_repetido_en_la_misma_fase_da_missing(self):
+        """Nuevo 7 variante: dos lecturas llamadas igual en SCAM-S4."""
+        def mut(part):
+            def fn(rows):
+                first = next(r for r in rows if r.get("step") == "dof_var_6s_t1_pre")
+                extra = dict(first)
+                extra.pop("op_id", None)
+                extra["read_nk"] = dict(first["read_nk"])
+                extra["read_nk"]["cam_dtsum_ms"] = 900.0
+                idx = next(i for i, r in enumerate(rows) if r.get("step") == "dof_var_6s_t1_post")
+                rows.insert(idx + 1, extra)
+            _r1_scenario(part, fn)
+        v = self._r2("dup_step", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-08"]["status"], "missing", v)
+
+    def test_r2_36_preset_tardio_no_acredita_la_mascara_inicial(self):
+        """Nuevo 8: hud_preset tras restaurar (2) no vale de inicial."""
+        def mut(part):
+            def fn(rows):
+                for phase, post_step in (("SCAM-S3", "post_path_hud"), ("SCAM-S5", "post_stop_state")):
+                    for row in rows:
+                        if row.get("ev") == "state" and row.get("phase") == phase and row.get("step") == post_step:
+                            row["read_nk"]["aux_vis_mask"] = 2.0
+                            row["read_nk"]["saved_aux_vis_mask"] = 2.0
+                    idx = next(i for i, r in enumerate(rows) if r.get("phase") == phase and r.get("step") == "hud_preset")
+                    preset = rows.pop(idx)
+                    preset["read_nk"]["aux_vis_mask"] = 2.0
+                    preset["read_nk"]["saved_aux_vis_mask"] = 2.0
+                    idx_post = next(i for i, r in enumerate(rows) if r.get("phase") == phase and r.get("step") == post_step)
+                    rows.insert(idx_post + 1, preset)
+            _r1_scenario(part, fn)
+        v = self._r2("preset_late", mut)
+        checks = _checks_by_id(v)
+        self.assertNotEqual(checks["CAM-09"]["status"], "pass", v)
+        self.assertNotEqual(checks["CAM-10"]["status"], "pass", v)
+
+    def test_r2_37_preset_en_la_op5_acredita_y_la_restauracion_mala_falla(self):
+        """Nuevo 8 variante: la op5 enlazada (34) manda aunque la
+        lectura hud_preset llegue tarde con 2."""
+        def mut(part):
+            def fn(rows):
+                for phase, post_step, boundary in (("SCAM-S3", "post_path_hud", "path_hud_start"), ("SCAM-S5", "post_stop_state", "stop")):
+                    for row in rows:
+                        if row.get("ev") == "state" and row.get("phase") == phase and row.get("step") == post_step:
+                            row["read_nk"]["aux_vis_mask"] = 2.0
+                            row["read_nk"]["saved_aux_vis_mask"] = 2.0
+                    op5 = _op(phase, "preset_op5", "scam_hud_op", "done", nk={"frame": 900.0, "tick_ms": 4000.0, "elem_vis_mask": 255.0, "flags_mask": 258.0, "saved_flags_mask": 258.0, "aux_vis_mask": 34.0, "saved_aux_vis_mask": 34.0, "qb_vis_b": 0.0, "qb_items_n": 1.0, "menu_open_b": 0.0, "ovl_vis_b": 0.0, "player_in_veh_b": 0.0})
+                    idx_b = next(i for i, r in enumerate(rows) if r.get("phase") == phase and r.get("step") == boundary)
+                    rows.insert(idx_b, op5)
+                    idx = next(i for i, r in enumerate(rows) if r.get("phase") == phase and r.get("step") == "hud_preset")
+                    preset = rows.pop(idx)
+                    preset["read_nk"]["aux_vis_mask"] = 2.0
+                    preset["read_nk"]["saved_aux_vis_mask"] = 2.0
+                    idx_post = next(i for i, r in enumerate(rows) if r.get("phase") == phase and r.get("step") == post_step)
+                    rows.insert(idx_post + 1, preset)
+            _r1_scenario(part, fn)
+        v = self._r2("preset_op5", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-09"]["detail"], "aux_not_restored", v)
+        self.assertEqual(checks["CAM-10"]["status"], "fail", v)
+
+    def test_r2_38_stop_corrido_en_el_resumen_da_missing(self):
+        """Nuevo 6: el resumen stop se corre 600 ms; el bridge no."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "stop":
+                        row["stop_send_h_ms"] += 600.0
+                        row["stop_ack_h_ms"] += 600.0
+                        row["stop_recv_ms"] += 600.0
+            self._r2_scenario_direct(part, fn)
+        v = self._r2("stop_shift", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-10"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-10"]["detail"], "stop_summary_mismatch", v)
+
+    def test_r2_39_stop_sin_op_enlazada_da_missing(self):
+        """Nuevo 6 variante: sin la op job_stop no hay base temporal."""
+        def mut(part):
+            _r1_drop_events(part, lambda r: r.get("step") == "stop_op")
+        v = self._r2("stop_no_op", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-10"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-10"]["detail"], "no_stop_anchor", v)
+
+    def test_r2_40_n8_seis_ordenes_con_un_solo_resultado_da_fail(self):
+        """Sol 8: las seis sin cliente apuntan al mismo op_id y verbo."""
+        def mut(part):
+            def fn(rows):
+                free = next(r for r in rows if r.get("step") == "no_client_free")
+                for row in rows:
+                    if row.get("step") in ("no_client_pose", "no_client_hud", "no_client_dof", "no_client_path", "no_client_sample"):
+                        row["op_id"] = free["op_id"]
+                        row["verb"] = free["verb"]
+            self._r2_scenario_direct(part, fn)
+        v = self._r2("n8_shared", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-01"]["status"], "fail", v)
+
+    def test_r2_41_n8_orden_aceptada_con_efectos_de_foco_da_fail(self):
+        """Sol 8 variante: verbos distintos, pero post_nc cambia el foco."""
+        def mut(part):
+            _r1_state(part, "SCAM-S1", "post_nc", sent_focus_dist_m=10.0, enable_b=1.0)
+        v = self._r2("n8_effects", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-01"]["detail"], "no_client_effects", v)
+
+    def test_r2_42_cam08_caminos_truncados_dan_missing(self):
+        """Sol 7: 180 filas que no llegan a t3/t4 no acreditan fases."""
+        def mut(part):
+            for name in ("path_dof_var", "path_dof_fix"):
+                path = _samples(part) / f"{name}.jsonl"
+                _write_path_jsonl(path, _read_path_dicts(path)[:180])
+        v = self._r2("cam08_trunc", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-08"]["status"], "missing", v)
+
+    def test_r2_43_cam08_sin_bmp_de_t2_da_missing(self):
+        """Sol 7 variante: falta var_t2.bmp aunque su evento exista."""
+        def mut(part):
+            (_samples(part) / "var_t2.bmp").unlink()
+        v = self._r2("cam08_not2", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-08"]["status"], "missing", v)
+        self.assertIn("var_t2", checks["CAM-08"]["detail"], v)
+
+    def test_r2_44_cam08_reset_compartido_da_missing(self):
+        """Sol 7 variante: post_dof_var copia el op_id de post_dof_fix."""
+        def mut(part):
+            def fn(rows):
+                fix = next(r for r in rows if r.get("step") == "post_dof_fix")
+                for row in rows:
+                    if row.get("step") == "post_dof_var":
+                        row["op_id"] = fix["op_id"]
+                        row["read_nk"] = dict(fix["read_nk"])
+            self._r2_scenario_direct(part, fn)
+        v = self._r2("cam08_resetdup", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-08"]["status"], "missing", v)
+
+    def test_r2_45_cam08_captura_con_lecturas_inexistentes_da_missing(self):
+        """Sol 7 variante: los ev=capture de fase citan pasos que no hay."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "capture" and str(row.get("file", "")).startswith(("var_", "fix_")):
+                        row["pre_step"] = "no_existe_pre"
+                        row["post_step"] = "no_existe_post"
+            _r1_scenario(part, fn)
+        v = self._r2("cam08_capsteps", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-08"]["status"], "missing", v)
+        self.assertIn("no_capture_bracket", checks["CAM-08"]["detail"], v)
+
+    def test_r2_46_cam04_matriz_final_girada_da_fail(self):
+        """Sol 15: matriz y direccion giradas 15 grados, Euler intactos."""
+        def mut(part):
+            def m(rows):
+                last = rows[-1]
+                mat = ypr_matrix(last["yaw_deg"] + 15.0, last["pitch_deg"], last["roll_deg"])
+                for r in range(3):
+                    for c in range(3):
+                        last[f"m{r}{c}"] = mat[r][c]
+                last["eng_dx"], last["eng_dy"], last["eng_dz"] = mat[2][0], mat[2][1], mat[2][2]
+            _mutate_path(part, "path_linear_hud", m)
+        v = self._r2("cam04_matrix", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-04"]["status"], "fail", v)
+        self.assertIn("path_linear_hud_theta_deg", checks["CAM-04"]["detail"], v)
+
+    def test_r2_47_cam04_euler_final_distinto_con_matriz_buena_pasa(self):
+        """Sol 15 variante: CAM-04 juzga la matriz cruda, no el Euler."""
+        def mut(part):
+            def m(rows):
+                rows[-1]["yaw_deg"] += 15.0
+            _mutate_path(part, "path_linear_hud", m)
+        v = self._r2("cam04_euler", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-04"]["status"], "pass", v)
+
+    def test_docstring_r2_describe_lo_que_juzga_el_codigo(self):
+        """Nuevo 9: 36 columnas, bridge, frame, peer_inst y pasos."""
+        src = (QA_DIR / "s_cam_eval.py").read_text(encoding="utf-8")
+        doc = src[:src.index('"""', 3)]
+        for token in ("36 floats", "bridge.jsonl", "peer_inst", "op_id", "frame",
+                      "path_hud_start", "post_dof_var", "post_stop_state", "stop_op"):
+            self.assertIn(token, doc)
+        self.assertNotIn("lista de 27 floats", doc)
+        self.assertNotIn("_STATIC_RESET_STEPS", src)
+        self.assertNotIn("_avg_pose", src)
+
+    def test_r2_49_cam06_sin_pre_exacta_da_missing(self):
+        """Pasada c17: sin pre_1 no vale una lectura de otra fase."""
+        def mut(part):
+            _r1_drop_events(part, lambda r: r.get("ev") == "state" and r.get("phase") == "SCAM-S4" and r.get("step") == "pre_1")
+        v = self._r2("cam06_nopre", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-06"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-06"]["detail"], "no_state_neg_1", v)
+
+    def test_r2_50_cam06_misma_lectura_pre_y_post_da_missing(self):
+        """Nuevo 7 en CAM-06: post_2 con el op_id de pre_2."""
+        def mut(part):
+            def fn(rows):
+                pre = next(r for r in rows if r.get("phase") == "SCAM-S4" and r.get("step") == "pre_2")
+                for row in rows:
+                    if row.get("phase") == "SCAM-S4" and row.get("step") == "post_2":
+                        row["op_id"] = pre["op_id"]
+            self._r2_scenario_direct(part, fn)
+        v = self._r2("cam06_same", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-06"]["status"], "missing", v)
+
+    def test_r2_51_cam01_negativa_perdida_da_missing(self):
+        """Sol 13: neg_1 con lost contractual es ausencia de resultado."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("step") == "neg_1" and row.get("phase") == "SCAM-S1":
+                        row["status"] = "lost"
+                        row["reason"] = "result_lost"
+            _r1_scenario(part, fn)
+            bridge = _samples(part) / "bridge.jsonl"
+            brows = [r for r in _read_jsonl(bridge) if not (r.get("ev") == "result" and r.get("op_id") == "SCAM-S1-neg_1")]
+            brows.append({"ev": "lost", "op_id": "SCAM-S1-neg_1", "peer": "client", "reason": "result_lost", "verb": "scam_pose_apply"})
+            _write_jsonl(bridge, brows)
+        v = self._r2("cam01_lost", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "missing", v)
+        self.assertNotEqual(v["verdict"], "PASA", v)
+
+    def test_r2_52_cam01_aceptada_sin_horquilla_da_fail(self):
+        """Sol 13 variante: neg_0 en done sin pre_0 es fail, no missing."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("step") == "neg_0":
+                        row["status"] = "done"
+                        row["reason"] = ""
+                rows[:] = [r for r in rows if not (r.get("ev") == "state" and r.get("step") == "pre_0")]
+            _r1_scenario(part, fn)
+        v = self._r2("cam01_accepted", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-01"]["detail"], "closed_cam_not_rejected", v)
+
+    def test_r2_53_cam10_sin_preset_en_s5_da_missing(self):
+        """Sol 9: sin observacion inicial, aux=saved=2 no acredita nada."""
+        def mut(part):
+            _r1_drop_events(part, lambda r: r.get("phase") == "SCAM-S5" and r.get("step") == "hud_preset")
+            _r1_state(part, "SCAM-S5", "post_stop_state", aux_vis_mask=2.0, saved_aux_vis_mask=2.0)
+        v = self._r2("cam10_nopreset", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-10"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-10"]["detail"], "no_initial_aux_observation", v)
+
+    def test_r2_54_cam09_referencia_de_otra_escena_da_missing(self):
+        """Nuevo 10 variante: visible en blanco frente a la limpia."""
+        def mut(part):
+            _write_bmp(_samples(part) / "hud_visible_ref.bmp", bytearray([255]) * (W * H))
+        v = self._r2("cam09_otherscene", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-09"]["detail"], "hud_visible_other_scene", v)
 
     # ---------------------------------------------------------------- testigo comun (E9)
     def _reevaluate_parts(self, ev_dir):
