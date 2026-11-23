@@ -3857,6 +3857,250 @@ class TestP2fFakeLeaseAtDeletion(_GuardedTestCase):
                 row["lease_age_ms"], row["emit_tick_ms"] - peer.last_ok_ms, places=6)
 
 
+class _ScenarioCtx:
+    def __init__(self):
+        self.scenario = []
+
+    def record_scenario(self, row):
+        self.scenario.append(dict(row))
+
+
+class TestP2hDirectorCensus(_GuardedTestCase):
+    """P2h: censo completo de los alrededores del director en t5.
+
+    La posicion sale de las filas del inventario del director en un censo t5
+    posterior a la purga con include_director_b=1; el disco es completo, de
+    radio 30 m, etapa t5_post_restart_census, etiqueta t5_director_p<n> y
+    include_director_b=1, paginado hasta el final. Dos posiciones a mas de
+    15 m dan dos discos; a menos, uno. Sin posicion no hay disco y se anota
+    en el escenario.
+    """
+
+    def _fake_census_rec(self, ext, jobs, peer, *, op_id, tag, cx, cz, rad, include_dir):
+        status, _reason, _payload = ext.on_start_op(
+            {"op_id": op_id, "verb": "per_census_start", "qa_fault": ""},
+            _unpacked(
+                strings={"area_tag": tag, "director_uid": ext.director_uid},
+                numbers={"center_x_m": cx, "center_z_m": cz,
+                         "radius_m": rad, "include_director_b": float(include_dir)},
+            ),
+            {},
+        )
+        self.assertEqual(status, "done")
+        peer.renew()
+        peer.now += 1000.0
+        for _ in range(6):
+            ext.on_tick(0.016)
+        job = jobs.jobs_by_id[op_id]
+        return {
+            "stage": "t5_post_restart_census",
+            "area_id": tag.split(":", 1)[-1],
+            "area_tag": tag,
+            "include_director_b": int(include_dir),
+            "job_complete": job["state"] == "done",
+            "rows": _job_rows(job),
+            "center_x_m": cx,
+            "center_z_m": cz,
+            "radius_m": rad,
+        }
+
+    def test_director_disc_full_with_expected_parameters(self):
+        ctx = _ScenarioCtx()
+        t5_rec = {
+            "stage": "t5_post_restart_census",
+            "include_director_b": 1,
+            "job_complete": True,
+            "rows": [
+                {"owner_uid": "dir-1", "pos_x_m": 10884.61, "pos_z_m": 2750.33},
+                {"owner_uid": "dir-1", "pos_x_m": 10884.61, "pos_z_m": 2750.33},
+                {"owner_uid": "otro", "pos_x_m": 1.0, "pos_z_m": 2.0},
+            ],
+        }
+        rows12 = [{"net_id": f"1:{i}", "owner_uid": "", "pos_x_m": 10884.61,
+                   "pos_z_m": 2750.33} for i in range(12)]
+        starts = []
+
+        def fake_issue(ctx_arg, peer, verb, payload=None, **kwargs):
+            if verb == "per_census_start":
+                u = wire.unpack_payload(payload)
+                starts.append(u)
+                return _op_outcome("done", "", "op-census", {
+                    "str": {"job": "op-census"},
+                    "num": {"snap_tick_ms": 1000.0,
+                            "center_x_m": u["num"]["center_x_m"],
+                            "center_z_m": u["num"]["center_z_m"],
+                            "radius_m": u["num"]["radius_m"]},
+                })
+            if verb == "job_read":
+                u = wire.unpack_payload(payload)
+                page = int(round(float(u["num"].get("page_n", 0.0))))
+                chunk = {0: rows12[0:5], 1: rows12[5:10], 2: rows12[10:12]}.get(page, [])
+                return _op_outcome("done", "", "op-read", {
+                    "str": {"job": "op-census", "state": "done"},
+                    "num": {"page_n": float(page), "pages_n": 3.0, "rows_total_n": 12.0},
+                    "rows": chunk,
+                })
+            if verb == "job_free":
+                return _op_outcome("done", "", "op-free",
+                                   {"str": {"job": "op-census", "freed": "1"}})
+            raise AssertionError(verb)
+
+        with mock.patch.object(f03_common, "issue_one", side_effect=fake_issue), \
+             mock.patch.object(s_persist_run, "_bridge_events", return_value=[]):
+            recs = s_persist_run._director_t5_censuses(
+                ctx, {"areas": {}}, [t5_rec], "dir-1", target_inst=None,
+                hello_t_ms=1234.0,
+            )
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(len(starts), 1)
+        u = starts[0]
+        self.assertEqual(u["str"]["area_tag"], "t5_post_restart_census:t5_director_p0")
+        self.assertEqual(u["str"]["director_uid"], "dir-1")
+        self.assertEqual(u["num"]["center_x_m"], 10884.61)
+        self.assertEqual(u["num"]["center_z_m"], 2750.33)
+        self.assertEqual(u["num"]["radius_m"], 30.0)
+        self.assertEqual(u["num"]["include_director_b"], 1.0)
+        rec = recs[0]
+        self.assertEqual(rec["stage"], "t5_post_restart_census")
+        self.assertEqual(rec["area_id"], "t5_director_p0")
+        self.assertEqual(rec["include_director_b"], 1)
+        self.assertEqual(rec["radius_m"], 30.0)
+        self.assertTrue(rec["job_complete"])
+        self.assertEqual(rec["job_num"]["rows_total_n"], 12.0)
+        self.assertEqual(rec["job_num"]["pages_n"], 3.0)
+        self.assertEqual(len(rec["rows"]), 12)
+        self.assertEqual(rec["hello_t_ms"], 1234.0)
+        self.assertTrue(any(ev.get("ev") == "t5_director_disc" for ev in ctx.scenario))
+
+    def test_two_far_positions_two_discs_and_close_positions_one(self):
+        ctx = _ScenarioCtx()
+        calls = []
+
+        def fake_census(ctx_arg, fixture, stage, area_id, include_dir, *,
+                        center_override=None, radius_override=None,
+                        director_uid="", target_inst=None, **kwargs):
+            calls.append((stage, area_id, int(include_dir), center_override,
+                          radius_override, director_uid))
+            return {"stage": stage, "area_id": area_id,
+                    "include_director_b": int(include_dir), "job_complete": True,
+                    "rows": [], "center_x_m": center_override[0],
+                    "center_z_m": center_override[1], "radius_m": radius_override}
+
+        far = {"stage": "t5_post_restart_census", "include_director_b": 1,
+               "job_complete": True, "rows": [
+                   {"owner_uid": "dir-1", "pos_x_m": 100.0, "pos_z_m": 100.0},
+                   {"owner_uid": "dir-1", "pos_x_m": 120.0, "pos_z_m": 100.0},
+               ]}
+        with mock.patch.object(s_persist_run, "_census", side_effect=fake_census):
+            recs = s_persist_run._director_t5_censuses(ctx, {}, [far], "dir-1")
+        self.assertEqual(len(recs), 2)
+        self.assertEqual([c[1] for c in calls], ["t5_director_p0", "t5_director_p1"])
+        self.assertEqual([c[3] for c in calls], [(100.0, 100.0), (120.0, 100.0)])
+        self.assertTrue(all(c[0] == "t5_post_restart_census" and c[2] == 1
+                            and c[4] == 30.0 and c[5] == "dir-1" for c in calls))
+
+        calls.clear()
+        ctx_close = _ScenarioCtx()
+        close = {"stage": "t5_post_restart_census", "include_director_b": 1,
+                 "job_complete": True, "rows": [
+                     {"owner_uid": "dir-1", "pos_x_m": 100.0, "pos_z_m": 100.0},
+                     {"owner_uid": "dir-1", "pos_x_m": 110.0, "pos_z_m": 100.0},
+                 ]}
+        with mock.patch.object(s_persist_run, "_census", side_effect=fake_census):
+            recs_close = s_persist_run._director_t5_censuses(ctx_close, {}, [close], "dir-1")
+        self.assertEqual(len(recs_close), 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][3], (100.0, 100.0))
+
+    def test_no_director_position_emits_no_disc_and_annotates(self):
+        ctx = _ScenarioCtx()
+        calls = []
+
+        def fake_census(*args, **kwargs):
+            calls.append((args, kwargs))
+            return {"job_complete": True}
+
+        t0_rec = {"stage": "t0_baseline_census", "include_director_b": 1,
+                  "job_complete": True, "rows": [
+                      {"owner_uid": "dir-1", "pos_x_m": 5.0, "pos_z_m": 6.0},
+                  ]}
+        no_dir_rows = {"stage": "t5_post_restart_census", "include_director_b": 1,
+                       "job_complete": True, "rows": [
+                           {"owner_uid": "otro", "pos_x_m": 1.0, "pos_z_m": 2.0},
+                       ]}
+        excluded = {"stage": "t5_post_restart_census", "include_director_b": 0,
+                    "job_complete": True, "rows": [
+                        {"owner_uid": "dir-1", "pos_x_m": 7.0, "pos_z_m": 8.0},
+                    ]}
+        with mock.patch.object(s_persist_run, "_census", side_effect=fake_census):
+            recs = s_persist_run._director_t5_censuses(
+                ctx, {}, [t0_rec, no_dir_rows, excluded], "dir-1")
+        self.assertEqual(recs, [])
+        self.assertEqual(calls, [])
+        missing = [ev for ev in ctx.scenario
+                   if ev.get("ev") == "t5_director_census_missing"]
+        self.assertEqual(len(missing), 1)
+        self.assertEqual(missing[0].get("reason"), "no_director_position")
+
+    def test_glove_near_diag_director_appears_in_director_disc(self):
+        peer, jobs, ext = _make_clock_fake()
+        diag = (10884.61, 2750.33)
+        for net in (fake_ext_persist.DIRECTOR_JEANS_NET,
+                    fake_ext_persist.DIRECTOR_APPLE_NET):
+            ent = ext.world[net]
+            ent["pos"] = (diag[0], float(ent["pos"][1]), diag[1])
+        glove = ext._add_entity(
+            net_id="1:950", pers_id="70:0:0:0",
+            class_name="WorkingGloves_Yellow", cat="raw", loc_kind="ground",
+            pos=(diag[0] + 1.0, 100.0, diag[1] + 1.0), persistent=True,
+        )
+        status, _reason, _payload = ext.on_start_op(
+            {"op_id": "op-purge", "verb": "per_purge_start", "qa_fault": ""},
+            _purge_args([{"pers_id": glove["pers_id"],
+                          "class_name": glove["class_name"]}], ext.director_uid),
+            {},
+        )
+        self.assertEqual(status, "done")
+        for _ in range(30):
+            jobs.tick_jobs(0.016, peer.local_ms())
+            ext.on_tick(0.016)
+            if ext.purge_job_id == "":
+                break
+            peer.now += 16.0
+        self.assertEqual(jobs.get_state("op-purge"), "done")
+        self.assertIn(glove["net_id"], ext.world)
+
+        base = self._fake_census_rec(
+            ext, jobs, peer, op_id="op-base",
+            tag="t5_post_restart_census:area_a",
+            cx=4500.0, cz=10200.0, rad=60.0, include_dir=1,
+        )
+        self.assertTrue(any(str(r.get("owner_uid") or "") == ext.director_uid
+                            for r in base["rows"]))
+
+        ctx = _ScenarioCtx()
+
+        def fake_census(ctx_arg, fixture, stage, area_id, include_dir, *,
+                        center_override=None, radius_override=None,
+                        director_uid="", target_inst=None, **kwargs):
+            return self._fake_census_rec(
+                ext, jobs, peer, op_id=f"op-{area_id}",
+                tag=f"{stage}:{area_id}",
+                cx=center_override[0], cz=center_override[1],
+                rad=radius_override, include_dir=include_dir,
+            )
+
+        with mock.patch.object(s_persist_run, "_census", side_effect=fake_census):
+            recs = s_persist_run._director_t5_censuses(ctx, {}, [base], ext.director_uid)
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["area_id"], "t5_director_p0")
+        self.assertEqual(recs[0]["center_x_m"], diag[0])
+        self.assertEqual(recs[0]["center_z_m"], diag[1])
+        self.assertEqual(recs[0]["radius_m"], 30.0)
+        self.assertTrue(any(str(r.get("net_id") or "") == glove["net_id"]
+                            for r in recs[0]["rows"]))
+
+
 def _op_outcome(status, reason, op_id, payload):
     return SimpleNamespace(status=status, reason=reason, op_id=op_id, payload=payload)
 

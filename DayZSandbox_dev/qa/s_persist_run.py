@@ -46,6 +46,11 @@ T4_PURGE_TIMEOUT_S = 120.0
 # asi que el radio inicial cubre el alcance estimado con margen acotado.
 SLACK_REL = 0.10
 SLACK_ABS_M = 5.0
+# P2h (aclaracion del orquestador: la caida antes de `pre`): censo de los
+# alrededores del director en t5. Disco completo de radio 30 m por posicion y
+# agrupacion de posiciones con el margen de N39 (15 m).
+DIRECTOR_CENSUS_RADIUS_M = 30.0
+DIRECTOR_POSITION_MARGIN_M = 15.0
 
 
 def _fixture():
@@ -1192,6 +1197,97 @@ def _census(ctx, fixture, stage, area_id, include_dir, *, busy_probe=False, busy
     rec["state"] = state
     ctx.record_scenario(rec)
     return rec
+
+
+def _director_t5_positions(censuses, director_uid):
+    """Posiciones del director leidas en censos t5 posteriores a la purga.
+
+    Solo cuentan los censos completos con ``include_director_b == 1``: sus
+    filas del inventario del director llevan el ``GetPosition()`` del objeto
+    (``pos_x_m``/``pos_z_m``). Sin UID de director no hay posiciones.
+    """
+    if not director_uid:
+        return []
+    positions = []
+    for c in censuses or []:
+        if not c or not c.get("job_complete"):
+            continue
+        if int(c.get("include_director_b", 0) or 0) != 1:
+            continue
+        stage = str(c.get("stage") or "")
+        if not stage.startswith("t5_"):
+            continue
+        for row in c.get("rows") or []:
+            if str(row.get("owner_uid") or "") != director_uid:
+                continue
+            try:
+                x = float(row.get("pos_x_m"))
+                z = float(row.get("pos_z_m"))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(x) and math.isfinite(z):
+                positions.append((x, z))
+    return positions
+
+
+def _cluster_director_positions(positions, margin_m):
+    """Agrupa posiciones: las que distan <= margen comparten disco; las que
+    distan mas de margen abren otro disco centrado en la primera posicion."""
+    clusters = []
+    for x, z in positions:
+        for cx, cz in clusters:
+            if math.hypot(x - cx, z - cz) <= float(margin_m):
+                break
+        else:
+            clusters.append((x, z))
+    return clusters
+
+
+def _director_t5_censuses(ctx, fixture, censuses, director_uid, *,
+                          target_inst=None, hello_t_ms=None):
+    """Censos completos de los alrededores del director en t5 (P2h).
+
+    Emite un disco de radio 30 m por cada posicion del director leida en un
+    censo t5 posterior a la purga (agrupando las que distan <= 15 m). Usa la
+    etiqueta desnuda ``t5_director_p<n>`` con la etapa
+    ``t5_post_restart_census`` e ``include_director_b = 1``; el censo se
+    pagina hasta el final como los demas. Sin posicion no emite disco y lo
+    anota en el escenario (el oraculo dara ``missing``).
+    """
+    positions = _director_t5_positions(censuses, director_uid)
+    clusters = _cluster_director_positions(positions, DIRECTOR_POSITION_MARGIN_M)
+    if not clusters:
+        ctx.record_scenario({
+            "ev": "t5_director_census_missing",
+            "reason": "no_director_position",
+            "director_uid": director_uid,
+            "t5_censuses_n": len([c for c in (censuses or [])
+                                  if c and c.get("job_complete")]),
+        })
+        return []
+    out = []
+    for idx, (x, z) in enumerate(clusters):
+        tag = f"t5_director_p{idx}"
+        rec = _census(
+            ctx, fixture, "t5_post_restart_census", tag, 1,
+            center_override=(x, z),
+            radius_override=DIRECTOR_CENSUS_RADIUS_M,
+            director_uid=director_uid,
+            target_inst=target_inst,
+        )
+        rec["hello_t_ms"] = hello_t_ms
+        out.append(rec)
+        ctx.record_scenario({
+            "ev": "t5_director_disc",
+            "area_tag": tag,
+            "stage": "t5_post_restart_census",
+            "center_x_m": x,
+            "center_z_m": z,
+            "radius_m": DIRECTOR_CENSUS_RADIUS_M,
+            "positions_n": len(positions),
+            "clusters_n": len(clusters),
+        })
+    return out
 
 
 def _collect_creature_tracks(rec, lids, tracks, obs_req_t):
@@ -3124,7 +3220,7 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
 
                 w_pre = f03_common.issue_one(ctx, "server", "per_status", wire.pack_payload(scalars_str={"director_uid": director_uid_t0}), target_inst=server_epoch_new or None)
                 ctx.record_scenario({"ev": "t5_witness_pre_status", "status": w_pre.status, "num": dict(w_pre.payload["num"]) if w_pre.payload else {}})
-                _census(ctx, fixture, "t5_witness_pre_census", "area_b", 1, director_uid=director_uid_t0, target_inst=server_epoch_new or None)
+                witness_pre_rec = _census(ctx, fixture, "t5_witness_pre_census", "area_b", 1, director_uid=director_uid_t0, target_inst=server_epoch_new or None)
 
                 stale_reset = _reset_scene(ctx, "scene_b", ctx.peek_next_op_id(), server_epoch_old)
                 ctx.record_scenario({"ev": "t5_stale_epoch_reset", "status": stale_reset.status, "reason": stale_reset.reason})
@@ -3133,7 +3229,18 @@ def run_part(args, base_dir, argv, part_name, *, drop_control_pre_restart=False)
 
                 w_post = f03_common.issue_one(ctx, "server", "per_status", wire.pack_payload(scalars_str={"director_uid": director_uid_t0}), target_inst=server_epoch_new or None)
                 ctx.record_scenario({"ev": "t5_witness_post_status", "status": w_post.status, "num": dict(w_post.payload["num"]) if w_post.payload else {}})
-                _census(ctx, fixture, "t5_witness_post_census", "area_b", 1, director_uid=director_uid_t0, target_inst=server_epoch_new or None)
+                witness_post_rec = _census(ctx, fixture, "t5_witness_post_census", "area_b", 1, director_uid=director_uid_t0, target_inst=server_epoch_new or None)
+
+                # P2h: censo de los alrededores del director en t5, despues de la
+                # purga. Las posiciones salen de los censos t5 con el director
+                # incluido (base y testigo); el disco cubre la caida antes de pre.
+                t5_censuses.extend(_director_t5_censuses(
+                    ctx, fixture,
+                    list(t5_censuses) + [witness_pre_rec, witness_post_rec],
+                    director_uid_t0,
+                    target_inst=server_epoch_new or None,
+                    hello_t_ms=hello_t_ms,
+                ))
 
                 _reset_scene(ctx, "scene_b", ctx.peek_next_op_id(), server_epoch_new)
 
