@@ -4140,7 +4140,93 @@ class TestP2iLeaseGuardAndDoneCensus(_GuardedTestCase):
     def _rows(self, jobs):
         return _job_rows(jobs.jobs_by_id["op-purge"])
 
-    def test_blockq_clock_advance_between_preparation_and_delete(self):
+    def test_blockq_clock_advance_while_emit_rows_written_deletes_outside_lease(self):
+        """BLOQ 1 de Sol: el reloj avanza al escribir emit y la baja vence.
+
+        La muestra de la decision queda exactamente en el limite (3000,0 con
+        un lease de 3000; no vence porque la condicion es age > limit). En el
+        orden viejo las filas emit se escriben ANTES de la baja y el reloj
+        avanza 0,5 ms mientras se escriben: la baja efectiva ocurre a 3000,5,
+        ya fuera del lease, y la fila declara 3000,0. Con el orden de la P2i
+        la unica muestra se toma junto a la baja y las filas se publican
+        despues: la baja cae dentro del lease y la fila declara la edad
+        efectiva. El test falla con el fake de comb7 y pasa con el actual.
+        """
+
+        class _SolStepPeer(_ClockPeer):
+            """Reloj detenido que solo avanza cuando el fake escribe emit."""
+
+            def local_ms(self):
+                return float(self.now)
+
+            def advance(self, ms):
+                self.now += float(ms)
+
+        peer = _SolStepPeer()
+        jobs = fake_peer.JobMgr(peer)
+        ext = fake_ext_persist.PersistFakeExt()
+        ext.init(peer, jobs)
+        pers, cls, net = self._gloves(peer, jobs, ext)
+        self._start(ext, pers, cls)
+        jobs.configure_job_faults("op-purge", ext_handles_deadman=True)
+        peer.now = 1000.0
+        # Edad exactamente en el limite en la muestra de la decision.
+        peer.last_ok_ms = float(peer.now) - float(peer.lease_ms)
+
+        deletes = []
+        orig_delete = ext._delete_entity
+
+        def delete_with_effective_tick(ent):
+            # Hora efectiva de la baja: el reloj en el instante del borrado.
+            deletes.append(float(peer.now))
+            return orig_delete(ent)
+
+        orig_append = ext._purge_append
+
+        def append_emit_with_clock_step(phase, ent, result, *args, **kwargs):
+            # Hallazgo 1: el reloj puede avanzar dentro del frame mientras se
+            # construyen las filas emit del orden viejo (antes de la baja).
+            if phase == "emit":
+                peer.advance(0.5)
+            return orig_append(phase, ent, result, *args, **kwargs)
+
+        ext._delete_entity = delete_with_effective_tick
+        ext._purge_append = append_emit_with_clock_step
+
+        jobs.tick_jobs(0.016, peer.local_ms())
+        ext.on_tick(0.016)
+
+        self.assertEqual(len(deletes), 1)
+        effective_ms = deletes[0]
+        effective_age = effective_ms - float(peer.last_ok_ms)
+        # La baja cae dentro del lease, no 0,5 ms despues del limite.
+        self.assertLessEqual(effective_age, float(peer.lease_ms))
+        self.assertNotIn(net, ext.world)
+        emits = [r for r in self._rows(jobs)
+                 if r["phase"] == "emit" and r["emit_tick_ms"] > 0.0]
+        self.assertTrue(emits)
+        for row in emits:
+            # La fila emit declara la hora y la edad de la baja efectiva.
+            self.assertAlmostEqual(row["emit_tick_ms"], effective_ms, places=6)
+            self.assertAlmostEqual(row["lease_age_ms"], effective_age, places=6)
+            self.assertLessEqual(row["lease_age_ms"], row["lease_limit_ms"])
+
+        # Renovar y completar: con el orden nuevo el trabajo acaba done/ok y la
+        # baja ya ejecutada es la que se registra.
+        peer.renew()
+        for _ in range(8):
+            peer.advance(16.0)
+            jobs.tick_jobs(0.016, peer.local_ms())
+            ext.on_tick(0.016)
+            if ext.purge_job_id == "":
+                break
+        self.assertEqual(jobs.get_state("op-purge"), "done")
+        self.assertEqual(jobs.jobs_by_id["op-purge"]["reason"], "ok")
+        self.assertNotIn(net, ext.world)
+        self.assertTrue([r for r in self._rows(jobs)
+                         if r["phase"] == "result" and r["result"] == "deleted"])
+
+    def test_control_lease_already_expired_at_deletion_sample(self):
         peer, jobs, ext = _make_halfstep_fake()
         pers, cls, net = self._gloves(peer, jobs, ext)
         self._start(ext, pers, cls)
