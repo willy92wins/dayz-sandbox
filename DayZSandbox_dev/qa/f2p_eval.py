@@ -104,6 +104,18 @@ CONTROL_CENSUS_RADIUS_M = 30.0
 V_MAX_INFECTADO = 7.0
 V_MAX_ANIMAL = 12.0
 
+# Enmienda T4 retail (brief:1341): identidad grabada de 7980132 que se acepta al re-evaluar sin tocar
+# las dos evidencias de T4. La lista se fija por el sha256 de los bytes de `run/manifest.json`.
+REEVALUATED_ORACLE_COMMIT = "7980132e7334a98e793bce7ed456811f3ff24852"
+REEVALUATED_ORACLE_FILES = {
+    "f2p_eval.py": "4d17ff533e458e787e4e157d07947608d66d72131410059bdfcb46b35ea6cac9",
+    "f2p_mutants.py": "71856a640ce80ef49e8640d5a9990ceff8ddc8b9e29311fd3f5bfbd3abf8d26b",
+}
+REEVALUATED_MANIFEST_SHA256 = {
+    "67fb209c6cd2886ff25e149b93d1becbd645eb606b090f358d6efa2d284de1a7": "t4-e7cbf06",
+    "ad50f895c1ab1e8cdd49aa5ee18b9b33792bba75d379de0f1b96dae83493f233": "t4-3723120",
+}
+
 _HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
 _HEX16 = re.compile(r"^[0-9a-fA-F]{16}$")
 _HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
@@ -619,8 +631,38 @@ def _part_for_time(manifest: dict[str, Any], t_ms: float) -> str:
     return ""
 
 
+def _recorded_reevaluated_identity(manifest: dict[str, Any], backend: dict[str, Any]) -> bool:
+    """La identidad grabada es exactamente la de 7980132 (brief:1341), no una parecida."""
+    ident = manifest.get("identity") if isinstance(manifest.get("identity"), dict) else {}
+    f2p = manifest.get("f2p") if isinstance(manifest.get("f2p"), dict) else {}
+    if str(ident.get("oracle_commit") or "") != REEVALUATED_ORACLE_COMMIT or \
+            str(f2p.get("oracle_commit") or "") != REEVALUATED_ORACLE_COMMIT:
+        return False
+    files = f2p.get("oracle_files") if isinstance(f2p.get("oracle_files"), dict) else {}
+    for name, sha in REEVALUATED_ORACLE_FILES.items():
+        if str(files.get(name) or "") != sha:
+            return False
+    if not backend.get("frozen"):
+        return False
+    ev = backend["frozen"][-1]["data"]
+    if str(ev.get("commit") or "") != REEVALUATED_ORACLE_COMMIT:
+        return False
+    ev_files = ev.get("files") if isinstance(ev.get("files"), dict) else {}
+    for name, sha in REEVALUATED_ORACLE_FILES.items():
+        if str(ev_files.get(name) or "") != sha:
+            return False
+    return True
+
+
+def _reevaluated_evidence(manifest: dict[str, Any], backend: dict[str, Any],
+                          manifest_sha: str) -> bool:
+    """Solo las dos evidencias de T4 con la identidad exacta de 7980132 se re-evalúan (brief:1341)."""
+    return bool(manifest_sha) and manifest_sha in REEVALUATED_MANIFEST_SHA256 and \
+        _recorded_reevaluated_identity(manifest, backend)
+
+
 def _validate_manifest(manifest: dict[str, Any], repo_root: Path, backend: dict[str, Any],
-                       probe: dict[str, Any]) -> list[str]:
+                       probe: dict[str, Any], manifest_sha: str = "") -> list[str]:
     reasons: list[str] = []
     ident = manifest.get("identity") if isinstance(manifest.get("identity"), dict) else {}
     f2p = manifest.get("f2p") if isinstance(manifest.get("f2p"), dict) else {}
@@ -639,17 +681,22 @@ def _validate_manifest(manifest: dict[str, Any], repo_root: Path, backend: dict[
         reasons.append("manifest_incomplete")
     if build in ("diag", "retail") and ident.get("git_dirty") is not False:
         reasons.append("manifest_incomplete")
+    # Enmienda T4 retail (brief:1341): la identidad grabada de 7980132 se acepta solo para las dos
+    # evidencias de T4 fijadas por el sha256 de sus bytes de manifest, y solo si es exactamente esa
+    # identidad. Cualquier otra sigue el camino normal (fail-closed).
+    reevaluated = _reevaluated_evidence(manifest, backend, manifest_sha)
     ident_oc = str(ident.get("oracle_commit") or "")
     f2p_oc = str(f2p.get("oracle_commit") or "")
-    if not _HEX40.match(f2p_oc) or not _HEX40.match(ident_oc) or ident_oc != f2p_oc:
-        reasons.append("oracle_modified")
     files = f2p.get("oracle_files") if isinstance(f2p.get("oracle_files"), dict) else {}
-    for name in ("f2p_eval.py", "f2p_mutants.py"):
-        recorded = str(files.get(name) or "")
-        actual = _sha256_file(Path(__file__).with_name(name))
-        if recorded != actual:
+    if not reevaluated:
+        if not _HEX40.match(f2p_oc) or not _HEX40.match(ident_oc) or ident_oc != f2p_oc:
             reasons.append("oracle_modified")
-            break
+        for name in ("f2p_eval.py", "f2p_mutants.py"):
+            recorded = str(files.get(name) or "")
+            actual = _sha256_file(Path(__file__).with_name(name))
+            if recorded != actual:
+                reasons.append("oracle_modified")
+                break
     storage = f2p.get("storage") if isinstance(f2p.get("storage"), dict) else {}
     if not str(storage.get("path") or "") or not str(storage.get("id") or ""):
         reasons.append("manifest_incomplete")
@@ -679,12 +726,13 @@ def _validate_manifest(manifest: dict[str, Any], repo_root: Path, backend: dict[
     if backend["frozen"]:
         ev = backend["frozen"][-1]["data"]
         ev_files = ev.get("files") if isinstance(ev.get("files"), dict) else {}
-        if str(ev.get("commit") or "") != str(f2p.get("oracle_commit") or ""):
-            reasons.append("oracle_modified")
-        for name in ("f2p_eval.py", "f2p_mutants.py"):
-            if str(ev_files.get(name) or "") != str(files.get(name) or ""):
+        if not reevaluated:
+            if str(ev.get("commit") or "") != str(f2p.get("oracle_commit") or ""):
                 reasons.append("oracle_modified")
-                break
+            for name in ("f2p_eval.py", "f2p_mutants.py"):
+                if str(ev_files.get(name) or "") != str(files.get(name) or ""):
+                    reasons.append("oracle_modified")
+                    break
     else:
         reasons.append("manifest_incomplete")
     if backend["pbo"]:
@@ -706,11 +754,13 @@ def _validate_manifest(manifest: dict[str, Any], repo_root: Path, backend: dict[
 
 
 def _oracle_check_ok(part_dir: Path, manifest: dict[str, Any],
-                     backend: dict[str, Any]) -> str:
+                     backend: dict[str, Any], reevaluated: bool = False) -> str:
     """R-14: el commit verificado por el gate tiene que ser el cuarto vínculo.
 
     Lee `part_dir/../oracle_check.json` (lo escribe el núcleo antes de evaluar). Sin él, INCONCLUSO
     `oracle_unverified`. Exige `ok: true` y que su `commit` sea el mismo que los tres del manifest.
+    Enmienda T4 retail (brief:1341): en una evidencia re-evaluada, el gate corrió con el oráculo
+    vigente, así que el `commit` del `oracle_check` solo tiene que ser un sha de 40 hex.
     """
     path = part_dir.parent / "oracle_check.json"
     if not path.is_file():
@@ -722,12 +772,16 @@ def _oracle_check_ok(part_dir: Path, manifest: dict[str, Any],
     if not isinstance(check, dict) or check.get("ok") is not True:
         return "oracle_unverified"
     commit = str(check.get("commit") or "")
+    if not _HEX40.match(commit):
+        return "oracle_unverified"
+    if reevaluated:
+        return ""
     ident = manifest.get("identity") if isinstance(manifest.get("identity"), dict) else {}
     f2p = manifest.get("f2p") if isinstance(manifest.get("f2p"), dict) else {}
     frozen_commit = ""
     if backend.get("frozen"):
         frozen_commit = str(backend["frozen"][-1]["data"].get("commit") or "")
-    if not _HEX40.match(commit) or commit != str(ident.get("oracle_commit") or "") or \
+    if commit != str(ident.get("oracle_commit") or "") or \
             commit != str(f2p.get("oracle_commit") or "") or commit != frozen_commit:
         return "oracle_unverified"
     return ""
@@ -1694,6 +1748,106 @@ def _covered(pos: tuple[float, float], disks: list[tuple[float, float, float]],
             if not _point_in_union((pos[0] + dx, pos[1] + dz), disks):
                 return False
     return True
+
+
+def _last_valid_measurement_row(probe: dict[str, Any], manifest: dict[str, Any],
+                                tap: dict[str, Any] | None, net: str, epoch: str,
+                                before_deliver_t: float) -> tuple[tuple[float, float], float,
+                                                                  dict[str, Any]] | None:
+    """Última posición válida de `net` en una medición válida del mismo epoch anterior al censo
+    juzgado (brief:1339-1340 y §6.1 :537-548): un censo por su unión, o el testigo de la generación.
+
+    La medición manda por su entrega (`deliver_t`); el tick es el `snap_tick_ms` del componente que
+    trae la fila o el `tick_ms` de la fila del testigo. La posición del documento nunca cuenta (S-12).
+    """
+    best: tuple[float, tuple[float, float], float, dict[str, Any]] | None = None
+    for job in probe["jobs"].values():
+        if job["kind"] == "census":
+            tag = str(job.get("tag") or "")
+            if ":disk:" in tag:
+                continue
+            if _job_epoch(probe, job) != epoch:
+                continue
+            dt = job.get("deliver_t")
+            if not _finite(dt) or float(dt) >= float(before_deliver_t):
+                continue
+            u = _census_union(probe, manifest, str(job["part"]), tag, tap=tap)
+            if not u["ok"]:
+                continue
+            row = u["rows"].get(net)
+            tick = u["row_tick"].get(net)
+            if row is None or not _finite(tick):
+                continue
+            cand = (float(dt), (float(row["pos_x_m"]), float(row["pos_z_m"])),
+                    float(tick), row)
+            if best is None or cand[0] > best[0]:
+                best = cand
+        elif job["kind"] == "witness":
+            if _job_epoch(probe, job) != epoch:
+                continue
+            dt = job.get("deliver_t")
+            if not _finite(dt) or float(dt) >= float(before_deliver_t):
+                continue
+            if _measurement(job, manifest=manifest, probe=probe, part=str(job["part"]),
+                            tap=tap) != "":
+                continue
+            rows = [r for r in job["rows"]
+                    if str(r.get("net_id")) == net and _finite(r.get("tick_ms"))]
+            if not rows:
+                continue
+            r = max(rows, key=lambda x: float(x["tick_ms"]))
+            cand = (float(dt), (float(r["pos_x_m"]), float(r["pos_z_m"])),
+                    float(r["tick_ms"]), r)
+            if best is None or cand[0] > best[0]:
+                best = cand
+    if best is None:
+        return None
+    return best[1], best[2], best[3]
+
+
+def _creature_absence_outcome(probe: dict[str, Any], manifest: dict[str, Any],
+                              tap: dict[str, Any] | None, judged_u: dict[str, Any],
+                              net: str, doc_kind: str) -> tuple[str, str]:
+    """Ausencia de una criatura de una generación con la regla de cobertura (brief:1339-1340).
+
+    Devuelve `(estado, sufijo)`: `fail` con `census_missing` solo si un ÚNICO componente cubre el
+    disco de incertidumbre; si no, `inconcluso` con `coverage_gap`, `no_position` o `kind_mismatch`.
+    La ausencia de un objeto no cambia (`census_missing`).
+    """
+    if doc_kind not in ("infectado", "animal"):
+        return "fail", "census_missing"
+    comps = judged_u.get("components") or []
+    if not comps:
+        return "inconcluso", "coverage_gap"
+    main_job = _census(probe, str(comps[0].get("tag") or ""))
+    if main_job is None or not _finite(main_job.get("deliver_t")):
+        return "inconcluso", "coverage_gap"
+    epoch = _job_epoch(probe, main_job)
+    if not _HEX32.match(epoch):
+        return "inconcluso", "coverage_gap"
+    last = _last_valid_measurement_row(probe, manifest, tap, net, epoch,
+                                       float(main_job["deliver_t"]))
+    if last is None:
+        return "inconcluso", "no_position"
+    pos, tick, row = last
+    if int(row.get("ai_agent_b", 0)) != 1:
+        return "inconcluso", "kind_mismatch"
+    v_max = V_MAX_INFECTADO if doc_kind == "infectado" else V_MAX_ANIMAL
+    for comp in comps:
+        cj = _census(probe, str(comp.get("tag") or ""))
+        if cj is None or _job_epoch(probe, cj) != epoch:
+            continue
+        st = comp.get("snap_tick_ms")
+        if not _finite(st):
+            continue
+        dt_s = (float(st) - float(tick)) / 1000.0
+        if dt_s < 0:
+            continue
+        required = v_max * dt_s + 2.0
+        cx, cz = comp["center"]
+        if math.hypot(pos[0] - cx, pos[1] - cz) + required <= float(comp["radius"]) + 1e-9:
+            return "fail", "census_missing"
+    return "inconcluso", "coverage_gap"
 
 
 def _backend_validator() -> Any:
@@ -3108,7 +3262,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         return gate_core.make_verdict(SPIKE_ID, 2, checks=_checks_as_list(checks),
                                       metrics=metrics, reasons=reasons)
     try:
-        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_bytes = manifest_path.read_bytes()
+        manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+        raw = json.loads(manifest_bytes.decode("utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("manifest_not_dict")
         manifest = {k: v for k, v in raw.items() if k in ALLOWED_MANIFEST_KEYS}
@@ -3134,16 +3290,26 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     backend = _parse_backend(backend_rows)
     # v1.3.9: cada `op.state` pertenece a la sesión del tramo entre reinicios del backend.
     _assign_op_sessions(tap, backend)
-    manifest_reasons = _validate_manifest(manifest, repo_root, backend, probe)
+    reevaluated = _reevaluated_evidence(manifest, backend, manifest_sha)
+    if reevaluated:
+        metrics["reevaluated_from"] = REEVALUATED_ORACLE_COMMIT
+    manifest_reasons = _validate_manifest(manifest, repo_root, backend, probe,
+                                          manifest_sha=manifest_sha)
     if manifest_reasons:
         reasons.extend(sorted(set(manifest_reasons)))
         return gate_core.make_verdict(SPIKE_ID, 2, checks=_checks_as_list(checks),
                                       metrics=metrics, reasons=reasons)
-    oracle_reason = _oracle_check_ok(part_dir, manifest, backend)
+    oracle_reason = _oracle_check_ok(part_dir, manifest, backend, reevaluated=reevaluated)
     if oracle_reason:
         reasons.append(oracle_reason)
         return gate_core.make_verdict(SPIKE_ID, 2, checks=_checks_as_list(checks),
                                       metrics=metrics, reasons=reasons)
+    if reevaluated:
+        try:
+            _check = json.loads((part_dir.parent / "oracle_check.json").read_text(encoding="utf-8"))
+            metrics["reevaluated_with"] = str(_check.get("commit") or "")
+        except Exception:
+            metrics["reevaluated_with"] = ""
     # S-08 (re-congelado de 2026-11-23, brief:1314-1315): sin el validador del backend no se puede
     # juzgar ninguna lectura de reconciliación. Un import que falla es un error de montaje: INCONCLUSO
     # `backend_validator_unavailable`, nunca FALLA (antes daba FALLA en F2P-05 o F2P-08).
@@ -3556,6 +3722,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                            str(r.get("parent_net_id") or "") == net for r in rows)}
 
         fails = []
+        gaps = []
         if not gen3["ok"] or not gen3b["ok"]:
             fails.append("generation_missing")
         # S-03: completa, disjunta y con raíces reales (sin padre también en el censo).
@@ -3663,8 +3830,29 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         followed = (scene1_nets & nets31) | foreign_nets | scene2_nets
         nets32 = {str(r.get("net_id")) for r in post32["rows"]}
         missing_followed = sorted(followed - nets32)
+        # Enmienda T4 retail (brief:1339): la ausencia de una criatura se juzga con la regla de
+        # cobertura; la de un objeto no cambia.
+        _kind_by_net: dict[str, str] = {}
+        for _g, _d in ((gen3, doc1), (gen3b, doc2)):
+            if _g["ok"]:
+                _k = {str(e["id"]): str(e["kind"]) for e in _d["entities"]}
+                for _lid, _net in _g["pairs"].items():
+                    _kind_by_net[_net] = _k.get(_lid, "")
         if missing_followed:
-            fails.append("second_reset_diff:" + ",".join(missing_followed[:5]))
+            _second_fail: list[str] = []
+            for net in missing_followed:
+                _dk = _kind_by_net.get(net, "")
+                if _dk in ("infectado", "animal"):
+                    _status, _suffix = _creature_absence_outcome(
+                        probe, manifest, tap, post32_u, net, _dk)
+                    if _status == "fail":
+                        _second_fail.append(net)
+                    else:
+                        gaps.append(f"second_reset_diff:{net}:{_suffix}")
+                else:
+                    _second_fail.append(net)
+            if _second_fail:
+                fails.append("second_reset_diff:" + ",".join(sorted(_second_fail)[:5]))
         else:
             for net in sorted(followed):
                 a = next((r for r in post31["rows"] if str(r.get("net_id")) == net), None)
@@ -3684,7 +3872,12 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             for _lid, _net in _gen["pairs"].items():
                 row = next((r for r in pre3["rows"] if str(r.get("net_id")) == _net), None)
                 if row is None:
-                    fails.append(f"{_label}:{_lid}:census_missing")
+                    _status, _suffix = _creature_absence_outcome(
+                        probe, manifest, tap, pre3_u, _net, _kinds.get(_lid, ""))
+                    if _status == "fail":
+                        fails.append(f"{_label}:{_lid}:{_suffix}")
+                    else:
+                        gaps.append(f"{_label}:{_lid}:{_suffix}")
                     continue
                 # v1.3.12 (X-05, §6.1 punto 3 línea 502): raíz es sin padre en la muestra 0 y
                 # también sin padre en el censo siguiente.
@@ -3716,6 +3909,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 missing("F2P-05", ";".join(fails[:5]))
             else:
                 fail("F2P-05", ";".join(fails[:5]))
+        elif gaps:
+            missing("F2P-05", ";".join(gaps[:5]))
         else:
             passing("F2P-05")
 
@@ -4101,11 +4296,17 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             else:
                 kinds = {str(e["id"]): str(e["kind"]) for e in doc1["entities"]}
                 bad: list[str] = []
+                gaps: list[str] = []
                 by_net1 = {str(r.get("net_id")): r for r in post1["rows"]}
                 for lid, net in gen4_prev["pairs"].items():
                     c = by_net1.get(net)
                     if c is None:
-                        bad.append(f"{lid}:apply1_census_missing")
+                        _status, _suffix = _creature_absence_outcome(
+                            probe, manifest, tap, post1_u, net, kinds.get(lid, ""))
+                        if _status == "fail":
+                            bad.append(f"{lid}:apply1_{_suffix}")
+                        else:
+                            gaps.append(f"{lid}:apply1_{_suffix}")
                         continue
                     # v1.3.12 (X-05, §6.1 punto 3 línea 502): también sin padre en el censo.
                     if str(c.get("parent_net_id") or "") != "":
@@ -4136,7 +4337,12 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 for lid, net in gen4["pairs"].items():
                     c = by_net.get(net)
                     if c is None:
-                        bad.append(f"{lid}:census_missing")
+                        _status, _suffix = _creature_absence_outcome(
+                            probe, manifest, tap, p4a_u, net, kinds.get(lid, ""))
+                        if _status == "fail":
+                            bad.append(f"{lid}:{_suffix}")
+                        else:
+                            gaps.append(f"{lid}:{_suffix}")
                         continue
                     if str(c.get("parent_net_id") or "") != "":
                         bad.append(f"{lid}:not_root")
@@ -4156,6 +4362,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         bad.append(f"{lid}:pose")
                 if bad:
                     fail("F2P-08", ";".join(bad[:5]))
+                elif gaps:
+                    missing("F2P-08", ";".join(gaps[:5]))
                 elif ce_extra:
                     missing("F2P-08", "posible_botin_ce")
                 else:
@@ -4385,6 +4593,12 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     if str(r.get("parent_net_id") or "") != "":
                         continue
                     if int(r.get("alive_b", 0)) == 1:
+                        # Enmienda T4 retail (brief:1340, Q-02 :937): un objeto fuera de lo que
+                        # cubrió P1:base no cuenta como extra; dentro de esa unión, como antes.
+                        if int(r.get("ai_agent_b", 0)) == 0 and p1_u["ok"] and \
+                                not _point_in_union((float(r["pos_x_m"]), float(r["pos_z_m"])),
+                                                    p1_u["disks"]):
+                            continue
                         extra_at_pose.append(net)
                 if extra_at_pose:
                     bad.append("extras:" + ",".join(sorted(extra_at_pose)[:5]))

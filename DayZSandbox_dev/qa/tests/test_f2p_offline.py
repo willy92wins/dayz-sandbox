@@ -204,6 +204,31 @@ def _checks(verdict: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {c["id"]: c for c in verdict.get("checks") or []}
 
 
+# Enmienda T4 retail (brief:1341): identidad grabada de 7980132 y las dos evidencias de T4.
+T4R_OLD_COMMIT = "7980132e7334a98e793bce7ed456811f3ff24852"
+T4R_OLD_FILES = {
+    "f2p_eval.py": "4d17ff533e458e787e4e157d07947608d66d72131410059bdfcb46b35ea6cac9",
+    "f2p_mutants.py": "71856a640ce80ef49e8640d5a9990ceff8ddc8b9e29311fd3f5bfbd3abf8d26b",
+}
+T4R_T4_MANIFEST_SHA256 = {
+    "67fb209c6cd2886ff25e149b93d1becbd645eb606b090f358d6efa2d284de1a7",
+    "ad50f895c1ab1e8cdd49aa5ee18b9b33792bba75d379de0f1b96dae83493f233",
+}
+
+
+def _t4r_old_identity_campaign() -> dict[str, Any]:
+    """Fixture válida con la identidad grabada de 7980132 (no la de los ficheros que corren)."""
+    c = _load_fixture()
+    c["manifest"]["identity"]["oracle_commit"] = T4R_OLD_COMMIT
+    c["manifest"]["f2p"]["oracle_commit"] = T4R_OLD_COMMIT
+    c["manifest"]["f2p"]["oracle_files"] = dict(T4R_OLD_FILES)
+    for ev in c["samples"]["backend.jsonl"]:
+        if ev.get("kind") == "oracle.frozen":
+            ev["data"]["commit"] = T4R_OLD_COMMIT
+            ev["data"]["files"] = dict(T4R_OLD_FILES)
+    return c
+
+
 class TestF2POracleOffline(unittest.TestCase):
     def test_positive_campaign_passes(self) -> None:
         campaign = _load_fixture()
@@ -1647,6 +1672,139 @@ class TestF2POracleOffline(unittest.TestCase):
             v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "r2g"), repo_root=REPO_ROOT)
         self.assertEqual(v["exit_code"], 0, msg=json.dumps(v, indent=2))
         self.assertEqual(v["verdict"], "PASA")
+
+    # --- Enmienda T4 retail (brief:1334-1343): la evidencia ejecutable del congelado. ---
+
+    def test_t4r_f2p05_creature_coverage_gap(self) -> None:
+        # La criatura de P3 se aleja entre censos y falta de P3:pre_reset; sin un único componente
+        # que cubra su disco de incertidumbre, INCONCLUSO `apply1:ani-01:coverage_gap`. Con 7980132:
+        # FALLA `apply1:ani-01:census_missing`.
+        campaign = f2p_mutants.mutate(_load_fixture(), "t4r_p3_creature_coverage_gap")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "t4r_f05"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 2, msg=json.dumps(v, indent=2))
+        c_map = _checks(v)
+        self.assertEqual(c_map["F2P-05"]["status"], "missing", msg=c_map["F2P-05"])
+        self.assertTrue(str(c_map["F2P-05"]["detail"]).endswith("coverage_gap"),
+                        msg=c_map["F2P-05"])
+        self.assertFalse(any(c["status"] == "fail" for c in v["checks"]), msg=v["checks"])
+
+    def test_t4r_f2p08_creature_coverage_gap(self) -> None:
+        # La de P4a:apply2 falta de P4a:post_apply2; su última posición válida es la del testigo.
+        # INCONCLUSO `ani-01:coverage_gap`. Con 7980132: FALLA `ani-01:census_missing`.
+        campaign = f2p_mutants.mutate(_load_fixture(), "t4r_p4a_apply2_coverage_gap")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "t4r_f08"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 2, msg=json.dumps(v, indent=2))
+        c_map = _checks(v)
+        self.assertEqual(c_map["F2P-08"]["status"], "missing", msg=c_map["F2P-08"])
+        self.assertTrue(str(c_map["F2P-08"]["detail"]).endswith("coverage_gap"),
+                        msg=c_map["F2P-08"])
+        self.assertFalse(any(c["status"] == "fail" for c in v["checks"]), msg=v["checks"])
+
+    def test_t4r_f2p09_object_outside_p1_pasa(self) -> None:
+        # Un objeto quieto de la escena 1 fuera de lo que cubrió P1:base y dentro de un disco de
+        # animal en P5 no cuenta como extra: PASA. Con 7980132: FALLA `extras:1:999`.
+        campaign = f2p_mutants.mutate(_load_fixture(), "t4r_p5_object_outside_p1")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "t4r_f09"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 0, msg=json.dumps(v, indent=2))
+        self.assertEqual(v["verdict"], "PASA")
+
+    def test_t4r_f2p05_creature_covered_falla(self) -> None:
+        # Negativa de control: la misma ausencia, pero Δt pequeño y el disco principal cubre el
+        # disco de incertidumbre. FALLA `apply1:ani-01:census_missing` (también con 7980132).
+        campaign = f2p_mutants.mutate(_load_fixture(), "t4r_p3_creature_covered")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "t4r_f05n"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 1, msg=json.dumps(v, indent=2))
+        c_map = _checks(v)
+        self.assertEqual(c_map["F2P-05"]["status"], "fail", msg=c_map["F2P-05"])
+        self.assertIn("census_missing", str(c_map["F2P-05"]["detail"]), msg=c_map["F2P-05"])
+
+    def test_t4r_f2p08_creature_covered_falla(self) -> None:
+        # Negativa de control: la misma ausencia de P4a con Δt pequeño. FALLA `ani-01:census_missing`.
+        campaign = f2p_mutants.mutate(_load_fixture(), "t4r_p4a_apply2_covered")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "t4r_f08n"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 1, msg=json.dumps(v, indent=2))
+        c_map = _checks(v)
+        self.assertEqual(c_map["F2P-08"]["status"], "fail", msg=c_map["F2P-08"])
+        self.assertIn("census_missing", str(c_map["F2P-08"]["detail"]), msg=c_map["F2P-08"])
+
+    def test_t4r_f2p09_object_inside_p1_falla(self) -> None:
+        # Negativa de control: el mismo objeto quieto dentro de la unión de P1:base sí es extra.
+        # FALLA `extras:1:998` (también con 7980132).
+        campaign = f2p_mutants.mutate(_load_fixture(), "t4r_p5_object_inside_p1")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "t4r_f09n"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 1, msg=json.dumps(v, indent=2))
+        c_map = _checks(v)
+        self.assertEqual(c_map["F2P-09"]["status"], "fail", msg=c_map["F2P-09"])
+        self.assertTrue(str(c_map["F2P-09"]["detail"]).startswith("extras:"),
+                        msg=c_map["F2P-09"])
+
+    def test_t4r_reevaluated_identity_accepts_7980132(self) -> None:
+        # La identidad grabada de 7980132 se acepta solo con el sha256 de su manifest en la lista
+        # fijada. El veredicto dice de dónde y con qué commit se re-evaluó.
+        campaign = _t4r_old_identity_campaign()
+        campaign["oracle_check"] = {"ok": True, "commit": "b" * 40, "files": [], "problems": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = _build(campaign, Path(tmp) / "t4r_re")
+            sha = _sha(pdir / "manifest.json")
+            with mock.patch.object(f2p_eval, "REEVALUATED_MANIFEST_SHA256",
+                                   {sha: "synthetic"}, create=True):
+                v = f2p_eval.evaluate(pdir, repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 0, msg=json.dumps(v, indent=2))
+        self.assertEqual(v["verdict"], "PASA")
+        self.assertEqual(v["metrics"]["reevaluated_from"], T4R_OLD_COMMIT, msg=v["metrics"])
+        self.assertEqual(v["metrics"]["reevaluated_with"], "b" * 40, msg=v["metrics"])
+
+    def test_t4r_reevaluated_identity_outside_list_oracle_modified(self) -> None:
+        # Fuera de la lista, la identidad grabada no es la de los ficheros que corren:
+        # INCONCLUSO `oracle_modified`. Es un control: también falla con 7980132.
+        campaign = _t4r_old_identity_campaign()
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = _build(campaign, Path(tmp) / "t4r_out")
+            with mock.patch.object(f2p_eval, "REEVALUATED_MANIFEST_SHA256", {},
+                                   create=True):
+                v = f2p_eval.evaluate(pdir, repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 2, msg=json.dumps(v, indent=2))
+        self.assertIn("oracle_modified", v["reasons"], msg=v["reasons"])
+
+    def test_t4r_reevaluated_identity_byte_changed_oracle_modified(self) -> None:
+        # Un byte cambiado cambia el sha256 del manifest: aunque la identidad sea la de 7980132,
+        # no está en la lista y da `oracle_modified`. Control: también falla con 7980132.
+        campaign = _t4r_old_identity_campaign()
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = _build(campaign, Path(tmp) / "t4r_byte")
+            sha = _sha(pdir / "manifest.json")
+            with (pdir / "manifest.json").open("ab") as fh:
+                fh.write(b" ")
+            with mock.patch.object(f2p_eval, "REEVALUATED_MANIFEST_SHA256",
+                                   {sha: "synthetic"}, create=True):
+                v = f2p_eval.evaluate(pdir, repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 2, msg=json.dumps(v, indent=2))
+        self.assertIn("oracle_modified", v["reasons"], msg=v["reasons"])
+
+    def test_t4r_reevaluated_oracle_check_without_ok_unverified(self) -> None:
+        # Con el sha en la lista pero el `oracle_check` sin `ok: true`, INCONCLUSO
+        # `oracle_unverified`. Con 7980132: `oracle_modified` (no llega al check).
+        campaign = _t4r_old_identity_campaign()
+        campaign["oracle_check"] = {"ok": False, "commit": "b" * 40, "files": [], "problems": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir = _build(campaign, Path(tmp) / "t4r_chk")
+            sha = _sha(pdir / "manifest.json")
+            with mock.patch.object(f2p_eval, "REEVALUATED_MANIFEST_SHA256",
+                                   {sha: "synthetic"}, create=True):
+                v = f2p_eval.evaluate(pdir, repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 2, msg=json.dumps(v, indent=2))
+        self.assertIn("oracle_unverified", v["reasons"], msg=v["reasons"])
+
+    def test_t4r_reevaluated_list_has_exactly_two_entries(self) -> None:
+        # La lista real tiene exactamente las dos evidencias de T4 de la tabla.
+        listed = getattr(f2p_eval, "REEVALUATED_MANIFEST_SHA256", {})
+        self.assertEqual(set(listed), T4R_T4_MANIFEST_SHA256)
 
     def test_tap_req_id_matches_real_proxy_capture(self) -> None:
         # v1.3.14 (§5.4): el tap numera cada peticion con un req_id unico y repite el mismo en su

@@ -67,6 +67,26 @@ Si falta una clave, un valor tiene forma inválida, o `oracle_files`/`oracle_com
 coinciden con lo observado en `backend.jsonl` → INCONCLUSO (`manifest_incomplete`,
 `oracle_modified`, `pbo_mismatch`), nunca PASA.
 
+**Re-evaluación de las dos evidencias de T4 (enmienda retail, brief:1341).** El evaluador acepta la
+identidad grabada de `7980132e7334a98e793bce7ed456811f3ff24852` **solo** cuando el sha256 de los bytes
+de `manifest.json` está en la lista fijada:
+
+| Evidencia | Build | sha256 de `run/manifest.json` |
+|---|---|---|
+| `t4-e7cbf06` | retail | `67fb209c6cd2886ff25e149b93d1becbd645eb606b090f358d6efa2d284de1a7` |
+| `t4-3723120` | diag | `ad50f895c1ab1e8cdd49aa5ee18b9b33792bba75d379de0f1b96dae83493f233` |
+
+Además, `identity.oracle_commit`, `f2p.oracle_commit` y el `commit` del último `oracle.frozen` del
+backend tienen que ser ese mismo commit, y los dos `oracle_files` (manifest y evento) tienen que ser
+`f2p_eval.py = 4d17ff533e458e787e4e157d07947608d66d72131410059bdfcb46b35ea6cac9` y
+`f2p_mutants.py = 71856a640ce80ef49e8640d5a9990ceff8ddc8b9e29311fd3f5bfbd3abf8d26b`. En ese caso el
+`oracle_check.json` del gate solo tiene que dar `ok: true` con un `commit` de 40 hex (el gate corrió
+con el oráculo vigente), y el veredicto lo dice en `metrics`: `reevaluated_from` (el commit de
+`7980132`) y `reevaluated_with` (el commit del `oracle_check`). La evidencia no se reescribe. Cualquier
+otra evidencia con una identidad que no sea la vigente sigue dando `oracle_modified` u
+`oracle_unverified`; si el sha no está en la lista, o la identidad grabada no es exactamente la de
+`7980132`, no hay re-evaluación.
+
 ## 2. `samples/bridge.jsonl` (sonda)
 
 Eventos del `QABridge` de F0.3 tal cual (`qa/bridge_qa.py:475-489`, `qa/f03_common.py:504-549`):
@@ -207,6 +227,20 @@ los dos lados; los casa por la vida del servidor (`_server_lives`, `_job_life_pr
   comprobación la usa y todo lo demás pasa, el veredicto global no es PASA: INCONCLUSO con
   `server_life_unbound` en `reasons`. Un `restart` de más tras el último trabajo de P5 deja una vida
   sin identidad; no puede quedar en PASA.
+- **Ausencia de una criatura de una generación (enmienda T4 retail, brief:1339):** en F2P-05 y F2P-08
+  se juzga con la regla de cobertura de §5 (criaturas) y §6.1 :537-548, también en `second_reset_diff`
+  y en la generación de `P4a:apply1`. La última posición válida es la de la medición válida más
+  reciente del mismo epoch que el censo juzgado en la que aparece, anterior a él (un censo por su
+  unión, con el `snap_tick_ms` del componente que trae la fila, o el testigo de la generación con su
+  `tick_ms`); nunca la del documento. El tipo sale de la fila del documento y de `ai_agent_b` en esa
+  medición. FALLA `census_missing` solo si un único componente cubre el disco de radio
+  `V_MAX · Δt + 2 m`; sin cobertura, o con epochs distintos, INCONCLUSO `coverage_gap`; sin última
+  posición, INCONCLUSO `no_position`; con el tipo contradictorio, INCONCLUSO `kind_mismatch`. Un
+  FALLA independiente de la comprobación sigue decidiendo.
+- **Extras de F2P-09 fuera de P1 (enmienda T4 retail, brief:1340, Q-02 :937):** una raíz con
+  `ai_agent_b = 0` cuya posición queda fuera de la unión de los discos de `P1:base` no cuenta como
+  extra; dentro de esa unión, como antes. Es la regla simétrica de la ausencia de un objeto (§5) y la
+  limitación Q-02. Los extras de criatura no cambian.
 - `metrics.server_lives` resume cada vida (`desde_t_ms`, `hasta_t_ms`, `casa`, `motivo`, `producto`
   y `sonda`); es diagnóstico y no decide nada, salvo el caso L1 anterior.
 - Los estímulos crudos (`per_spawn_raw`, `per_cleanup_qa`) no son trabajos: se validan como antes.
@@ -546,6 +580,11 @@ propia línea confirmatoria.
   (`center_x_m`,`center_z_m`,`radius_m`) más los discos extra por entidad seguida. Una entidad seguida
   que falta de todos los discos y podía haber salido de lo cubierto (criatura, o a menos de 15 m del
   borde) → INCONCLUSO (`coverage_gap`), nunca «borrada».
+- **Ausencia de criatura en F2P-05/F2P-08 (enmienda T4 retail, brief:1339):** se aplica la misma
+  regla de un único componente de §5, con la última posición válida de una medición anterior del mismo
+  epoch (censo por su unión o testigo). Sin cobertura → `coverage_gap`; sin posición → `no_position`;
+  tipo contradictorio → `kind_mismatch`; solo un único componente que cubre el disco
+  `V_MAX · Δt + 2 m` deja el FALLA `census_missing`.
 - **Última posición conocida (R-09).** Para F2P-07, la última posición de una entidad de una
   generación de F2 es la de la **última medición válida anterior al reinicio** que la contenga, no la
   de nacimiento. Una entidad de una clase de la escena 1 que reaparezca a menos de 2 m de esa posición

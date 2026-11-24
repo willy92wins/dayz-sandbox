@@ -11255,6 +11255,189 @@ R2_NEGATIVES: dict[str, dict[str, Any]] = {
 }
 
 
+# ---------------------------------------------------------------------------------------------------
+# Enmienda T4 retail (brief:1334-1343): ausencia de criatura en F2P-05/F2P-08 con la regla de
+# cobertura, y extras de F2P-09 fuera de lo que cubrió P1. Casos escritos desde cero con la geometría
+# y los tiempos de la fixture; los nombres empiezan por `t4r_`.
+# ---------------------------------------------------------------------------------------------------
+
+def _t4r_remove_creature_from_census(c: dict[str, Any], tag: str, net: str) -> None:
+    _remove_row(c, tag, lambda r: str(r.get("net_id")) == net)
+
+
+def _t4r_set_snap(c: dict[str, Any], tag: str, value: float) -> None:
+    _edit_start_num(c, tag, "snap_tick_ms", float(value))
+
+
+def _t4r_p5_row(c: dict[str, Any]) -> dict[str, Any]:
+    rows = _r2_rows(c, "P5:post_apply")
+    assert rows, "sin filas de P5:post_apply"
+    return copy.deepcopy(rows[0])
+
+
+def _t4r_extra_row(c: dict[str, Any], net: str, x: float, z: float) -> dict[str, Any]:
+    row = _t4r_p5_row(c)
+    row.update({
+        "net_id": net, "class_name": "Barrel_Red", "parent_net_id": "",
+        "pos_x_m": float(x), "pos_y_m": 300.0, "pos_z_m": float(z),
+        "yaw_deg": 0.0, "ai_agent_b": 0.0, "alive_b": 1.0, "surface_y_m": 300.0,
+    })
+    return row
+
+
+def _t4r_clone_p5_animal_disk(c: dict[str, Any], row: dict[str, Any]) -> None:
+    """Añade `P5:post_apply:disk:ani-01` clonando un disco de un censo de una página y cambiando
+    centro, radio, sello, instancia/epoch y filas. El disco queda dentro de la ventana de P5 y es
+    fresco frente al terminal del apply nuevo."""
+    src_tag = "P4a:post_reset:disk:ani-01"
+    new_tag = "P5:post_apply:disk:ani-01"
+    start, _pages = _job_events(c, src_tag)
+    assert start is not None, "sin el disco de origen"
+    u0 = _unpack(start["result"]["read"])
+    assert u0 is not None, "disco de origen sin lectura"
+    src_jid = str(u0[0].get("job") or "")
+    assert src_jid, "disco de origen sin job"
+    bridge = c["samples"]["bridge.jsonl"]
+    src_ops: set[str] = set()
+    for ev in bridge:
+        oid = str(ev.get("op_id") or "")
+        au = _unpack(ev["args"]) if isinstance(ev.get("args"), dict) else None
+        rr = ev.get("result", {}).get("read") if isinstance(ev.get("result"), dict) else None
+        ru = _unpack(rr) if isinstance(rr, dict) else None
+        if oid == src_jid or (au and str(au[0].get("job") or "") == src_jid) or \
+                (ru and str(ru[0].get("job") or "") == src_jid):
+            src_ops.add(oid)
+    assert src_ops, "sin ops del disco de origen"
+    mx = max(int(x.split("-", 1)[1]) for x in
+             (str(ev.get("op_id") or "") for ev in bridge)
+             if x.startswith("op-") and x.split("-", 1)[1].isdigit())
+    mapping = {oid: f"op-{mx + i + 1}" for i, oid in enumerate(sorted(src_ops))}
+    op_verbs = {str(ev.get("op_id") or ""): str(ev.get("verb") or "")
+                for ev in bridge if ev.get("ev") == "enq"}
+    new_jid = mapping[src_jid]
+    inst = "e3" * 16
+    snap = 71400.0
+    frame = 86.0
+    center = (6090.0, 7710.0)
+    cloned: list[dict[str, Any]] = []
+    for ev in bridge:
+        oid = str(ev.get("op_id") or "")
+        if oid not in src_ops:
+            continue
+        ev2 = copy.deepcopy(ev)
+        ev2["op_id"] = mapping[oid]
+        verb = op_verbs.get(oid, "")
+        base = 765600.0 if verb == "per_census_start" else \
+            (765622.0 if verb == "job_read" else 765700.0)
+        if ev2.get("ev") == "enq":
+            ev2["t_ms"] = base
+        elif ev2.get("ev") == "deliver":
+            ev2["t_ms"] = base + 5.0
+        elif ev2.get("ev") == "result":
+            ev2["t_ms"] = base + 20.0
+        if "inst" in ev2:
+            ev2["inst"] = inst
+        if isinstance(ev2.get("args"), dict):
+            u = _unpack(ev2["args"])
+            if u:
+                s, n, rows = u
+                if "job" in s:
+                    s["job"] = new_jid
+                if "area_tag" in s:
+                    s["area_tag"] = new_tag
+                ev2["args"] = _repack(s, n, ev2["args"].get("ncol", []),
+                                      ev2["args"].get("scol", []), rows,
+                                      ev2["args"].get("has"))
+        if isinstance(ev2.get("result"), dict):
+            ev2["result"]["op_id"] = mapping[oid]
+        if isinstance(ev2.get("result"), dict) and isinstance(ev2["result"].get("read"), dict):
+            read = ev2["result"]["read"]
+            u = _unpack(read)
+            if u:
+                s, n, rows = u
+                if "job" in s:
+                    s["job"] = new_jid
+                if "area_tag" in s:
+                    s["area_tag"] = new_tag
+                if "server_epoch" in s:
+                    s["server_epoch"] = inst
+                if verb == "per_census_start":
+                    n["snap_tick_ms"] = snap
+                    n["snap_frame"] = frame
+                    n["rows_captured_n"] = 1.0
+                    n["center_x_m"] = center[0]
+                    n["center_z_m"] = center[1]
+                    n["radius_m"] = 120.0
+                elif verb == "job_read":
+                    n["page_n"] = 0.0
+                    n["pages_n"] = 1.0
+                    n["rows_total_n"] = 1.0
+                    n["snap_tick_ms"] = snap
+                    n["snap_frame"] = frame
+                    n["center_x_m"] = center[0]
+                    n["center_z_m"] = center[1]
+                    n["radius_m"] = 120.0
+                    n["window_ms"] = 0.0
+                    rows = [copy.deepcopy(row)]
+                ev2["result"]["read"] = _repack(s, n, read["ncol"], read["scol"],
+                                                rows, read.get("has"))
+        cloned.append(ev2)
+    bridge.extend(cloned)
+
+
+def _t4r_p3_creature_coverage_gap(c: dict[str, Any]) -> None:
+    """F2P-05: `ani-01` (Animal_CervusElaphus, net 1:231) se aleja entre censos y falta de
+    `P3:pre_reset`; su última posición válida es la del testigo `P3:apply1` (Δt grande frente al
+    radio). INCONCLUSO `apply1:ani-01:coverage_gap`."""
+    _t4r_remove_creature_from_census(c, "P3:pre_reset", "1:231")
+
+
+def _t4r_p3_creature_covered(c: dict[str, Any]) -> None:
+    """F2P-05, negativa: la misma ausencia, pero el disco principal cubre el disco de incertidumbre
+    porque Δt es pequeño. FALLA `apply1:ani-01:census_missing`."""
+    _t4r_remove_creature_from_census(c, "P3:pre_reset", "1:231")
+    _t4r_set_snap(c, "P3:pre_reset", 371599.0)
+
+
+def _t4r_p4a_apply2_coverage_gap(c: dict[str, Any]) -> None:
+    """F2P-08: `ani-01` (net 1:464) falta de `P4a:post_apply2`; su última posición válida es la del
+    testigo `P4a:apply2` (Δt grande frente al radio). INCONCLUSO `ani-01:coverage_gap`."""
+    _t4r_remove_creature_from_census(c, "P4a:post_apply2", "1:464")
+
+
+def _t4r_p4a_apply2_covered(c: dict[str, Any]) -> None:
+    """F2P-08, negativa: la misma ausencia, con Δt pequeño y el disco principal cubriéndola.
+    FALLA `ani-01:census_missing`."""
+    _t4r_remove_creature_from_census(c, "P4a:post_apply2", "1:464")
+    _t4r_set_snap(c, "P4a:post_apply2", 568599.0)
+
+
+def _t4r_p5_object_outside_p1(c: dict[str, Any]) -> None:
+    """F2P-09: un `Barrel_Red` quieto fuera de la unión de `P1:base` y dentro de un disco de animal
+    en P5. No cuenta como extra: PASA."""
+    row = _t4r_extra_row(c, "1:999", 6010.0, 7750.0)
+    _t4r_clone_p5_animal_disk(c, row)
+
+
+def _t4r_p5_object_inside_p1(c: dict[str, Any]) -> None:
+    """F2P-09, negativa: el mismo objeto quieto dentro de la unión de `P1:base` sí es un extra.
+    FALLA `extras:1:998`."""
+    _add_row(c, "P5:post_apply", _t4r_extra_row(c, "1:998", 6150.0, 7650.0))
+
+
+T4R_POSITIVES: dict[str, dict[str, Any]] = {
+    "t4r_p3_creature_coverage_gap": {"apply": _t4r_p3_creature_coverage_gap},
+    "t4r_p4a_apply2_coverage_gap": {"apply": _t4r_p4a_apply2_coverage_gap},
+    "t4r_p5_object_outside_p1": {"apply": _t4r_p5_object_outside_p1},
+}
+
+T4R_NEGATIVES: dict[str, dict[str, Any]] = {
+    "t4r_p3_creature_covered": {"apply": _t4r_p3_creature_covered, "expected_exit_code": 1},
+    "t4r_p4a_apply2_covered": {"apply": _t4r_p4a_apply2_covered, "expected_exit_code": 1},
+    "t4r_p5_object_inside_p1": {"apply": _t4r_p5_object_inside_p1, "expected_exit_code": 1},
+}
+
+
 MUTANTS: dict[str, dict[str, Any]] = {
     "creation_suppressed": {"apply": _m_creation_suppressed, "expected_exit_code": 1,
                             "must_fail_checks": ["F2P-01"],
@@ -11410,7 +11593,8 @@ def mutate(campaign: dict[str, Any], name: str) -> dict[str, Any]:
             SOL_POSITIVES_R14.get(name) or SOL_MUTANTS_R15.get(name) or
             SOL_NEGATIVES_R15.get(name) or SOL_POSITIVES_R15.get(name) or
             ID_POSITIVES.get(name) or ID_NEGATIVES.get(name) or
-            R2_POSITIVES.get(name) or R2_NEGATIVES.get(name))
+            R2_POSITIVES.get(name) or R2_NEGATIVES.get(name) or
+            T4R_POSITIVES.get(name) or T4R_NEGATIVES.get(name))
     if spec is None:
         raise KeyError(name)
     spec["apply"](c)
