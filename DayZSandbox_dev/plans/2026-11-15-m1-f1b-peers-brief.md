@@ -72,7 +72,7 @@ Lo que no trace a esto no entra.
 - Ninguna clave en logs, salidas ni errores.
 - UTF-8 sin BOM con LF. El worktree se crea con `git -c core.autocrlf=false`, o la copia de trabajo sale en CRLF.
 - Vanilla montado en `P:\scripts`. Las líneas de motor de este brief están leídas ahí el 2026-11-15.
-- Linter: `C:\Users\guill\DayZ-Modding-Knowledge-Pack\tools\dayz-script-validator\scripts\script_validator.py` (en adelante, `VAL`).
+- Linter: `%USERPROFILE%\DayZ-Modding-Knowledge-Pack\tools\dayz-script-validator\scripts\script_validator.py` (en adelante, `VAL`).
 - AddonBuilder: `C:\Program Files (x86)\Steam\steamapps\common\DayZ Tools\Bin\AddonBuilder\AddonBuilder.exe`.
 - **No se lanza DayZ en esta parte.**
 

@@ -5,7 +5,7 @@
 **Por qué ahora.** F0.3-0 pasó su gate en partida en diag y en retail (`origin/main` `4f18c62`): `WIRE_CAP = 3500` está validado (G10 cumplido). La sesión principal ordenó arrancar las partidas el 2026-11-15. El PR de F1b-peers no se mergea hasta que G1-G9 pasen, porque toca el PBO.
 
 **Qué se reutiliza.** El mapa del arnés de F0.3-0 está en las notas compartidas (`2026-11-15-f1b-peers-mapa-partida-f030.md`). De ahí salen:
-- el lanzamiento por WMI y el cierre por WM_CLOSE de los PID propios (`C:\tmp\dsbx-f030-work\partida\run_f030_partida.ps1`, `C:\Users\guill\MCPTest_autotest\harness\probe-lib.ps1`);
+- el lanzamiento por WMI y el cierre por WM_CLOSE de los PID propios (`C:\tmp\dsbx-f030-work\partida\run_f030_partida.ps1`, `%USERPROFILE%\MCPTest_autotest\harness\probe-lib.ps1`);
 - el lease de GPU, con `comprobar --min-vram-libre 4000` y después `adquirir` y `soltar`;
 - `gate_core` (PASA, FALLA o INCONCLUSO) y la forma de la evidencia;
 - el p95 de `s_puente_eval`;
