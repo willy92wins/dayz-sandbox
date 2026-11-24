@@ -177,7 +177,7 @@ Log C:\tmp\dsbx-f1bpeers-work\partida\profiles_diag\server\script_2026-11-15_16-
 16:43:26.508 SCRIPT       : [DSBX] clock tick_ms=703401
 16:43:26.852 SCRIPT       : [DSBX] effect step=retirar session=900f45ba3d3a92e8 op=op-2 tick_ms=703746
 16:43:26.854 SCRIPT       : [DSBX] effect step=anotar session=900f45ba3d3a92e8 op=op-2 tick_ms=703747
-16:43:29.026  SCRIPT       : [Logout]: New player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= with logout time 15
+16:43:29.026  SCRIPT       : [Logout]: New player uid-redactado-1 with logout time 15
 16:43:31.508 SCRIPT       : [DSBX] clock tick_ms=708401
 16:43:34.261  SCRIPT       : [DSBX] shutdown role=server created_n=2 inflight_p=0 inflight_r=0
 16:43:34.268  SCRIPT       : ~DayZGame()

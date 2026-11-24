@@ -626,10 +626,10 @@ Log C:\tmp\dsbx-f1bpeers-work\partida\profiles_diag\server\script_2026-11-15_16-
 16:25:36.453 SCRIPT       : [DSBX] clock tick_ms=919074
 16:25:37.279 SCRIPT       : [DSBX] effect step=retirar session=6eecfbf5c4ce9e97 op=op-104 tick_ms=919900
 16:25:37.279 SCRIPT       : [DSBX] effect step=anotar session=6eecfbf5c4ce9e97 op=op-104 tick_ms=919901
-16:25:39.501  SCRIPT       : [Logout]: New player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= with instant logout
+16:25:39.501  SCRIPT       : [Logout]: New player uid-redactado-1 with instant logout
 16:25:39.502  SCRIPT       : 11-15 16:25:39 | Server | Debug | Connect | n/a | n/a | InvokeOnDisconnect:CustomMission<0x00000295680E3F90>
 16:25:39.503  SCRIPT       : 11-15 16:25:39 | Server | Debug | Connect | n/a | n/a | Player disconnected:SurvivorBase<0x00000295C8772020> SurvivorF_Keiko:20799
-16:25:39.503  SCRIPT       : [Logout]: Player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= finished
+16:25:39.503  SCRIPT       : [Logout]: Player uid-redactado-1 finished
 16:25:41.452 SCRIPT       : [DSBX] clock tick_ms=924074
 16:25:43.728  SCRIPT       : [DSBX] shutdown role=server created_n=25 inflight_p=1 inflight_r=0
 16:25:43.742  SCRIPT       : ~DayZGame()

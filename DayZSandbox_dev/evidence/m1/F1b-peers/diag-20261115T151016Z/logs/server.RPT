@@ -5806,8 +5806,8 @@ Version 1.30.164289.70
 16:11:37.41  El jugador DSBXQA se está conectando.
 16:11:37.42  [StateMachine]: Player DSBXQA (dpnid 17934610 uid ) Entering WaitPlayerAssignedLoginState
 16:11:37.169 [StateMachine]: Player DSBXQA (dpnid 17934610 uid ) Entering PlayerAssignedLoginState
-16:11:37.170 [StateMachine]: Player DSBXQA (dpnid 17934610 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBGetLoginTimeLoginState
-16:11:37.171 [StateMachine]: Player DSBXQA (dpnid 17934610 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBWaitLoginTimeLoginState
+16:11:37.170 [StateMachine]: Player DSBXQA (dpnid 17934610 uid uid-redactado-1) Entering DBGetLoginTimeLoginState
+16:11:37.171 [StateMachine]: Player DSBXQA (dpnid 17934610 uid uid-redactado-1) Entering DBWaitLoginTimeLoginState
 16:11:39.663 SCRIPT       : [DSBX] clock tick_ms=82284
 16:11:42.112 [IdleMode] Leaving OUT
 16:11:42.796 PerfWarning: Way too much components (517) in dz\structures\specific\hotel\hotel.p3d:geometryFire
@@ -5816,8 +5816,8 @@ Version 1.30.164289.70
 16:11:47.972 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_02_moss.p3d)
 16:11:47.972 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_03_moss.p3d)
 16:11:49.662 SCRIPT       : [DSBX] clock tick_ms=92284
-16:11:52.172 [StateMachine]: Player DSBXQA (dpnid 17934610 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBGetCharacterLoginState
-16:11:52.173 [StateMachine]: Player DSBXQA (dpnid 17934610 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering CreateNetObjectsLoginState
+16:11:52.172 [StateMachine]: Player DSBXQA (dpnid 17934610 uid uid-redactado-1) Entering DBGetCharacterLoginState
+16:11:52.173 [StateMachine]: Player DSBXQA (dpnid 17934610 uid uid-redactado-1) Entering CreateNetObjectsLoginState
 16:11:52.173 [CE][PlayerSpawnPoints][GRP_DBG] :: Selected: Nizhnee | idx: 6 (ut: 94797 | lt: 120000 | ctr: 2)
 16:11:52.173 [CE][PlayerSpawnPoints][GRP_DBG] :: Current: Nizhnee | idx: 6 (ct: 94797 | ut: 94797 | lt: 120000 | ctr: 2)
 16:11:52.173 [CE][PlayerSpawnPoints][GRP_DBG] :: Current: Nizhnee index: 6 (lt: 120000 | ctr: 2)
@@ -5827,10 +5827,10 @@ Version 1.30.164289.70
 16:11:52.173  NETWORK      : server: Player dpid=17934610 added at playerIndex=1
 16:11:52.178  NETWORK      : server: sending World state to remote player... id=17934610
 16:11:52.179  NETWORK      : Server: SetClientState dpid=17934610 id=0 name=DSBXQA MISSION RECEIVED -> GAME LOADED
-16:11:52.179 [StateMachine]: Player DSBXQA (dpnid 17934610 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering PreloadCamLoginState
+16:11:52.179 [StateMachine]: Player DSBXQA (dpnid 17934610 uid uid-redactado-1) Entering PreloadCamLoginState
 16:11:52.179 NETWORK      : Network simulation
 16:11:52.179  NETWORK      : Login: Player DSBXQA (17934610) preloading at: 13032.474609 0.000000 8160.517578, yaw: 0.000000, new: 1
-16:11:52.179 [StateMachine]: Player DSBXQA (dpnid 17934610 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering WaitPreloadCamLoginState
+16:11:52.179 [StateMachine]: Player DSBXQA (dpnid 17934610 uid uid-redactado-1) Entering WaitPreloadCamLoginState
 16:11:54.662 SCRIPT       : [DSBX] clock tick_ms=97284
 16:11:54.712 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_03_moss.p3d)
 16:11:55.72  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_03_moss.p3d)
@@ -5852,7 +5852,7 @@ Version 1.30.164289.70
 16:11:58.850 SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-4 tick_ms=101472
 16:11:59.49  SCRIPT       : [DSBX] effect step=retirar session=2f08a499d52ad35c op=op-5 tick_ms=101671
 16:11:59.51  SCRIPT       : [DSBX] effect step=anotar session=2f08a499d52ad35c op=op-5 tick_ms=101672
-16:11:59.201 [StateMachine]: Player DSBXQA (dpnid 17934610 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering GetNewCharLoginState
+16:11:59.201 [StateMachine]: Player DSBXQA (dpnid 17934610 uid uid-redactado-1) Entering GetNewCharLoginState
 16:12:01.258 NETWORK      : Network simulation
 16:12:01.258  WORLD        : Create entity type 'SurvivorF_Keiko'
 16:12:01.258   AUDIO        : Loading SoundSet 'Gag_Drowning_SoundVoice_Char_SoundSet'
@@ -5875,7 +5875,7 @@ Version 1.30.164289.70
 16:12:01.280 Warning: No components in dz\characters\shoes\feet3_f.p3d:geometry
 16:12:01.281 Warning: No components in dz\characters\heads\f_keiko.p3d:geometry
 16:12:01.282 Warning: No components in dz\characters\pants\legs3_f.p3d:geometry
-16:12:01.285 El jugador DSBXQA (id=HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= pos=<13032.5, 8160.5, 5.7>) se ha conectado.
+16:12:01.285 El jugador DSBXQA (id=uid-redactado-1 pos=<13032.5, 8160.5, 5.7>) se ha conectado.
 16:12:01.285 Player "DSBXQA" (steamID=<redacted> pos=<13032.5, 8160.5, 5.7>) is connected
 16:12:01.287 Warning: No components in dz\gear\food\plum.p3d:geometry
 16:12:01.290  SCRIPT       : 11-15 16:12:01 | Server | Debug | Connect | n/a | n/a | InvokeOnConnect:CustomMission<0x00000295680E3F90>
@@ -5884,7 +5884,7 @@ Version 1.30.164289.70
     charID 1
     playerID 1
     dpnid 17934610
-    uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=
+    uid uid-redactado-1
 16:12:01.295 SCRIPT       : [DSBX] clock tick_ms=103917
 16:12:01.304 Warning Message: No entry 'config.bin/CfgAIBehaviours/InfectedMale/BehaviourHLZombie/SlotCalm/BehaviourZombieCalm/SoundsDuring/Sound1.sounds'.
 16:12:01.304 Warning Message: No entry 'config.bin/CfgAIBehaviours/InfectedMale/BehaviourHLZombie/SlotAlerted/BehaviourZombieAlerted/SoundsEntering/Sound1.sounds'.
@@ -7249,14 +7249,14 @@ Version 1.30.164289.70
 16:25:39.501 [Disconnect]: Client 17934610 early disconnect
 16:25:39.501 [Disconnect]: Start script disconnect 17934610 (dbCharacterId 1 dbPlayerId 1) logoutTime 15
 16:25:39.501 NETWORK      : Network simulation
-16:25:39.501  SCRIPT       : [Logout]: New player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= with instant logout
+16:25:39.501  SCRIPT       : [Logout]: New player uid-redactado-1 with instant logout
 16:25:39.502  SCRIPT       : 11-15 16:25:39 | Server | Debug | Connect | n/a | n/a | InvokeOnDisconnect:CustomMission<0x00000295680E3F90>
 16:25:39.503  SCRIPT       : 11-15 16:25:39 | Server | Debug | Connect | n/a | n/a | Player disconnected:SurvivorBase<0x00000295C8772020> SurvivorF_Keiko:20799
-16:25:39.503  SCRIPT       : [Logout]: Player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= finished
+16:25:39.503  SCRIPT       : [Logout]: Player uid-redactado-1 finished
 16:25:39.503 CHAR_DEBUG - EXIT
-16:25:39.503     player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= (dpnid = 17934610)
+16:25:39.503     player uid-redactado-1 (dpnid = 17934610)
 16:25:39.503     Person  : playerID = 1 , charID = 1
-16:25:39.503 [Disconnect]: Finish script disconnect 17934610 (HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=)
+16:25:39.503 [Disconnect]: Finish script disconnect 17934610 (uid-redactado-1)
 16:25:39.503 [Disconnect]: DisconnectPlayerFinish 17934610
 16:25:39.503 [Disconnect]: Remove player info 17934610
 16:25:39.504 [Disconnect]: Player destroy 17934610 
