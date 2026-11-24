@@ -9,7 +9,7 @@ Tres capas:
   * estaticas sobre los .c, como qa/tests/test_probe_static.py.
 """
 
-import argparse
+import argparse, os
 import hashlib
 import json
 import re
@@ -35,7 +35,7 @@ PERSIST_C = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "5_Mission" / "DSB
 WITNESS_C = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts" / "4_World" / "DSBX_QA_W_Witness.c"  # bufer y ganchos
 WITNESS_W_C = WITNESS_C
 PROBE_SCRIPTS = QA_DIR / "probe" / "DayZSandbox_QA" / "scripts"
-VANILLA_ROOTS = (Path("P:/scripts"), Path("C:/Users/guill/OneDrive/Documentos/DayZ Projects/scripts"))
+VANILLA_ROOTS = (Path("P:/scripts"), Path(os.environ.get("DSBX_VANILLA_SCRIPTS", "P:/scripts")))
 # Implementacion de S-persist (rama claude/s-persist-impl-e9, PR #21) sobre la que va este PR: la cabeza que se fusiono
 # en el (antes, 6a7bd7a).
 BASELINE_COMMIT = "89c431e"
@@ -1225,7 +1225,7 @@ class StaticModdedClassModuleTests(unittest.TestCase):
     def setUpClass(cls):
         roots = [r for r in VANILLA_ROOTS if (r / "3_game").is_dir() and (r / "4_world").is_dir()]
         if not roots:
-            raise unittest.SkipTest("no hay scripts vanilla (P:\\scripts ni la copia de OneDrive)")
+            raise unittest.SkipTest("no hay scripts vanilla (P:\\scripts ni DSBX_VANILLA_SCRIPTS)")
         cls.index = _vanilla_class_index(roots[0])
 
     def test_probe_modded_classes_live_in_their_vanilla_module(self):
@@ -1307,7 +1307,7 @@ class StaticHookRootsTests(unittest.TestCase):
     def setUpClass(cls):
         roots = [r for r in VANILLA_ROOTS if (r / "3_game").is_dir() and (r / "4_world").is_dir()]
         if not roots:
-            raise unittest.SkipTest("no hay scripts vanilla (P:\\scripts ni la copia de OneDrive)")
+            raise unittest.SkipTest("no hay scripts vanilla (P:\\scripts ni DSBX_VANILLA_SCRIPTS)")
         cls.root = roots[0]
         cls.parents, cls.modules = _script_parents(cls.root)
 
@@ -1351,7 +1351,7 @@ class StaticHookRootsTests(unittest.TestCase):
 
 
 class StaticEEInitCoverageTests(unittest.TestCase):
-    VANILLA_ROOTS = (Path("P:/scripts"), Path("C:/Users/guill/OneDrive/Documentos/DayZ Projects/scripts"))
+    VANILLA_ROOTS = (Path("P:/scripts"), Path(os.environ.get("DSBX_VANILLA_SCRIPTS", "P:/scripts")))
 
     def test_scanner_detects_a_class_that_cuts_the_chain(self):
         tmp = Path(tempfile.mkdtemp(prefix="dsbx-eeinit-"))
