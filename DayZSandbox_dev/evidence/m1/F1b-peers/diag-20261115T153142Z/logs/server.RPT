@@ -5960,7 +5960,7 @@ Version 1.30.164289.70
 16:33:26.488 Warning: No components in dz\characters\heads\m_denis_2.p3d:geometry
 16:33:26.490 Warning: No components in dz\characters\pants\legs3_m.p3d:geometry
 16:33:26.493 El jugador DSBXQA (id=HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= pos=<9538.9, 1998.9, 5.6>) se ha conectado.
-16:33:26.493 Player "DSBXQA" (steamID=76561198141021937 pos=<9538.9, 1998.9, 5.6>) is connected
+16:33:26.493 Player "DSBXQA" (steamID=<redacted> pos=<9538.9, 1998.9, 5.6>) is connected
 16:33:26.494 Warning: No components in dz\gear\food\plum.p3d:geometry
 16:33:26.495  SCRIPT       : 11-15 16:33:26 | Server | Debug | Connect | n/a | n/a | InvokeOnConnect:CustomMission<0x000001CEE56F0040>
 16:33:26.496  SCRIPT       : 11-15 16:33:26 | Server | Debug | Connect | n/a | n/a | Player connected:SurvivorBase<0x000001D1E890EFF0> SurvivorM_Denis:20673

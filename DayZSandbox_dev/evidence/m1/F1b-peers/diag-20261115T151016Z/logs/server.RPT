@@ -5876,7 +5876,7 @@ Version 1.30.164289.70
 16:12:01.281 Warning: No components in dz\characters\heads\f_keiko.p3d:geometry
 16:12:01.282 Warning: No components in dz\characters\pants\legs3_f.p3d:geometry
 16:12:01.285 El jugador DSBXQA (id=HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= pos=<13032.5, 8160.5, 5.7>) se ha conectado.
-16:12:01.285 Player "DSBXQA" (steamID=76561198141021937 pos=<13032.5, 8160.5, 5.7>) is connected
+16:12:01.285 Player "DSBXQA" (steamID=<redacted> pos=<13032.5, 8160.5, 5.7>) is connected
 16:12:01.287 Warning: No components in dz\gear\food\plum.p3d:geometry
 16:12:01.290  SCRIPT       : 11-15 16:12:01 | Server | Debug | Connect | n/a | n/a | InvokeOnConnect:CustomMission<0x00000295680E3F90>
 16:12:01.290  SCRIPT       : 11-15 16:12:01 | Server | Debug | Connect | n/a | n/a | Player connected:SurvivorBase<0x00000295C8772020> SurvivorF_Keiko:20799
