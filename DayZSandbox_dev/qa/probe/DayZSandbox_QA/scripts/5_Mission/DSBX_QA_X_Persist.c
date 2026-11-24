@@ -1399,7 +1399,11 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 		// MENOR 13: owner_uid medido por la raiz del arbol, no una constante de la orden.
 		string rowOwnerUid = "";
 		if (director && ent.GetHierarchyRootPlayer() == director) rowOwnerUid = directorUid;
-		AppendPurgeRow(phase, FormatPersId(ent), ent.GetType(), ParentPersIdOf(ent), ParentNetIdOf(ent), rowOwnerUid, result, FormatNetId(ent), depthN, emitTick, leaseAge, leaseLimit, maxHp, healthHp, 0.0);
+		string rowPersId = FormatPersId(ent);
+		string rowParentPersId = ParentPersIdOf(ent);
+		string rowParentNetId = ParentNetIdOf(ent);
+		string rowNetId = FormatNetId(ent);
+		AppendPurgeRow(phase, rowPersId, ent.GetType(), rowParentPersId, rowParentNetId, rowOwnerUid, result, rowNetId, depthN, emitTick, leaseAge, leaseLimit, maxHp, healthHp, 0.0);
 	}
 
 	protected void HandlePurgeStart(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
@@ -1622,7 +1626,10 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 				EntityAI first = FindFirstPersIdInTree(treeItems, pid);
 				string firstOwner = "";
 				if (first && director && first.GetHierarchyRootPlayer() == director) firstOwner = m_PurgeDirectorUid;
-				ResolvePurgeResult(a, "ambiguous", pid, cls, ParentPersIdOf(first), ParentNetIdOf(first), FormatNetId(first), firstOwner, 0.0);
+				string firstParentPersId = ParentPersIdOf(first);
+				string firstParentNetId = ParentNetIdOf(first);
+				string firstNetId = FormatNetId(first);
+				ResolvePurgeResult(a, "ambiguous", pid, cls, firstParentPersId, firstParentNetId, firstNetId, firstOwner, 0.0);
 				continue;
 			}
 			EntityAI cand = FindFirstPersIdInTree(treeItems, pid);
@@ -1631,7 +1638,10 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			{
 				string candOwner = "";
 				if (cand && director && cand.GetHierarchyRootPlayer() == director) candOwner = m_PurgeDirectorUid;
-				ResolvePurgeResult(a, "retained_foreign", pid, cls, ParentPersIdOf(cand), ParentNetIdOf(cand), FormatNetId(cand), candOwner, 0.0);
+				string candParentPersId = ParentPersIdOf(cand);
+				string candParentNetId = ParentNetIdOf(cand);
+				string candNetId = FormatNetId(cand);
+				ResolvePurgeResult(a, "retained_foreign", pid, cls, candParentPersId, candParentNetId, candNetId, candOwner, 0.0);
 				continue;
 			}
 			EntityAI leaf = PickPurgeLeaf(cand, director, treeItems);
@@ -1639,7 +1649,10 @@ class DSBX_QA_X_Persist : DSBX_QA_Ext
 			{
 				string candOwner2 = "";
 				if (cand && director && cand.GetHierarchyRootPlayer() == director) candOwner2 = m_PurgeDirectorUid;
-				ResolvePurgeResult(a, "retained_foreign", pid, cls, ParentPersIdOf(cand), ParentNetIdOf(cand), FormatNetId(cand), candOwner2, 0.0);
+				string cand2ParentPersId = ParentPersIdOf(cand);
+				string cand2ParentNetId = ParentNetIdOf(cand);
+				string cand2NetId = FormatNetId(cand);
+				ResolvePurgeResult(a, "retained_foreign", pid, cls, cand2ParentPersId, cand2ParentNetId, cand2NetId, candOwner2, 0.0);
 				continue;
 			}
 			// P2i: preparar las filas emit y los datos de la hoja antes de la

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -4347,5 +4348,137 @@ def _job_rows(job):
         row.update({job["ncol"][j]: n[j] for j in range(nnc)})
         rows.append(row)
     return rows
+
+
+# P2j: una llamada por sentencia en las filas de la purga. Las funciones que
+# devuelven string se cuentan por su canonico: las envolturas que llaman a
+# FormatPersId/FormatNetId cuentan como esas mismas funciones.
+_STRING_CALL_CANON = {
+    "FormatPersId": "FormatPersId",
+    "FormatNetId": "FormatNetId",
+    "ParentPersIdOf": "FormatPersId",
+    "ParentNetIdOf": "FormatNetId",
+}
+_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+
+
+def _strip_comments_and_literals(text):
+    """Quita comentarios y literales de cadena conservando las lineas."""
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            if j == -1:
+                j = n
+            out.append(" " * (j - i))
+            i = j
+        elif c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            if j == -1:
+                j = n - 2
+            seg = text[i:j + 2]
+            out.append("".join(ch if ch == "\n" else " " for ch in seg))
+            i = j + 2
+        elif c == '"':
+            j = i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    break
+                j += 1
+            out.append('""')
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _split_statements(text):
+    """Parte en sentencias por ; { } con profundidad de parentesis 0."""
+    start = 0
+    start_line = 1
+    line = 1
+    depth = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            line += 1
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            if depth > 0:
+                depth -= 1
+        elif depth == 0 and c in ";{}":
+            yield start_line, text[start:i]
+            start = i + 1
+            start_line = line
+        i += 1
+    tail = text[start:]
+    if tail.strip():
+        yield start_line, tail
+
+
+def _duplicate_string_calls(text):
+    """Devuelve [(linea, canonico, veces, sentencia)] con duplicados."""
+    clean = _strip_comments_and_literals(text)
+    out = []
+    for start_line, chunk in _split_statements(clean):
+        counts = {}
+        first_line = {}
+        for m in _CALL_RE.finditer(chunk):
+            canon = _STRING_CALL_CANON.get(m.group(1))
+            if not canon:
+                continue
+            line = start_line + chunk[:m.start()].count("\n")
+            counts[canon] = counts.get(canon, 0) + 1
+            first_line.setdefault(canon, line)
+        for canon, count in counts.items():
+            if count > 1:
+                out.append((first_line[canon], canon, count,
+                            " ".join(chunk.split())))
+    out.sort(key=lambda v: (v[0], v[1]))
+    return out
+
+
+QA_PERSIST_C = (QA_DIR / "probe" / "DayZSandbox_QA" / "scripts"
+                / "5_Mission" / "DSBX_QA_X_Persist.c")
+REF_0D82BC2_C = REPO_ROOT / "_encargo" / "p2j" / "DSBX_QA_X_Persist_0d82bc2.c"
+
+
+class TestP2jOneCallPerPurgeRowStatement(_GuardedTestCase):
+    """P2j: cada sentencia de las filas de la purga llama una sola vez a una
+    funcion que devuelve string, contando las envolturas indirectas."""
+
+    def _read(self, path):
+        return Path(path).read_text(encoding="utf-8-sig")
+
+    def test_live_purge_rows_have_one_call_per_statement(self):
+        target = os.environ.get("DSBX_PERSIST_C")
+        target = Path(target) if target else QA_PERSIST_C
+        violations = _duplicate_string_calls(self._read(target))
+        if violations:
+            detail = "\n".join(
+                f"  :{line} {canon} x{count}: {snippet}"
+                for line, canon, count, snippet in violations
+            )
+            self.fail(
+                f"llamadas duplicadas a funciones string en una sentencia "
+                f"({target}):\n{detail}"
+            )
+
+    def test_reference_0d82bc2_has_the_four_known_sites(self):
+        violations = _duplicate_string_calls(self._read(REF_0D82BC2_C))
+        sites = sorted({line for line, _c, _n, _s in violations})
+        self.assertEqual(sites, [1402, 1625, 1634, 1642])
+
+
 if __name__ == "__main__":
     unittest.main()
