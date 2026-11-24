@@ -379,40 +379,19 @@ def _dist(p, q) -> float:
     return math.sqrt(sum((float(a) - float(b)) ** 2 for a, b in zip(p, q)))
 
 
-def _rot_x(angle: float) -> list:
-    c, s = math.cos(angle), math.sin(angle)
-    return [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]]
+def _dir_from_euler(yaw_deg: float, pitch_deg: float) -> list:
+    """Dirección ``mat[2]`` de ``YawPitchRollMatrix`` con la fórmula medida
+    en la sonda de cliente del 24-nov (enmienda del orquestador, hecho 1):
+    ``(cos p * sin y, sin p, cos p * cos y)``, sin efecto del roll.
 
-
-def _rot_y(angle: float) -> list:
-    c, s = math.cos(angle), math.sin(angle)
-    return [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]]
-
-
-def _rot_z(angle: float) -> list:
-    c, s = math.cos(angle), math.sin(angle)
-    return [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]
-
-
-def _mul3(a: list, b: list) -> list:
-    return [
-        [sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)]
-        for i in range(3)
-    ]
-
-
-def _ypr_matrix(yaw_deg: float, pitch_deg: float, roll_deg: float) -> list:
-    """Matriz 3x3 con la convención verificada de ``YawPitchRollMatrix``.
-
-    El ejemplo del prototipo (``enmath3d.c:127-130``) casa con
-    ``transpose(Rz(pitch) * Ry(yaw) * Rx(roll))``; se usa la misma convención
-    para reconstruir la orientación de las filas que solo publican Euler.
+    Es la única reconstrucción desde Euler que el motor acredita: las
+    filas ``mat[0]`` y ``mat[1]`` siguen sin medir hasta la v5 de la
+    sonda, así que ninguna orientación entera se reconstruye desde Euler.
     """
     yaw = math.radians(float(yaw_deg))
     pitch = math.radians(float(pitch_deg))
-    roll = math.radians(float(roll_deg))
-    m = _mul3(_mul3(_rot_z(pitch), _rot_y(yaw)), _rot_x(roll))
-    return [[m[j][i] for j in range(3)] for i in range(3)]
+    cp = math.cos(pitch)
+    return [cp * math.sin(yaw), math.sin(pitch), cp * math.cos(yaw)]
 
 
 def _matrix_to_quat(m: list) -> list:
@@ -462,19 +441,6 @@ def _theta3d_cells(obs: dict, ref: dict) -> float:
     return _theta3d(_matrix_to_quat(m_obs), _matrix_to_quat(m_ref))
 
 
-def _theta3d_euler(obs: dict, ref: dict) -> float:
-    try:
-        q_obs = _matrix_to_quat(
-            _ypr_matrix(obs["yaw_deg"], obs["pitch_deg"], obs["roll_deg"])
-        )
-        q_ref = _matrix_to_quat(
-            _ypr_matrix(ref["yaw_deg"], ref["pitch_deg"], ref["roll_deg"])
-        )
-    except (KeyError, TypeError, ValueError):
-        return 180.0
-    return _theta3d(q_obs, q_ref)
-
-
 def _find_state(scenario: list, phase: str, *names: str) -> dict | None:
     for name in names:
         row = _state(scenario, phase, name)
@@ -518,15 +484,6 @@ def _row_dir(row: dict, prefix: str = "") -> list[float]:
 
 def _mat_forward(row: dict) -> list[float]:
     return [float(row["m20"]), float(row["m21"]), float(row["m22"])]
-
-
-def _matrix_dict(m: list) -> dict:
-    return {f"m{i}{j}": m[i][j] for i in range(3) for j in range(3)}
-
-
-def _q_from_row(row: dict) -> list:
-    m = [[float(row[f"m{i}{j}"]) for j in range(3)] for i in range(3)]
-    return _matrix_to_quat(m)
 
 
 def _key_table(fixture_path: dict) -> list[dict]:
@@ -583,45 +540,24 @@ def _ref_pos_rel(keys: list[dict], t_s: float, pos_mode: str) -> list[float]:
     return out
 
 
-def _normalize_quat(q: list) -> list:
-    n = math.sqrt(sum(float(v) ** 2 for v in q))
-    if n <= 0.0:
-        return [0.0, 0.0, 0.0, 1.0]
-    return [float(v) / n for v in q]
-
-
-def _key_quat(key: dict) -> list:
-    return _matrix_to_quat(
-        _ypr_matrix(key["yaw_deg"], key["pitch_deg"], key["roll_deg"])
-    )
-
-
-def _slerp(qa: list, qb: list, u: float) -> list:
-    qa = _normalize_quat(qa)
-    qb = _normalize_quat(qb)
-    dot = sum(float(a) * float(b) for a, b in zip(qa, qb))
-    if dot < 0.0:
-        qb = [-v for v in qb]
-        dot = -dot
-    dot = _clip(dot, -1.0, 1.0)
-    if dot > 0.9995:
-        return _normalize_quat([_lerp(qa[i], qb[i], u) for i in range(4)])
-    omega = math.acos(dot)
-    sin_omega = math.sin(omega)
-    w1 = math.sin((1.0 - u) * omega) / sin_omega
-    w2 = math.sin(u * omega) / sin_omega
-    return _normalize_quat([w1 * qa[i] + w2 * qb[i] for i in range(4)])
-
-
-def _ref_quat(keys: list[dict], t_s: float) -> list:
+def _ref_dir(keys: list[dict], t_s: float) -> list:
+    """Dirección de referencia en ``t_s``: los Euler de las claves se
+    interpolan por el camino corto en yaw y se aplica la fórmula medida
+    de ``mat[2]``. El giro completo entre claves (el slerp de la matriz
+    entera) no se reconstruye: ``mat[0]`` y ``mat[1]`` están sin medir
+    hasta la v5, y esa parte queda pendiente (ver CAM-05)."""
     end = keys[-1]["t_s"]
     t = _clip(float(t_s), 0.0, end)
     for i in range(len(keys) - 1):
         t0, t1 = keys[i]["t_s"], keys[i + 1]["t_s"]
         if t0 <= t <= t1:
             u = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
-            return _slerp(_key_quat(keys[i]), _key_quat(keys[i + 1]), u)
-    return _key_quat(keys[-1])
+            yaw = keys[i]["yaw_deg"] + _wrap180(
+                keys[i + 1]["yaw_deg"] - keys[i]["yaw_deg"]
+            ) * u
+            pitch = _lerp(keys[i]["pitch_deg"], keys[i + 1]["pitch_deg"], u)
+            return _dir_from_euler(yaw, pitch)
+    return _dir_from_euler(keys[-1]["yaw_deg"], keys[-1]["pitch_deg"])
 
 
 def _ref_fov(keys: list[dict], t_s: float) -> float:
@@ -678,8 +614,8 @@ def _path_status(
     count = len(rows)
     if count == 0:
         return "missing", "no_rows"
-    if count < 180:
-        return "missing", f"rows={count}"
+    # Cobertura (enmienda del 24-nov, hecho 5): sin mínimo fijo de filas;
+    # la acreditan seq_n/frame contiguos y ningún hueco de dtsum > 100 ms.
     dtsums = []
     for row in rows:
         try:
@@ -689,6 +625,8 @@ def _path_status(
     for i in range(1, count):
         if dtsums[i] - dtsums[i - 1] > 100.0:
             return "missing", f"gap_ms={dtsums[i] - dtsums[i - 1]:.1f}"
+    if dtsums[-1] < t_end * 1000.0 - 100.0:
+        return "missing", f"coverage_end_ms={dtsums[-1]:.1f}"
     for i, row in enumerate(rows):
         try:
             seq = float(row["seq_n"])
@@ -705,16 +643,15 @@ def _path_status(
                 return "fail", "frame_not_contiguous"
         if abs(seq - i) > 1e-6:
             return "fail", "seq_n_not_contiguous"
-    for row in rows:
-        try:
-            if float(row["active_b"]) != 1.0:
-                return "fail", "cam_inactive"
-            if _dist(_row_pos(row, "eng_"), _row_pos(row)) >= 0.01:
-                return "fail", "cam_eng_mismatch"
-        except (KeyError, TypeError, ValueError):
-            return "missing", "bad_columns"
-    for row in rows:
-        t = _row_time(row, t_end)
+    # La vista se ve en el frame siguiente (enmienda, hecho 2): la
+    # ``eng_*`` de la fila i es la pose ordenada en la fila i-1, y la
+    # vista de la fila 0 precede al recorrido, así que no se juzga.
+    # Las filas con dtsum posterior a la duración de las claves ya no
+    # son del recorrido (el trabajo terminó) y tampoco se juzgan.
+    for i, row in enumerate(rows):
+        if not i or dtsums[i] > t_end * 1000.0 + 1e-6:
+            continue
+        t = _row_time(rows[i - 1], t_end)
         if t is None:
             return "missing", "bad_dtsum"
         ref_rel = _ref_pos_rel(keys, t, pos_mode)
@@ -722,6 +659,18 @@ def _path_status(
         err = _dist(_row_pos(row, "eng_"), ref)
         if err >= 0.5:
             return "fail", f"ref_err_m={err:.3f}"
+    for i, row in enumerate(rows):
+        try:
+            if float(row["active_b"]) != 1.0:
+                return "fail", "cam_inactive"
+            if (
+                i
+                and dtsums[i] <= t_end * 1000.0 + 1e-6
+                and _dist(_row_pos(row, "eng_"), _row_pos(rows[i - 1])) >= 0.01
+            ):
+                return "fail", "cam_eng_mismatch"
+        except (KeyError, TypeError, ValueError):
+            return "missing", "bad_columns"
     steps = [
         _dist(_row_pos(rows[i], "eng_"), _row_pos(rows[i - 1], "eng_"))
         for i in range(1, count)
@@ -1256,14 +1205,20 @@ def _check_cam_01(samples: dict) -> dict:
     if fixture is None:
         missing.append("no_fixture_setup")
     else:
+        # El terminal de transporte se clasifica antes de juzgar la
+        # lectura: una orden sin RESULT no aporta lectura ni ancla, así
+        # que nada de lo que depende de ella puede dar FALLA.
+        fixture_terminal = None
         if fixture.get("status") == "lost":
-            missing.append("fixture_lost")
+            fixture_terminal = "lost"
         elif _transport_terminal(fixture) == "timeout":
-            missing.append("fixture_timeout")
+            fixture_terminal = "timeout"
+        if fixture_terminal is not None:
+            missing.append(f"fixture_{fixture_terminal}")
         elif fixture.get("status") != "done":
             fails.append("fixture_not_done")
         fnk = _nk(fixture)
-        if _num(fixture, "active_b") != 1.0:
+        if fixture_terminal is None and _num(fixture, "active_b") != 1.0:
             fails.append("fixture_cam_inactive")
         s0_fovs = [
             _num(r, "fov_rad")
@@ -1275,12 +1230,14 @@ def _check_cam_01(samples: dict) -> dict:
         if s0_fovs:
             if not any(abs(v - 0.70) < 0.001 for v in s0_fovs):
                 fails.append("fixture_fov")
-        elif fixture_fov is not None:
+        elif fixture_terminal is None and fixture_fov is not None:
             if abs(fixture_fov - 0.70) >= 0.001:
                 fails.append("fixture_fov")
-        else:
+        elif fixture_terminal is None:
             missing.append("no_fixture_fov_reading")
-        if _num(fixture, "subj_present_b") != 1.0 or _num(fixture, "bg_present_b") != 1.0:
+        if fixture_terminal is None and (
+            _num(fixture, "subj_present_b") != 1.0 or _num(fixture, "bg_present_b") != 1.0
+        ):
             fails.append("fixture_scene_missing")
         if fnk.get("anchor_y_m") is None:
             missing.append("no_anchor_y")
@@ -1418,6 +1375,10 @@ def _check_cam_01(samples: dict) -> dict:
     start_op = _event(scenario, "op", "SCAM-S2", "path_1_start")
     if busy_attempt is None or busy_pre is None or busy_post is None or start_op is None:
         missing.append("no_busy_probe")
+    elif (start_terminal := _transport_terminal(start_op)) is not None:
+        # Sin RESULT del arranque no hay trabajo que anclar: la prueba
+        # de ocupado entera queda sin acreditar, nunca en FALLA.
+        missing.append(f"path_1_start_{start_terminal}")
     else:
         # El trabajo ocupado se ata al que devolvio la Pasada 1.
         job1_id = _sk(start_op).get("job")
@@ -1457,8 +1418,10 @@ def _check_cam_02(samples: dict) -> dict:
     def _applied(state_names, step, want_name):
         """Reaplicacion (brief:106): vale la lectura de estado enlazada
         o el propio RESULT de ``scam_pose_apply``, consumido por verbo,
-        nombre e ID enlazado. El RESULT trae los 25 campos del verbo; no
-        hace falta una lectura posterior para juzgar la pose aplicada."""
+        nombre e ID enlazado. El RESULT acredita el nodo (``x_m..``,
+        ``m..`` y ``fov_rad``); sus ``eng_*`` son la vista del frame
+        anterior (enmienda, hecho 2) y solo se juzgan en una lectura
+        posterior, nunca en el propio RESULT."""
         row = _find_state(scenario, phase, *state_names)
         if row is not None:
             return row, None
@@ -1562,8 +1525,10 @@ def _check_cam_02(samples: dict) -> dict:
 
         # La referencia es la lectura de scam_pose_save (brief:105: 10
         # campos, sin matriz), no los angulos pedidos ni S_0. Si el read
-        # no trae celdas, la matriz de referencia se reconstruye con los
-        # Euler guardados y se compara con la matriz cruda reaplicada.
+        # trae las celdas, la orientacion se juzga celdas frente a
+        # celdas; si no, se juzga la direccion con la formula medida de
+        # mat[2] desde los Euler guardados, y el giro completo queda
+        # pendiente de la v5 (mat[0]/mat[1] sin medir), nunca en FALLA.
         save_roll = _event(scenario, "op", phase, "save_p_roll")
         save_p0 = _event(scenario, "op", phase, "save_p0")
         if save_roll is None or save_p0 is None:
@@ -1578,41 +1543,54 @@ def _check_cam_02(samples: dict) -> dict:
             if saved_name is not None and saved_name != want_name:
                 return _chk("CAM-02", "fail", "saved_pose_name_mismatch")
 
-        def _saved_ref(save_row):
+        def _saved_cells(save_row):
             nk = _nk(save_row)
             if all(k in nk for k in POSE_CELLS):
                 return {k: float(nk[k]) for k in POSE_CELLS}
-            m = _ypr_matrix(nk["yaw_deg"], nk["pitch_deg"], nk["roll_deg"])
-            return _matrix_dict(m)
+            return None
+
+        def _orientation_err(applied_row, save_row):
+            cells = _saved_cells(save_row)
+            if cells is not None:
+                return _theta3d_cells(_nk(applied_row), cells)
+            nk = _nk(save_row)
+            return _angle_between(
+                _mat_forward(_nk(applied_row)),
+                _dir_from_euler(nk["yaw_deg"], nk["pitch_deg"]),
+            )
 
         roll_saved_pos = _row_pos(_nk(save_roll))
         p0_saved_pos = _row_pos(_nk(save_p0))
+        # Las eng_* solo se juzgan en una lectura de estado posterior;
+        # en el RESULT de scam_pose_apply son del frame anterior.
+        p_roll_is_result = p_roll.get("ev") == "op"
+        p0_is_result = p0.get("ev") == "op"
         if _num(p_roll, "active_b") != 1.0:
             return _chk("CAM-02", "fail", "p_roll_inactive")
-        if _dist(_row_pos(_nk(p_roll), "eng_"), roll_saved_pos) >= 0.05:
+        if not p_roll_is_result and _dist(_row_pos(_nk(p_roll), "eng_"), roll_saved_pos) >= 0.05:
             return _chk("CAM-02", "fail", "p_roll_eng_pos_err")
         if _dist(_row_pos(_nk(p_roll)), roll_saved_pos) >= 0.05:
             return _chk("CAM-02", "fail", "p_roll_cam_pos_err")
-        if _theta3d_cells(_nk(p_roll), _saved_ref(save_roll)) >= 0.5:
+        if _orientation_err(p_roll, save_roll) >= 0.5:
             return _chk("CAM-02", "fail", "p_roll_theta_deg")
         if abs(_num(p_roll, "fov_rad") - _num(save_roll, "fov_rad")) >= 0.00873:
             return _chk("CAM-02", "fail", "p_roll_fov_err")
-        if _angle_between(_row_dir(_nk(p_roll), "eng_"), _mat_forward(_nk(p_roll))) >= 0.05:
+        if not p_roll_is_result and _angle_between(_row_dir(_nk(p_roll), "eng_"), _mat_forward(_nk(p_roll))) >= 0.05:
             return _chk("CAM-02", "fail", "p_roll_direction_err")
-        if _dist(_row_pos(_nk(p_roll), "eng_"), _row_pos(_nk(p_roll))) >= 0.01:
+        if not p_roll_is_result and _dist(_row_pos(_nk(p_roll), "eng_"), _row_pos(_nk(p_roll))) >= 0.01:
             return _chk("CAM-02", "fail", "p_roll_cam_identity")
 
         if _num(p0, "active_b") != 1.0:
             return _chk("CAM-02", "fail", "p0_inactive")
-        if _dist(_row_pos(_nk(p0), "eng_"), p0_saved_pos) >= 0.05:
+        if not p0_is_result and _dist(_row_pos(_nk(p0), "eng_"), p0_saved_pos) >= 0.05:
             return _chk("CAM-02", "fail", "p0_eng_pos_err")
         if _dist(_row_pos(_nk(p0)), p0_saved_pos) >= 0.05:
             return _chk("CAM-02", "fail", "p0_cam_pos_err")
-        if _theta3d_cells(_nk(p0), _saved_ref(save_p0)) >= 0.5:
+        if _orientation_err(p0, save_p0) >= 0.5:
             return _chk("CAM-02", "fail", "p0_theta_deg")
         if abs(_num(p0, "fov_rad") - _num(save_p0, "fov_rad")) >= 0.00873:
             return _chk("CAM-02", "fail", "p0_fov_err")
-        if _angle_between(_row_dir(_nk(p0), "eng_"), _mat_forward(_nk(p0))) >= 0.05:
+        if not p0_is_result and _angle_between(_row_dir(_nk(p0), "eng_"), _mat_forward(_nk(p0))) >= 0.05:
             return _chk("CAM-02", "fail", "p0_direction_err")
     except (KeyError, TypeError, ValueError):
         return _chk("CAM-02", "missing", "bad_columns")
@@ -1620,12 +1598,14 @@ def _check_cam_02(samples: dict) -> dict:
 
 
 # CAM-03: una muestra por frame en m_Probe.m_Frame, trayectoria a < 0.5 m de la
-# referencia analítica independiente (claves de la fixture; solo el origen
-# vertical se ancla a la primera fila, como en CAM-04) y ningún paso mayor que
-# 3x la mediana. M < 180 filas o un salto de dtsum_ms > 100 ms dan missing
-# (INCONCLUSO). PASS exige seq_n y frame consecutivos, dtsum_ms creciente,
-# cámara y motor a < 0.01 m en todas las filas, error < 0.5 m en todas y paso
-# <= 3x mediana. FAIL en caso contrario.
+# referencia analítica independiente (claves de la fixture; el origen
+# vertical se ancla con anchor_y) y ningún paso mayor que 3x la mediana.
+# La cobertura se acredita por seq_n y frame contiguos y sin huecos de
+# dtsum_ms > 100 ms, sin mínimo fijo de filas (enmienda del 24-nov,
+# hecho 5); su ausencia da missing (INCONCLUSO). La vista de cada fila
+# se compara con la pose ordenada en la fila anterior (hecho 2). PASS
+# exige dtsum_ms creciente, vista y nodo anterior a < 0.01 m, error
+# < 0.5 m y paso <= 3x mediana. FAIL en caso contrario.
 def _check_cam_03(samples: dict) -> dict:
     fixtures = (samples.get("fixtures_paths") or {}).get("paths") or {}
     for dump in ("path_catmull_scripted", "path_linear_hud"):
@@ -1676,9 +1656,12 @@ def _check_cam_04(samples: dict) -> dict:
             return _chk("CAM-04", "missing", "no_anchor_y")
         try:
             dtsum = float(last["dtsum_ms"])
-            dx = float(last["eng_x_m"]) - float(key_last["pos_x_m"])
-            dz = float(last["eng_z_m"]) - float(key_last["pos_z_m"])
-            dy = float(last["eng_y_m"]) - (
+            # El final se juzga en el nodo de la ultima fila: la vista
+            # de esa fila es la pose del frame anterior (hecho 2) y el
+            # dump no trae una fila posterior que la asiente.
+            dx = float(last["x_m"]) - float(key_last["pos_x_m"])
+            dz = float(last["z_m"]) - float(key_last["pos_z_m"])
+            dy = float(last["y_m"]) - (
                 anchor_y + float(key_last["pos_y_rel_m"]) - float(keys[0]["pos_y_rel_m"])
             )
             fov = float(last["fov_rad"])
@@ -1690,14 +1673,20 @@ def _check_cam_04(samples: dict) -> dict:
         pos_err = math.sqrt(dx * dx + dy * dy + dz * dz)
         if pos_err >= 0.05:
             return _chk("CAM-04", "fail", f"{dump}_pos_err_m={pos_err:.4f}")
-        # La orientacion final se juzga con las celdas crudas m00..m22
-        # de la ultima fila frente a la clave final, no con sus Euler.
+        if len(rows) > 1:
+            view_err = _dist(_row_pos(last, "eng_"), _row_pos(rows[-2]))
+            if view_err >= 0.01:
+                return _chk("CAM-04", "fail", f"{dump}_view_pos_err_m={view_err:.4f}")
+        # La orientacion final se juzga por la direccion: mat[2] cruda
+        # de la ultima fila frente a la formula medida desde la clave
+        # final. El giro completo frente a la clave queda pendiente de
+        # la v5 (mat[0]/mat[1] sin medir), nunca en FALLA.
         if not all(k in last for k in POSE_CELLS):
             return _chk("CAM-04", "missing", f"{dump}_no_matrix_cells")
-        ref_cells = _matrix_dict(
-            _ypr_matrix(key_last["yaw_deg"], key_last["pitch_deg"], key_last["roll_deg"])
+        theta = _angle_between(
+            _mat_forward(last),
+            _dir_from_euler(key_last["yaw_deg"], key_last["pitch_deg"]),
         )
-        theta = _theta3d_cells(last, ref_cells)
         if theta >= 0.5:
             return _chk("CAM-04", "fail", f"{dump}_theta_deg={theta:.3f}")
         if abs(fov - fov_key) >= 0.00873:
@@ -1711,25 +1700,27 @@ def _check_cam_04(samples: dict) -> dict:
 # < 2.0 grados, yaw cerca de 180/-179/-99 en los instantes fijados, excursión de
 # FOV >= 0.25 rad y error de lerp < 0.02 rad, y interp_comparison.json con
 # selected_mode calculado por la regla empírica de §5.3. FAIL en otro caso.
-def _path_stats(rows: list, keys: list[dict], pos_mode: str) -> dict | None:
+def _path_stats(samples: dict, rows: list, keys: list[dict], pos_mode: str) -> dict | None:
     if not rows:
         return None
     t_end = keys[-1]["t_s"]
-    try:
-        y_datum = float(rows[0]["eng_y_m"]) - keys[0]["pos"][1]
-    except (KeyError, TypeError, ValueError):
+    # El datum vertical se ancla con anchor_y, como CAM-03: el camino
+    # del motor sale del origen (enmienda, hecho 4), así que la primera
+    # fila no es la clave 0.
+    y_datum = _y_datum(samples, keys)
+    if y_datum is None:
         return None
     errors = []
     steps = []
     for i, row in enumerate(rows):
-        t = _row_time(row, t_end)
-        if t is None:
-            return None
-        ref_rel = _ref_pos_rel(keys, t, pos_mode)
-        ref = [ref_rel[0], y_datum + ref_rel[1], ref_rel[2]]
         try:
-            errors.append(_dist(_row_pos(row, "eng_"), ref))
-            if i:
+            if i and float(row["dtsum_ms"]) <= t_end * 1000.0 + 1e-6:
+                t_prev = _row_time(rows[i - 1], t_end)
+                if t_prev is None:
+                    return None
+                ref_rel = _ref_pos_rel(keys, t_prev, pos_mode)
+                ref = [ref_rel[0], y_datum + ref_rel[1], ref_rel[2]]
+                errors.append(_dist(_row_pos(row, "eng_"), ref))
                 steps.append(
                     _dist(_row_pos(row, "eng_"), _row_pos(rows[i - 1], "eng_"))
                 )
@@ -1742,13 +1733,12 @@ def _path_stats(rows: list, keys: list[dict], pos_mode: str) -> dict | None:
     }
 
 
-def _engine_b2_b(rows: list, keys: list[dict]) -> bool:
+def _engine_b2_b(samples: dict, rows: list, keys: list[dict]) -> bool:
     if not rows:
         return False
     t_end = keys[-1]["t_s"]
-    try:
-        y_datum = float(rows[0]["eng_y_m"]) - keys[0]["pos"][1]
-    except (KeyError, TypeError, ValueError):
+    y_datum = _y_datum(samples, keys)
+    if y_datum is None:
         return False
     status, _ = _path_status(rows, keys, "linear", t_end, y_datum)
     if status != "pass":
@@ -1762,12 +1752,14 @@ def _engine_b2_b(rows: list, keys: list[dict]) -> bool:
     if row3 is None or abs(t3 - 3.0) > 0.1:
         return False
     try:
-        for row, t in zip(rows, times):
-            if _angle_between(_row_dir(row, "eng_"), _mat_forward(row)) >= 0.05:
-                return False
-            if _theta3d(_q_from_row(row), _ref_quat(keys, t)) >= 2.0:
-                return False
-            if abs(float(row["fov_rad"]) - _ref_fov(keys, t)) >= 0.02:
+        for i, row in enumerate(rows):
+            if i and float(row["dtsum_ms"]) <= t_end * 1000.0 + 1e-6:
+                prev = rows[i - 1]
+                if _angle_between(_row_dir(row, "eng_"), _mat_forward(prev)) >= 0.05:
+                    return False
+                if _angle_between(_mat_forward(prev), _ref_dir(keys, times[i - 1])) >= 2.0:
+                    return False
+            if abs(float(row["fov_rad"]) - _ref_fov(keys, times[i])) >= 0.02:
                 return False
     except (KeyError, TypeError, ValueError):
         return False
@@ -1819,11 +1811,23 @@ def _check_cam_05(samples: dict) -> dict:
                 yaw = _col(row, "yaw_deg")
                 if yaw is None or abs(yaw) < 178.5:
                     return _chk("CAM-05", "fail", "short_arc_yaw_deg")
-        for row in rows:
-            t = _row_time(row, t_end)
-            if _angle_between(_row_dir(row, "eng_"), _mat_forward(row)) >= 0.05:
+        # La vista de la fila i es la pose ordenada en la fila i-1
+        # (hecho 2): su direccion se compara con mat[2] de la fila
+        # anterior y con la direccion de referencia de ese instante.
+        # El giro completo frente al slerp queda pendiente de la v5.
+        for i, row in enumerate(rows):
+            if not i:
+                continue
+            try:
+                if float(row["dtsum_ms"]) > t_end * 1000.0 + 1e-6:
+                    continue
+            except (KeyError, TypeError, ValueError):
+                return _chk("CAM-05", "missing", "bad_dtsum")
+            prev = rows[i - 1]
+            t = _row_time(prev, t_end)
+            if _angle_between(_row_dir(row, "eng_"), _mat_forward(prev)) >= 0.05:
                 return _chk("CAM-05", "fail", "engine_direction_vs_matrix")
-            if _theta3d(_q_from_row(row), _ref_quat(keys, t)) >= 2.0:
+            if _angle_between(_mat_forward(prev), _ref_dir(keys, t)) >= 2.0:
                 return _chk("CAM-05", "fail", "orientation_vs_slerp")
         for target, expected, tol, label in (
             (1.5, 180.0, 1.0, "mid_1_5s"),
@@ -1853,17 +1857,18 @@ def _check_cam_05(samples: dict) -> dict:
     # informe: se escribe si se puede, pero CAM-05 no se comprueba a si
     # mismo releyendo el fichero que acaba de escribir.
     engine_rows = samples.get("paths", {}).get("path_engine_interp") or []
-    scripted_stats = _path_stats(rows, keys, fpath.get("pos_mode", "linear"))
-    engine_stats = _path_stats(engine_rows, keys, "linear")
+    scripted_stats = _path_stats(samples, rows, keys, fpath.get("pos_mode", "linear"))
+    engine_stats = _path_stats(samples, engine_rows, keys, "linear")
     if scripted_stats is None:
         return _chk("CAM-05", "missing", "bad_scripted_metrics")
     if engine_stats is None:
         return _chk("CAM-05", "missing", "no_path_engine_interp")
-    engine_ok = _engine_b2_b(engine_rows, keys)
+    engine_ok = _engine_b2_b(samples, engine_rows, keys)
     comparison = {
         "engine_max_over_median_step": engine_stats["max_over_median_step"],
         "engine_max_pos_err_m": engine_stats["max_pos_err_m"],
         "engine_passes_b2_b": bool(engine_ok),
+        "engine_starts_from_origin": True,
         "engine_supports_keyed_dof_b": None,
         "scripted_max_over_median_step": scripted_stats["max_over_median_step"],
         "scripted_max_pos_err_m": scripted_stats["max_pos_err_m"],
@@ -1990,12 +1995,13 @@ def _check_cam_06(samples: dict) -> dict:
                     or abs(pos[2] - float(anchor["anchor_z_m"])) >= 0.05
                 ):
                     return _chk("CAM-06", "fail", f"{name}_pose")
-                ref = {
-                    "yaw_deg": float(anchor["yaw_deg"]),
-                    "pitch_deg": float(anchor["pitch_deg"]),
-                    "roll_deg": float(anchor["roll_deg"]),
-                }
-                if _theta3d_euler(_nk(row), ref) >= 0.5:
+                # El ancla solo publica Euler: se juzga la direccion
+                # con la formula medida y el giro completo queda
+                # pendiente de la v5, nunca en FALLA.
+                anchor_dir = _dir_from_euler(
+                    float(anchor["yaw_deg"]), float(anchor["pitch_deg"])
+                )
+                if _angle_between(_mat_forward(_nk(row)), anchor_dir) >= 0.5:
                     return _chk("CAM-06", "fail", f"{name}_orientation")
 
     gray_noblur = _capture_ready(samples, "dof_ctrl_noblur.bmp", rois, missing)
@@ -2213,10 +2219,32 @@ def _check_cam_08(samples: dict) -> dict:
         return _chk("CAM-08", "fail", "reset_focus_not_zero")
 
     # Cobertura y continuidad de los dos trabajos, variable y control.
+    # La cota de filas se deriva del periodo de frame medido en la
+    # propia corrida (enmienda, hecho 5): hacen falta las filas que
+    # cubren hasta la ultima fase (5,6 s) a ese periodo, sin huecos
+    # mayores que 100 ms ni que 2,5 periodos, la cota que sea mayor.
+    def _coverage_ok(dump_rows):
+        if len(dump_rows) < 2:
+            return False
+        try:
+            deltas = [
+                float(dump_rows[i]["dtsum_ms"]) - float(dump_rows[i - 1]["dtsum_ms"])
+                for i in range(1, len(dump_rows))
+            ]
+        except (KeyError, TypeError, ValueError):
+            return False
+        positive = [d for d in deltas if d > 0.0]
+        if not positive:
+            return False
+        period = _median(positive)
+        needed = math.ceil(5600.0 / period)
+        gap_max = max(100.0, 2.5 * period)
+        return len(dump_rows) >= needed and all(d <= gap_max for d in deltas)
+
     fix_rows = samples.get("paths", {}).get("path_dof_fix") or []
     if (samples.get("path_bad_columns") or {}).get("path_dof_fix"):
         missing.append("bad_columns_fix")
-    if len(fix_rows) < 180:
+    if not _coverage_ok(fix_rows):
         missing.append("no_path_dof_fix_coverage")
     else:
         for i, row in enumerate(fix_rows):
@@ -2232,7 +2260,7 @@ def _check_cam_08(samples: dict) -> dict:
             except (KeyError, TypeError, ValueError):
                 missing.append("bad_columns_fix")
                 break
-    if rows and len(rows) < 180:
+    if rows and not _coverage_ok(rows):
         missing.append("no_path_dof_var_coverage")
     # Cobertura hasta cada fase: 180 filas que no llegan a t3/t4 no
     # acreditan las fases tardias de ninguno de los dos caminos.
@@ -2441,6 +2469,7 @@ def _check_cam_09(samples: dict) -> dict:
     # max_bracket_span_ms ni se mueve mas de 0,05 m / 0,2 grados entre
     # sus extremos (brief:261), y el frame efectivo cae dentro de ella.
     p_cap = None
+    p_cap_row = None
     if pre_cap is None or post_cap is None or cap_event is None:
         missing.append("no_capture_bracket")
     else:
@@ -2505,7 +2534,17 @@ def _check_cam_09(samples: dict) -> dict:
                     key=lambda r: abs(float(r["tick_ms"]) - tick_v),
                     default=None,
                 )
-                if eff_row is not None and abs(float(eff_row["tick_ms"]) - tick_v) > 17.0:
+                # La tolerancia sale del periodo de frame medido en la
+                # propia corrida (enmienda, hecho 5), no de 17 ms fijos.
+                tick_deltas = [
+                    float(rows[i]["tick_ms"]) - float(rows[i - 1]["tick_ms"])
+                    for i in range(1, len(rows))
+                ]
+                tick_deltas = [d for d in tick_deltas if d > 0.0]
+                tick_tol = _median(tick_deltas) if tick_deltas else 0.0
+                if eff_row is not None and (
+                    tick_tol <= 0.0 or abs(float(eff_row["tick_ms"]) - tick_v) > tick_tol
+                ):
                     eff_row = None
                 if eff_row is not None and pre_frame is not None and post_frame is not None:
                     if not (pre_frame <= float(eff_row["frame"]) <= post_frame):
@@ -2518,6 +2557,7 @@ def _check_cam_09(samples: dict) -> dict:
                 missing.append("capture_frame_not_anchored")
         else:
             p_cap = {k: float(eff_row[k]) for k in POSE_SCALARS}
+            p_cap_row = eff_row
         # Capturas sin evento: nunca PASA. El contenido identico entre
         # tomas independientes no es reutilizacion (ver CAM-08).
         for name in ("hud_during.bmp", "hud_clean_ref.bmp",
@@ -2540,7 +2580,9 @@ def _check_cam_09(samples: dict) -> dict:
         try:
             if _dist(_row_pos(_nk(clean_ref)), [p_cap["x_m"], p_cap["y_m"], p_cap["z_m"]]) > 0.01:
                 missing.append("clean_ref_pose_moved")
-            if _theta3d_euler(_nk(clean_ref), p_cap) > 0.05:
+            # Los dos lados publican sus celdas: la rotacion se juzga
+            # celdas frente a celdas, sin reconstruir Euler.
+            if p_cap_row is not None and _theta3d_cells(_nk(clean_ref), p_cap_row) > 0.05:
                 missing.append("clean_ref_pose_rotated")
             if abs(_num(clean_ref, "fov_rad") - p_cap["fov_rad"]) > 0.001:
                 missing.append("clean_ref_fov")
