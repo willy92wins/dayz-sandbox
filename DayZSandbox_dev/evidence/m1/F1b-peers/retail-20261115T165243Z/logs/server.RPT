@@ -5813,7 +5813,7 @@ Version 1.30.164289.70
 17:55:11.404  PHYSICS      : Initializing ragdoll DZ/characters/bodies/human.ragdoll
 17:55:11.409 Warning: No components in dz\gear\food\plum.p3d:geometry
 17:55:11.413 El jugador DSBXQA (id=HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= pos=<9538.9, 1998.9, 5.7>) se ha conectado.
-17:55:11.413 Player "DSBXQA" (steamID=76561198141021937 pos=<9538.9, 1998.9, 5.7>) is connected
+17:55:11.413 Player "DSBXQA" (steamID=<redacted> pos=<9538.9, 1998.9, 5.7>) is connected
 17:55:11.413 <LOAD EXISTING CHAR>:
     charID 1
     playerID 1
