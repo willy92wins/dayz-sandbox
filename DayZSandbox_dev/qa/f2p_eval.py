@@ -1112,6 +1112,18 @@ def _life_at(probe: dict[str, Any], t_ms: float) -> dict[str, Any] | None:
     return None
 
 
+def _life_index_at(probe: dict[str, Any], t_ms: float) -> int | None:
+    """Índice de la vida del servidor que contiene `t_ms`, o None (ronda 2, B4: la reutilización de
+    `net_id` se mira dentro de una misma vida; entre vidas distintas un `net_id` igual no dice nada)."""
+    lives = probe.get("lives")
+    if not isinstance(lives, dict) or not _finite(t_ms):
+        return None
+    for idx, life in enumerate(lives.get("lives") or []):
+        if life["lo"] <= float(t_ms) < life["hi"]:
+            return idx
+    return None
+
+
 def _job_life_problem(probe: dict[str, Any], job: dict[str, Any]) -> str:
     """'' si el trabajo de la sonda casa con la vida en que se entregó (brief:1307-1308).
 
@@ -2453,18 +2465,33 @@ def _server_restart_ok(tap: dict[str, Any], backend: dict[str, Any], manifest: d
               float(win["start_t_ms"]) <= float(_hello_resp_time(h)) <= float(win["end_t_ms"])]
     if not restarts or not hellos:
         return False
-    first_hello = min(hellos, key=lambda h: float(_hello_resp_time(h)))
-    epoch = str(first_hello.get("epoch") or "")
-    if not _HEX32.match(epoch):
-        return False
     declared = str(win.get("server_epoch") or "")
-    if declared and declared != epoch:
-        return False
-    prev_epoch = _epoch_at(tap, float(win["start_t_ms"]) - 1e-6)
-    if prev_epoch == epoch:
-        return False
-    return any(str(r["data"].get("epoch") or "") == epoch and
-               float(r["t_ms"]) < float(_hello_resp_time(first_hello)) for r in restarts)
+    # B1 (ronda 2, brief:1318): por cada `restart` del servidor de la parte, el primer `/hello`
+    # aceptado POSTERIOR a ese `restart`, comparado con el último aceptado ANTERIOR a ese mismo
+    # `restart`. El mod vuelve a saludar en la misma vida cuando vence el lease
+    # (DSBX_Peer.c:882-899), y ese `/hello` repetido puede caer antes del `restart`: el oráculo de
+    # 98c7a78 tomaba el primero de la ventana y lo comparaba con el epoch previo a la ventana, y
+    # daba INCONCLUSO una partida honesta. El `/hello` repetido no acredita una vida nueva; el que
+    # acredita el reinicio es el primero posterior a él.
+    for r in restarts:
+        rt = float(r["t_ms"])
+        after = [h for h in hellos if float(_hello_resp_time(h)) > rt]
+        if not after:
+            continue
+        first_hello = min(after, key=lambda h: float(_hello_resp_time(h)))
+        epoch = str(first_hello.get("epoch") or "")
+        if not _HEX32.match(epoch):
+            continue
+        if declared and declared != epoch:
+            continue
+        # Último `/hello` aceptado anterior a ESE `restart` (no el previo a la ventana de la parte).
+        prev_epoch = _epoch_at(tap, rt - 1e-6)
+        if prev_epoch == epoch:
+            continue
+        if str(r["data"].get("epoch") or "") != epoch:
+            continue
+        return True
+    return False
 
 
 def _witness_windows(probe: dict[str, Any], tap: dict[str, Any], backend: dict[str, Any],
@@ -3166,13 +3193,17 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     p1_u = union("P1:base", "P1")
     p1 = {"rows": list(p1_u["rows"].values())} if p1_u["ok"] else None
     baseline_classes = {str(r.get("class_name")) for r in (p1["rows"] if p1 else [])}
-    # Enmienda de identidad (brief:1308): el censo base de P1 da a comprobaciones de otras vidas
-    # (F2P-07 y F2P-09) las clases de la CE en la zona y los `net_id` de la base. Si la vida en que
-    # se entregó no casa, esas comprobaciones lo usan y no pueden juzgar con él: lo que dependa de la
-    # base da INCONCLUSO `server_life_unbound`, nunca PASA ni un FALLA por la base vacía.
+    # Enmienda de identidad (brief:1308) y ronda 2 (B3, brief:1319): el censo base de P1 da a
+    # comprobaciones de otras vidas (F2P-07 y F2P-09) las clases de la CE en la zona y los `net_id`
+    # de la base. Si P1:base no vale por la razón que sea (páginas, frescura, el `/hello` del
+    # producto después de su entrega, la vida sin casar...), esas comprobaciones lo usan y no pueden
+    # juzgar con él: lo que dependa de la base da INCONCLUSO `baseline_unbacked`, nunca PASA ni un
+    # FALLA por la base vacía. `p1` es None exactamente cuando la unión de P1:base no vale; el delta
+    # de identidad solo miraba `life_unbound` y una página perdida daba FALLA `extras:` en F2P-09.
     _p1_base_job = _census(probe, "P1:base")
-    baseline_life_bad = _p1_base_job is not None and \
-        _job_life_problem(probe, _p1_base_job).startswith("life_unbound")
+    baseline_bad = p1 is None
+    _p1_life_idx = _life_index_at(probe, float(_p1_base_job["deliver_t"])) \
+        if _p1_base_job is not None and _finite(_p1_base_job.get("deliver_t")) else None
     p2_u = union("P2:post", "P2", judged_t=_p2_terminal_t(tap, backend, manifest), fresh=True)
     p2 = {"rows": list(p2_u["rows"].values())} if p2_u["ok"] else None
     wit2 = _witness(probe, "P2:apply")
@@ -3835,7 +3866,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if cls in creature_classes and ai == 1:
                     if cls in ce_classes_in_zone:
                         botin.append(f"{r.get('net_id')}:{cls}:criatura")
-                    elif baseline_life_bad:
+                    elif baseline_bad:
                         unbound_hits.append(f"{r.get('net_id')}:{cls}:criatura")
                     else:
                         fails.append(f"{r.get('net_id')}:creature_reappeared")
@@ -3847,7 +3878,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if _near_last_known(r, last):
                     if cls in ce_classes_in_zone:
                         botin.append(f"{r.get('net_id')}:{cls}")
-                    elif baseline_life_bad:
+                    elif baseline_bad:
                         unbound_hits.append(f"{r.get('net_id')}:{cls}")
                     else:
                         fails.append(f"{r.get('net_id')}:near_last_known")
@@ -3921,21 +3952,25 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     gen4_bad.append(f"{lid}:unsupported")
         if fails or gen4_bad:
             fail("F2P-07", ";".join((fails + gen4_bad)[:5]))
+        elif p4c_state_bad:
+            # M2 (ronda 2, brief:1319): el terminal acreditado de P4c no depende de la base ni de la
+            # vida de la sonda; se juzga antes del guardián para que un FALLA independiente decida.
+            fail("F2P-07", p4c_state_bad)
         elif botin:
             missing("F2P-07", "posible_botin_ce:" + ";".join(botin[:5]))
-        elif unbound_hits or baseline_life_bad or not _lives_before_ok:
-            # Enmienda de identidad (brief:1308): F2P-07 usa la base de P1 y los censos de la vida
-            # anterior a cada reinicio; si esas vidas no casan, INCONCLUSO, nunca PASA. Va después
-            # de los FALLA que no dependen de ellas, como el botín de la CE.
-            missing("F2P-07", "server_life_unbound" +
+        elif unbound_hits or baseline_bad or not _lives_before_ok:
+            # Enmienda de identidad (brief:1308) y ronda 2 (B3, brief:1319): F2P-07 usa la base de P1
+            # y los censos de la vida anterior a cada reinicio; si la base no vale por la razón que
+            # sea o esas vidas no casan, INCONCLUSO, nunca PASA. Va después de los FALLA que no
+            # dependen de ellas (el terminal de P4c y el botín de la CE ya se han juzgado).
+            _reason = "baseline_unbacked" if (unbound_hits or baseline_bad) else "server_life_unbound"
+            missing("F2P-07", _reason +
                     (":" + ";".join(unbound_hits[:5]) if unbound_hits else ""))
         elif not _server_restart_ok(tap, backend, manifest, "P4b") or \
                 not _server_restart_ok(tap, backend, manifest, "P4c"):
             missing("F2P-07", "restart_unbacked")
         elif not control_ok:
             missing("F2P-07", "persistent_control_missing")
-        elif p4c_state_bad:
-            fail("F2P-07", p4c_state_bad)
         elif p4c_reset_fuera:
             missing("F2P-07", "p4c_reset_fuera_de_guion")
         else:
@@ -4143,6 +4178,14 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         _p5_judged = _apply_terminal_t(tap, backend, manifest, "P5", 1)
     p5_u = union("P5:post_apply", "P5", judged_t=_p5_judged, fresh=True)
     p5c = {"rows": list(p5_u["rows"].values())} if p5_u["ok"] else None
+    # B4 (ronda 2, brief:1320): la reutilización de `net_id` se mira dentro de una misma vida. El
+    # motor recicla los `net_id` al reiniciar el servidor; entre vidas distintas un `net_id` igual no
+    # dice nada. P5 está en otra vida que la base de P1 en la partida automática (vida 3 frente a 1).
+    _p5_job = _census(probe, "P5:post_apply")
+    _p5_life_idx = _life_index_at(probe, float(_p5_job["deliver_t"])) \
+        if _p5_job is not None and _finite(_p5_job.get("deliver_t")) else None
+    _same_life_base = _p1_life_idx is not None and _p5_life_idx is not None and \
+        _p1_life_idx == _p5_life_idx
     wit5 = _witness(probe, "P5:cut")
     if wit5 is not None and _measurement(wit5, manifest=manifest, probe=probe, part="P5",
                                         tap=tap) != "":
@@ -4293,7 +4336,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 new_nets = set(gen5b["pairs"].values())
                 if gen5["ok"] and new_nets & set(gen5["nets"]):
                     bad.append("reuses_cut_nets")
-                if new_nets & base_nets:
+                if _same_life_base and new_nets & base_nets:
                     bad.append("reuses_baseline_nets")
                 p5_by_net = {str(r.get("net_id")): r for r in p5c["rows"]}
                 live = 0
@@ -4333,7 +4376,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 # que la CE crea en la zona (las del censo de P1) no se distinguen del botín (§6.1.9).
                 extra_at_pose = []
                 for net, r in p5_by_net.items():
-                    if net in base_nets or net in new_nets or \
+                    if (_same_life_base and net in base_nets) or net in new_nets or \
                             (gen5["ok"] and net in gen5["nets"]):
                         continue
                     cls = str(r.get("class_name"))
@@ -4345,16 +4388,17 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         extra_at_pose.append(net)
                 if extra_at_pose:
                     bad.append("extras:" + ",".join(sorted(extra_at_pose)[:5]))
-                if baseline_life_bad:
-                    # Enmienda de identidad (brief:1308): sin la base de P1 (su vida no casa), un
-                    # extra no se distingue del botín de la CE ni de la base, y la reutilización de
-                    # la base no se puede ver. Esos motivos no deciden; los demás FALLA, sí.
+                if baseline_bad:
+                    # Enmienda de identidad (brief:1308) y ronda 2 (B3, brief:1319): si la base de
+                    # P1 no vale por la razón que sea, un extra no se distingue del botín de la CE
+                    # ni de la base, y la reutilización de la base no se puede ver. Esos motivos no
+                    # deciden; los demás FALLA, sí. El orden de ahora se conserva.
                     bad = [b for b in bad
                            if not str(b).startswith(("extras=", "extras:", "reuses_baseline_nets"))]
                 if bad:
                     fail("F2P-09", ";".join(bad[:5]))
-                elif baseline_life_bad:
-                    missing("F2P-09", "server_life_unbound")
+                elif baseline_bad:
+                    missing("F2P-09", "baseline_unbacked")
                 elif ce_extra:
                     missing("F2P-09", "posible_botin_ce")
                 elif live != len(doc1["entities"]):
@@ -4729,6 +4773,28 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 if c["id"] not in out:
                     out.append(c["id"])
         return gate_core.make_verdict(SPIKE_ID, 2, checks=checks_list, metrics=metrics, reasons=out)
+    # L1 (ronda 2, brief:1325): una vida registrada dentro de la partida que no casa y que ninguna
+    # comprobación usa no puede dejar el veredicto global en PASA. Un `restart` del servidor de más
+    # tras el último trabajo de P5 abre una vida sin identidad; las 13 pasan y la partida daría PASA.
+    # Solo se aplica cuando todas las comprobaciones pasan y no hay motivos (si algo ya da INCONCLUSO
+    # o FALLA, no cambia nada) y solo cuenta una vida que solape alguna parte de la campaña: un
+    # reinicio registrado fuera de la partida no crea una vida que haya que casar.
+    _unbound_in_campaign = False
+    for _life in probe["lives"].get("lives") or []:
+        if _life.get("ok"):
+            continue
+        for _p in (manifest.get("f2p", {}).get("parts") or []):
+            if _finite(_p.get("start_t_ms")) and _finite(_p.get("end_t_ms")) and \
+                    float(_life["lo"]) < float(_p["end_t_ms"]) and \
+                    float(_life["hi"]) > float(_p["start_t_ms"]):
+                _unbound_in_campaign = True
+                break
+        if _unbound_in_campaign:
+            break
+    if _unbound_in_campaign:
+        reasons.append("server_life_unbound")
+        return gate_core.make_verdict(SPIKE_ID, 2, checks=checks_list, metrics=metrics,
+                                      reasons=list(reasons))
     return gate_core.make_verdict(SPIKE_ID, 0, checks=checks_list, metrics=metrics, reasons=[])
 
 

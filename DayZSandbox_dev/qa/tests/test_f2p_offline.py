@@ -1552,6 +1552,76 @@ class TestF2POracleOffline(unittest.TestCase):
         self.assertNotEqual(v["exit_code"], 0, msg=json.dumps(v, indent=2))
         self.assertNotIn("backend_validator_unavailable", v["reasons"])
 
+    # --- Ronda 2 (brief:1317-1327): B1, B3, M2, B4, L1 y G-01. La evidencia ejecutable del
+    # congelado: cada uno falla con el evaluador de `38d0de4` y pasa con el de la ronda 2. ---
+
+    def test_r2_b1_hello_lease_antes_restart_pasa(self) -> None:
+        # B1 (brief:1318): el `/hello` repetido por el lease antes del `restart` no acredita el
+        # reinicio; el primero posterior sí. Con el evaluador de 38d0de4: INCONCLUSO
+        # `restart_unbacked`.
+        campaign = f2p_mutants.mutate(_load_fixture(), "r2_b1_hello_lease_antes_restart")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "r2_b1"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 0, msg=json.dumps(v, indent=2))
+        self.assertEqual(v["verdict"], "PASA")
+        self.assertTrue(all(life["casa"] for life in v["metrics"]["server_lives"]),
+                        msg=v["metrics"]["server_lives"])
+
+    def test_r2_b3_base_invalida_extra_ce_inconcluso(self) -> None:
+        # B3 (brief:1319): con `P1:base` inválida (el `/hello` del producto después de su entrega)
+        # y el botín de la CE `0:8020` en P5, lo que depende de la base da `missing`
+        # `baseline_unbacked`; nunca FALLA ni PASA. Con 38d0de4: FALLA `extras:0:8020`.
+        campaign = f2p_mutants.mutate(_load_fixture(), "r2_b3_base_invalida_extra_ce")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "r2_b3"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 2, msg=json.dumps(v, indent=2))
+        self.assertFalse(any(c["status"] == "fail" for c in v["checks"]), msg=v["checks"])
+        c_map = _checks(v)
+        self.assertEqual(c_map["F2P-09"]["status"], "missing", msg=c_map["F2P-09"])
+        self.assertEqual(c_map["F2P-09"]["detail"], "baseline_unbacked", msg=c_map["F2P-09"])
+        self.assertEqual(c_map["F2P-07"]["status"], "missing", msg=c_map["F2P-07"])
+
+    def test_r2_m2_terminal_p4c_independiente_falla(self) -> None:
+        # M2 (brief:1319): el terminal acreditado de P4c `parcial/contenido_ajeno` no depende de la
+        # base y se juzga antes del guardián. Con 38d0de4: INCONCLUSO `server_life_unbound`.
+        campaign = f2p_mutants.mutate(_load_fixture(), "r2_m2_terminal_p4c_independiente")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "r2_m2"), repo_root=REPO_ROOT)
+        c_map = _checks(v)
+        self.assertEqual(c_map["F2P-07"]["status"], "fail", msg=json.dumps(v, indent=2))
+        self.assertIn("state=parcial/contenido_ajeno", c_map["F2P-07"]["detail"],
+                      msg=c_map["F2P-07"])
+
+    def test_r2_b4_net_id_de_otra_vida_pasa(self) -> None:
+        # B4 (brief:1320): un `net_id` de P5 igual a uno de la base de P1 está en otra vida; no es
+        # reutilización. Con 38d0de4: FALLA `reuses_baseline_nets`.
+        campaign = f2p_mutants.mutate(_load_fixture(), "r2_b4_net_id_de_otra_vida")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "r2_b4"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 0, msg=json.dumps(v, indent=2))
+        self.assertEqual(v["verdict"], "PASA")
+
+    def test_r2_l1_vida_sin_identidad_inconcluso(self) -> None:
+        # L1 (brief:1325): un `restart` de más tras el último trabajo de P5 deja una vida sin
+        # identidad; el veredicto global no puede ser PASA. Con 38d0de4: PASA.
+        campaign = f2p_mutants.mutate(_load_fixture(), "r2_l1_vida_sin_identidad")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "r2_l1"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 2, msg=json.dumps(v, indent=2))
+        self.assertIn("server_life_unbound", v["reasons"], msg=v["reasons"])
+
+    def test_r2g_g01_gate_build_rehello_pasa(self) -> None:
+        # G-01 (brief:1321): el caso se construye como el constructor del gate (`_as_offline_run` y
+        # después `mutate`). El `/hello` sintético de la sonda repite `build`/`proto` de la campaña;
+        # la positiva `id_sonda_rehello_misma_identidad` da PASA. Su «antes» es la entrada del gate
+        # sobre 38d0de4 (`build_mismatch`), ya guardada en la ronda 1.
+        campaign = _as_offline_run(_load_fixture())
+        campaign = f2p_mutants.mutate(campaign, "id_sonda_rehello_misma_identidad")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "r2g"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 0, msg=json.dumps(v, indent=2))
+        self.assertEqual(v["verdict"], "PASA")
+
     def test_tap_req_id_matches_real_proxy_capture(self) -> None:
         # v1.3.14 (§5.4): el tap numera cada peticion con un req_id unico y repite el mismo en su
         # respuesta. Contraste con las partidas reales de F1b-peers (HECHOS.txt) y con la fixture.

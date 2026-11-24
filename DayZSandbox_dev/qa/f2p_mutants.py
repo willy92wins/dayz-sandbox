@@ -3004,11 +3004,27 @@ def _probe_ver(c: dict[str, Any]) -> str:
     return "dsbx-qa1+0123456789abcdef"
 
 
+def _probe_hello_args(c: dict[str, Any]) -> dict[str, str]:
+    """G-01 (ronda 2, brief:1321): un `/hello` sintético de la sonda repite `proto`, `build` y
+    `probe_ver` de un `hello` existente de la campaña. Antes `_add_bridge_hello` fijaba
+    `build: "diag"`, y el constructor del gate (que parte de la campaña ya en `offline`) daba
+    `build_mismatch` en la positiva `id_sonda_rehello_misma_identidad`; el `hello` repetido de la
+    sonda real lleva la misma build que el primero."""
+    for ev in c["samples"]["bridge.jsonl"]:
+        if ev.get("ev") == "hello" and isinstance(ev.get("args"), dict):
+            args = ev["args"]
+            return {"proto": str(args.get("proto") or "qa0"),
+                    "build": str(args.get("build") or "diag"),
+                    "probe_ver": str(args.get("probe_ver") or "dsbx-qa1+0123456789abcdef")}
+    return {"proto": "qa0", "build": "diag", "probe_ver": "dsbx-qa1+0123456789abcdef"}
+
+
 def _add_bridge_hello(c: dict[str, Any], peer: str, inst: str, t: float) -> None:
-    pv = _probe_ver(c)
+    args = _probe_hello_args(c)
     c["samples"]["bridge.jsonl"].append({
         "t_ms": float(t), "ev": "hello", "peer": peer, "inst": inst, "http": 200, "ok": True,
-        "args": {"proto": "qa0", "build": "diag", "probe_ver": pv, "inst": inst, "peer": peer}})
+        "args": {"proto": args["proto"], "build": args["build"], "probe_ver": args["probe_ver"],
+                 "inst": inst, "peer": peer}})
 
 
 def _shift_events(c: dict[str, Any], lo: float, hi: float, delta: float,
@@ -10978,6 +10994,212 @@ for _table, _name, _also in (
                {"must_detail": {"F2P-07": "missing_census"},
                 "allowed_non_pass": {_also: ["missing"], "F2P-13": ["missing"]}})
 
+# ---------------------------------------------------------------------------------------------------
+# Ronda 2 (brief:1317-1327): casos de B1, B3, M2, B4 y L1, escritos desde cero. Parten de la fixture
+# y no copian los reproductores de la ronda 1. Los nombres empiezan por `r2_`.
+# ---------------------------------------------------------------------------------------------------
+
+def _r2_part_window(c: dict[str, Any], part: str) -> dict[str, Any]:
+    for p in c["manifest"]["f2p"]["parts"]:
+        if p.get("name") == part:
+            return p
+    raise KeyError(part)
+
+
+def _r2_server_restarts(c: dict[str, Any]) -> list[float]:
+    return sorted(float(r["t_ms"]) for r in c["samples"]["backend.jsonl"]
+                  if r.get("kind") == "restart" and
+                  str((r.get("data") or {}).get("target") or "") == "server")
+
+
+def _r2_part_restart(c: dict[str, Any], part: str) -> float | None:
+    win = _r2_part_window(c, part)
+    lo, hi = float(win["start_t_ms"]), float(win["end_t_ms"])
+    for t in _r2_server_restarts(c):
+        if lo <= t <= hi:
+            return t
+    return None
+
+
+def _r2_job_deliver_t(c: dict[str, Any], tag: str) -> float | None:
+    ids = _tag_job_ops(c, tag)
+    ts = [float(ev["t_ms"]) for ev in c["samples"]["bridge.jsonl"]
+          if ev.get("ev") == "deliver" and str(ev.get("op_id") or "") in ids and
+          isinstance(ev.get("t_ms"), (int, float))]
+    return min(ts) if ts else None
+
+
+def _r2_rows(c: dict[str, Any], tag: str) -> list[dict[str, Any]]:
+    _start, pages = _job_events(c, tag)
+    rows: list[dict[str, Any]] = []
+    for ev in pages:
+        u = _unpack(ev["result"]["read"])
+        if u:
+            rows.extend(u[2])
+    return rows
+
+
+def _r2_tap_hellos(c: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Cada `/hello` del tap como `(peticion, respuesta)`, emparejados por `req_id`."""
+    reqs: dict[int, dict[str, Any]] = {}
+    resps: dict[int, dict[str, Any]] = {}
+    for ev in c["samples"]["bridge_tap.jsonl"]:
+        if ev.get("path") != "/hello":
+            continue
+        rid = ev.get("req_id")
+        if not isinstance(rid, int):
+            continue
+        if ev.get("dir") == "req":
+            reqs[rid] = ev
+        elif ev.get("dir") == "resp":
+            resps[rid] = ev
+    return [(reqs[rid], resps[rid]) for rid in sorted(reqs) if rid in resps]
+
+
+def _r2_first_server_hello(c: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    for req, resp in _r2_tap_hellos(c):
+        if str((req.get("body") or {}).get("peer") or "") == "server" and \
+                bool((resp.get("body") or {}).get("ok")):
+            return req, resp
+    return None
+
+
+def _r2_b1_hello_lease_antes_restart(c: dict[str, Any]) -> None:
+    """B1 (brief:1318): un `/hello` repetido del servidor por el vencimiento del lease, en la misma
+    vida y ANTES del `restart`. El oráculo debe acreditar el reinicio con el primer `/hello`
+    posterior al `restart`, no con ese repetido."""
+    rb = _r2_part_restart(c, "P4b")
+    rc = _r2_part_restart(c, "P4c")
+    assert rb is not None and rc is not None, "faltan los restarts de P4b/P4c"
+    pairs = [(req, resp) for req, resp in _r2_tap_hellos(c)
+             if str((req.get("body") or {}).get("peer") or "") == "server" and
+             bool((resp.get("body") or {}).get("ok")) and float(resp.get("t_ms") or 0) < rb]
+    assert pairs, "sin un /hello del servidor antes del restart de P4b"
+    req, resp = max(pairs, key=lambda p: float(p[1].get("t_ms") or 0))
+    tap = c["samples"]["bridge_tap.jsonl"]
+    rid = max(e["req_id"] for e in tap if isinstance(e.get("req_id"), int)) + 1
+    clone_req = copy.deepcopy(req)
+    clone_resp = copy.deepcopy(resp)
+    clone_req["req_id"] = rid
+    clone_resp["req_id"] = rid
+    clone_req["t_ms"] = rb - 100.0
+    clone_resp["t_ms"] = rb - 95.0
+    if isinstance(clone_resp.get("body"), dict):
+        clone_resp["body"]["conn"] = 2
+    tap.extend([clone_req, clone_resp])
+    # El `/hello` repetido abre una conexión nueva; los eventos de las vidas siguientes usan 3 y 4
+    # para que la traza del tap siga cuadrando (como en una reconexión real del peer).
+    rbe = min([t for t in _r2_server_restarts(c) if t > rc] or [float("inf")])
+    for e in tap:
+        t = e.get("t_ms")
+        if not (isinstance(t, (int, float)) and rb < float(t) < rbe):
+            continue
+        conn = 3 if float(t) < rc else 4
+        if e.get("path") == "/hello" and e.get("dir") == "resp" and \
+                isinstance(e.get("body"), dict):
+            e["body"]["conn"] = conn
+        q = e.get("query")
+        if isinstance(q, dict) and q.get("peer") == "server" and "conn" in q:
+            q["conn"] = str(conn)
+        for op in (e.get("body") or {}).get("ops", []) or []:
+            if isinstance(op, dict):
+                op["conn"] = conn
+
+
+def _r2_b3_base_invalida_extra_ce(c: dict[str, Any]) -> None:
+    """B3 (brief:1319): `P1:base` inválida porque el primer `/hello` del producto se acepta después
+    de su entrega. La fixture ya lleva el botín de la CE `0:8020` (Barrel_Yellow) en P5: sin base,
+    F2P-09 no lo puede eximir y antes daba FALLA `extras:0:8020`."""
+    base_t = _r2_job_deliver_t(c, "P1:base")
+    assert base_t is not None, "sin P1:base"
+    pair = _r2_first_server_hello(c)
+    assert pair is not None, "sin /hello del producto"
+    req, resp = pair
+    rt = float(resp.get("t_ms") or 0)
+    delta = (base_t + 95.0) - rt
+    req["t_ms"] = float(req.get("t_ms") or 0) + delta
+    resp["t_ms"] = rt + delta
+
+
+def _r2_m2_terminal_p4c_independiente(c: dict[str, Any]) -> None:
+    """M2 (brief:1319): la base sin casar (un epoch de sonda ajeno en P2) y el terminal acreditado
+    del reset de P4c `parcial/contenido_ajeno`. El terminal no depende de la base: F2P-07 tiene que
+    dar FALLA con ese estado, no INCONCLUSO."""
+    _edit_start_str(c, "P2:post", "server_epoch", "f" * 32)
+    win = _r2_part_window(c, "P4c")
+    lo, hi = float(win["start_t_ms"]), float(win["end_t_ms"])
+    rc = _r2_part_restart(c, "P4c")
+    assert rc is not None, "sin restart de P4c"
+    op_id = None
+    for e in c["samples"]["bridge_tap.jsonl"]:
+        t = e.get("t_ms")
+        if e.get("dir") != "resp" or e.get("path") != "/poll" or \
+                not isinstance(t, (int, float)):
+            continue
+        if not (lo <= float(t) <= hi) or float(t) > rc:
+            continue
+        for o in (e.get("body") or {}).get("ops", []) or []:
+            if isinstance(o, dict) and o.get("verb") == "scene.reset" and not op_id:
+                op_id = str(o.get("op_id") or "")
+        if op_id:
+            break
+    assert op_id, "sin reset de P4c antes del restart"
+    for r in c["samples"]["backend.jsonl"]:
+        data = r.get("data") or {}
+        if r.get("kind") == "op.state" and str(data.get("op_id") or "") == op_id and \
+                str(data.get("state") or "") == "observado":
+            data["state"] = "parcial"
+            data["reason"] = "contenido_ajeno"
+            return
+    raise AssertionError("sin terminal observado del reset de P4c")
+
+
+def _r2_b4_net_id_de_otra_vida(c: dict[str, Any]) -> None:
+    """B4 (brief:1320): un `net_id` de P5 igual a uno de la base de P1, en vidas distintas. El motor
+    recicla los `net_id` al reiniciar el servidor; no es reutilización."""
+    p1 = _r2_rows(c, "P1:base")
+    p5 = _r2_rows(c, "P5:post_apply")
+    assert p1 and p5, "sin censos de P1/P5"
+    base = {str(r.get("net_id")) for r in p1}
+    cand = next((str(r.get("net_id")) for r in p5 if str(r.get("net_id")) not in base), None)
+    assert cand, "sin un net_id nuevo de P5"
+    # Se cambia una fila de la base que NO sea un edificio (F2P-11 exige `net_id` con parte alta
+    # negativa en los edificios): las de la CE llevan la parte alta >= 0. La clase no cambia.
+    target_row = next((r for r in p1
+                       if str(r.get("net_id") or "").split(":")[0].lstrip("-").isdigit() and
+                       int(str(r.get("net_id")).split(":")[0]) >= 0), None)
+    assert target_row is not None, "sin una fila de la base que no sea un edificio"
+    target = str(target_row.get("net_id"))
+    _mutate_row(c, "P1:base", lambda r: str(r.get("net_id")) == target,
+                lambda r: r.__setitem__("net_id", cand))
+
+
+def _r2_l1_vida_sin_identidad(c: dict[str, Any]) -> None:
+    """L1 (brief:1325): un `restart` del servidor de más dentro de la ventana de P5, tras su último
+    trabajo. Abre una vida sin identidad; las 13 pasan, pero el veredicto global no puede ser PASA."""
+    win = _r2_part_window(c, "P5")
+    t = float(win["end_t_ms"]) - 1000.0
+    rows = c["samples"]["backend.jsonl"]
+    seq = max(int(r.get("seq") or 0) for r in rows) + 1
+    rows.append({"seq": seq, "t_ms": t, "kind": "restart",
+                 "data": {"target": "server", "epoch": "e4" * 16}})
+
+
+R2_POSITIVES: dict[str, dict[str, Any]] = {
+    "r2_b1_hello_lease_antes_restart": {"apply": _r2_b1_hello_lease_antes_restart},
+    "r2_b4_net_id_de_otra_vida": {"apply": _r2_b4_net_id_de_otra_vida},
+}
+
+R2_NEGATIVES: dict[str, dict[str, Any]] = {
+    "r2_b3_base_invalida_extra_ce": {"apply": _r2_b3_base_invalida_extra_ce,
+                                     "expected_exit_code": 2},
+    "r2_m2_terminal_p4c_independiente": {"apply": _r2_m2_terminal_p4c_independiente,
+                                         "expected_exit_code": 1},
+    "r2_l1_vida_sin_identidad": {"apply": _r2_l1_vida_sin_identidad,
+                                 "expected_exit_code": 2},
+}
+
+
 MUTANTS: dict[str, dict[str, Any]] = {
     "creation_suppressed": {"apply": _m_creation_suppressed, "expected_exit_code": 1,
                             "must_fail_checks": ["F2P-01"],
@@ -11132,7 +11354,8 @@ def mutate(campaign: dict[str, Any], name: str) -> dict[str, Any]:
             SOL_MUTANTS_R14.get(name) or SOL_NEGATIVES_R14.get(name) or
             SOL_POSITIVES_R14.get(name) or SOL_MUTANTS_R15.get(name) or
             SOL_NEGATIVES_R15.get(name) or SOL_POSITIVES_R15.get(name) or
-            ID_POSITIVES.get(name) or ID_NEGATIVES.get(name))
+            ID_POSITIVES.get(name) or ID_NEGATIVES.get(name) or
+            R2_POSITIVES.get(name) or R2_NEGATIVES.get(name))
     if spec is None:
         raise KeyError(name)
     spec["apply"](c)

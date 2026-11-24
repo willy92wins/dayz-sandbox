@@ -187,8 +187,28 @@ los dos lados; los casa por la vida del servidor (`_server_lives`, `_job_life_pr
   los censos de la vida anterior a cada reinicio del servidor: si esas vidas no casan, dan INCONCLUSO
   `server_life_unbound`, después de sus FALLA que no dependen de ellas; un extra o una reaparición
   que solo fallaría porque la base vacía no lo exime no da FALLA.
+- **La base de P1 inválida por cualquier razón (ronda 2, B3, brief:1319):** si `P1:base` no vale por
+  páginas perdidas, frescura, un `/hello` del producto después de su entrega o la vida sin casar, lo
+  que depende de la base da INCONCLUSO `baseline_unbacked` (nunca FALLA ni PASA). En F2P-09 no deciden
+  los motivos `extras=`, `extras:` y `reuses_baseline_nets`; los FALLA independientes siguen decidiendo
+  en el orden de siempre. En F2P-07 no deciden las clases de la CE en la zona ni sus `net_id`; el
+  terminal acreditado de P4c se juzga **antes** del guardián (ronda 2, M2), para que un reset
+  `parcial/contenido_ajeno` dé FALLA aunque la base no case.
+- **Reinicio del servidor acreditado (ronda 2, B1, brief:1318):** por cada `restart` del servidor de
+  la parte, se toma el primer `/hello` aceptado **posterior** a ese `restart` y se compara con el
+  último aceptado **anterior** a ese mismo `restart`. El mod vuelve a saludar en la misma vida cuando
+  vence el lease (`DSBX_Peer.c:882-899`); ese `/hello` repetido antes del `restart` no acredita una
+  vida nueva.
+- **Reutilización de `net_id` (ronda 2, B4, brief:1320):** se mira dentro de una misma vida, con la
+  pareja (vida, `net_id`). El motor recicla los `net_id` al reiniciar el servidor; entre vidas
+  distintas un `net_id` igual no dice nada. La exención del botín por clase sigue usando las clases de
+  P1.
+- **Una vida registrada dentro de la partida que no casa (ronda 2, L1, brief:1325):** si ninguna
+  comprobación la usa y todo lo demás pasa, el veredicto global no es PASA: INCONCLUSO con
+  `server_life_unbound` en `reasons`. Un `restart` de más tras el último trabajo de P5 deja una vida
+  sin identidad; no puede quedar en PASA.
 - `metrics.server_lives` resume cada vida (`desde_t_ms`, `hasta_t_ms`, `casa`, `motivo`, `producto`
-  y `sonda`); es diagnóstico y no decide nada.
+  y `sonda`); es diagnóstico y no decide nada, salvo el caso L1 anterior.
 - Los estímulos crudos (`per_spawn_raw`, `per_cleanup_qa`) no son trabajos: se validan como antes.
 
 Los **estímulos crudos** (`per_spawn_raw` y `per_cleanup_qa`) pasan por la misma validación de origen:
@@ -529,11 +549,14 @@ propia línea confirmatoria.
 - **Última posición conocida (R-09).** Para F2P-07, la última posición de una entidad de una
   generación de F2 es la de la **última medición válida anterior al reinicio** que la contenga, no la
   de nacimiento. Una entidad de una clase de la escena 1 que reaparezca a menos de 2 m de esa posición
-  (aunque no case con el documento) → FALLA. Los reinicios se acreditan con el epoch del `/hello`
-  nuevo, el evento de reinicio del runner y el mismo `storage.id`; el `server_epoch` de la parte, si
+  (aunque no case con el documento) → FALLA. Los reinicios se acreditan con el epoch del primer
+  `/hello` aceptado **posterior** al `restart` (comparado con el último aceptado **anterior** a ese
+  mismo `restart`; un `/hello` repetido por el lease antes del `restart` no acredita una vida nueva,
+  B1), el evento de reinicio del runner y el mismo `storage.id`; el `server_epoch` de la parte, si
   está, tiene que coincidir con ese `/hello`; si no está, no falta nada. Reutilizar el epoch anterior
   → INCONCLUSO. Esa «última medición válida» es de la vida del servidor anterior al reinicio, con el
-  epoch del producto en ella; si esa vida no casa (§2), F2P-07 da INCONCLUSO `server_life_unbound`.
+  epoch del producto en ella; si esa vida no casa (§2), F2P-07 da INCONCLUSO `server_life_unbound`; si
+  la base de P1 no vale por cualquier razón, lo que depende de ella da `baseline_unbacked` (B3).
 - `surface_y_m` tiene que salir en las filas y variar con la posición; constante o ausente → FALLA
   (`surface_y_constant` / `surface_y_missing`), y F2P-11 no PASA.
 - `net_id=="0:0"` en una entidad creada → FALLA (`net_id_zero`).
@@ -560,6 +583,13 @@ El oráculo lleva estas negativas, y las pruebas offline comprueban que dan FALL
   `restart` o un `restart` del servidor sin reinicio (`ID_NEGATIVES`, INCONCLUSO). La positiva con los
   ids del juego (la sonda con los suyos y el producto con una `inst` y un epoch distintos) da PASA
   (`ID_POSITIVES`).
+- **ronda 2 (brief:1317-1327):** `P1:base` inválida con el botín de la CE en P5 da INCONCLUSO
+  `baseline_unbacked`, nunca FALLA (`R2_NEGATIVES: r2_b3_base_invalida_extra_ce`); el terminal de P4c
+  `parcial/contenido_ajeno` con la base sin casar da FALLA en F2P-07 (`r2_m2_terminal_p4c_independiente`);
+  una vida registrada dentro de la partida sin identidad da INCONCLUSO `server_life_unbound`
+  (`r2_l1_vida_sin_identidad`). Las positivas `r2_b1_hello_lease_antes_restart` (un `/hello` repetido
+  por el lease antes del `restart`) y `r2_b4_net_id_de_otra_vida` (un `net_id` de P5 igual a uno de la
+  base de P1, en otra vida) dan PASA (`R2_POSITIVES`).
 
 `qa/f2p_mutants.py` expone `SECTION6_MUTANTS` y `SECTION6_NEGATIVES`: el mapa explícito de cada punto de
 §6 del brief a los mutantes/negativas reales que lo tumban. Las pruebas offline verifican que no falta
