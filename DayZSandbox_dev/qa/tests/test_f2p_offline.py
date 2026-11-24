@@ -1610,6 +1610,32 @@ class TestF2POracleOffline(unittest.TestCase):
         self.assertEqual(v["exit_code"], 2, msg=json.dumps(v, indent=2))
         self.assertIn("server_life_unbound", v["reasons"], msg=v["reasons"])
 
+    def test_r2_b4b_net_reciclado_extra_falla(self) -> None:
+        # B4 (brief:1320), la otra mitad: en P5 una raíz viva con el `net_id` de una fila de P1 que
+        # no es edificio y con una clase de la escena 1 que no es de la base es un extra; el `net_id`
+        # reciclado en otra vida no la exime. Con 38d0de4: PASA (la exime por `net_id`).
+        campaign = f2p_mutants.mutate(_load_fixture(), "r2_b4b_net_reciclado_extra")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "r2_b4b"), repo_root=REPO_ROOT)
+        c_map = _checks(v)
+        self.assertEqual(v["exit_code"], 1, msg=json.dumps(v, indent=2))
+        self.assertEqual(c_map["F2P-09"]["status"], "fail", msg=c_map["F2P-09"])
+        self.assertTrue(str(c_map["F2P-09"]["detail"]).startswith("extras:"),
+                        msg=c_map["F2P-09"])
+
+    def test_r2_l1_vida_sin_producto_inconcluso(self) -> None:
+        # L1 (brief:1325) con el `hello` de la sonda en la vida nueva y SIN `/hello` del producto:
+        # la vida no casa por `product_ids=0`. Con 38d0de4: PASA; con el mutante de `_server_lives`
+        # (`len(prod_ids) > 1`): PASA.
+        campaign = f2p_mutants.mutate(_load_fixture(), "r2_l1_vida_sin_producto")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "r2_l1p"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 2, msg=json.dumps(v, indent=2))
+        self.assertIn("server_life_unbound", v["reasons"], msg=v["reasons"])
+        lives = v["metrics"]["server_lives"]
+        self.assertFalse(lives[-1]["casa"], msg=lives[-1])
+        self.assertIn("product_ids=0", str(lives[-1]["motivo"]), msg=lives[-1])
+
     def test_r2g_g01_gate_build_rehello_pasa(self) -> None:
         # G-01 (brief:1321): el caso se construye como el constructor del gate (`_as_offline_run` y
         # después `mutate`). El `/hello` sintético de la sonda repite `build`/`proto` de la campaña;

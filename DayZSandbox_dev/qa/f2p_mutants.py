@@ -11185,6 +11185,57 @@ def _r2_l1_vida_sin_identidad(c: dict[str, Any]) -> None:
                  "data": {"target": "server", "epoch": "e4" * 16}})
 
 
+def _r2_b4b_net_reciclado_extra(c: dict[str, Any]) -> None:
+    """B4 (brief:1320), la otra mitad: la exención por `net_id` de la base tampoco vale entre vidas.
+    En P5, una raíz viva con el `net_id` de una fila de P1 que no es un edificio y con una clase de
+    la escena 1 que no es de la base: el motor recicló ese `net_id` y en P5 es otro objeto. La
+    exención por `net_id` de 38d0de4 lo tapaba; con la pareja (vida, `net_id`) es un extra."""
+    p1 = _r2_rows(c, "P1:base")
+    p5 = _r2_rows(c, "P5:post_apply")
+    assert p1 and p5, "sin censos de P1/P5"
+    base = {str(r.get("net_id")) for r in p1}
+    base_classes = {str(r.get("class_name")) for r in p1}
+    target_net = None
+    for r in p1:
+        net = str(r.get("net_id") or "")
+        hi = net.split(":")[0]
+        if hi.lstrip("-").isdigit() and int(hi) >= 0 and \
+                any(str(x.get("net_id")) == net for x in p5):
+            target_net = net
+            break
+    assert target_net is not None, "sin un net_id de la base no-edificio en P5"
+    # Clase de la escena 1 que no sea de la base: la de una fila nueva de P5 (raíz y viva).
+    new_cls = next((str(r.get("class_name")) for r in p5
+                    if str(r.get("net_id")) not in base and
+                    str(r.get("parent_net_id") or "") == "" and
+                    int(r.get("alive_b", 0)) == 1 and
+                    str(r.get("class_name")) not in base_classes), None)
+    assert new_cls, "sin una clase de la escena 1 fuera de la base"
+    assert any(str(r.get("net_id")) == target_net for r in p5), \
+        "sin la fila de P5 con el net_id reciclado"
+
+    def fn(rows: list[dict[str, Any]]) -> None:
+        for r in rows:
+            if str(r.get("net_id")) == target_net:
+                r["class_name"] = new_cls
+                r["parent_net_id"] = ""
+                r["alive_b"] = 1.0
+    _edit_rows(c, "P5:post_apply", fn)
+
+
+def _r2_l1_vida_sin_producto(c: dict[str, Any]) -> None:
+    """L1 (brief:1325) con el `hello` de la sonda en la vida nueva y SIN `/hello` del producto: la
+    vida no casa por `product_ids=0` (no por `probe_hello_missing`). Con el mutante de
+    `_server_lives` (`len(prod_ids) > 1`) la vida casaría y el veredicto sería PASA."""
+    win = _r2_part_window(c, "P5")
+    t = float(win["end_t_ms"]) - 1000.0
+    rows = c["samples"]["backend.jsonl"]
+    seq = max(int(r.get("seq") or 0) for r in rows) + 1
+    rows.append({"seq": seq, "t_ms": t, "kind": "restart",
+                 "data": {"target": "server", "epoch": "e4" * 16}})
+    _add_bridge_hello(c, "server", "a5a5" * 8, t + 100.0)
+
+
 R2_POSITIVES: dict[str, dict[str, Any]] = {
     "r2_b1_hello_lease_antes_restart": {"apply": _r2_b1_hello_lease_antes_restart},
     "r2_b4_net_id_de_otra_vida": {"apply": _r2_b4_net_id_de_otra_vida},
@@ -11197,6 +11248,10 @@ R2_NEGATIVES: dict[str, dict[str, Any]] = {
                                          "expected_exit_code": 1},
     "r2_l1_vida_sin_identidad": {"apply": _r2_l1_vida_sin_identidad,
                                  "expected_exit_code": 2},
+    "r2_b4b_net_reciclado_extra": {"apply": _r2_b4b_net_reciclado_extra,
+                                   "expected_exit_code": 1},
+    "r2_l1_vida_sin_producto": {"apply": _r2_l1_vida_sin_producto,
+                                "expected_exit_code": 2},
 }
 
 

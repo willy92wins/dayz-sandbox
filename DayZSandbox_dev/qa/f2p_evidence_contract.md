@@ -590,6 +590,12 @@ El oráculo lleva estas negativas, y las pruebas offline comprueban que dan FALL
   (`r2_l1_vida_sin_identidad`). Las positivas `r2_b1_hello_lease_antes_restart` (un `/hello` repetido
   por el lease antes del `restart`) y `r2_b4_net_id_de_otra_vida` (un `net_id` de P5 igual a uno de la
   base de P1, en otra vida) dan PASA (`R2_POSITIVES`).
+- **ronda 2b (las dos negativas que faltan):** en P5 una raíz viva con el `net_id` de una fila de P1
+  que no es edificio y con una clase de la escena 1 que no es de la base da FALLA en F2P-09
+  (`extras:<net_id>`): el `net_id` reciclado en otra vida no la exime
+  (`R2_NEGATIVES: r2_b4b_net_reciclado_extra`). Y una vida nueva con el `hello` de la sonda y sin
+  `/hello` del producto no casa por `product_ids=0` y da INCONCLUSO `server_life_unbound`
+  (`r2_l1_vida_sin_producto`), no por `probe_hello_missing`.
 
 `qa/f2p_mutants.py` expone `SECTION6_MUTANTS` y `SECTION6_NEGATIVES`: el mapa explícito de cada punto de
 §6 del brief a los mutantes/negativas reales que lo tumban. Las pruebas offline verifican que no falta
