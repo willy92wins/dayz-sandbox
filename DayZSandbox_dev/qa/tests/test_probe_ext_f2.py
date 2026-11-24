@@ -115,7 +115,7 @@ def _cols(pages):
     return list(p0["ncol"]), list(p0["scol"])
 
 
-def _census(ctx, tag, radius, select_all=None, include_dir=0, center=CENTER, free=True):
+def _census(ctx, tag, radius, select_all=None, include_dir=0, center=CENTER, free=True, director_uid=""):
     nums = {
         "center_x_m": float(center[0]),
         "center_z_m": float(center[1]),
@@ -124,7 +124,10 @@ def _census(ctx, tag, radius, select_all=None, include_dir=0, center=CENTER, fre
     }
     if select_all is not None:
         nums["select_all_entityai_b"] = float(select_all)
-    out = _issue(ctx, "per_census_start", {"area_tag": tag}, nums)
+    strs = {"area_tag": tag}
+    if director_uid:
+        strs["director_uid"] = director_uid
+    out = _issue(ctx, "per_census_start", strs, nums)
     if out.status != "done":
         return out, None, ""
     job_id = str(out.payload["str"]["job"])
@@ -298,7 +301,8 @@ class CensusSelectAllE2E(_E2EBase):
         self.assertEqual([r for r in pages["rows"] if r["owner_uid"]], [])
 
     def test_mode1_include_director_and_radius_120(self):
-        _o, pages, state = _census(self.ctx, "dir", 120.0, select_all=1, include_dir=1)
+        _o, pages, state = _census(self.ctx, "dir", 120.0, select_all=1, include_dir=1,
+                                   director_uid=fake_ext_persist.DIRECTOR_UID)
         self.assertEqual(state, "done")
         owners = [r for r in pages["rows"] if r["owner_uid"] == fake_ext_persist.DIRECTOR_UID]
         self.assertEqual(sorted(r["class_name"] for r in owners), ["Apple", "Jeans_Blue"])
