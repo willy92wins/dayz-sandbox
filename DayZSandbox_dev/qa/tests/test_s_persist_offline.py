@@ -8258,6 +8258,193 @@ class TestSPersistOracleOffline(unittest.TestCase):
                         seen.append(_only_non_pass(verdict))
                 self.assertEqual(seen[0], seen[1], msg=name)
 
+    _REAB_MARCAS_QA: tuple[float, ...] = (0.7325, 0.6150, 0.8450)
+    _REAB_NET_FUGA: str = "1:9301"
+    _REAB_NET_CTRL: str = "1:9302"
+    _REAB_NET_CTRL_HIJO: str = "1:9303"
+    _REAB_PARTES: tuple[tuple[str, str, str], ...] = (
+        ("run", "", "1122334455667788"),
+        ("mut-unprotected_leak", "omit_nopersistency_flag", "2233445566778899"),
+        ("mut-foreign_wiped", "reset_wipe_radius_25m", "33445566778899aa"),
+        ("mut-census_resource_bypass", "census_resource_bypass", "445566778899aabb"),
+    )
+
+    @classmethod
+    def _reab_tiene_marca_qa(cls, fila: dict[str, Any], centinelas: set[str]) -> bool:
+        """Predicado sin memoria de la sonda en t6 (DSBX_QA_X_Persist.c:3423-3447 y :3591)."""
+        clase = str(fila.get("class_name") or "")
+        max_hp = float(fila.get("max_hp", 0.0))
+        hp = float(fila.get("health_hp", 0.0))
+        if clase not in centinelas or max_hp <= 0.0:
+            return False
+        return any(abs(hp - max_hp * ratio) <= 1e-2 for ratio in cls._REAB_MARCAS_QA)
+
+    def _reab_reinicio_motor_en_mutante(
+        self,
+        part_dir: Path,
+        builder: "_SyntheticPartBuilder",
+        *,
+        forzar_fuga_en_t6: bool = False,
+    ) -> None:
+        """Transforma ``mut-unprotected_leak`` al reinicio del motor: net_id nuevos, pers_id iguales y t6 sin memoria."""
+        fuga_pre = self._census_row(part_dir, "t3_post_reset_census:area_d", "d_prop_leak")
+        fuga_pers = str(fuga_pre["pers_id"])
+        ctrl_pers = str(builder.entities_by_lid["c_persistent_control"]["pers_id"])
+        hijo_pers = str(builder.entities_by_lid["c_persistent_control_child"]["pers_id"])
+
+        capturadas_d: list[dict[str, Any]] = []
+
+        def _renovar_area_d(page: types.SimpleNamespace) -> None:
+            for fila in page.rows:
+                if str(fila.get("pers_id") or "") == fuga_pers:
+                    fila["net_id"] = self._REAB_NET_FUGA
+                    capturadas_d.append(copy.deepcopy(fila))
+
+        self._e9_edit_pages(part_dir, {"t5_post_restart_census:area_d"}, _renovar_area_d)
+        self.assertEqual(len(capturadas_d), 1, msg="fuga ausente en t5 de area_d")
+        fuga_t5 = capturadas_d[0]
+
+        conteo_c = {"ctrl": 0, "hijo": 0}
+
+        def _renovar_area_c(page: types.SimpleNamespace) -> None:
+            for fila in page.rows:
+                pid = str(fila.get("pers_id") or "")
+                if pid == ctrl_pers:
+                    fila["net_id"] = self._REAB_NET_CTRL
+                    conteo_c["ctrl"] += 1
+                elif pid == hijo_pers:
+                    fila["net_id"] = self._REAB_NET_CTRL_HIJO
+                    fila["parent_net_id"] = self._REAB_NET_CTRL
+                    conteo_c["hijo"] += 1
+
+        self._e9_edit_pages(part_dir, {"t5_post_restart_census:area_c"}, _renovar_area_c)
+        self.assertEqual(conteo_c, {"ctrl": 1, "hijo": 1}, msg="control o hijo ausente en t5 de area_c")
+
+        centinelas = set(builder.fixture["sentinel_classes"])
+        if forzar_fuga_en_t6 or not self._reab_tiene_marca_qa(fuga_t5, centinelas):
+            fila_t6 = copy.deepcopy(fuga_t5)
+            fila_t6["net_id"] = self._REAB_NET_FUGA
+            fila_t6["pers_id"] = fuga_pers
+            fila_t6["own_b"] = 0.0
+            fila_t6["own_logical_id"] = ""
+            fila_t6["alive_b"] = 1.0
+            self._add_t6_rows(part_dir, builder, "area_d", [fila_t6])
+
+    def _reab_evaluar_spike_con_reinicio_motor(
+        self, base: Path, *, forzar_fuga_en_t6: bool
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Construye las cuatro partes en ``base``, aplica el reinicio del motor al mutante y agrega el spike."""
+        veredicto_mut: dict[str, Any] | None = None
+        for nombre, fallo, nonce in self._REAB_PARTES:
+            builder = _SyntheticPartBuilder(nombre, nonce=nonce, fault_code=fallo)
+            part_dir = builder.build_into(base / nombre)
+            if nombre == "mut-unprotected_leak":
+                self._reab_reinicio_motor_en_mutante(
+                    part_dir, builder, forzar_fuga_en_t6=forzar_fuga_en_t6
+                )
+            veredicto = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            gate_core.write_json(part_dir / "verdict.json", veredicto)
+            if nombre == "mut-unprotected_leak":
+                veredicto_mut = veredicto
+        self.assertIsNotNone(veredicto_mut)
+        agregado = f03_common.aggregate_spike(base, "S-persist", repo_root=REPO_ROOT)
+        assert veredicto_mut is not None
+        return veredicto_mut, agregado
+
+    def test_reab_fuga_identificable_sin_memoria_tras_el_reinicio(self) -> None:
+        """Contrato de dato para ``scene_d`` (brief :143, :189, :284, :342).
+
+        Comprueba que toda entidad de ``scene_d`` con ``must_vanish_on_restart_b == 1`` pertenezca a
+        ``sentinel_classes`` y nazca con una de las tres marcas QA de salud de :143 (0.7325, 0.6150 u 0.8450)
+        a 1e-9. En las partidas reales del 24-nov el motor conservo ``pers_id`` y salud pero renovo los
+        ``net_id`` (``Barrel_Yellow``: 0:1056->0:183 en diag, 0:1032->0:195 en retail) y la sonda arranco sin
+        registros (``own_b=0``, ``own_logical_id=''``), limpiando en t6 solo por marca (``cleaned_raw_n=1``);
+        sin marca, ``per_cleanup_qa`` (:189) no puede borrar ``d_prop_leak`` en t6 (:284) y el mutante no cae
+        solo por PER-08 (:342).
+        """
+        fixture = json.loads(
+            (QA_DIR / "fixtures" / "s_persist_fixture.json").read_text(encoding="utf-8")
+        )
+        centinelas = set(fixture["sentinel_classes"])
+        entidades_d = [
+            ent
+            for ent in fixture["scenes"]["scene_d"]["entities"]
+            if int(ent.get("must_vanish_on_restart_b", 0)) == 1
+        ]
+        self.assertTrue(entidades_d, msg="scene_d sin entidades con must_vanish_on_restart_b == 1")
+        for ent in entidades_d:
+            lid = str(ent.get("logical_id") or "")
+            clase = str(ent.get("class_name") or "")
+            ratio = float(ent.get("health_mark_ratio", 0.0))
+            self.assertIn(clase, centinelas, msg=f"{lid}:{clase}")
+            self.assertTrue(
+                any(abs(ratio - marca) <= 1e-9 for marca in self._REAB_MARCAS_QA),
+                msg=f"{lid}:health_mark_ratio={ratio}",
+            )
+
+    def test_reab_mutante_con_reinicio_del_motor_cae_solo_por_per08(self) -> None:
+        """Mutante ``mut-unprotected_leak`` con reinicio de motor (brief :143, :189, :284, :342).
+
+        Comprueba que, tras renovar los ``net_id`` en t5 conservando los ``pers_id`` y aplicar en t6 una
+        limpieza sin memoria que solo borra por clase centinela y marca QA de :143 (:189), la parte mutante
+        da ``exit_code == 1`` con ``_only_non_pass == {"PER-08": "fail"}`` y detalle
+        ``reappeared_in_area_d:Barrel_Red`` (:342), sin falsos fallos en t6 (:284), y que el agregado de las
+        cuatro partes da ``exit_code == 0`` y ``verdict == "PASA"``. Se apoya en las partidas reales del
+        24-nov: el motor renovo ``net_id`` (``Barrel_Yellow``: 0:1056->0:183 en diag, 0:1032->0:195 en retail),
+        conservo ``pers_id`` y salud, arranco sin registros (``own_b=0``, ``own_logical_id=''``) y borro el
+        control en t6 por marca (``cleaned_raw_n=1``, ``area_c`` vacia).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            veredicto_mut, agregado = self._reab_evaluar_spike_con_reinicio_motor(
+                Path(tmp), forzar_fuga_en_t6=False
+            )
+            self.assertEqual(veredicto_mut["exit_code"], 1, msg=json.dumps(veredicto_mut, indent=2))
+            self.assertEqual(
+                _only_non_pass(veredicto_mut),
+                {"PER-08": "fail"},
+                msg=json.dumps(veredicto_mut["checks"], indent=2),
+            )
+            detalle_per08 = _checks_by_id(veredicto_mut)["PER-08"]["detail"]
+            self.assertIn("reappeared_in_area_d:Barrel_Red", detalle_per08)
+            self.assertEqual(agregado["exit_code"], 0, msg=json.dumps(agregado, indent=2))
+            self.assertEqual(agregado["verdict"], "PASA", msg=json.dumps(agregado, indent=2))
+
+    def test_reab_superviviente_marcado_sigue_tumbando_per09(self) -> None:
+        """Guarda de t6: llevar marca QA no excusa a un superviviente (brief :143, :189, :284, :342).
+
+        Aplica el mismo reinicio de motor sobre ``mut-unprotected_leak``, pero deja viva la fuga en el censo
+        t6 de ``area_d`` aunque lleve marca de :143, simulando un fallo de ``per_cleanup_qa`` (:189).
+        Comprueba que la parte da ``_only_non_pass == {"PER-08": "fail", "PER-09": "fail"}`` con detalle de
+        PER-09 que empieza por ``t6_cleanup_survivors:`` y contiene ``Barrel_Red:1:9301`` (:284), y que el
+        agregado de las cuatro partes da ``exit_code == 2`` con
+        ``reasons == ["mutant_wrong_check:unprotected_leak:PER-09"]`` (:342). Se apoya en las partidas reales
+        del 24-nov: tras reiniciar el motor conserva ``pers_id`` y salud con ``net_id`` nuevo y sin memoria en
+        la sonda (``own_b=0``, ``own_logical_id=''``), por lo que el cierre de identidad del evaluador sigue
+        atribuyendo la fuga viva en t6 al test.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            veredicto_mut, agregado = self._reab_evaluar_spike_con_reinicio_motor(
+                Path(tmp), forzar_fuga_en_t6=True
+            )
+            self.assertEqual(veredicto_mut["exit_code"], 1, msg=json.dumps(veredicto_mut, indent=2))
+            self.assertEqual(
+                _only_non_pass(veredicto_mut),
+                {"PER-08": "fail", "PER-09": "fail"},
+                msg=json.dumps(veredicto_mut["checks"], indent=2),
+            )
+            detalle_per09 = _checks_by_id(veredicto_mut)["PER-09"]["detail"]
+            self.assertTrue(
+                detalle_per09.startswith("t6_cleanup_survivors:"),
+                msg=detalle_per09,
+            )
+            self.assertIn(f"Barrel_Red:{self._REAB_NET_FUGA}", detalle_per09)
+            self.assertEqual(agregado["exit_code"], 2, msg=json.dumps(agregado, indent=2))
+            self.assertEqual(
+                agregado["reasons"],
+                ["mutant_wrong_check:unprotected_leak:PER-09"],
+                msg=json.dumps(agregado, indent=2),
+            )
+
 
 class _O5DirectorDiscBuilder(_SyntheticPartBuilder):
     """O5: el constructor sintetico con los discos de la P2h; el constructor base no cambia.
