@@ -18,13 +18,13 @@ param(
 )
 $ErrorActionPreference = 'Continue'
 # probe-lib.ps1 fija $script:Root a su propia carpeta: por eso aqui la raiz de trabajo se llama $WorkRoot.
-. 'C:\Users\guill\MCPTest_autotest\harness\probe-lib.ps1'
+. "$env:USERPROFILE\MCPTest_autotest\harness\probe-lib.ps1"
 $ErrorActionPreference = 'Continue'
 $S = "$WorkRoot\profiles_$Build\server"; $C = "$WorkRoot\profiles_$Build\client"
 $B1 = "$WorkRoot\b1"
 $Port = 2502
 $Py = 'C:\Python314\python.exe'
-$Lease = 'C:\Users\guill\.claude\tools\gpu_lease.py'
+$Lease = $(if ($env:DSBX_GPU_LEASE) { $env:DSBX_GPU_LEASE } else { throw 'falta DSBX_GPU_LEASE: ruta de gpu_lease.py' })
 $LeaseSesion = 'f1b-peers-partida'
 $Log = "$WorkRoot\run_$Build.log"
 function L([string]$m) { $line = "$(Get-Date -Format 'HH:mm:ss.fff') $m"; Add-Content -Path $Log -Value $line -Encoding UTF8; Write-Host $line }
