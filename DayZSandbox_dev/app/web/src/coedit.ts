@@ -29,6 +29,7 @@ export interface CoeditView {
   readAtPerf: number;
   canUndo: boolean;
   canRedo: boolean;
+  historySince: number;
 }
 
 export interface CoeditState {
@@ -123,6 +124,7 @@ export async function refreshCoedit(): Promise<void> {
       ai_last_call_age_ms?: number | null;
       can_undo?: boolean;
       can_redo?: boolean;
+      history_since?: number;
     } | null;
     if (!d) return;
     set({
@@ -132,6 +134,7 @@ export async function refreshCoedit(): Promise<void> {
         readAtPerf: performance.now(),
         canUndo: d.can_undo === true,
         canRedo: d.can_redo === true,
+        historySince: typeof d.history_since === 'number' ? d.history_since : 0,
       },
     });
   } catch {
@@ -155,12 +158,18 @@ function mergeBatches(recs: BatchRecord[]): void {
 let historyInFlight = false;
 
 export async function loadHistory(): Promise<void> {
-  const info = getState().docInfo;
-  if (!info || historyInFlight) return;
-  if (knownRev >= info.rev) return;
-  const since = knownRev >= 0 ? knownRev : Math.max(0, info.rev - HISTORY_WINDOW);
+  if (historyInFlight) return;
   historyInFlight = true;
   try {
+    // La primera vez hace falta saber desde dónde guarda tandas el backend (history_since).
+    if (knownRev < 0) await refreshCoedit();
+    const info = getState().docInfo;
+    if (!info || knownRev >= info.rev) return;
+    const floor = cs.view ? cs.view.historySince : 0;
+    // La rev 1 es el documento de partida, sin tanda: solo falta algo si el suelo es mayor.
+    if (knownRev < 0 && floor > 1) set({ historyGap: true });
+    const since =
+      knownRev >= 0 ? knownRev : Math.max(floor, info.rev - HISTORY_WINDOW, 0);
     const res = await fetch(`/api/scene/changes?since_rev=${since}&timeout_s=0`, {
       credentials: 'same-origin',
     });
@@ -247,8 +256,9 @@ export function isInverse(b: BatchRecord): boolean {
   return name === 'undo' || name === 'redo' || name === 'revert';
 }
 
+// «N cambios» = las operaciones de la tanda, como en el prototipo (estudio.html:3160).
 export function changeCount(b: BatchRecord): number {
-  return Array.isArray(b.fp) ? b.fp.length : 0;
+  return Array.isArray(b.ops) ? b.ops.length : 0;
 }
 
 export function batchLabel(b: BatchRecord): string {

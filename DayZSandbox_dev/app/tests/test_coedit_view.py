@@ -4,7 +4,7 @@ import unittest
 from .test_server import AK, HK, Base, move
 from .test_server_web import FakeClock, cookie_header, login, raw
 
-KEYS = {"ok", "paused", "ai_last_call_age_ms", "can_undo", "can_redo"}
+KEYS = {"ok", "paused", "ai_last_call_age_ms", "can_undo", "can_redo", "history_since"}
 
 
 class CoeditBase(Base):
@@ -85,6 +85,22 @@ class T13UltimaLlamada(CoeditBase):
         self.assertEqual(self.view()["ai_last_call_age_ms"], 2000)
 
 
+class T15Historial(CoeditBase):
+    def test_history_since_es_la_menor_que_acepta_changes(self):
+        def since():
+            return self.view()["history_since"]
+        first = since()
+        self.assertEqual(first, self.env.store.snapshot()["rev"])
+        for i in range(3):
+            self.env.ops([move("obj-01", 7000 + i, 7000)])
+        s = since()
+        self.assertEqual(s, first)
+        st, body = self.env.req("GET", "/api/scene/changes?since_rev=%d&timeout_s=0" % s)
+        self.assertEqual((st, len(body["batches"])), (200, 3))
+        st, body = self.env.req("GET", "/api/scene/changes?since_rev=%d&timeout_s=0" % (s - 1))
+        self.assertEqual(body.get("code"), "stale_base")
+
+
 class T14Pilas(CoeditBase):
     def flags(self):
         v = self.view()
@@ -121,8 +137,8 @@ class T14Pilas(CoeditBase):
                   {"doc_id": self.doc_id(), "request_id": "rv-2"})
         store = self.env.store
         before = {k: list(v) for k, v in store._undo.items()}
-        self.assertEqual(store.stacks({"role": "human", "id": "web"}),
-                         store.stacks({"role": "human", "id": "web"}))
+        self.assertEqual(store.coedit_view({"role": "human", "id": "web"}),
+                         store.coedit_view({"role": "human", "id": "web"}))
         self.assertEqual({k: list(v) for k, v in store._undo.items()}, before)
 
 

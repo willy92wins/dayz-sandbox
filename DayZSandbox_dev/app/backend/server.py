@@ -244,13 +244,13 @@ class Backend:
             self.clients.discard(q)
 
     def coedit_view(self):
-        """GET /api/coedit (F6-web parte 2 §2.1): pausa, última llamada de la IA y pilas de la persona."""
+        """GET /api/coedit (F6-web parte 2 §2.1): pausa, última llamada de la IA, pilas e historial."""
         with self.store.lock:
             paused = self.paused
             last = self.ai_last_call
         age = None if last is None else max(0, int((self.clock() - last) * 1000))
         view = {"ok": True, "paused": paused, "ai_last_call_age_ms": age}
-        view.update(self.store.stacks(HUMAN))
+        view.update(self.store.coedit_view(HUMAN))
         return view
 
     def set_paused(self, paused):
