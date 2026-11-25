@@ -4450,7 +4450,7 @@ def _duplicate_string_calls(text):
 
 QA_PERSIST_C = (QA_DIR / "probe" / "DayZSandbox_QA" / "scripts"
                 / "5_Mission" / "DSBX_QA_X_Persist.c")
-REF_0D82BC2_C = REPO_ROOT / "_encargo" / "p2j" / "DSBX_QA_X_Persist_0d82bc2.c"
+REF_0D82BC2_C = QA_DIR / "fixtures" / "p2j" / "DSBX_QA_X_Persist_0d82bc2.c"
 
 
 class TestP2jOneCallPerPurgeRowStatement(_GuardedTestCase):
