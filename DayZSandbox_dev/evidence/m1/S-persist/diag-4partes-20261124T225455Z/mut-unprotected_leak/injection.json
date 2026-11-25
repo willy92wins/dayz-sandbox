@@ -1,0 +1,11 @@
+{
+  "applied": true,
+  "kind": "enforce_fault",
+  "mutant": "unprotected_leak",
+  "observable_effect": {
+    "qa_fault": "omit_nopersistency_flag",
+    "scene_id": "scene_a"
+  },
+  "target": "DSBX_QA_X_Persist",
+  "when_h_ms": 155884.339
+}

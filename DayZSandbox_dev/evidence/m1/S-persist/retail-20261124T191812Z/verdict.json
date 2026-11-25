@@ -1,0 +1,20 @@
+{
+  "checks": [],
+  "error": null,
+  "exit_code": 2,
+  "id": "S-persist",
+  "members": [
+    {
+      "exit_code": 0,
+      "id": "run",
+      "reasons": [],
+      "verdict": "PASA"
+    }
+  ],
+  "metrics": {},
+  "reasons": [
+    "missing_part:mut-unprotected_leak"
+  ],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "INCONCLUSO"
+}

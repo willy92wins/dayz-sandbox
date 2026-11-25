@@ -1,0 +1,11 @@
+{
+  "applied": true,
+  "kind": "enforce_fault",
+  "mutant": "census_resource_bypass",
+  "observable_effect": {
+    "bypass": true,
+    "resource": "per_census"
+  },
+  "target": "DSBX_QA_X_Persist::HandleCensusStart",
+  "when_h_ms": 155633.987
+}

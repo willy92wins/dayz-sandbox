@@ -87,6 +87,32 @@ Evidence contract consumed by ``evaluate(part_dir)``
          (PER-09) must carry a valid ``pers_id`` other than ``"0:0:0:0"`` (oracle v2; v1 demanded
          ``"0:0:0:0"``); no two distinct entities of ``t1_pre_transition_census`` or ``t5_witness_pre_census``
          (same stage and epoch) may share one, and the witness keeps it from pre to post census (v2.1).
+     * ``per_purge_start`` + ``job_read`` + ``job_free`` (job ``resource = "per_purge"``, brief, final sections
+       2026-11-22; replaces ``per_purge_read``): the runner's order after the validated restart, ``args`` strings
+       ``director_uid``, ``expect_epoch``, rows ``scol = ["pers_id", "class_name"]``; the start ``read`` (the
+       acknowledgement) carries ``job``, ``state``, ``resource`` and ``pre_n``; every ``job_read`` page has rows
+       ``scol = ["phase", "pers_id", "class_name", "parent_pers_id", "owner_uid", "result", "net_id", "parent_net_id"]``,
+       ``ncol = ["depth_n", "emit_tick_ms", "lease_age_ms", "lease_limit_ms", "max_hp", "health_hp",
+       "confirm_tick_ms"]`` with ``phase`` in ``pre`` / ``emit`` / ``result`` (a deletion is an ``emit`` row with
+       ``emit_tick_ms > 0``; the other contiguous ``emit`` rows are the candidate's subtree in that tick; a
+       ``deleted`` result carries in ``confirm_tick_ms`` the later tick that confirmed it; clarification of
+       2026-11-22). The job is the order's ``op_id`` and its pages are the contractual 8-row slices. The accredited
+       garments are recomputed from the apply, the ``move_to_director`` transition and the old-epoch censuses with the
+       director (``purge_authorized`` is not trusted), each link tied to the old epoch, and compared by equality with
+       the raw order. The order, every waiting ``per_status`` and every read are tied to the new epoch by ``op_id``
+       (``enq`` with that ``inst``, a delivery to it, and a ``result`` whose last accepted server ``hello`` is that
+       epoch). Remnants and unattributable sentinels are judged in every post-purge census (t5 and t6); absence only
+       with t5. A remnant is an accredited ``pers_id`` in any location of those censuses (ground, another owner or a
+       world container included); an accredited garment that ends ``absent`` without a deletion, whether it is in
+       ``pre`` (it left the director's tree, O4) or not (it may have dropped next to the director before ``pre``,
+       O5), needs every director position read in a post-purge t5 census (the ``pos_x_m`` / ``pos_z_m`` of the
+       director's inventory rows) inside a complete t5 disc with a 15 m inner margin, or PER-08 is missing. The
+       runner's discs around the director (``t5_director_p<n>``, stage ``t5_post_restart_census``,
+       ``include_director_b = 1``) are t5 discs like the others, with their own area id, as a ``t5_track_*`` disc.
+     * ``per_status`` in t0 goes without ``director_uid`` and reports ``players_n``: two or more players ->
+       ``director_ambiguous`` (2 INCONCLUSO); the uid is fixed only with exactly one ready player before the first
+       baseline census (otherwise ``director_not_selected``, 2 INCONCLUSO; traces without ``players_n`` nor a runner
+       purge keep the historical fallback).
      * ``per_cleanup_qa`` (instant on ``"server"``):
        - ``read`` numbers: ``cleaned_own_n``, ``cleaned_raw_n``, ``tick_ms``, ``frame``.
        - In ``t6_post_cleanup_census`` only entities of the test count as survivors (oracle v2.1, brief :284,
@@ -103,7 +129,8 @@ Evidence contract consumed by ``evaluate(part_dir)``
      ``files: {rel_path: {"sha256": <64hex>, "size_b": int, "mtime_ns": int}}``
      before (in ``storage_snapshot_t0``) and after the run (in ``storage_restore_result``
      or ``storage_snapshot_t6`` / ``storage_snapshot_post``), plus ``restore_ok_b == 1``.
-   - ``baseline_director_foreign``: initial non-sentinel items in the director.
+   - ``baseline_director_foreign`` / ``baseline_director_sentinel`` and ``purge_authorized``: runner diagnostics,
+     never a source of truth (the director baseline is the complete t0 census of ``area_a``, also its sentinel rows).
    - ``ledger_entry``: expected scene and raw-spawn entities for the part.
    - ``ledger_spawn_recorded``: ``logical_id`` / ``tag``, ``net_id_t1``,
      ``pers_id_t1``, ``init_max_hp``, ``init_health_hp``.
@@ -137,6 +164,7 @@ import json
 import math
 import re
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -443,6 +471,10 @@ def _is_finite_num(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
 
 
+def _dict_or_empty(v: Any) -> dict[str, Any]:
+    return v if isinstance(v, dict) else {}
+
+
 def _angle_diff_deg(a: float, b: float) -> float:
     d = (float(a) - float(b)) % 360.0
     if d > 180.0:
@@ -472,6 +504,963 @@ def _valid_pers_id(val: Any) -> bool:
 
 def _is_nonzero_pers_id(val: Any) -> bool:
     return _valid_pers_id(val) and any(int(p) != 0 for p in val.split(":"))
+
+
+def _baseline_anchor_of(rows: Iterable[dict[str, Any]], owner_uid: str) -> dict[str, str]:
+    """Ancla del personaje del director: ``{pers_id: class_name}`` de las filas basales de t0 de ese jugador con un
+    ``pers_id`` valido y distinto de cero. El basal es completo (brief, ronda 2, `:537`): tambien las filas de clase
+    centinela que ya llevaba el director."""
+    if not owner_uid:
+        return {}
+    out: dict[str, str] = {}
+    for r in rows:
+        if str(r.get("owner_uid") or "") == owner_uid and _is_nonzero_pers_id(r.get("pers_id")):
+            out[str(r["pers_id"])] = str(r.get("class_name") or "")
+    return out
+
+
+def _rows_anchor_character(rows: Iterable[dict[str, Any]], owner_uid: str, anchor: dict[str, str]) -> bool:
+    """El ancla de PER-07 (O2, Sol 2 sobre 433d535): alguna fila de ese jugador con un ``pers_id`` del basal de t0
+    y la misma clase. Ese ``pers_id`` solo lo puede llevar el mismo personaje; el resto del inventario corrobora,
+    pero no se exige que sobreviva todo (un consumible basal se puede gastar)."""
+    for r in rows:
+        pid = str(r.get("pers_id") or "")
+        if (
+            str(r.get("owner_uid") or "") == owner_uid
+            and _is_nonzero_pers_id(pid)
+            and anchor.get(pid) == str(r.get("class_name") or "")
+        ):
+            return True
+    return False
+
+
+def _director_census_identity_issue(c_item: dict[str, Any], owner_uid: str, anchor: dict[str, str]) -> str:
+    """Identidad del director en UN censo (O2, Sol 3: el ancla se verifica en cada censo que se usa, nunca con los
+    ``pers_id`` de otro censo). ``""`` si el censo trae al director legible, con su uid y con el ancla; si no, el
+    motivo del ``missing``: ``director_absent_or_uid_mismatch``, ``director_identity_unanchored`` (el basal de t0 no
+    trae ningun ``pers_id`` utilizable) o ``director_character_replaced``."""
+    if (
+        not owner_uid
+        or int(c_item.get("director_present_b", 0)) != 1
+        or int(c_item.get("director_inv_readable_b", 0)) != 1
+        or str(c_item.get("director_uid") or "") != owner_uid
+    ):
+        return "director_absent_or_uid_mismatch"
+    if not anchor:
+        return "director_identity_unanchored"
+    if not _rows_anchor_character(c_item.get("rows") or [], owner_uid, anchor):
+        return "director_character_replaced"
+    return ""
+
+
+def _bridge_op_links(bridge_events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Vinculo de cada orden en la traza del puente (brief, arbitraje 7): su ``enq`` (indice e ``inst`` destino), sus
+    entregas (``deliver``, o el ``poll`` que la lleva, con su ``inst``) y su primer ``result`` no duplicado, con el
+    epoch del ultimo ``hello`` aceptado de ese peer en ese punto de la traza (el ``result`` del puente real no trae
+    ``inst``: el puente solo lo acepta del ``inst`` registrado por el ultimo ``hello``)."""
+    last_hello: dict[str, str] = {}
+    links: dict[str, dict[str, Any]] = {}
+
+    def _link(oid: str) -> dict[str, Any]:
+        return links.setdefault(oid, {
+            "enq_idx": None,
+            "enq_inst": None,
+            "deliveries": [],
+            "result_idx": None,
+            "result_inst": "",
+            "result_hello_inst": "",
+            "result_peer": "",
+        })
+
+    for idx, ev in enumerate(bridge_events):
+        ev_type = ev.get("ev")
+        peer = str(ev.get("peer") or "")
+        if ev_type == "hello":
+            if ev.get("http") == 200 and ev.get("ok") is not False:
+                h_args = ev.get("args") if isinstance(ev.get("args"), dict) else {}
+                h_peer = peer or str(h_args.get("peer") or "")
+                if h_peer:
+                    last_hello[h_peer] = str(ev.get("inst") or h_args.get("inst") or "")
+        elif ev_type == "enq":
+            oid = str(ev.get("op_id") or "")
+            if oid:
+                lk = _link(oid)
+                if lk["enq_idx"] is None:
+                    lk["enq_idx"] = idx
+                    lk["enq_inst"] = ev["inst"] if isinstance(ev.get("inst"), str) else None
+        elif ev_type == "deliver":
+            oid = str(ev.get("op_id") or "")
+            if oid:
+                _link(oid)["deliveries"].append((idx, str(ev.get("inst") or "")))
+        elif ev_type == "poll" and ev.get("http", 200) == 200:
+            p_inst = str(ev.get("inst") or "")
+            for raw in ev.get("ops") or []:
+                if isinstance(raw, dict) and isinstance(raw.get("op_id"), str) and raw["op_id"]:
+                    _link(raw["op_id"])["deliveries"].append((idx, p_inst))
+            for oid in ev.get("op_ids") or []:
+                if isinstance(oid, str) and oid:
+                    _link(oid)["deliveries"].append((idx, p_inst))
+        elif ev_type == "result" and ev.get("http", 200) == 200:
+            res_list: list[dict[str, Any]] = []
+            if isinstance(ev.get("result"), dict):
+                res_list.append(ev["result"])
+            if isinstance(ev.get("results"), list):
+                res_list.extend(r for r in ev["results"] if isinstance(r, dict))
+            for res in res_list:
+                if bool(res.get("dup")):
+                    continue
+                oid = str(res.get("op_id") or ev.get("op_id") or "")
+                if not oid:
+                    continue
+                lk = _link(oid)
+                if lk["result_idx"] is None:
+                    lk["result_idx"] = idx
+                    lk["result_inst"] = str(ev.get("inst") or "")
+                    lk["result_hello_inst"] = last_hello.get(peer, "")
+                    lk["result_peer"] = peer
+    return links
+
+
+def _epoch_link_issue(
+    links: dict[str, dict[str, Any]], op_id: str, epoch: str, *, untargeted_ok: bool = False
+) -> str:
+    """``""`` si la orden ``op_id`` queda ligada al epoch ``epoch`` en la traza: ``enq`` con ese ``inst`` destino, una
+    entrega a ese ``inst`` entre el ``enq`` y el resultado, y un resultado del servidor cuyo ultimo ``hello`` aceptado
+    (y su ``inst``, si lo trae) es ese epoch. Si no, el primer eslabon que falta.
+
+    O3 (H6): con ``untargeted_ok`` vale tambien un ``enq`` sin ``inst`` destino (el runner no fija ``target_inst`` antes
+    del reinicio: el puente real escribe ``inst = null``, `qa/bridge_qa.py:371-378`); la entrega (un ``poll`` del peer de
+    ese epoch que la lleva) y el resultado se exigen igual."""
+    lk = links.get(op_id)
+    if not epoch or lk is None or lk["enq_idx"] is None:
+        return "no_enq"
+    if lk["enq_inst"] != epoch and not (untargeted_ok and lk["enq_inst"] in (None, "")):
+        return "enq_inst"
+    if lk["result_idx"] is None:
+        return "no_result"
+    if not any(inst == epoch and lk["enq_idx"] < d_idx < lk["result_idx"] for d_idx, inst in lk["deliveries"]):
+        return "no_delivery"
+    if lk["result_peer"] != "server" or lk["result_hello_inst"] != epoch or lk["result_inst"] not in ("", epoch):
+        return "result_epoch"
+    return ""
+
+
+# Purga ordenada por el runner (brief, `:517-601` y arbitraje `:603-648`): estados terminales del gestor, valores de
+# `result` y censos del epoch viejo de los que salen las acreditadas (`:541`, arbitraje 3).
+_PURGE_TERMINAL_STATES = frozenset({"done", "failed", "stopped", "expired"})
+_PURGE_RESULT_VALUES = frozenset({"deleted", "retained_foreign", "absent", "ambiguous"})
+# `StartJob(this, op.op_id, "per_purge", ncol, scol, 8, 256, 600000.0, "stop")` (brief, arbitraje 1; aclaracion, punto 1)
+_PURGE_PAGE_SIZE = 8
+_ACCREDITATION_STAGES = frozenset({
+    "t1_post_transition_census",
+    "t2_census_10min",
+    "t3_pre_reset_census",
+    "t3_post_reset_census",
+})
+_PRE_RESTART_STAGES = _ACCREDITATION_STAGES | {"t0_baseline_census", "t1_pre_transition_census"}
+# O4 (hallazgo 4 de Sol sobre `ba58eda`): margen interior con el que un disco t5 cubre los alrededores del director, el
+# mismo que la cobertura post-reinicio de las criaturas (brief `:280`, N39: "margen interior >= 15,0 m"). El motor suelta
+# lo que el director lleva en las manos junto a el al quedar inconsciente (`playerbase.c:3771-3774`, `DropItem`).
+_O4_DIRECTOR_SURROUNDINGS_MARGIN_M = 15.0
+
+
+def _purge_row(r: dict[str, Any]) -> dict[str, Any]:
+    def _num(key: str) -> float | None:
+        v = r.get(key)
+        return float(v) if _is_finite_num(v) else None
+
+    return {
+        "phase": str(r.get("phase") or ""),
+        "pers_id": str(r.get("pers_id") or ""),
+        "class_name": str(r.get("class_name") or ""),
+        "parent_pers_id": str(r.get("parent_pers_id") or ""),
+        "owner_uid": str(r.get("owner_uid") or ""),
+        "result": str(r.get("result") or ""),
+        "net_id": str(r.get("net_id") or ""),
+        "parent_net_id": str(r.get("parent_net_id") or ""),
+        "emit_tick_ms": _num("emit_tick_ms"),
+        "lease_age_ms": _num("lease_age_ms"),
+        "lease_limit_ms": _num("lease_limit_ms"),
+        # aclaracion, punto 2: tick en que se confirmo que la entidad ya no estaba (solo en `result = deleted`)
+        "confirm_tick_ms": _num("confirm_tick_ms"),
+    }
+
+
+def _purge_emit_runs(rows: list[dict[str, Any]]) -> list[list[int]]:
+    """Indices de las filas ``emit`` contiguas del recibo (en el orden del trabajo). Las filas de un tick van juntas:
+    el subarbol del candidato en ese tick y su baja (aclaracion: una baja es la fila `emit` con `emit_tick_ms > 0`)."""
+    runs: list[list[int]] = []
+    cur: list[int] = []
+    for i, r in enumerate(rows):
+        if r["phase"] == "emit":
+            cur.append(i)
+        elif cur:
+            runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+    return runs
+
+
+def _job_of(op: Any) -> str:
+    a = _unpack_any_payload(op.args)
+    r = _unpack_any_payload(op.read)
+    return str((r[0].get("job") if r else "") or (a[0].get("job") if a else "") or "")
+
+
+def _judge_runner_purge(
+    *,
+    ordered_ops: list[Any],
+    links: dict[str, dict[str, Any]],
+    censuses: list[dict[str, Any]],
+    server_epoch_old: str,
+    server_epoch_new: str,
+    director_uid: str,
+    baseline_rows: list[dict[str, Any]],
+    anchor: dict[str, str],
+    bridge_spawn_info: dict[str, dict[str, Any]],
+    ledger_by_id: dict[str, dict[str, Any]],
+    fixture: dict[str, Any],
+    sentinel_classes: set[str],
+    new_hello_idx: int | None = None,
+) -> dict[str, Any]:
+    """Juzga la purga que ordena el runner (brief, secciones finales; sustituye a `per_purge_read` y a `:510-514`).
+
+    El oraculo recalcula las acreditadas desde el alta, la transicion `move_to_director` y los censos del epoch viejo
+    que incluyen al director (nunca desde `purge_authorized`) y las compara por igualdad con la orden cruda del puente.
+    Juzga el trabajo `per_purge_start` (orden, acuse con `pre_n`, lecturas ligadas al epoch, paginas unicas y completas,
+    filas `pre` / `emit` / `result`), el orden frente al primer censo t5 y los remanentes por identidad.
+
+    Devuelve ``fails`` (acreditados con evidencia del epoch correcto: mandan sobre cualquier ``missing`` de PER-08),
+    ``missings``, ``accredited`` (``{pers_id: {logical_id, class_name, role}}``), ``candidate_pids`` (todo ``pers_id``
+    leido para una prenda prevista), ``baseline_pids``, ``done``, ``order_seq`` y ``ambiguous_pids`` (O3, H3: los
+    ``pers_id`` que dos entidades llevan en una misma ventana de observacion del epoch nuevo).
+
+    O3 (ultima ronda): el enlace al epoch viejo de cada eslabon de la procedencia (H6), la captura del tick de cada baja
+    y su identidad (H2, H4), la cronologia (H7), el trabajo de la orden y su rodaja de 8 filas (H8), toda la espera de
+    `per_status` (H9), la unicidad antes del remanente (H3) y lo observado en t6 (H10); `absent` ya no da `missing` por
+    estar en `pre` (H1). ``new_hello_idx`` es el indice del primer `hello` aceptado del servidor nuevo en la traza.
+
+    O4 (variante «solo el guante», hallazgo 4 de Sol sobre `ba58eda`): un remanente se busca en todas las ubicaciones de
+    los censos posteriores, no solo en el director; y una acreditada que consta en `pre` y acaba en `absent` sin baja
+    solo da PASA si los alrededores del director en t5 estan cubiertos (si no, `missing`).
+    """
+    fails: list[str] = []
+    missings: list[str] = []
+    epoch_new = server_epoch_new
+    baseline_pids = {
+        str(r.get("pers_id")) for r in baseline_rows if _is_nonzero_pers_id(r.get("pers_id"))
+    }
+    out: dict[str, Any] = {
+        "fails": fails,
+        "missings": missings,
+        "accredited": {},
+        "candidate_pids": {},
+        "baseline_pids": baseline_pids,
+        "done": False,
+        "order_seq": None,
+        "metrics": {},
+        "ambiguous_pids": set(),
+    }
+
+    # (1) Prendas previstas: lo que el runner llevo al director con `move_to_director` (`:540`). Una transicion `ok`
+    # cuyo destino no consta como el director (o sin uid del director) es una prenda prevista SIN identificar
+    # (`missing`), no una que se pueda dar por no acreditada (sin FALLA falso).
+    expected: dict[str, dict[str, Any]] = {}
+    for op in ordered_ops:
+        if op.inst != server_epoch_old or op.verb != "per_child_transition" or op.status != "done":
+            continue
+        in_u = _unpack_any_payload(op.args)
+        out_u = _unpack_any_payload(op.read)
+        if not in_u or not out_u or in_u[0].get("action") != "move_to_director":
+            continue
+        if out_u[0].get("transition_status") != "ok":
+            continue
+        lid = in_u[0].get("logical_id", "")
+        if lid:
+            ent = expected.setdefault(
+                lid, {"scene_id": in_u[0].get("scene_id", ""), "net_ids": set(), "to_director": True, "op_ids": []}
+            )
+            ent["net_ids"].add(str(out_u[0].get("net_id") or ""))
+            ent["op_ids"].append(op.op_id)
+            if not director_uid or out_u[0].get("post_owner_uid") != director_uid:
+                ent["to_director"] = False
+
+    old_complete = [c for c in censuses if c.get("job_complete") and c.get("inst") == server_epoch_old]
+    # O3 (H6): las lecturas `job_read` aceptadas de cada trabajo de censo (llevan las filas de las que sale el pers_id)
+    census_reads: dict[str, list[str]] = {}
+    for op in ordered_ops:
+        if op.verb == "job_read" and op.status == "done" and op.peer == "server":
+            j = _job_of(op)
+            if j:
+                census_reads.setdefault(j, []).append(op.op_id)
+    accredited: dict[str, dict[str, Any]] = {}
+    candidate_pids: dict[str, str] = {}
+    unidentified: list[str] = []
+    for lid in sorted(expected):
+        ent = expected[lid]
+        info = bridge_spawn_info.get(lid) or {}
+        led = ledger_by_id.get(lid) or {}
+        ledger_cls = str(led.get("class_name") or "")
+        apply_nid = str(info.get("net_id") or "")
+        role = str(led.get("role") or "")
+        if not role:
+            role = str((fixture.get("scenes", {}).get(ent["scene_id"]) or {}).get("role") or "")
+        issue = ""
+        # (2) el alta, la transicion y los censos se cruzan por escena, logical_id y net_id (arbitraje 3)
+        if not ent["to_director"]:
+            issue = "transition_not_to_director"
+        elif not _valid_net_id(apply_nid, lid) or ent["net_ids"] != {apply_nid} or info.get("scene_id") != ent["scene_id"]:
+            issue = "apply_transition_mismatch"
+        elif not ledger_cls or str(info.get("class_name") or "") != ledger_cls:
+            issue = "class_not_in_ledger"
+        readings = [
+            r
+            for c in old_complete
+            if c.get("stage") in _ACCREDITATION_STAGES
+            for r in c.get("rows") or []
+            if str(r.get("owner_uid") or "") == director_uid and str(r.get("net_id") or "") == apply_nid
+        ]
+        pids = {str(r.get("pers_id") or "") for r in readings}
+        for pid in pids:
+            if _is_nonzero_pers_id(pid):
+                candidate_pids.setdefault(pid, lid)
+        pid_g = next(iter(pids)) if len(pids) == 1 else ""
+        if not issue:
+            if not readings:
+                issue = "no_director_reading"
+            elif len(pids) != 1:
+                issue = "inconsistent_readings"
+            elif not _is_nonzero_pers_id(pid_g):
+                issue = "zero_or_invalid_pers_id"
+            elif any(str(r.get("class_name") or "") != ledger_cls for r in readings):
+                issue = "class_mismatch"
+            elif pid_g in baseline_pids:
+                issue = "pers_id_in_baseline"
+            elif any(
+                str(r.get("pers_id") or "") == pid_g and str(r.get("net_id") or "") != apply_nid
+                for c in old_complete
+                if c.get("stage") in _PRE_RESTART_STAGES
+                for r in c.get("rows") or []
+            ):
+                issue = "pers_id_shared"
+        if not issue:
+            # O3 (H6, brief arbitraje 3 y 7): antes de autorizar por identidad, cada eslabon de la procedencia vieja
+            # queda ligado al epoch viejo en la traza (su `enq`, su ENTREGA a ese epoch y su resultado): el alta
+            # (`per_apply_scene`), la transicion `move_to_director` y cada censo del que sale una lectura (su
+            # `per_census_start` y sus `job_read`). Un eslabon ausente deja la prenda sin identificar (`missing`).
+            chain: list[tuple[str, str]] = [("per_apply_scene", str(info.get("apply_op_id") or ""))]
+            chain += [("per_child_transition", oid) for oid in ent["op_ids"]]
+            for c in old_complete:
+                if c.get("stage") in _ACCREDITATION_STAGES and any(
+                    str(r.get("owner_uid") or "") == director_uid and str(r.get("net_id") or "") == apply_nid
+                    for r in c.get("rows") or []
+                ):
+                    chain.append(("per_census_start", str(c.get("op_id") or "")))
+                    chain += [("job_read", oid) for oid in census_reads.get(str(c.get("job_id") or ""), [])]
+            for verb, oid in chain:
+                link_issue = (
+                    _epoch_link_issue(links, oid, server_epoch_old, untargeted_ok=True) if oid else "no_enq"
+                )
+                if link_issue:
+                    issue = f"old_link:{verb}:{link_issue}"
+                    break
+        if issue:
+            unidentified.append(lid)
+            missings.append(f"purge_accredited_unidentified:{lid}:{issue}")
+        else:
+            accredited[pid_g] = {"logical_id": lid, "class_name": ledger_cls, "role": role, "net_id_old": apply_nid}
+    out["accredited"] = accredited
+    out["candidate_pids"] = candidate_pids
+    all_identified = not unidentified
+    exp_pairs = sorted((pid, a["class_name"]) for pid, a in accredited.items())
+    # `pers_id` que el epoch viejo ya ata a OTRA entidad (no a una prenda prevista): con una prenda sin identificar,
+    # solo un `pers_id` del basal o de otra entidad conocida es una autorizacion definitivamente indebida (`fail`); uno
+    # que no se puede ligar a nada es falta de evidencia (`missing`), no un fallo (O2: sin FALLA falso).
+    garment_nids = {str((bridge_spawn_info.get(lid) or {}).get("net_id") or "") for lid in expected}
+    other_entity_pids = {
+        str(r.get("pers_id"))
+        for c in old_complete
+        if c.get("stage") in _PRE_RESTART_STAGES
+        for r in c.get("rows") or []
+        if _is_nonzero_pers_id(r.get("pers_id")) and str(r.get("net_id") or "") not in garment_nids
+    } - set(candidate_pids)
+
+    def _definitely_unaccredited(pid: str) -> bool:
+        if all_identified:
+            return pid not in accredited
+        return pid in baseline_pids or pid in other_entity_pids
+
+    # (3) Las ordenes. La unica de la corrida es la de t4_restart (`:538`, `:587`).
+    orders = [op for op in ordered_ops if op.verb == "per_purge_start"]
+    new_epoch_complete = [c for c in censuses if c.get("job_complete") and epoch_new and c.get("inst") == epoch_new]
+    if len(orders) > 1:
+        missings.append("purge_extra_order")
+    def _order_target(o: Any) -> str:
+        enq_inst = (links.get(o.op_id) or {}).get("enq_inst")
+        return str(enq_inst if enq_inst is not None else (o.inst or ""))
+
+    main = next((o for o in orders if o.peer == "server" and epoch_new and _order_target(o) == epoch_new), None)
+    if not orders:
+        if accredited:
+            missings.append("purge_not_done:no_order")
+    elif main is None:
+        missings.append("purge_order_not_after_restart")
+    out["order_seq"] = main.seq_idx if main is not None else None
+
+    # Censos posteriores a la purga del epoch nuevo, tras la orden (sin orden, todos). Aclaracion, punto 4 (O3, H10): lo
+    # OBSERVADO (un remanente o una centinela sin atribuir) se juzga en cualquiera de ellos, t5 (reinicio y testigo) y
+    # t6; la AUSENCIA se acredita solo con t5, antes de la limpieza (`post_purge_t5`).
+    post_purge = [
+        c for c in new_epoch_complete
+        if c.get("stage") in (
+            "t5_post_restart_census", "t5_witness_pre_census", "t5_witness_post_census", "t6_post_cleanup_census",
+        )
+        and (main is None or c["seq_idx"] > main.seq_idx)
+    ]
+    post_purge_t5 = [c for c in post_purge if c.get("stage") != "t6_post_cleanup_census"]
+    t5_post = [c for c in post_purge_t5 if c.get("stage") == "t5_post_restart_census"]
+    t5_director_ok = any(
+        int(c.get("include_director_b", 0)) == 1 and not _director_census_identity_issue(c, director_uid, anchor)
+        for c in t5_post
+    )
+    # O3 (H2): lo observado despues en t5 (reinicio y testigo, cualquier dueno) acredita la supervivencia: por `pers_id`
+    # (valido y distinto de cero) y clase, o por `net_id` del epoch nuevo y clase si el `pers_id` no sirve.
+    t5_seen_by_pid = {
+        (str(r.get("pers_id")), str(r.get("class_name") or ""))
+        for c in post_purge_t5 for r in c.get("rows") or [] if _is_nonzero_pers_id(r.get("pers_id"))
+    }
+    t5_seen_by_nid = {
+        (str(r.get("net_id") or ""), str(r.get("class_name") or ""))
+        for c in post_purge_t5 for r in c.get("rows") or [] if _valid_net_id(r.get("net_id"))
+    }
+
+    def _seen_after_in_t5(row: dict[str, Any]) -> bool:
+        if _is_nonzero_pers_id(row["pers_id"]):
+            return (row["pers_id"], row["class_name"]) in t5_seen_by_pid
+        return _valid_net_id(row["net_id"]) and (row["net_id"], row["class_name"]) in t5_seen_by_nid
+
+    # O3 (H3): la unicidad del `pers_id` en el epoch nuevo se resuelve en cada ventana de observacion: la captura `pre`,
+    # la captura de cada tick (filas `emit` contiguas) y los censos posteriores a la purga. Dos entidades distintas (por
+    # `net_id`, que dentro de un proceso identifica a una entidad) con el mismo `pers_id` en una misma ventana lo hacen
+    # ambiguo. Entre ventanas no se cruza: una prenda borrada en la purga y una entidad con su `pers_id` despues es un
+    # remanente por identidad (`:582`), como juzgaban O2 y e9.
+    identity_windows: list[list[dict[str, Any]]] = [
+        [{"pers_id": str(r.get("pers_id") or ""), "net_id": str(r.get("net_id") or "")} for c in post_purge for r in c.get("rows") or []]
+    ]
+    # O4 (hallazgo 4 de Sol sobre `ba58eda`): las acreditadas que constan en `pre` y acaban en `absent` sin baja salieron
+    # del arbol del director despues de la captura inicial. Que falten en el arbol no acredita que falten en el mundo:
+    # su ausencia se juzga en (5) con la cobertura de los alrededores del director en t5.
+    # O5 (hallazgo 1 de Sol sobre `810d8a7`, aclaracion del 23-nov, "la caida antes de `pre`"): tambien las que acaban
+    # en `absent` sin baja y SIN `pre`: pudieron caer junto al director antes de la captura inicial.
+    absent_without_baja: set[str] = set()
+
+    for o in orders:
+        is_main = o is main
+        tgt = _order_target(o)
+        in_u = _unpack_any_payload(o.args)
+        if not in_u:
+            missings.append("purge_order_unreadable")
+            continue
+        o_s, _o_n, o_rows = in_u
+        order_pairs = sorted((str(r.get("pers_id") or ""), str(r.get("class_name") or "")) for r in o_rows)
+        order_pids = {pid for pid, _cls in order_pairs}
+        order_cls = {pid: cls for pid, cls in order_pairs}
+        # (a) igualdad con la lista recalculada, aunque no haya bajas (arbitraje 3)
+        if all_identified:
+            if order_pairs != exp_pairs:
+                fails.append("purge_order_differs_from_accredited")
+        else:
+            for pid, cls in order_pairs:
+                if _definitely_unaccredited(pid) or (pid in accredited and accredited[pid]["class_name"] != cls):
+                    fails.append(f"purge_order_unaccredited:{cls}")
+        if is_main:
+            if o_s.get("director_uid") != director_uid:
+                missings.append("purge_order_wrong_director")
+            if o_s.get("expect_epoch") != epoch_new:
+                missings.append("purge_order_stale_epoch")
+        o_issue = _epoch_link_issue(links, o.op_id, tgt)
+        if o_issue:
+            missings.append(f"purge_epoch_unlinked:per_purge_start:{o_issue}")
+        if o.status != "done":
+            if is_main and accredited:
+                missings.append(f"purge_not_done:order_{o.status or 'no_result'}")
+            continue
+        start_u = _unpack_any_payload(o.read) or ({}, {}, [])
+        # aclaracion, punto 3 (O3, H8): el trabajo de la orden es su `op_id`; el `job` del acuse y de todas las lecturas
+        # tiene que serlo (un alias no se acepta)
+        job = o.op_id
+        if is_main and str(start_u[0].get("job") or "") != job:
+            missings.append("purge_job_is_not_the_order_op_id")
+        if is_main and start_u[0].get("resource") != "per_purge":
+            missings.append("purge_wrong_resource")
+        pre_n_raw = start_u[1].get("pre_n")
+        pre_n = int(round(pre_n_raw)) if _is_finite_num(pre_n_raw) else None
+
+        def _op_jobs(op: Any) -> tuple[str, str]:
+            a_u = _unpack_any_payload(op.args)
+            r_u = _unpack_any_payload(op.read)
+            return (str(a_u[0].get("job") or "") if a_u else "", str(r_u[0].get("job") or "") if r_u else "")
+
+        job_ops = [
+            op for op in ordered_ops
+            if op.verb in ("job_read", "job_stop", "job_free") and op.seq_idx > o.seq_idx and job in _op_jobs(op)
+        ]
+        reads: list[dict[str, Any]] = []
+        last_read_idx: int | None = None
+        stop_states: set[str] = set()
+        for jop in job_ops:
+            j_issue = _epoch_link_issue(links, jop.op_id, tgt) if jop.peer == "server" else "peer"
+            if j_issue and is_main:
+                missings.append(f"purge_epoch_unlinked:{jop.verb}:{j_issue}")
+            if jop.verb == "job_read":
+                r_idx = (links.get(jop.op_id) or {}).get("result_idx")
+                if r_idx is not None:
+                    last_read_idx = r_idx if last_read_idx is None else max(last_read_idx, r_idx)
+            if jop.status != "done" or j_issue:
+                continue
+            ju = _unpack_any_payload(jop.read)
+            if not ju:
+                continue
+            j_s, j_n, j_rows = ju
+            if jop.verb == "job_stop":
+                if j_s.get("state") in _PURGE_TERMINAL_STATES:
+                    stop_states.add(str(j_s.get("state")))
+                continue
+            if jop.verb != "job_read":
+                continue
+            a_u = _unpack_any_payload(jop.args) or ({}, {}, [])
+            page = int(round(j_n.get("page_n", -1.0)))
+            if (
+                j_s.get("job") != job
+                or str(a_u[0].get("job") or "") != job
+                or j_s.get("resource") != "per_purge"
+                or page != int(round(a_u[1].get("page_n", -2.0)))
+            ):
+                if is_main:
+                    missings.append("purge_read_inconsistent")
+                continue
+            reads.append({
+                "state": str(j_s.get("state") or ""),
+                "reason": str(j_s.get("reason") or ""),
+                "page": page,
+                "pages_n": int(round(j_n.get("pages_n", -1.0))),
+                "rows_total": int(round(j_n.get("rows_total_n", -1.0))),
+                "start": float(j_n.get("start_tick_ms", 0.0)),
+                "end": float(j_n.get("end_tick_ms", 0.0)),
+                "rows": [_purge_row(r) for r in j_rows],
+            })
+
+        term = [r for r in reads if r["state"] in _PURGE_TERMINAL_STATES]
+        term_state = ""
+        complete_rows: list[dict[str, Any]] | None = None
+        end_tick = 0.0
+        start_tick = 0.0
+        if term:
+            sigs = {(r["state"], r["reason"], r["rows_total"], r["pages_n"], r["start"], r["end"]) for r in term}
+            term_state = term[-1]["state"]
+            end_tick = term[-1]["end"]
+            start_tick = term[-1]["start"]
+            consistent = len(sigs) == 1 and (not stop_states or stop_states == {term_state})
+            if not consistent and is_main:
+                missings.append("purge_terminal_inconsistent")
+            pages: dict[int, list[list[dict[str, Any]]]] = {}
+            for r in term:
+                pages.setdefault(r["page"], []).append(r["rows"])
+            pages_n = term[-1]["pages_n"]
+            rows_total = term[-1]["rows_total"]
+            # una relectura identica de la misma pagina es valida y no cuenta dos veces (aclaracion, punto 1)
+            same_dup = all(all(x == lst[0] for x in lst) for lst in pages.values())
+            if rows_total == 0:
+                ok_pages = pages_n == 0 and set(pages) == {0} and pages[0][0] == []
+            else:
+                # aclaracion, punto 1 (O3, H8): la rodaja contractual de `job_read` con `page_size = 8` del `StartJob`:
+                # `pages_n = ceil(total / 8)` y la pagina `p` lleva las filas `8p` a `8p + 7` (`F0.3-0` `:161`)
+                ok_pages = (
+                    pages_n == (rows_total + _PURGE_PAGE_SIZE - 1) // _PURGE_PAGE_SIZE
+                    and set(pages) == set(range(pages_n))
+                    and all(
+                        len(pages[p][0]) == min(_PURGE_PAGE_SIZE, rows_total - _PURGE_PAGE_SIZE * p)
+                        for p in range(pages_n)
+                    )
+                )
+            if consistent and same_dup and ok_pages:
+                complete_rows = [row for p in range(max(pages_n, 0)) for row in pages[p][0]] if rows_total else []
+            elif is_main:
+                missings.append("purge_pages_incomplete")
+        scan_rows: list[dict[str, Any]]
+        if complete_rows is not None:
+            scan_rows = complete_rows
+        else:
+            by_slot: dict[tuple[int, int], dict[str, Any]] = {}
+            for r in reads:
+                for i, row in enumerate(r["rows"]):
+                    by_slot[(r["page"], i)] = row
+            scan_rows = [by_slot[k] for k in sorted(by_slot)]
+
+        pre_rows = [r for r in scan_rows if r["phase"] == "pre"]
+        emit_rows = [r for r in scan_rows if r["phase"] == "emit"]
+        result_rows = [r for r in scan_rows if r["phase"] == "result"]
+        bajas_idx = [
+            i for i, r in enumerate(scan_rows)
+            if r["phase"] == "emit" and r["emit_tick_ms"] is not None and r["emit_tick_ms"] > 0.0
+        ]
+        bajas = [scan_rows[i] for i in bajas_idx]
+        if not start_tick and reads:
+            start_tick = max((r["start"] for r in reads), default=0.0)
+        if is_main:
+            # O3 (H3): ventanas de identidad de la purga: la captura `pre` y la de cada tick
+            identity_windows.append(pre_rows)
+            identity_windows.extend([scan_rows[j] for j in run] for run in _purge_emit_runs(scan_rows))
+
+        # (b) las bajas: identidad, dueno, clase y E1 (`:577-580`); de cualquier estado terminal (arbitraje 5)
+        for b in bajas:
+            pid = b["pers_id"]
+            cls = b["class_name"]
+            if pid not in order_pids:
+                fails.append(f"purge_deleted_unordered:{cls}")
+            elif order_cls.get(pid) != cls:
+                fails.append(f"purge_deleted_class_mismatch:{cls}")
+            if pid in baseline_pids:
+                fails.append(f"purge_deleted_baseline:{cls}")
+            elif pid in order_pids and _definitely_unaccredited(pid):
+                fails.append(f"purge_deleted_unaccredited:{cls}")
+            if director_uid and b["owner_uid"] != director_uid:
+                fails.append(f"purge_deleted_outside_director:{cls}")
+            age = b["lease_age_ms"]
+            lim = b["lease_limit_ms"]
+            if age is None or lim is None or lim <= 0.0 or age < 0.0:
+                missings.append("purge_emit_lease_unaccredited")
+            elif age > lim:
+                fails.append(f"purge_emit_lease_expired:{cls}")
+        # (c) O3 (H4, H2 y H7): la captura del tick de cada baja. Las filas `emit` contiguas del recibo son la captura
+        # del tick (aclaracion: el subarbol del candidato en ese momento, con su baja); `pre` es la captura inicial.
+        #  - H4: la baja se cruza por la identidad del epoch nuevo (`net_id`, `pers_id` y clase) con `pre` y con su
+        #    captura; si la entidad o su arbol no se pueden acreditar, `missing`. Un descendiente de la baja presente
+        #    en su tick es `fail`: un padre solo se borra cuando ya esta fisicamente vacio (arbitraje 2).
+        #  - H2: el arrastre se atribuye con la captura del tick: un descendiente ajeno en ella que no se observa despues
+        #    en t5 se borro con el padre (`fail`, `:580`); sin el director cubierto en t5, `missing`. Un descendiente de
+        #    `pre` que la captura del tick ya no pone bajo la baja no se le atribuye: si no se observa despues en t5, su
+        #    ausencia no se explica (`missing`, nunca `fail`).
+        #  - H7: como mucho una baja por tick y cada emision dentro de la ventana del trabajo.
+        pre_by_nid: dict[str, dict[str, Any]] = {}
+        pre_children: dict[str, list[dict[str, Any]]] = {}
+        for r in pre_rows:
+            if _valid_net_id(r["net_id"]):
+                pre_by_nid.setdefault(r["net_id"], r)
+                if r["parent_net_id"]:
+                    pre_children.setdefault(r["parent_net_id"], []).append(r)
+        baja_tick_by_nid: dict[str, float] = {}
+        for b in bajas:
+            if _valid_net_id(b["net_id"]):
+                baja_tick_by_nid[b["net_id"]] = min(b["emit_tick_ms"], baja_tick_by_nid.get(b["net_id"], b["emit_tick_ms"]))
+        tick_count: dict[float, int] = {}
+        for b in bajas:
+            tick_count[b["emit_tick_ms"]] = tick_count.get(b["emit_tick_ms"], 0) + 1
+        if any(n > 1 for n in tick_count.values()):
+            missings.append("purge_two_bajas_in_one_tick")
+        if any(
+            (start_tick > 0.0 and b["emit_tick_ms"] < start_tick) or (end_tick > 0.0 and b["emit_tick_ms"] > end_tick)
+            for b in bajas
+        ):
+            missings.append("purge_emit_outside_the_job_window")
+        run_of: dict[int, list[int]] = {i: run for run in _purge_emit_runs(scan_rows) for i in run}
+        for bi in bajas_idx:
+            b = scan_rows[bi]
+            b_nid = b["net_id"]
+            capture = [scan_rows[j] for j in run_of.get(bi, [bi])]
+            if not _valid_net_id(b_nid):
+                missings.append("purge_baja_unidentified")
+                continue
+            p_row = pre_by_nid.get(b_nid)
+            if p_row is None:
+                missings.append("purge_baja_not_in_pre")
+            elif (p_row["pers_id"], p_row["class_name"]) != (b["pers_id"], b["class_name"]):
+                missings.append("purge_baja_identity_mismatch")
+            if any(not _valid_net_id(r["net_id"]) for r in capture) or any(
+                r["net_id"] in pre_by_nid
+                and (pre_by_nid[r["net_id"]]["pers_id"], pre_by_nid[r["net_id"]]["class_name"])
+                != (r["pers_id"], r["class_name"])
+                for r in capture
+            ):
+                missings.append("purge_emit_tree_unidentified")
+            # descendientes de la baja en la captura de su tick (sin la propia baja ni lo que ya tuvo su baja antes)
+            cap_children: dict[str, list[dict[str, Any]]] = {}
+            for r in capture:
+                if r["parent_net_id"]:
+                    cap_children.setdefault(r["parent_net_id"], []).append(r)
+            tick_desc: dict[str, dict[str, Any]] = {}
+            todo = [b_nid]
+            while todo:
+                for ch in cap_children.get(todo.pop(), []):
+                    ch_nid = ch["net_id"]
+                    if ch_nid == b_nid or ch_nid in tick_desc:
+                        continue
+                    if baja_tick_by_nid.get(ch_nid, b["emit_tick_ms"]) < b["emit_tick_ms"]:
+                        continue
+                    tick_desc[ch_nid] = ch
+                    todo.append(ch_nid)
+            for ch_nid in sorted(tick_desc):
+                row = tick_desc[ch_nid]
+                fails.append(f"purge_baja_with_descendant:{row['class_name']}")
+                if row["pers_id"] in order_pids or _seen_after_in_t5(row):
+                    continue
+                if t5_director_ok:
+                    fails.append(f"purge_foreign_lost_with_parent:{row['class_name']}")
+                else:
+                    missings.append("purge_t5_director_uncovered")
+            # descendientes de la captura inicial que la del tick ya no pone bajo la baja
+            pre_desc: dict[str, dict[str, Any]] = {}
+            todo = [b_nid]
+            while todo:
+                for ch in pre_children.get(todo.pop(), []):
+                    if ch["net_id"] != b_nid and ch["net_id"] not in pre_desc:
+                        pre_desc[ch["net_id"]] = ch
+                        todo.append(ch["net_id"])
+            for ch_nid in sorted(pre_desc):
+                row = pre_desc[ch_nid]
+                if ch_nid in tick_desc or row["pers_id"] in order_pids or _seen_after_in_t5(row):
+                    continue
+                if t5_director_ok:
+                    missings.append(f"purge_foreign_unaccounted:{row['class_name']}")
+                else:
+                    missings.append("purge_t5_director_uncovered")
+
+        if not is_main:
+            continue
+        # (d) el recibo: acuse con pre_n, paginas completas, una fila result por autorizado (`:584`, arbitraje 4)
+        if complete_rows is not None:
+            if any(r["phase"] not in ("pre", "emit", "result") for r in complete_rows):
+                missings.append("purge_row_unknown_phase")
+            pre_keys = [r["net_id"] for r in pre_rows]
+            if pre_n is None or pre_n != len(pre_rows):
+                missings.append("purge_pre_n_mismatch")
+            if len(set(pre_keys)) != len(pre_keys) or not all(_valid_net_id(k) for k in pre_keys):
+                missings.append("purge_pre_rows_duplicated_or_unidentified")
+            if any(r["owner_uid"] != director_uid for r in pre_rows):
+                missings.append("purge_pre_wrong_owner")
+            # (e) el personaje antes de la primera baja: las filas pre contienen el ancla de PER-07 (arbitraje 8)
+            if not _rows_anchor_character(pre_rows, director_uid, anchor):
+                missings.append("purge_character_unanchored")
+            baja_count: dict[str, int] = {}
+            for b in bajas:
+                baja_count[b["pers_id"]] = baja_count.get(b["pers_id"], 0) + 1
+            for pid, cnt in sorted(baja_count.items()):
+                if cnt > 1:
+                    missings.append("purge_duplicate_baja")
+            if term_state == "done":
+                res_by_pid: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+                for i, r in enumerate(scan_rows):
+                    if r["phase"] == "result":
+                        res_by_pid.setdefault(r["pers_id"], []).append((i, r))
+                first_baja_of: dict[str, int] = {}
+                for bi in bajas_idx:
+                    first_baja_of.setdefault(scan_rows[bi]["pers_id"], bi)
+                for pid in sorted(order_pids):
+                    vals = res_by_pid.get(pid, [])
+                    if len(vals) != 1:
+                        missings.append("purge_result_missing_or_repeated")
+                        continue
+                    r_idx_row, r_row = vals[0]
+                    val = r_row["result"]
+                    if val not in _PURGE_RESULT_VALUES:
+                        missings.append("purge_result_unknown")
+                    elif val == "deleted" and pid not in baja_count:
+                        missings.append("purge_result_deleted_without_baja")
+                    elif val != "deleted" and pid in baja_count:
+                        missings.append("purge_result_contradicts_baja")
+                    elif val == "deleted":
+                        b_row = scan_rows[first_baja_of[pid]]
+                        # H4: el `result` cruza con su baja por la identidad del epoch nuevo
+                        if not _valid_net_id(r_row["net_id"]) or r_row["net_id"] != b_row["net_id"]:
+                            missings.append("purge_result_identity_mismatch")
+                        # H7 y aclaracion, punto 2: `deleted` despues de su `emit`, confirmado en un tick posterior a su
+                        # emision y dentro del trabajo
+                        if r_idx_row < first_baja_of[pid]:
+                            missings.append("purge_deleted_before_its_emit")
+                        conf = r_row["confirm_tick_ms"]
+                        if conf is None or conf <= b_row["emit_tick_ms"] or (end_tick > 0.0 and conf > end_tick):
+                            missings.append("purge_confirm_not_after_emit")
+                    # O3 (H1): un `absent` de algo que estaba en `pre` es legitimo: `pre` es la captura inicial y la
+                    # implementacion resuelve `absent` sobre el arbol del tick de resolucion (P2c). Se contrasta con las
+                    # emisiones (sin baja: arriba) y con la cobertura posterior (remanente o director sin cubrir en t5,
+                    # abajo); ya no da `missing` por estar en `pre`.
+                    elif val == "absent" and pid in accredited:
+                        # O4: con `pre`, salio del arbol despues de la captura inicial sin baja. O5: sin `pre`, pudo caer
+                        # antes de la captura (el inconsciente suelta lo que lleva en las manos, `playerbase.c:3771`, y
+                        # la sonda admite un director inconsciente). En los dos casos su ausencia del mundo se juzga
+                        # en (5) con la misma regla.
+                        absent_without_baja.add(pid)
+                if any(pid not in order_pids for pid in res_by_pid):
+                    missings.append("purge_result_unordered")
+        # (f) el estado: sin `done` del epoch validado, `missing` (`:584`); las bajas ya quedaron juzgadas
+        if term_state != "done":
+            if accredited or order_pairs:
+                missings.append(f"purge_not_done:{term_state or 'wait_expired'}")
+        elif not any(m.startswith(("purge_terminal_inconsistent", "purge_epoch_unlinked")) for m in missings):
+            out["done"] = True
+        # (g) el orden: fin del trabajo frente al inicio del primer censo t5 aceptado (`:581`, `>=` como `:512`) y,
+        # en la traza, la ultima lectura del trabajo antes del envio del primer censo t5 (`:586`)
+        t5_started = [
+            c for c in censuses
+            if c.get("stage") == "t5_post_restart_census" and c.get("inst") == epoch_new and c.get("status") == "done"
+        ]
+        if t5_started:
+            first_t5 = min(t5_started, key=lambda c: c["seq_idx"])
+            starts = [t for t in (float(first_t5.get("job_start_tick_ms", 0.0)), float(first_t5.get("snap_tick_ms", 0.0))) if t > 0.0]
+            if term_state:
+                if end_tick <= 0.0:
+                    missings.append("purge_end_unaccredited")
+                elif not starts:
+                    missings.append("purge_order_unverifiable")
+                elif end_tick >= min(starts):
+                    fails.append("purge_not_before_t5_census")
+        # O3 (H7, cierre parcial de Sol 5): la barrera de la traza es el ENVIO del primer censo tras la orden (su `enq`),
+        # tambien si se rechazo (`purge_pending`): no el primer trabajo aceptado, que sigue siendo el del `fail` de arriba
+        first_send = min(
+            (op.seq_idx for op in ordered_ops if op.verb == "per_census_start" and op.peer == "server" and op.seq_idx > o.seq_idx),
+            default=None,
+        )
+        if first_send is not None and (last_read_idx is None or last_read_idx >= first_send):
+            missings.append("purge_read_not_before_t5")
+        out["metrics"] = {
+            "order_n": len(order_pairs),
+            "accredited_n": len(accredited),
+            "state": term_state,
+            "bajas_n": len(bajas),
+            "pre_n": pre_n,
+        }
+
+    # (4) el per_status que valida al director, ligado al epoch nuevo antes de la orden (`:574`, arbitraje 7)
+    if main is not None:
+        validating = [
+            op for op in ordered_ops
+            if op.verb == "per_status" and op.status == "done" and op.seq_idx < main.seq_idx and op.inst == epoch_new
+            and (lambda u: bool(u)
+                 and (u[0].get("server_epoch") or op.inst) == epoch_new
+                 and u[0].get("director_uid") == director_uid
+                 and all(int(round(u[1].get(k, 0.0))) == 1 for k in ("director_present_b", "director_alive_b", "director_inv_readable_b"))
+                 )(_unpack_any_payload(op.read))
+        ]
+        if not validating:
+            missings.append("purge_director_not_validated")
+        else:
+            v_issue = _epoch_link_issue(links, validating[-1].op_id, epoch_new)
+            if v_issue:
+                missings.append(f"purge_epoch_unlinked:per_status:{v_issue}")
+        # O3 (H9, aclaracion, punto 5): TODA la espera de `per_status` entre el `hello` nuevo y la orden se liga al epoch
+        # nuevo, no solo la respuesta que valida: cada `per_status` con respuesta en esa ventana (por su `enq` o por su
+        # resultado) va con `target_inst` del epoch nuevo, entregado a el y respondido por el; y si su respuesta trae
+        # `server_epoch`, es ese. Una orden sin respuesta no tiene respuesta que ligar.
+        order_enq = (links.get(main.op_id) or {}).get("enq_idx")
+        lo = new_hello_idx if new_hello_idx is not None else -1
+        hi = order_enq if order_enq is not None else main.seq_idx
+        for op in ordered_ops:
+            if op.verb != "per_status" or op.peer != "server":
+                continue
+            lk = links.get(op.op_id) or {}
+            e_idx, r_idx = lk.get("enq_idx"), lk.get("result_idx")
+            if r_idx is None or not ((e_idx is not None and lo < e_idx < hi) or lo < r_idx < hi):
+                continue
+            w_issue = _epoch_link_issue(links, op.op_id, epoch_new)
+            if not w_issue:
+                w_u = _unpack_any_payload(op.read)
+                if w_u and str(w_u[0].get("server_epoch") or epoch_new) != epoch_new:
+                    w_issue = "server_epoch"
+            if w_issue:
+                missings.append(f"purge_epoch_unlinked:per_status_wait:{w_issue}")
+
+    # (5) remanentes por identidad (`:582`): tras un `done`, un `pers_id` acreditado en el director de un censo
+    # posterior (t5 o t6, aclaracion punto 4) es `fail`; la ausencia solo se acredita con un censo t5 completo del mismo
+    # director (arbitraje 4). O3 (H3): la unicidad se resuelve antes. Si ese `pers_id` lo llevan dos entidades distintas
+    # en una misma ventana de observacion del epoch nuevo (la captura `pre`, la de un tick o los censos posteriores), no
+    # hay prueba de cual es la prenda de Sandbox: `missing`, nunca `fail`.
+    ambiguous_pids: set[str] = set()
+    for window in identity_windows:
+        w_nids: dict[str, set[str]] = {}
+        for r in window:
+            if _is_nonzero_pers_id(r["pers_id"]) and _valid_net_id(r["net_id"]):
+                w_nids.setdefault(r["pers_id"], set()).add(r["net_id"])
+        ambiguous_pids |= {pid for pid, nids in w_nids.items() if len(nids) > 1}
+    out["ambiguous_pids"] = ambiguous_pids
+    if accredited:
+        if out["done"]:
+            for c in post_purge:
+                for r in c.get("rows") or []:
+                    pid = str(r.get("pers_id") or "")
+                    if pid not in accredited:
+                        continue
+                    # O4 (regla 1, hallazgo 4 de Sol sobre `ba58eda`): el `pers_id` acreditado se busca en todas las
+                    # ubicaciones de los censos posteriores, suelo, otro dueno o un contenedor del mundo incluidos, no
+                    # solo en el director (`:582`: "en algun censo posterior a la purga aparece una entidad con un
+                    # `pers_id` acreditado"). Fuera del director se nombra aparte.
+                    if pid in ambiguous_pids:
+                        missings.append(f"purge_remnant_ambiguous:{accredited[pid]['logical_id']}")
+                    elif str(r.get("owner_uid") or "") == director_uid:
+                        fails.append(f"purge_remnant:{accredited[pid]['logical_id']}")
+                    else:
+                        fails.append(f"purge_remnant_out_of_director:{accredited[pid]['logical_id']}")
+            # O4 (regla 2): una acreditada que salio del arbol despues de `pre` sin baja puede seguir viva donde cayo. El
+            # motor suelta lo que hay en las manos junto al director al quedar inconsciente (`playerbase.c:3771-3774`;
+            # `move_to_director` coloca con `FindInventoryLocationType.ANY`, que incluye las manos). Su ausencia solo se
+            # acredita si los alrededores del director en t5 estan cubiertos: cada posicion del director leida en un
+            # censo t5 posterior a la purga (las filas de su inventario llevan `GetPosition()`, la del director), dentro
+            # de un disco t5 completo con el margen de N39. Sin posicion o sin cobertura, `missing` (arbitraje 4, `:632`:
+            # "Una ausencia fuera de cobertura da `missing`"); nunca PASA.
+            # O5 (aclaracion del 23-nov, "la caida antes de `pre`"): la misma regla para el `absent` sin baja y sin
+            # `pre`; si el guante aparece, ya es `fail` por la regla 1 de arriba. Los discos de la P2h
+            # (`t5_director_p<n>`, etapa `t5_post_restart_census`, `include_director_b = 1`, centrados en el director)
+            # son discos t5 como los demas: cuentan aqui y en la busqueda de la regla 1.
+            if absent_without_baja:
+                dir_pos: list[tuple[float, float] | None] = []
+                for c in post_purge_t5:
+                    if int(c.get("include_director_b", 0)) != 1 or _director_census_identity_issue(c, director_uid, anchor):
+                        continue
+                    for r in c.get("rows") or []:
+                        if str(r.get("owner_uid") or "") == director_uid:
+                            px, pz = r.get("pos_x_m"), r.get("pos_z_m")
+                            dir_pos.append((float(px), float(pz)) if _is_finite_num(px) and _is_finite_num(pz) else None)
+                surroundings_covered = bool(dir_pos) and all(
+                    p is not None
+                    and any(
+                        math.hypot(p[0] - float(d["center_x_m"]), p[1] - float(d["center_z_m"]))
+                        + _O4_DIRECTOR_SURROUNDINGS_MARGIN_M
+                        <= float(d["radius_m"]) + 1e-6
+                        for d in post_purge_t5
+                    )
+                    for p in dir_pos
+                )
+                if not surroundings_covered:
+                    for pid in sorted(absent_without_baja, key=lambda p: accredited[p]["logical_id"]):
+                        missings.append(f"purge_absent_uncovered:{accredited[pid]['logical_id']}")
+        if not t5_director_ok:
+            missings.append("purge_t5_director_uncovered")
+
+    # (6) una centinela en el director que no se puede atribuir (`:588`): pers_id no valido, repetido, o ni del basal
+    # ni de una prenda prevista
+    nids_by_pid: dict[str, set[str]] = {}
+    for c in post_purge:
+        for r in c.get("rows") or []:
+            if str(r.get("owner_uid") or "") == director_uid:
+                nids_by_pid.setdefault(str(r.get("pers_id") or ""), set()).add(str(r.get("net_id") or ""))
+    for c in post_purge:
+        for r in c.get("rows") or []:
+            cls = str(r.get("class_name") or "")
+            pid = str(r.get("pers_id") or "")
+            if str(r.get("owner_uid") or "") != director_uid or cls not in sentinel_classes:
+                continue
+            if (
+                not _is_nonzero_pers_id(pid)
+                or len(nids_by_pid.get(pid, set())) > 1
+                or (pid not in baseline_pids and pid not in candidate_pids)
+                or (pid in baseline_pids and anchor.get(pid) != cls)
+            ):
+                missings.append(f"director_sentinel_unattributable:{cls}")
+
+    # sin duplicados, en orden de aparicion
+    out["fails"] = list(dict.fromkeys(fails))
+    out["missings"] = list(dict.fromkeys(missings))
+    return out
 
 
 def _pers_ids_shared_by_distinct_entities(stage_censuses: list[dict[str, Any]]) -> list[str]:
@@ -648,7 +1637,9 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]] | None:
 
 def _infer_area_id(area_tag: str, cx: float | None, cz: float | None, fixture: dict[str, Any]) -> str:
     tag_low = (area_tag or "").lower()
-    if "t5_track_" in tag_low:
+    # O5: el disco de la P2h alrededor del director (`t5_director_p<n>`) es su propio disco, como una pista: centrado en
+    # el director, que en el constructor y en el fake esta en el centro de area_a, no ocupa el lugar del censo del area.
+    if "t5_track_" in tag_low or "t5_director_p" in tag_low:
         return area_tag
     for aid in ("area_a_mut", "area_a", "area_b", "area_c", "area_d"):
         if aid in tag_low:
@@ -1085,6 +2076,10 @@ def _parse_bridge_timeline(
         cz = out_n.get("center_z_m", in_n.get("center_z_m"))
         rad = out_n.get("radius_m", in_n.get("radius_m", 60.0))
         inc_dir = int(round(out_n.get("include_director_b", in_n.get("include_director_b", 0.0))))
+        # O2 (Sol 1 sobre 433d535): el valor EXPLICITO de include_director_b en la orden (args) y en el acuse, para
+        # juzgar el pedido antes de clasificar la caida tecnica del trabajo (None = la clave no esta).
+        inc_dir_arg = int(round(in_n["include_director_b"])) if "include_director_b" in in_n else None
+        inc_dir_read = int(round(out_n["include_director_b"])) if "include_director_b" in out_n else None
         area_id = _infer_area_id(raw_tag, cx, cz, fixture)
         explicit_stage = _extract_stage_from_tag(raw_tag, {**in_s, **out_s})
         if bop.op_id in census_overlap_offenders:
@@ -1106,6 +2101,14 @@ def _parse_bridge_timeline(
         job_complete = False
         free_done_ms = 0.0
         released_tick_ms = 0.0
+        # O2 (Sol 5): inicio del trabajo segun el gestor (start_tick_ms de cualquier job_read del mismo trabajo, del
+        # mismo peer y epoch, posterior a la orden), aunque el trabajo no acabe completo.
+        job_start_ticks = [
+            float((_unpack_any_payload(jr.read) or ({}, {}, []))[1].get("start_tick_ms", 0.0))
+            for jr in job_read_ops_by_job.get(out_s.get("job") or bop.op_id, [])
+            if jr.seq_idx > bop.seq_idx and jr.peer == "server" and jr.inst == (out_s.get("server_epoch") or bop.inst)
+        ]
+        job_start_tick_ms = min((t for t in job_start_ticks if t > 0.0), default=0.0)
 
         # Bind per_census_start -> job_read -> job_free strictly to this single execution (BLOQ 3 & BLOQ 12)
         if (
@@ -1231,6 +2234,9 @@ def _parse_bridge_timeline(
             "center_z_m": float(cz) if cz is not None else 0.0,
             "radius_m": float(rad) if rad is not None else 60.0,
             "include_director_b": inc_dir,
+            "include_director_arg": inc_dir_arg,
+            "include_director_read": inc_dir_read,
+            "job_start_tick_ms": job_start_tick_ms,
             "snap_tick_ms": snap_tick_ms,
             "snap_frame": int(round(out_n.get("snap_frame", 0.0))),
             "released_tick_ms": released_tick_ms,
@@ -1476,6 +2482,20 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             ep = s.get("server_epoch") or bop.inst
             if ep == server_epoch_old:
                 status_ops_old.append((bop, s, n, r))
+                # Brief, ronda 2 (`:531`) y arbitraje 8: el `per_status` de t0 (sin `director_uid`) trae `players_n`; con
+                # cero jugadores se sigue esperando, con dos o mas es `director_ambiguous`, y el uid solo se fija con
+                # exactamente un jugador listo y un uid no vacio. Sin `players_n` (evidencia anterior) vale el uid leido.
+                p_n = n.get("players_n")
+                if p_n is not None:
+                    if int(round(p_n)) >= 2:
+                        if not director_uid_t0 and "director_ambiguous" not in reasons:
+                            reasons.append("director_ambiguous")
+                        continue
+                    if int(round(p_n)) != 1 or not all(
+                        int(round(n.get(k, 0.0))) == 1
+                        for k in ("director_present_b", "director_alive_b", "director_inv_readable_b")
+                    ):
+                        continue
                 if not director_uid_t0 and s.get("director_uid"):
                     director_uid_t0 = s["director_uid"]
             elif server_epoch_new and ep == server_epoch_new:
@@ -1498,17 +2518,53 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 reasons.append("t0_director_inventory_not_censused")
                 break
             for row in c0["rows"]:
-                cname = str(row.get("class_name") or "")
                 ouid = str(row.get("owner_uid") or "")
-                if cname in sentinel_classes or ouid == "" or (director_uid_t0 and ouid != director_uid_t0):
+                # Brief, ronda 2 (`:537`, `:248`): una clase centinela DENTRO del arbol del director ya no aborta, va
+                # al basal completo y se juzga por identidad; lo que esta fuera de ese arbol (areas de suelo, otro
+                # jugador), de cualquier clase, sigue abortando con `dirty_initial_area`.
+                if ouid == "" or (director_uid_t0 and ouid != director_uid_t0):
                     if "dirty_initial_area" not in reasons:
                         reasons.append("dirty_initial_area")
                     break
                 if aid == "area_a" and ouid == director_uid_t0:
                     baseline_director_rows.append(row)
 
-    # MEN-8: `baseline_director_foreign` del runner ya NO es una fuente de verdad: la linea base del
-    # director sale solo de las filas del censo t0 de area_a (include_director_b == 1).
+    # O3 (H5, brief ronda 2 `:531` y arbitraje 8): en el contrato nuevo (el `per_status` de t0 publica `players_n`, o la
+    # corrida ordena una purga `per_purge_start`) el uid del director solo vale si una seleccion lista (`players_n == 1`,
+    # uid no vacio, presente, vivo y legible) precede al primer censo basal de t0, y es ese uid. Si no, la seleccion no
+    # esta acreditada: `director_not_selected` (INCONCLUSO); el uid de un censo o de otro `per_status` ya no la suple. Las
+    # trazas antiguas (sin `players_n` ni purga del runner) conservan el respaldo historico.
+    t0_new_contract = any(op.verb == "per_purge_start" for op in ordered_ops) or any(
+        "players_n" in n for _bop, _s, n, _r in status_ops_old
+    )
+    if t0_new_contract and "director_ambiguous" not in reasons:
+        first_t0_seq = min(
+            (c["seq_idx"] for c in censuses if c.get("stage") == "t0_baseline_census"), default=10**9
+        )
+        t0_selected_uid = next(
+            (
+                str(s.get("director_uid") or "")
+                for bop, s, n, _r in status_ops_old
+                if bop.seq_idx < first_t0_seq
+                and n.get("players_n") is not None
+                and int(round(n["players_n"])) == 1
+                and str(s.get("director_uid") or "")
+                and all(
+                    int(round(n.get(k, 0.0))) == 1
+                    for k in ("director_present_b", "director_alive_b", "director_inv_readable_b")
+                )
+            ),
+            "",
+        )
+        if not t0_selected_uid or t0_selected_uid != director_uid_t0:
+            reasons.append("director_not_selected")
+
+    # MEN-8: `baseline_director_foreign` / `baseline_director_sentinel` del runner NO son fuente de verdad: el basal
+    # del director sale solo de las filas del censo t0 de area_a (include_director_b == 1), completo.
+    # Ancla de identidad (E9 y O2): los `pers_id` de ese basal, con su clase, distinguen al personaje del director de
+    # un personaje nuevo del mismo jugador (el `director_uid` no cambia).
+    baseline_anchor = _baseline_anchor_of(baseline_director_rows, director_uid_t0)
+    bridge_links = _bridge_op_links(bridge_events)
 
     # Collect per_apply_scene and per_spawn_raw and ground_query in t1
     ground_queries: list[tuple[float, float, float]] = []
@@ -1564,6 +2620,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
 
     # Build authoritative entity spawn metadata from bridge per_apply_scene + per_spawn_raw
     applied_scenes_final: dict[str, tuple[dict[str, str], dict[str, float], list[dict[str, Any]], list[dict[str, Any]]]] = {}
+    # O3 (H6): la orden del alta de cada escena, para ligar la procedencia vieja de las prendas al epoch viejo
+    applied_scene_op_ids: dict[str, str] = {}
     idempotent_hits_by_scene: dict[str, int] = {}
     selected_pathway = ""
     for _bop, in_s, _in_n, in_r, out_s, out_n, out_r in apply_ops_old:
@@ -1573,6 +2631,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             idempotent_hits_by_scene[sc_id] = idempotent_hits_by_scene.get(sc_id, 0) + 1
         else:
             applied_scenes_final[sc_id] = (out_s, out_n, in_r, out_r)
+            applied_scene_op_ids[sc_id] = _bop.op_id
             pw = out_s.get("q9_pathway") or in_s.get("q9_pathway") or ""
             if pw in ("a", "b"):
                 selected_pathway = pw
@@ -1593,6 +2652,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                     "health_hp": float(row.get("health_hp", 0.0)),
                     "spawn_tick_ms": float(row.get("spawn_tick_ms", 0.0)),
                     "q9_row": row,
+                    "apply_op_id": applied_scene_op_ids.get(sc_id, ""),
                 }
     for tag, (out_s, out_n) in spawn_raw_ops.items():
         bridge_spawn_info[tag] = {
@@ -2562,11 +3622,31 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         and r.get("loc_kind") == "cargo"
                         and r.get("parent_net_id") == b_t5_nid
                     ]
+                    per06_missing: list[str] = []
                     if len(fireplaces) != 1:
                         per06_fail.append("control_child_fireplace_missing")
+                    else:
+                        # O2 (Sol 6 sobre 433d535): el hijo se compara entre t3 y t5 tambien por su `pers_id` (ancla de
+                        # identidad), ademas de su clase y su ubicacion: otro `Fireplace` en el mismo barril no pasa.
+                        b_t3_nid = str(b_t3.get("net_id") or "")
+                        t3_fireplaces = [
+                            r
+                            for r in c_t3_post_c["rows"]
+                            if r.get("class_name") == "Fireplace"
+                            and r.get("loc_kind") == "cargo"
+                            and r.get("parent_net_id") == b_t3_nid
+                        ]
+                        child_pers_t3 = str(t3_fireplaces[0].get("pers_id") or "") if len(t3_fireplaces) == 1 else ""
+                        child_pers_t5 = str(fireplaces[0].get("pers_id") or "")
+                        if not _is_nonzero_pers_id(child_pers_t3) or not _is_nonzero_pers_id(child_pers_t5):
+                            per06_missing.append("control_child_identity_unverifiable")
+                        elif child_pers_t5 != child_pers_t3:
+                            per06_fail.append("control_child_pers_id_mismatch")
 
                     if per06_fail:
                         checks["PER-06"] = {"status": "fail", "detail": ";".join(per06_fail)}
+                    elif per06_missing:
+                        checks["PER-06"] = {"status": "missing", "detail": ";".join(per06_missing)}
                     else:
                         checks["PER-06"] = {"status": "pass", "detail": "ok"}
 
@@ -2575,10 +3655,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         c for c in censuses_by_stage.get("t5_post_restart_census", [])
         if c["job_complete"] and c["inst"] == server_epoch_new
     ]
-
     # Ordenes que alteran el mundo (MENOR: las lecturas puras no cuentan). El evaluador es ciego a las
     # inyecciones, asi que un per_census_start aceptado cuenta como mutador (no puede saber si el peer
-    # lo uso para borrar algo); los rechazados no tuvieron efecto.
+    # lo uso para borrar algo); los rechazados no tuvieron efecto. `per_purge_start` borra: es mutador.
     def _op_is_mutating(op: _BridgeOperation) -> bool:
         if op.status == "rejected":
             return False
@@ -2589,9 +3668,10 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             "per_spawn_raw",
             "per_cleanup_qa",
             "per_census_start",
+            "per_purge_start",
         ):
             return True
-        if op.verb in ("job_read", "job_free", "job_stop", "per_status", "ground_query"):
+        if op.verb in ("job_read", "job_free", "job_stop", "per_status", "per_purge_read", "ground_query"):
             return False
         return op.verb.startswith("per_")
 
@@ -2835,6 +3915,111 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
     c_t5_a = census_by_stage_area.get(("t5_post_restart_census", "area_a"))
     c_t5_ret = census_by_stage_area.get(("t5_post_restart_census", retained_area_id))
 
+    # Purga ordenada por el runner (brief, secciones finales): se juzga una vez y la usan PER-07 y PER-08.
+    purge = _judge_runner_purge(
+        ordered_ops=ordered_ops,
+        links=bridge_links,
+        censuses=censuses,
+        server_epoch_old=server_epoch_old,
+        server_epoch_new=server_epoch_new,
+        director_uid=director_uid_t0,
+        baseline_rows=baseline_director_rows,
+        anchor=baseline_anchor,
+        bridge_spawn_info=bridge_spawn_info,
+        ledger_by_id=ledger_by_id,
+        fixture=fixture,
+        sentinel_classes=sentinel_classes,
+        new_hello_idx=next(
+            (
+                i for i, ev in enumerate(bridge_events)
+                if ev.get("ev") == "hello" and ev.get("http") == 200 and ev.get("ok") is not False
+                and server_epoch_new
+                and str(ev.get("peer") or _dict_or_empty(ev.get("args")).get("peer") or "") == "server"
+                and str(ev.get("inst") or _dict_or_empty(ev.get("args")).get("inst") or "") == server_epoch_new
+            ),
+            None,
+        ),
+    )
+    metrics["runner_purge"] = {
+        "accredited": sorted(a["logical_id"] for a in purge["accredited"].values()),
+        "done_b": 1 if purge["done"] else 0,
+        **purge["metrics"],
+    }
+
+    def _director_cross(
+        c_list: list[dict[str, Any]], roles: set[str] | None
+    ) -> tuple[list[str], list[str]]:
+        """El mismo cruce por `pers_id` del inventario del director en PER-07 y PER-08 (arbitraje 6). Un `pers_id`
+        acreditado de las ramas `roles` (``None`` = todas) es un remanente: `fail` tras un `done`, `missing` sin el;
+        una centinela del basal con su clase se conserva; una centinela que no se puede atribuir da `missing`."""
+        c_fail: list[str] = []
+        c_missing: list[str] = []
+        accredited_pids = purge["accredited"]
+        cand = purge["candidate_pids"]
+        base = purge["baseline_pids"]
+        nids_by_pid: dict[str, set[str]] = {}
+        for c_item in c_list:
+            for r in c_item["rows"]:
+                if str(r.get("owner_uid") or "") == director_uid_t0:
+                    nids_by_pid.setdefault(str(r.get("pers_id") or ""), set()).add(str(r.get("net_id") or ""))
+        for c_item in c_list:
+            for r in c_item["rows"]:
+                if str(r.get("owner_uid") or "") != director_uid_t0:
+                    continue
+                cname = str(r.get("class_name") or "")
+                pid = str(r.get("pers_id") or "")
+                acc = accredited_pids.get(pid)
+                if acc is not None:
+                    if roles is None or acc["role"] in roles:
+                        if pid in purge["ambiguous_pids"]:
+                            # O3 (H3): el mismo cruce que PER-08; un `pers_id` repetido en el epoch nuevo no prueba
+                            # cual es la prenda de Sandbox
+                            c_missing.append(f"purge_remnant_ambiguous:{acc['logical_id']}")
+                        elif purge["done"]:
+                            c_fail.append(f"reappeared_director_gloves:{cname}")
+                        else:
+                            c_missing.append("purge_not_done")
+                    continue
+                if pid in cand:
+                    lid_c = cand[pid]
+                    role_c = str((ledger_by_id.get(lid_c) or {}).get("role") or "")
+                    if roles is None or role_c in roles:
+                        c_missing.append(f"purge_accredited_unidentified:{lid_c}")
+                    continue
+                if cname in sentinel_classes and (
+                    not _is_nonzero_pers_id(pid)
+                    or len(nids_by_pid.get(pid, set())) > 1
+                    or pid not in base
+                    or baseline_anchor.get(pid) != cname
+                ):
+                    c_missing.append(f"director_sentinel_unattributable:{cname}")
+        return c_fail, c_missing
+
+    relevant_t5_reset_censuses = [
+        c
+        for c in t5_censuses
+        if c["area_id"] in ("area_a", retained_area_id)
+        or f"{retained_pfx}_inf_1" in c["raw_area_tag"]
+        or f"{retained_pfx}_ani_1" in c["raw_area_tag"]
+    ]
+    # O2 (Sol 3): la identidad del director se verifica en CADA censo del director que usa PER-07
+    per07_director_censuses = list({
+        c["op_id"]: c
+        for c in [c_t5_a, c_t5_ret] + [c for c in relevant_t5_reset_censuses if c["include_director_b"] == 1]
+        if c is not None
+    }.values())
+    _per07_identity = next(
+        (
+            iss
+            for iss in (
+                _director_census_identity_issue(c, director_uid_t0, baseline_anchor)
+                for c in sorted(per07_director_censuses, key=lambda c: c["seq_idx"])
+            )
+            if iss
+        ),
+        "",
+    )
+
     if checks["PER-06"]["status"] != "pass":
         checks["PER-07"] = {"status": "missing", "detail": "control_not_persisted"}
     elif (
@@ -2846,12 +4031,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         or c_t5_ret["inst"] != server_epoch_new
     ):
         checks["PER-07"] = {"status": "missing", "detail": "missing_t5_reset_branch_census"}
-    elif (
-        c_t5_a["director_present_b"] != 1
-        or c_t5_a["director_inv_readable_b"] != 1
-        or c_t5_a["director_uid"] != director_uid_t0
-    ):
-        checks["PER-07"] = {"status": "missing", "detail": "director_absent_or_uid_mismatch"}
+    elif _per07_identity:
+        checks["PER-07"] = {"status": "missing", "detail": _per07_identity}
     elif post_t3_mutating_old_ops:
         checks["PER-07"] = {"status": "missing", "detail": "post_t3_mutating_old_ops"}
     elif not n49_extremes_accredited:
@@ -2885,16 +4066,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         creature_classes_reset = {"ZmbM_PatrolNormal_Summer", "Animal_CapraHircus_Brown"}
         foreign_allowed_classes = {"WaterBottle", "Compass", "BandageDressing"}
 
-        relevant_t5_reset_censuses = [
-            c
-            for c in t5_censuses
-            if c["area_id"] in ("area_a", retained_area_id)
-            or f"{retained_pfx}_inf_1" in c["raw_area_tag"]
-            or f"{retained_pfx}_ani_1" in c["raw_area_tag"]
-        ]
-
-        per07_fail: list[str] = []
-        per07_missing: list[str] = []
+        # Arbitraje 6: el inventario del director se juzga por identidad, con los roles de la rama con reset
+        per07_fail, per07_missing = _director_cross(relevant_t5_reset_censuses, {"reset_retained", "reset_clean"})
         for c_item in relevant_t5_reset_censuses:
             for r in c_item["rows"]:
                 cname = str(r.get("class_name") or "")
@@ -2913,8 +4086,7 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         per07_missing.append("ce_fauna_intrusion")
                     continue
                 if ouid == director_uid_t0:
-                    if cname == "WorkingGloves_Beige":
-                        per07_fail.append("reappeared_director_gloves:WorkingGloves_Beige")
+                    # ya juzgado por identidad en `_director_cross` (antes: por clase, `WorkingGloves_Beige`)
                     continue
                 if cname in foreign_allowed_classes and max_hp > 0.0 and abs(hp - max_hp * 0.6150) <= 1e-2:
                     continue
@@ -2991,8 +4163,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             }
 
     c_t5_d = census_by_stage_area.get(("t5_post_restart_census", "area_d")) if has_scene_d else None
+    per08_gate = ""
     if checks["PER-06"]["status"] != "pass":
-        checks["PER-08"] = {"status": "missing", "detail": "control_not_persisted"}
+        per08_gate = "control_not_persisted"
     elif (
         c_t3_post_b is None
         or not c_t3_post_b["job_complete"]
@@ -3001,22 +4174,25 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
         or c_t5_b["inst"] != server_epoch_new
         or (has_scene_d and (c_t5_d is None or not c_t5_d["job_complete"] or c_t5_d["inst"] != server_epoch_new))
     ):
-        checks["PER-08"] = {"status": "missing", "detail": "missing_t5_unreset_branch_census"}
-    elif (
-        c_t5_b["director_present_b"] != 1
-        or c_t5_b["director_inv_readable_b"] != 1
-        or c_t5_b["director_uid"] != director_uid_t0
-    ):
-        checks["PER-08"] = {"status": "missing", "detail": "director_absent_or_uid_mismatch"}
+        per08_gate = "missing_t5_unreset_branch_census"
+    elif _per08_identity := _director_census_identity_issue(c_t5_b, director_uid_t0, baseline_anchor):
+        per08_gate = _per08_identity
     elif post_t3_mutating_old_ops:
-        checks["PER-08"] = {"status": "missing", "detail": "post_t3_mutating_old_ops"}
+        per08_gate = "post_t3_mutating_old_ops"
     elif not n49_extremes_accredited:
-        checks["PER-08"] = {"status": "missing", "detail": "post_restart_creature_coverage_missing:N49_extremes_unaccredited"}
+        per08_gate = "post_restart_creature_coverage_missing:N49_extremes_unaccredited"
     elif not (
         _creature_covered_in_t5("b_inf_1", ("t2_census_10min", "t3_pre_reset_census", "t3_post_reset_census"))
         and _creature_covered_in_t5("b_ani_1", ("t2_census_10min", "t3_pre_reset_census", "t3_post_reset_census"))
     ):
-        checks["PER-08"] = {"status": "missing", "detail": "post_restart_creature_coverage_missing"}
+        per08_gate = "post_restart_creature_coverage_missing"
+    if per08_gate:
+        # Brief, ronda 2 (`:589`) y arbitraje 5: un `fail` de la purga acreditado con evidencia del epoch correcto manda
+        # sobre cualquier `missing` concurrente de PER-08, tambien el del ancla del personaje (O2, Sol 4).
+        if purge["fails"]:
+            checks["PER-08"] = {"status": "fail", "detail": ";".join(purge["fails"][:5])}
+        else:
+            checks["PER-08"] = {"status": "missing", "detail": per08_gate}
     else:
         per08_fail: list[str] = []
         per08_missing: list[str] = []
@@ -3089,8 +4265,8 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         per08_missing.append("ce_fauna_intrusion")
                     continue
                 if ouid == director_uid_t0:
-                    if cname == "WorkingGloves_Yellow":
-                        per08_fail.append("reappeared_director_gloves:WorkingGloves_Yellow")
+                    # El inventario del director se juzga por identidad en la purga (remanentes y centinelas sin
+                    # atribuir, `:582` y `:588`), no por clase: sustituye a `:514` (arbitraje 6).
                     continue
                 if cname == "OrienteeringCompass" and max_hp > 0.0 and abs(hp - max_hp * 0.6150) <= 1e-2:
                     continue
@@ -3102,6 +4278,10 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                         per08_fail.append(f"reappeared_in_{aid}:{cname}")
                 elif cname == "SewingKit":
                     per08_fail.append("reappeared_cross_child:SewingKit")
+
+        # (3) La purga que ordena el runner (brief, secciones finales; sustituye a `per_purge_read` y a `:510-514`).
+        per08_fail.extend(purge["fails"])
+        per08_missing.extend(purge["missings"])
 
         if per08_fail:
             checks["PER-08"] = {"status": "fail", "detail": ";".join(per08_fail[:5])}
@@ -3226,6 +4406,9 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 checks["PER-09"] = {"status": "missing", "detail": "missing_witness_status"}
             else:
                 per09_fail: list[str] = []
+                # Causas tecnicas del lado t5 (director ausente o ilegible, censo t5 caido): la fila de PER-09 (brief
+                # :309) no exige nada del director, asi que dan `missing`, nunca `fail`; un fail real manda.
+                per09_missing: list[str] = []
                 if not stale_reset_ops or any(
                     op.status != "rejected" or op.reason != "stale_epoch" for op in stale_reset_ops
                 ):
@@ -3295,15 +4478,27 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                 # Nuevo 6: exigir inclusión y cobertura del director en t5 áreas obligatorias
                 # Per brief :234, t5 debe incluir director en area_a, area_b, retained_area_id
                 required_t5_director_areas = ["area_a", "area_b", retained_area_id]
-                for aid in required_t5_director_areas:
+                for aid in dict.fromkeys(required_t5_director_areas):
                     c_t5_dir = census_by_stage_area.get(("t5_post_restart_census", aid))
+                    # O2 (Sol 1 sobre 433d535): un `include_director_b = 0` EXPLICITO en la orden aceptada (o en su
+                    # acuse) se juzga antes de clasificar la caida tecnica del trabajo: el pedido demostrable da `fail`
+                    # aunque el trabajo acabe en `failed`, `expired` o `stopped`.
+                    if (
+                        c_t5_dir is not None
+                        and c_t5_dir["status"] == "done"
+                        and c_t5_dir["inst"] == server_epoch_new
+                        and 0 in (c_t5_dir.get("include_director_arg"), c_t5_dir.get("include_director_read"))
+                    ):
+                        per09_fail.append(f"t5_director_not_included:{aid}")
+                        continue
                     if not c_t5_dir or not c_t5_dir["job_complete"]:
-                        per09_fail.append(f"t5_missing_census:{aid}")
+                        per09_missing.append(f"t5_missing_census:{aid}")
                         continue
                     if c_t5_dir["include_director_b"] != 1:
+                        # la implementacion no pidio al director donde :234 lo exige: eso si es un fallo
                         per09_fail.append(f"t5_director_not_included:{aid}")
-                    if c_t5_dir["director_present_b"] != 1 or c_t5_dir["director_inv_readable_b"] != 1:
-                        per09_fail.append(f"t5_director_unreadable:{aid}")
+                    elif c_t5_dir["director_present_b"] != 1 or c_t5_dir["director_inv_readable_b"] != 1:
+                        per09_missing.append(f"t5_director_unreadable:{aid}")
 
                 pre_w_map = {str(r.get("net_id") or ""): r for r in c_wit_pre["rows"]}
                 post_w_map = {str(r.get("net_id") or ""): r for r in c_wit_post["rows"]}
@@ -3497,9 +4692,16 @@ def evaluate(part_dir: Path, *, repo_root: Path | None = None) -> dict[str, Any]
                                 t6_survivors.append(f"{r.get('class_name')}:{r.get('net_id')}")
 
                     if t6_missing_areas:
-                        checks["PER-09"] = {"status": "missing", "detail": f"t6_cleanup_census_absent:{','.join(t6_missing_areas)}"}
+                        checks["PER-09"] = {
+                            "status": "missing",
+                            "detail": ";".join(
+                                [f"t6_cleanup_census_absent:{','.join(t6_missing_areas)}"] + per09_missing[:4]
+                            ),
+                        }
                     elif t6_survivors:
                         checks["PER-09"] = {"status": "fail", "detail": f"t6_cleanup_survivors:{';'.join(t6_survivors[:5])}"}
+                    elif per09_missing:
+                        checks["PER-09"] = {"status": "missing", "detail": ";".join(per09_missing[:5])}
                     else:
                         checks["PER-09"] = {"status": "pass", "detail": "ok"}
 

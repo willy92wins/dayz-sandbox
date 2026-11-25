@@ -1,0 +1,86 @@
+{
+  "argv": [
+    "spike",
+    "S-persist",
+    "--both",
+    "--build",
+    "diag",
+    "--part",
+    "mut-census_resource_bypass",
+    "--evidence",
+    "C:\\dsbx-m1\\resultados\\spersist_4partes_0192a21_20261124T225455Z\\evidence",
+    "--server-profile",
+    "C:\\dsbx-m1\\spersist_4partes_0192a21\\run_20261124T225455Z\\profiles\\mut-census_resource_bypass\\server",
+    "--client-profile",
+    "C:\\dsbx-m1\\spersist_4partes_0192a21\\run_20261124T225455Z\\profiles\\mut-census_resource_bypass\\client",
+    "--pbo",
+    "C:\\dsbx-m1\\spersist_4partes_0192a21\\mods\\@DayZSandbox_QA\\Addons\\DayZSandbox_QA.pbo",
+    "--peer-timeout",
+    "600"
+  ],
+  "both": true,
+  "build": "diag",
+  "ended_utc": "2026-11-24T23:50:04Z",
+  "execution_identity": {
+    "fake_peer_pids": {
+      "client": null,
+      "server": null
+    },
+    "key_sha256": {
+      "client": "61365d87be18de6e",
+      "server": "44aae5c1ada12934"
+    },
+    "peer_insts": {
+      "client": [
+        "3bccbf7f01c9408fafb60491fdca4cd5",
+        "ae0702b93b684a4f8eac8b7a9a4e201f"
+      ],
+      "server": [
+        "0577dbc679474c448a03a74db9b1af08",
+        "72cd7c928f84422885acf713688a5db8"
+      ]
+    },
+    "port": 61022
+  },
+  "faults": [],
+  "harness": {
+    "git_dirty": false,
+    "git_head": "0192a219b163fa6cf608a8d4541c8fbcfac93496",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "python": "3.14.7"
+  },
+  "id": "S-persist",
+  "identity": {
+    "build": "diag",
+    "git_dirty": false,
+    "git_head": "0192a219b163fa6cf608a8d4541c8fbcfac93496",
+    "params": {
+      "hold_ms": 2000,
+      "lease_ms": 3000,
+      "probe_budget_log_poll_ms": 10,
+      "probe_budget_retry_ms": 1000,
+      "retry_ms": 2000,
+      "seed": 20261026,
+      "ttl_ms": 5000,
+      "wire_cap": 3500
+    },
+    "pbo_sha256": "f8edf2c1b37552468234abbea5c3aeeedc0d3d3c6cc9c164475dc8a10db4aa78",
+    "peer_builds": {
+      "client": "diag",
+      "server": "diag"
+    },
+    "probe_stamp": "7f8e583d41397e77"
+  },
+  "kind": "spike",
+  "params": {
+    "hold_ms": 2000,
+    "lease_ms": 3000,
+    "port": 61022,
+    "retry_ms": 2000,
+    "run_id": "a13c68b7",
+    "seed": 20261026,
+    "ttl_ms": 5000
+  },
+  "schema": "dsbx-qa-manifest/1",
+  "started_utc": "2026-11-24T23:32:24Z"
+}

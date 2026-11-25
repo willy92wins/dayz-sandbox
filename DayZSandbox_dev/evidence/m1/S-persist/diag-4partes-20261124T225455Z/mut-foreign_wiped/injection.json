@@ -1,0 +1,11 @@
+{
+  "applied": true,
+  "kind": "enforce_fault",
+  "mutant": "foreign_wiped",
+  "observable_effect": {
+    "qa_fault": "reset_wipe_radius_25m",
+    "scene_id": "scene_a_mut"
+  },
+  "target": "DSBX_QA_X_Persist",
+  "when_h_ms": 155097.02
+}
