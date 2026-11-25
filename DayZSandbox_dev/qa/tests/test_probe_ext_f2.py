@@ -973,7 +973,10 @@ class Mode0IdentityInProcess(unittest.TestCase):
             if explicit_zero:
                 nums["select_all_entityai_b"] = 0.0
             op_id = "census%d" % i
-            status, reason, payload = run("per_census_start", {"area_tag": "area_a"}, nums, op_id=op_id)
+            # Contrato de S-persist: el censo lleva siempre director_uid (como en a80e65b y en el
+            # runner de F2P); sin el, include_director_b = 1 se rechaza y los escalares del director salen a 0.
+            census_strs = {"area_tag": "area_a", "director_uid": fake_ext_persist.DIRECTOR_UID}
+            status, reason, payload = run("per_census_start", census_strs, nums, op_id=op_id)
             # S-persist retiene el censo hasta CENSUS_HOLD_MAX_MS (750 ms) si nadie lo disputa: 30 ticks de 33 ms.
             _tick(peer, jobs, ext, n=30)
             job = jobs.jobs_by_id[op_id]
@@ -1564,8 +1567,21 @@ class StaticPersistExtensionTests(unittest.TestCase):
             self.code,
             r'StartJob\(this,\s*op\.op_id,\s*"per_witness",\s*m_WitnessNcol,\s*m_WitnessScol,\s*5,\s*4096,\s*[^,]+,\s*"stop"\)',
         )
-        # El tope de filas lo pone el JobMgr (AppendRow): el .c no escribe a mano el motivo ni trunca.
-        self.assertNotIn('"rows_cap"', self.code)
+        # El tope de filas del testigo lo pone el JobMgr (AppendRow): ni HandleWitnessStart, ni
+        # TickWitness, ni AppendWitnessRow escriben a mano el motivo ni truncan.
+        witness_code = "".join(
+            _block_after(self.code, header) or ""
+            for header in (
+                r"protected\s+void\s+HandleWitnessStart\s*\([^)]*\)\s*\{",
+                r"protected\s+void\s+TickWitness\s*\(\s*\)\s*\{",
+                r"protected\s+bool\s+AppendWitnessRow\s*\([^)]*\)\s*\{",
+            )
+        )
+        self.assertNotIn('"rows_cap"', witness_code)
+        # La unica aparicion en todo el .c es la purga de S-persist, que cierra su propio trabajo.
+        self.assertEqual(self.code.count('"rows_cap"'), 1)
+        purge_start = _block_after(self.code, r"protected\s+void\s+HandlePurgeStart\s*\([^)]*\)\s*\{")
+        self.assertIn('m_Jobs.EndJob(m_PurgeJobId, "failed", "rows_cap");', purge_start)
         witness_tick = _block_after(self.code, r"protected\s+void\s+TickWitness\s*\(\s*\)\s*\{")
         self.assertGreaterEqual(witness_tick.count("AppendWitnessRow("), 2)
         row = _block_after(self.code, r"protected\s+bool\s+AppendWitnessRow\s*\([^)]*\)\s*\{")
@@ -1673,7 +1689,19 @@ class StaticPersistExtensionTests(unittest.TestCase):
         qa = _block_after(code, r"protected\s+bool\s+IsQaCreated\s*\(\s*Object\s+obj\s*\)\s*\{")
         for needle in ("FindRecordByObject(obj) != null", "FindRawRecordByObject(obj) != null", "IsSentinelClass(obj.GetType())"):
             self.assertIn(needle, qa)
-        self.assertEqual(code.count("ReadQaHealth("), 5)  # definicion, 2 en ApplyQaHealthMark, censo e IsQaHealthMark
+        # Definicion, 2 en ApplyQaHealthMark, censo, IsQaHealthMark y los 2 de la purga de S-persist
+        # (AppendPurgeTreeRow y la emision de TickPurge), ambos tras el mismo IsQaCreated.
+        purge_row = _block_after(code, r"protected\s+void\s+AppendPurgeTreeRow\s*\([^)]*\)\s*\{")
+        self.assertRegex(
+            purge_row,
+            r"if\s*\(\s*IsQaCreated\(ent\)\s*\)\s*ReadQaHealth\(ent,\s*maxHp,\s*healthHp\);\s*else\s*ReadHealth\(ent,\s*maxHp,\s*healthHp\);",
+        )
+        purge_tick = _block_after(code, r"protected\s+void\s+TickPurge\s*\(\s*\)\s*\{")
+        self.assertRegex(
+            purge_tick,
+            r"if\s*\(\s*IsQaCreated\(se\)\s*\)\s*ReadQaHealth\(se,\s*rowMaxHp,\s*rowHealthHp\);\s*else\s*ReadHealth\(se,\s*rowMaxHp,\s*rowHealthHp\);",
+        )
+        self.assertEqual(code.count("ReadQaHealth("), 7)
         self.assertEqual(len(re.findall(r"IsSentinelClass\([^;]*\)\s*&&\s*IsQaHealthMark\(", code)), 2)
         # y el testigo no lee salud.
         self.assertNotRegex(_code(WITNESS_C)[1], r"Get(Max)?Health\(")
