@@ -83,10 +83,9 @@ def _mul3(a, b):
 
 def ypr_matrix(yaw_deg, pitch_deg, roll_deg):
     """Matriz de la fixture sintetica con la convencion medida por la
-    sonda del 24-nov: la fila 2 es (cos p * sin y, sin p, cos p * cos y),
-    sin efecto del roll. Las filas 0 y 1 son un completado ortonormal
-    cualquiera: el motor aun no las ha medido (v5 de la sonda), y el
-    oraculo solo puede juzgarlas cuando los dos lados las publican."""
+    sonda: la fila 2 es (cos p * sin y, sin p, cos p * cos y), y las
+    filas 0 y 1 son esa base sin roll girada alrededor de la fila 2
+    por el roll (los 17 casos de la v5, ver test_r5_02)."""
     yaw = math.radians(float(yaw_deg))
     pitch = math.radians(float(pitch_deg))
     cp = math.cos(pitch)
@@ -104,7 +103,11 @@ def ypr_matrix(yaw_deg, pitch_deg, roll_deg):
         fwd[2] * side[0] - fwd[0] * side[2],
         fwd[0] * side[1] - fwd[1] * side[0],
     ]
-    return [side, upv, fwd]
+    roll = math.radians(float(roll_deg))
+    cr, sr = math.cos(roll), math.sin(roll)
+    side_r = [cr * side[i] - sr * upv[i] for i in range(3)]
+    up_r = [sr * side[i] + cr * upv[i] for i in range(3)]
+    return [side_r, up_r, fwd]
 
 
 def matrix_to_quat(m):
@@ -224,8 +227,11 @@ def _ref_pos_rel(keys, t_s, pos_mode):
 
 
 def _key_quat(key):
+    # El slerp sintetico de claves conserva la base sin roll (roll=0):
+    # es la trayectoria de direccion que acredita la referencia de
+    # CAM-05. La matriz completa medida (con roll) se usa en las poses.
     return matrix_to_quat(
-        ypr_matrix(key["yaw_deg"], key["pitch_deg"], key["roll_deg"])
+        ypr_matrix(key["yaw_deg"], key["pitch_deg"], 0.0)
     )
 
 
@@ -4514,6 +4520,472 @@ class SCamOfflineTests(unittest.TestCase):
                         row["capture_tick_ms"] = hud[50]["tick_ms"] + 20.0
             _r1_scenario(part, fn)
         v = self._r4("cam09_tick40", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "pass", v)
+
+    # ---------------------------------------------------------------- ronda 5 (test_r5_*)
+    def _r5(self, label, mutate):
+        return self._verdict_with(f"r5_{label}", mutate)
+
+    def _r5_t1_bracket(self, part, pre_ms, post_ms):
+        def fn(rows):
+            for row in rows:
+                if row.get("ev") == "state" and row.get("step") in (
+                    "dof_var_6s_t1_pre", "dof_fixed_6s_t1_pre",
+                ):
+                    row["read_nk"]["cam_dtsum_ms"] = pre_ms
+                if row.get("ev") == "state" and row.get("step") in (
+                    "dof_var_6s_t1_post", "dof_fixed_6s_t1_post",
+                ):
+                    row["read_nk"]["cam_dtsum_ms"] = post_ms
+                if row.get("ev") == "phase" and row.get("phase_k") == 1:
+                    row["pre_dtsum_ms"] = pre_ms
+                    row["post_dtsum_ms"] = post_ms
+        _r1_scenario(part, fn)
+
+    def test_r5_01_cam08_horquilla_191_pasa_y_la_mayor_da_missing(self):
+        """Punto 1: una horquilla honesta de 191 ms (el peor caso medido
+        en la v7) acredita CAM-08 con la cota nueva de 250 ms; una de
+        251 ms, ya pasada la cota, da INCONCLUSO
+        capture_phase_unaccredited, como pide el brief para CAM-08."""
+        v = self._r5("cam08_191", lambda p: self._r5_t1_bracket(p, 0.0, 191.0))
+        self.assertEqual(_checks_by_id(v)["CAM-08"]["status"], "pass", v)
+        v = self._r5("cam08_251", lambda p: self._r5_t1_bracket(p, 0.0, 251.0))
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-08"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-08"]["detail"], "capture_phase_unaccredited", v)
+
+    def test_r5_01_cam08_ventana_t1_con_la_horquilla_desplazada(self):
+        """Punto 1: la misma horquilla de 191 ms arrancando en 40 ms
+        deja el punto medio en 135,5 ms, dentro de la ventana t1 nueva
+        [0, 150] y fuera de la vieja [0, 100]: CAM-08 PASA."""
+        v = self._r5("cam08_t1_135", lambda p: self._r5_t1_bracket(p, 40.0, 231.0))
+        self.assertEqual(_checks_by_id(v)["CAM-08"]["status"], "pass", v)
+
+    def test_r5_01_cam09_horquilla_191_pasa(self):
+        """Punto 1 en CAM-09: pre/post_cap con una horquilla de 191 ms
+        (1950 -> 2141, punto medio 2045,5 en la ventana de captura)
+        acredita CAM-09 con la cota nueva."""
+        def mut(part):
+            _r1_state(part, "SCAM-S3", "pre_cap", cam_dtsum_ms=1950.0)
+            _r1_state(part, "SCAM-S3", "post_cap", cam_dtsum_ms=2141.0)
+        v = self._r5("cam09_191", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "pass", v)
+
+    def test_r5_02_ypr_los_17_casos_medidos(self):
+        """Punto 2: los 17 casos YawPitchRollMatrix de la v5 (fichero
+        de referencia del encargo, sin teclear ningun numero) salen de
+        ypr_matrix a 1e-6 en las 9 celdas."""
+        candidatos = [
+            base / "_encargo" / "r5" / "ref" / "ypr_v5_lineas.txt"
+            for base in Path(__file__).resolve().parents
+        ]
+        candidatos += [
+            base / "_encargo" / "r5" / "ref" / "ypr_v5_lineas.txt"
+            for base in Path.cwd().resolve().parents
+        ]
+        ref = next((c for c in candidatos if c.is_file()), candidatos[0])
+        angs, mats = {}, {}
+        for line in ref.read_text(encoding="utf-8").splitlines():
+            if " YPR k=" in line:
+                k_txt, payload = line.split(" YPR k=", 1)[1].split(" ang=", 1)
+                angs[int(k_txt)] = json.loads(payload)["v"]
+            elif " YPR_M k=" in line:
+                cab, payload = line.split(" YPR_M k=", 1)[1].split(" v=", 1)
+                k_txt, i_txt = cab.split(" i=", 1)
+                mats.setdefault(int(k_txt), {})[int(i_txt)] = json.loads(payload)["v"]
+        self.assertEqual(len(angs), 17)
+        self.assertEqual(sorted(mats), sorted(angs))
+        for k, ang in sorted(angs.items()):
+            self.assertEqual(sorted(mats[k]), [0, 1, 2])
+            with self.subTest(caso=k, ang=ang):
+                got = ypr_matrix(ang[0], ang[1], ang[2])
+                for i in range(3):
+                    for j in range(3):
+                        self.assertAlmostEqual(got[i][j], mats[k][i][j], delta=1e-6)
+
+    def _r5_append_after_end(self, part, rotate_dir=False):
+        """Una fila tras el fin (dtsum > 6000) con la vista desplazada
+        0,6 m del nodo final; el recorrido ya termino en ella."""
+        def m(rows):
+            last = dict(rows[-1])
+            row = dict(last)
+            row["seq_n"] = last["seq_n"] + 1.0
+            row["frame"] = last["frame"] + 1.0
+            row["tick_ms"] = last["tick_ms"] + 16.667
+            row["dtsum_ms"] = last["dtsum_ms"] + 16.667
+            row["eng_x_m"] = last["x_m"] + 0.6
+            if rotate_dir:
+                fwd = s_cam_eval._dir_from_euler(last["yaw_deg"] + 20.0, last["pitch_deg"])
+                row["eng_dx"], row["eng_dy"], row["eng_dz"] = fwd
+            rows.append(row)
+        _mutate_path(part, "path_catmull_scripted", m)
+
+    def test_r5m_N03_fixture_timeout_con_fov_malo_es_inconcluso(self):
+        """N03 (c_fixture_timeout_fov_mal): el fixture termina en
+        timeout con la lectura de FOV mala (1,40); sin RESULT no hay
+        lectura que juzgar y CAM-01 da INCONCLUSO fixture_timeout,
+        nunca FALLA fixture_fov."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "op" and row.get("step") == "fixture":
+                        row["read_nk"]["fov_rad"] = 1.40
+            _r1_scenario(part, fn)
+            self._r4_sin_result(part, "SCAM-S0", "fixture", "timeout")
+        v = self._r5("m_n03", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-01"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-01"]["detail"], "fixture_timeout", v)
+
+    def test_r5m_N16_control_estatico_girado_falla_cam06(self):
+        """N16 (c_control_estatico_girado): los controles estaticos de
+        SCAM-S4 miran 30 grados fuera del ancla y CAM-06 cae por la
+        orientacion del control sin blur."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "state" and str(row.get("step", "")).startswith("ctrl_"):
+                        nk = row["read_nk"]
+                        mat = ypr_matrix(nk["yaw_deg"] + 30.0, nk["pitch_deg"], nk["roll_deg"])
+                        nk["eng_dx"], nk["eng_dy"], nk["eng_dz"] = mat[2][0], mat[2][1], mat[2][2]
+                        for r in range(3):
+                            for c in range(3):
+                                nk[f"m{r}{c}"] = mat[r][c]
+            _r1_scenario(part, fn)
+        v = self._r5("m_n16", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-06"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-06"]["detail"], "dof_ctrl_noblur.bmp_orientation", v)
+
+    def test_r5m_N17_camino_con_pitch_desviado_falla_cam05(self):
+        """N17 (c_camino_pitch_desviado): mat[2] de cada fila va 10
+        grados en pitch fuera de la referencia y la vista la sigue;
+        CAM-05 cae por orientation_vs_slerp."""
+        def mut(part):
+            def m(rows):
+                fwd = [
+                    s_cam_eval._dir_from_euler(r["yaw_deg"], r["pitch_deg"] + 10.0)
+                    for r in rows
+                ]
+                for i, row in enumerate(rows):
+                    row["m20"], row["m21"], row["m22"] = fwd[i]
+                    src = fwd[i - 1] if i else fwd[0]
+                    row["eng_dx"], row["eng_dy"], row["eng_dz"] = src
+            _mutate_path(part, "path_catmull_scripted", m)
+        v = self._r5("m_n17", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-05"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-05"]["detail"], "orientation_vs_slerp", v)
+
+    def test_r5m_N21_fila_tras_el_fin_no_entra_en_el_error_de_referencia(self):
+        """N21 (c_filas_tras_el_fin): la fila tras el fin no se juzga
+        contra la referencia; CAM-03 cae por el paso de su vista
+        (step_over_median), no por ref_err."""
+        v = self._r5("m_n21", lambda p: self._r5_append_after_end(p))
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-03"]["status"], "fail", v)
+        self.assertTrue(
+            checks["CAM-03"]["detail"].startswith("path_catmull_scripted_step_over_median="),
+            v,
+        )
+
+    def test_r5m_N23_camino_truncado_da_missing_por_cobertura(self):
+        """N23 (c_camino_truncado): el camino acaba en 4983,3 ms y
+        CAM-03 da INCONCLUSO por cobertura hasta el final."""
+        def mut(part):
+            def m(rows):
+                rows[:] = [r for r in rows if float(r["dtsum_ms"]) <= 4983.4]
+            _mutate_path(part, "path_catmull_scripted", m)
+        v = self._r5("m_n23", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-03"]["status"], "missing", v)
+        self.assertEqual(
+            checks["CAM-03"]["detail"],
+            "path_catmull_scripted_coverage_end_ms=4983.3",
+            v,
+        )
+
+    def _r5_uniform_40(self, part):
+        _write_path_jsonl(_samples(part) / "path_catmull_scripted.jsonl",
+                          _path_rows("short_arc_6s", "catmull_rom", "slerp", "short_arc", PATH_DURATION_MS, 151))
+        _write_path_jsonl(_samples(part) / "path_linear_hud.jsonl",
+                          _path_rows("linear_hud_6s", "linear", "ypr", "linear_hud", PATH_DURATION_MS, 151))
+
+    def test_r5m_N25_uniforme_40_el_final_se_juzga_en_el_nodo(self):
+        """N25 (c_uniforme_40): a 40 ms por frame, la posicion final
+        de CAM-04 es la del nodo de la ultima fila, no la de su vista
+        (que es la pose del frame anterior): CAM-04 PASA."""
+        v = self._r5("m_n25", self._r5_uniform_40)
+        self.assertEqual(_checks_by_id(v)["CAM-04"]["status"], "pass", v)
+
+    def test_r5m_N26_ultima_fila_tras_el_fin_con_vista_mala(self):
+        """N26 (c_ultima_tras_el_fin_vista_mal): una fila tras el fin
+        en el camino del HUD cuya vista va 0,5 m fuera del nodo
+        anterior hace caer CAM-04 por view_pos_err."""
+        def mut(part):
+            def m(rows):
+                last = dict(rows[-1])
+                row = dict(last)
+                row["seq_n"] = last["seq_n"] + 1.0
+                row["frame"] = last["frame"] + 1.0
+                row["tick_ms"] = last["tick_ms"] + 16.667
+                row["dtsum_ms"] = last["dtsum_ms"] + 16.667
+                row["eng_x_m"] = last["x_m"] + 0.5
+                row["eng_y_m"] = last["y_m"]
+                row["eng_z_m"] = last["z_m"]
+                rows.append(row)
+            _mutate_path(part, "path_linear_hud", m)
+        v = self._r5("m_n26", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-04"]["status"], "fail", v)
+        self.assertEqual(
+            checks["CAM-04"]["detail"], "path_linear_hud_view_pos_err_m=0.5000", v
+        )
+
+    def test_r5m_N28_uniforme_40_la_referencia_es_la_de_la_fila_anterior(self):
+        """N28 (c_uniforme_40): a 40 ms, la direccion de referencia de
+        CAM-05 es la del instante de la fila anterior (la vista va un
+        frame por detras): CAM-05 PASA."""
+        v = self._r5("m_n28", self._r5_uniform_40)
+        self.assertEqual(_checks_by_id(v)["CAM-05"]["status"], "pass", v)
+
+    def test_r5m_N29_filas_tras_el_fin_no_se_juzgan_en_cam05(self):
+        """N29 (c_filas_tras_el_fin): la fila tras el fin, con la
+        vista girada 20 grados, no entra en CAM-05: CAM-05 PASA."""
+        v = self._r5("m_n29", lambda p: self._r5_append_after_end(p, rotate_dir=True))
+        self.assertEqual(_checks_by_id(v)["CAM-05"]["status"], "pass", v)
+
+    def test_r5m_N31_result_de_p0_con_vista_previa_no_falla(self):
+        """N31 (c_p0_result_vista_previa): en el RESULT de reaplicar
+        P0, las eng_* son del frame anterior; su direccion desviada
+        no se juzga y CAM-02 PASA."""
+        def mut(part):
+            self._r3_as_apply_ops(part)
+            def fn(rows):
+                for row in rows:
+                    if row.get("step") == "p0_applied" and row.get("ev") == "op":
+                        nk = row["read_nk"]
+                        fwd = s_cam_eval._dir_from_euler(nk["yaw_deg"] + 20.0, nk["pitch_deg"])
+                        nk["eng_dx"], nk["eng_dy"], nk["eng_dz"] = fwd
+            _r1_scenario(part, fn)
+        v = self._r5("m_n31", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-02"]["status"], "pass", v)
+
+    def test_r5m_N22_fila_tras_el_fin_no_entra_en_cam_eng(self):
+        """N22 (c_filas_tras_el_fin): la fila tras el fin tampoco se
+        juzga en la identidad cam/eng; CAM-03 cae por el paso de su
+        vista (step_over_median), no por cam_eng_mismatch."""
+        v = self._r5("m_n22", lambda p: self._r5_append_after_end(p))
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-03"]["status"], "fail", v)
+        self.assertTrue(
+            checks["CAM-03"]["detail"].startswith("path_catmull_scripted_step_over_median="),
+            v,
+        )
+
+    def test_r5m_N36_hueco_110_con_periodo_45_pasa_cam08(self):
+        """N36 (c_foco_45_con_hueco_110): a 45 ms por frame, un hueco
+        de 110 ms no pasa de 2,5 periodos (112,8 ms): CAM-08 PASA."""
+        def mut(part):
+            fixtures = _load_json(FIXTURES / "s_cam_paths.json")
+            for dump, fixture_name in (
+                ("path_dof_var", "dof_var_6s"), ("path_dof_fix", "dof_fixed_6s"),
+            ):
+                rows = _dof_rows(fixture_name, 134)
+                keys = _key_table(fixtures["paths"][fixture_name])
+                for row in rows[70:]:
+                    row["dtsum_ms"] += 65.0
+                    row["tick_ms"] += 65.0
+                    fd, fb = _ref_focus(keys, row["dtsum_ms"] / 1000.0)
+                    row["calc_focus_dist_m"] = fd
+                    row["sent_focus_dist_m"] = fd
+                    row["sent_focus_blur"] = fb
+                destino = _samples(part) / (dump + ".jsonl")
+                _write_path_jsonl(destino, rows)
+        v = self._r5("m_n36", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-08"]["status"], "pass", v)
+
+    def test_r5m_N38_periodo_mediano_con_tirones_da_missing_cam08(self):
+        """N38 (c_foco_con_tirones): saltos de 10/10/80 ms (mediana
+        10) dejan 361 filas donde la mediana exige 560 para cubrir
+        5,6 s: CAM-08 da INCONCLUSO por cobertura del fijo."""
+        def mut(part):
+            def m(rows):
+                d = 0.0
+                for i, row in enumerate(rows):
+                    row["dtsum_ms"] = d
+                    row["tick_ms"] = TICK_BASE + d
+                    d += (10.0, 10.0, 80.0)[i % 3]
+            _mutate_path(part, "path_dof_fix", m)
+        v = self._r5("m_n38", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-08"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-08"]["detail"], "no_path_dof_fix_coverage", v)
+
+    def test_r5m_N37_hueco_300_en_el_fijo_da_missing_cam08(self):
+        """N37 (c_foco_hueco_300): un hueco de 217 ms en el camino
+        fijo, muy por encima de 2,5 periodos y de 100 ms, deja
+        CAM-08 en INCONCLUSO por cobertura del fijo."""
+        def mut(part):
+            def m(rows):
+                for row in rows[100:]:
+                    row["dtsum_ms"] += 200.0
+                    row["tick_ms"] += 200.0
+            _mutate_path(part, "path_dof_fix", m)
+        v = self._r5("m_n37", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-08"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-08"]["detail"], "no_path_dof_fix_coverage", v)
+
+    def test_r5m_N41_referencia_limpia_girada_da_missing_cam09(self):
+        """N41 (c_ref_limpia_girada): la referencia limpia mira 30
+        grados fuera de la pose de la captura y CAM-09 da
+        INCONCLUSO clean_ref_pose_rotated."""
+        def mut(part):
+            def fn(rows):
+                for row in rows:
+                    if row.get("step") == "clean_ref_state" and row.get("ev") == "state":
+                        nk = row["read_nk"]
+                        mat = ypr_matrix(nk["yaw_deg"] + 30.0, nk["pitch_deg"], nk["roll_deg"])
+                        nk["eng_dx"], nk["eng_dy"], nk["eng_dz"] = mat[2][0], mat[2][1], mat[2][2]
+                        for r in range(3):
+                            for c in range(3):
+                                nk[f"m{r}{c}"] = mat[r][c]
+            _r1_scenario(part, fn)
+        v = self._r5("m_n41", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-09"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-09"]["detail"], "clean_ref_pose_rotated", v)
+
+    def test_r5m_F4_recuperacion_sin_avance_de_tick_da_missing(self):
+        """F4 (c_recuperacion_sin_avance): el tick de la recuperacion
+        no avanza (periodo 0) y la segunda fila repite frame; CAM-10
+        da INCONCLUSO tick_not_increasing antes que FALLA por frame."""
+        def mut(part):
+            path = _samples(part) / "control_recovery.jsonl"
+            rows = _read_jsonl(path)
+            for row in rows:
+                row[2] = 1000.0
+            rows[1][1] = rows[0][1]
+            _write_jsonl(path, rows)
+        v = self._r5("m_f4", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-10"]["status"], "missing", v)
+        self.assertEqual(checks["CAM-10"]["detail"], "tick_not_increasing", v)
+
+    def test_r5m_N18_motor_con_pitch_desviado_no_pasa_b2b(self):
+        """N18: en el camino del motor, mat[2] va 10 grados en pitch
+        fuera de la referencia y la vista la sigue; la comparativa
+        dice engine_passes_b2_b False y CAM-05 sigue PASA."""
+        def mut(part):
+            def m(rows):
+                fwd = [
+                    s_cam_eval._dir_from_euler(r["yaw_deg"], r["pitch_deg"] + 10.0)
+                    for r in rows
+                ]
+                for i, row in enumerate(rows):
+                    row["m20"], row["m21"], row["m22"] = fwd[i]
+                    src = fwd[i - 1] if i else fwd[0]
+                    row["eng_dx"], row["eng_dy"], row["eng_dz"] = src
+            _mutate_path(part, "path_engine_interp", m)
+        v = self._r5("m_n18", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-05"]["status"], "pass", v)
+        comp = v["metrics"]["interp_comparison"]
+        self.assertEqual(comp["engine_passes_b2_b"], False, v)
+
+    def test_r5m_N20_la_referencia_de_posicion_es_la_de_t_anterior(self):
+        """N20: a 100 ms por frame, la vista va 0,4 m por detras de
+        la referencia de su propio instante (dentro de 0,5 m frente
+        a t(i-1), fuera frente a t(i) al sumar el paso): CAM-03 PASA."""
+        def mut(part):
+            rows = _path_rows("short_arc_6s", "catmull_rom", "slerp", "short_arc", PATH_DURATION_MS, 61)
+            staged = [(r["x_m"], r["y_m"], r["z_m"]) for r in rows]
+            unit = {}
+            for i in range(1, len(rows)):
+                step = [staged[i][a] - staged[i - 1][a] for a in range(3)]
+                norm = math.hypot(step[0], step[1], step[2])
+                unit[i] = [s / norm for s in step]
+            for j, row in enumerate(rows):
+                u = unit[j + 1] if j + 1 in unit else unit[len(rows) - 1]
+                row["x_m"], row["y_m"], row["z_m"] = (
+                    staged[j][0] - 0.4 * u[0],
+                    staged[j][1] - 0.4 * u[1],
+                    staged[j][2] - 0.4 * u[2],
+                )
+            for i, row in enumerate(rows):
+                if i:
+                    row["eng_x_m"], row["eng_y_m"], row["eng_z_m"] = (
+                        staged[i - 1][0] - 0.4 * unit[i][0],
+                        staged[i - 1][1] - 0.4 * unit[i][1],
+                        staged[i - 1][2] - 0.4 * unit[i][2],
+                    )
+                else:
+                    row["eng_x_m"], row["eng_y_m"], row["eng_z_m"] = (
+                        row["x_m"], row["y_m"], row["z_m"]
+                    )
+            _write_path_jsonl(_samples(part) / "path_catmull_scripted.jsonl", rows)
+        v = self._r5("m_n20", mut)
+        self.assertEqual(_checks_by_id(v)["CAM-03"]["status"], "pass", v)
+
+    def test_r5m_N32_el_datum_de_las_metricas_es_anchor_y(self):
+        """N32: la vista del motor va 10 m por encima del ancla en
+        todo el camino; con el datum de anchor_y el error de la
+        comparativa es de ese orden, no el de su primera fila."""
+        def mut(part):
+            def m(rows):
+                for row in rows:
+                    row["y_m"] += 10.0
+                    row["eng_y_m"] += 10.0
+            _mutate_path(part, "path_engine_interp", m)
+        v = self._r5("m_n32", mut)
+        comp = v["metrics"]["interp_comparison"]
+        self.assertGreater(comp["engine_max_pos_err_m"], 5.0, v)
+
+    def test_r5m_N34_el_datum_del_b2b_del_motor_es_anchor_y(self):
+        """N34: sano, el motor pasa b2b; con su vista 0,6 m por
+        encima del ancla, el error frente al datum de anchor_y lo
+        deja fuera (engine_passes_b2_b False)."""
+        v = self._r5("m_n34_sana", lambda p: None)
+        comp = v["metrics"]["interp_comparison"]
+        self.assertEqual(comp["engine_passes_b2_b"], True, v)
+
+        def mut(part):
+            def m(rows):
+                for row in rows:
+                    row["y_m"] += 0.6
+                    row["eng_y_m"] += 0.6
+            _mutate_path(part, "path_engine_interp", m)
+        v = self._r5("m_n34", mut)
+        comp = v["metrics"]["interp_comparison"]
+        self.assertEqual(comp["engine_passes_b2_b"], False, v)
+
+    def test_r5m_N40_tick_de_captura_a_exactamente_un_periodo(self):
+        """N40 (c_tick_a_un_periodo): a 40 ms por frame, el
+        capture_tick_ms cae a exactamente un periodo (40 ms) de su
+        fila, en un hueco de ticks de 80 ms; la frontera no lo
+        desancla y CAM-09 PASA."""
+        def mut(part):
+            hud = _path_rows("linear_hud_6s", "linear", "ypr", "linear_hud", PATH_DURATION_MS, 151)
+            for row in hud[:50]:
+                row["tick_ms"] -= 40.0
+            _write_path_jsonl(_samples(part) / "path_linear_hud.jsonl", hud)
+
+            def nk_of(r):
+                return _pose_nk(r["x_m"], r["y_m"], r["z_m"], r["yaw_deg"], r["pitch_deg"],
+                                r["roll_deg"], r["fov_rad"], cam_dtsum=r["dtsum_ms"],
+                                frame=int(r["frame"]), tick=r["tick_ms"], aux=0.0)
+
+            destinos = {"pre_cap": hud[49], "post_cap": hud[52], "clean_ref_state": hud[49]}
+
+            def fn(rows):
+                for row in rows:
+                    if row.get("ev") == "state" and row.get("step") in destinos:
+                        row["read_nk"] = nk_of(destinos[row["step"]])
+                    if row.get("ev") == "capture" and row.get("file") == "hud_during.bmp":
+                        row.pop("frame", None)
+                        row["capture_tick_ms"] = hud[49]["tick_ms"] + 40.0
+            _r1_scenario(part, fn)
+        v = self._r5("m_n40", mut)
         self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "pass", v)
 
     # ---------------------------------------------------------------- testigo comun (E9)

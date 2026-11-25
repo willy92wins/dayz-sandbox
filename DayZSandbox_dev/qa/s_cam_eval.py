@@ -2304,8 +2304,23 @@ def _check_cam_08(samples: dict) -> dict:
     elif fix_reset[0] != 0.0 or fix_reset[1] != 0.0:
         return _chk("CAM-08", "fail", "fix_reset_focus_not_zero")
 
+    # Cotas de captura rederivadas de lo medido (decision de la
+    # principal de F0.3, 2026-11-25, brief:516-538; procedencia:
+    # INTERPRETACION_v7.md seccion 5 de la sonda combinada, zip v7
+    # sha256 c48f5e80...aad2): la horquilla peticion->listo medida va
+    # de 37 a 191 ms (mediana 88). max_bracket_span_ms = 250 cubre el
+    # peor caso con 59 ms de margen (+30,9 %; el sondeo del runner a
+    # 20 ms queda dentro de ese margen). Cada ventana de fase se
+    # ensancha 50 ms por lado, la mitad del aumento de la horquilla
+    # (150 -> 250), porque el punto medio solo puede desplazarse esa
+    # mitad; t1 queda [0, 150] al no poder bajar de 0. Los rangos de
+    # d_ref coherentes con las ventanas nuevas (lerp 2->50->2 m en
+    # 6 s, 16 m/s por tramo) son: t1 [2.0, 4.4], t2 [22.8, 29.2],
+    # t3 [46.8, 50.0] y t4 [2.0, 9.2] m. max_pair_skew_ms se queda en
+    # 150: con el arranque emparejado en el mismo instante, los dos
+    # puntos medios difieren como mucho media horquilla (125 ms).
     windows = rois.get("phase_windows_ms") or {}
-    span_max = float(rois.get("max_bracket_span_ms", 150.0))
+    span_max = float(rois.get("max_bracket_span_ms", 250.0))
     skew_max = float(rois.get("max_pair_skew_ms", 150.0))
     var_phases = _phase_event_map(samples, "dof_var_6s")
     fix_phases = _phase_event_map(samples, "dof_fixed_6s")
@@ -2488,7 +2503,7 @@ def _check_cam_09(samples: dict) -> dict:
         if pre_dt is None or post_dt is None:
             missing.append("bad_capture_dtsum")
         else:
-            span_max = float(rois.get("max_bracket_span_ms", 150.0))
+            span_max = float(rois.get("max_bracket_span_ms", 250.0))
             if post_dt - pre_dt > span_max or post_dt < pre_dt:
                 missing.append("capture_bracket_span")
             mid_dt = (pre_dt + post_dt) / 2.0
