@@ -1,0 +1,110 @@
+{
+  "checks": [
+    {
+      "detail": "ok",
+      "id": "PER-01",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-02",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-03",
+      "status": "pass"
+    },
+    {
+      "detail": "reset_status=ok/clean;counts=del:12.0,ret:0.0;retained_ids=[];retained_entity_missing:am_cont_1;retained_entity_missing:am_cont_1_child",
+      "id": "PER-04",
+      "status": "fail"
+    },
+    {
+      "detail": "am_prop_2:wiped_in_post_reset;am_cont_1:wiped_in_post_reset;am_cont_1_child:wiped_in_post_reset;am_foreign_ground:wiped_in_post_reset;am_foreign_in_chest:wiped_in_post_reset",
+      "id": "PER-05",
+      "status": "fail"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-06",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-07",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-08",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-09",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-10",
+      "status": "pass"
+    }
+  ],
+  "error": null,
+  "exit_code": 1,
+  "id": "S-persist",
+  "metrics": {
+    "grill_foreign_in_unreset_own_container": {
+      "post": null,
+      "pre": {
+        "class_name": "OrienteeringCompass",
+        "health_hp": 43.04999923706055,
+        "inv_children_n": 0,
+        "loc_kind": "cargo",
+        "max_hp": 70.0,
+        "net_id": "0:1074",
+        "ori_deg": [
+          0.0,
+          0.0,
+          -0.0
+        ],
+        "parent_class": "SeaChest",
+        "parent_net_id": "0:1064",
+        "pers_id": "-1752497558:1514533964:-650716002:-1806871812",
+        "pos_m": [
+          4686.0,
+          339.0,
+          10206.0
+        ],
+        "slot_name": "Cargo:0:0:0"
+      },
+      "readings_available_b": 1
+    },
+    "q9_selected_pathway": "a",
+    "runner_purge": {
+      "accredited": [
+        "ac_act_1_gloves_dir",
+        "b_act_1_gloves_dir"
+      ],
+      "accredited_n": 2,
+      "bajas_n": 1,
+      "done_b": 1,
+      "order_n": 2,
+      "pre_n": 7,
+      "state": "done"
+    },
+    "storage_auxiliary_fingerprint": {
+      "restore_ok_b": 1,
+      "t0_files_n": 32,
+      "t1_present_b": 1,
+      "t2_present_b": 1
+    }
+  },
+  "reasons": [
+    "PER-04",
+    "PER-05"
+  ],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "FALLA"
+}

@@ -1,0 +1,86 @@
+{
+  "argv": [
+    "spike",
+    "S-persist",
+    "--both",
+    "--build",
+    "diag",
+    "--part",
+    "run",
+    "--evidence",
+    "C:\\dsbx-m1\\resultados\\spersist_4partes_0192a21_20261124T225455Z\\evidence",
+    "--server-profile",
+    "C:\\dsbx-m1\\spersist_4partes_0192a21\\run_20261124T225455Z\\profiles\\run\\server",
+    "--client-profile",
+    "C:\\dsbx-m1\\spersist_4partes_0192a21\\run_20261124T225455Z\\profiles\\run\\client",
+    "--pbo",
+    "C:\\dsbx-m1\\spersist_4partes_0192a21\\mods\\@DayZSandbox_QA\\Addons\\DayZSandbox_QA.pbo",
+    "--peer-timeout",
+    "600"
+  ],
+  "both": true,
+  "build": "diag",
+  "ended_utc": "2026-11-25T00:07:45Z",
+  "execution_identity": {
+    "fake_peer_pids": {
+      "client": null,
+      "server": null
+    },
+    "key_sha256": {
+      "client": "5ccb304e930bc3bb",
+      "server": "4c0f3301d4d00fbc"
+    },
+    "peer_insts": {
+      "client": [
+        "cdb86ad9a04a4709ad0f6916f1589ef2",
+        "0dc587d9947340e297465f9ce8c46b34"
+      ],
+      "server": [
+        "76a5c523af1d4c16af388b9f6d1f5c22",
+        "5bb832e547324aa2ac23935eb2dc89f8"
+      ]
+    },
+    "port": 63428
+  },
+  "faults": [],
+  "harness": {
+    "git_dirty": false,
+    "git_head": "0192a219b163fa6cf608a8d4541c8fbcfac93496",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "python": "3.14.7"
+  },
+  "id": "S-persist",
+  "identity": {
+    "build": "diag",
+    "git_dirty": false,
+    "git_head": "0192a219b163fa6cf608a8d4541c8fbcfac93496",
+    "params": {
+      "hold_ms": 2000,
+      "lease_ms": 3000,
+      "probe_budget_log_poll_ms": 10,
+      "probe_budget_retry_ms": 1000,
+      "retry_ms": 2000,
+      "seed": 20261026,
+      "ttl_ms": 5000,
+      "wire_cap": 3500
+    },
+    "pbo_sha256": "f8edf2c1b37552468234abbea5c3aeeedc0d3d3c6cc9c164475dc8a10db4aa78",
+    "peer_builds": {
+      "client": "diag",
+      "server": "diag"
+    },
+    "probe_stamp": "7f8e583d41397e77"
+  },
+  "kind": "spike",
+  "params": {
+    "hold_ms": 2000,
+    "lease_ms": 3000,
+    "port": 63428,
+    "retry_ms": 2000,
+    "run_id": "c1e09535",
+    "seed": 20261026,
+    "ttl_ms": 5000
+  },
+  "schema": "dsbx-qa-manifest/1",
+  "started_utc": "2026-11-24T23:50:09Z"
+}
