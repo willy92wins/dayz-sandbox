@@ -1,0 +1,1096 @@
+=====================================================================
+== C:\Program Files (x86)\Steam\steamapps\common\DayZ\DayZDiag_x64.exe
+== "C:\Program -mod=C:\dsbx-m1\t4-3723120\pbo\@DayZSandbox;C:\dsbx-m1\t4-3723120\pbo\@DayZSandbox_QA -connect=127.0.0.1 -port=2302 -profiles=C:\dsbx-m1\t4-3723120\trabajo\profile-client -name=DSBXQA -window -x=1280 -y=720 -noPause
+=====================================================================
+Exe timestamp: 2026/11/03 12:15:17
+Current time:  2026/11/24 21:45:24
+Version 1.30.164289.70
+=====================================================================
+
+21:45:19.324 ENGINE    (E): Can't load settings ./$CurrentDir:DayZSetting.xml
+21:45:19.324 ENGINE    (W): Enfusion setting file load failed ($CurrentDir:DayZSetting.xml)
+21:45:24.359 [Inputs] Loading inputs default "bin/constants.xml"
+21:45:24.362 [Inputs] Loading inputs default "bin/specific.xml"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot01"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot02"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot03"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot04"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot05"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot06"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot07"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot08"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot09"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot10"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot11"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGestureSlot12"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteGreeting"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteSOS"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteHeart"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteTaunt"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteLyingDown"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteTauntKiss"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmotePoint"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteTauntElbow"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteThumb"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteThumbDown"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteThroat"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteDance"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteSalute"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteTimeout"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteFacepalm"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteClap"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteSilent"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteWatching"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteHold"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteListening"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmotePointSelf"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteLookAtMe"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteTauntThink"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteMove"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteGetDown"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteCome"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteSurrender"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteCampfireSit"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteSitA"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteSitB"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteRPSRandom"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteRPSRock"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteRPSPaper"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteRPSScisors"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteNod"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteShake"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteShrug"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteSuicide"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "EmoteVomit"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAAimLeft"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAAimRight"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAAimUp"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAAimDown"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAGetOver"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAStance"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAStand"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UACrouch"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAProne"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAZeroingUp"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAZeroingDown"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAZoomIn"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAZoomInOptics"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAZoomOutOptics"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAZoomInToggle"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UATurbo"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAPersonView"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UALookAround"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAFire"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAHeavyMeleeAttack"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UADefaultAction"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAAction"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UADropitem"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAThrowitem"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAToggleWeapons"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAUIQuickbarToggle"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UATempRaiseWeapon"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UATempRaiseWeaponGamepad"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAReloadMagazine"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UAPrevActionCategory"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UANextActionCategory"
+21:45:24.362 !!! [Inputs] Attempt to insert input twice "UACarHorn"
+21:45:24.363 [Inputs] Loading inputs cfg "C:\dsbx-m1\t4-3723120\trabajo\profile-client\Users\DSBXQA\usuario-tachado.core.xml"
+21:45:24.365 [Inputs] Exporting inputs cfg "C:\dsbx-m1\t4-3723120\trabajo\profile-client\Users\DSBXQA\usuario-tachado.core.xml"
+21:45:24.795 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableCrouchCameraHorizontalRotation'
+21:45:24.795 SCRIPT    (W): @"scripts/3_Game/human.c,241": Method not linked 'HumanInputController.DisableCrouchCameratHorizontalRotation'
+21:45:24.795 SCRIPT    (W): @"scripts/3_Game/human.c,240": Method not linked 'HumanInputController.DisableErectCameratHorizontalRotation'
+21:45:24.795 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableErectHorizontalRotation'
+21:45:25.123 ANIMATION (E): Can't load C:\dsbx-m1\t4-3723120\pbo\@DayZSandbox_QA/Anims/cfg/skeletons.anim.xml
+21:45:25.123 ANIMATION (E): Failed to open file, line 0, column 0
+21:45:25.123 ANIMATION (E): Can't load C:\dsbx-m1\t4-3723120\pbo\@DayZSandbox/Anims/cfg/skeletons.anim.xml
+21:45:25.123 ANIMATION (E): Failed to open file, line 0, column 0
+21:45:25.123 ANIMATION (E): Can't load nasdara/Anims/cfg/skeletons.anim.xml
+21:45:25.123 ANIMATION (E): Failed to open file, line 0, column 0
+21:45:25.123 ANIMATION (E): Can't load sakhal/Anims/cfg/skeletons.anim.xml
+21:45:25.123 ANIMATION (E): Failed to open file, line 0, column 0
+21:45:26.330 SCRIPT    (W): @"scripts/4_World/entities/building/underground/entrance/land_underground_entrance.c,149": 'UpdatePathgraphDoorByAnimationSourceName' is obsolete: 1.30: Use UpdatePathgraphEntityState
+21:45:26.708 WORLD        : Create entity type 'Static'
+21:45:26.708  WORLD        : Create entity type 'All'
+21:45:26.708   GUI       (W): String "STR_DN_UNKNOWN" not found (not in localization table)
+21:45:26.708 WORLD        : Create entity type 'Air'
+21:45:26.708  WORLD        : Create entity type 'Transport'
+21:45:26.708   GUI       (W): String "STR_DN_TRANSPORT" not found (not in localization table)
+21:45:26.708  GUI       (W): String "STR_DN_HELICOPTER" not found (not in localization table)
+21:45:26.708 WORLD        : Create entity type 'Car'
+21:45:26.708  GUI       (W): String "STR_DN_CAR" not found (not in localization table)
+21:45:26.708 WORLD        : Create entity type 'Man'
+21:45:26.708  GUI       (W): String "STR_DN_MAN" not found (not in localization table)
+21:45:26.736 RENDER    (E): Cannot find PP effect CloudsEffect, is the name correct?
+21:45:26.784 WORLD        : Create entity type 'Boat'
+21:45:26.784  GUI       (W): String "STR_DN_BOAT" not found (not in localization table)
+21:45:26.784 WORLD        : Create entity type 'Motorbike'
+21:45:26.784  GUI       (W): String "STR_DN_MOTORBIKE" not found (not in localization table)
+21:45:26.784 WORLD        : Create entity type 'Animal'
+21:45:26.784  GUI       (W): String "STR_DN_ANIMAL" not found (not in localization table)
+21:45:26.784 WORLD        : Create entity type 'Fortress'
+21:45:26.784  GUI       (W): String "STR_DN_BUNKER" not found (not in localization table)
+21:45:27.309 WORLD        : Create entity type 'M79_Base'
+21:45:27.309  AUDIO        : Loading SoundSet 'IZH18_silencerHomeMade_SoundSet'
+21:45:27.309   AUDIO     (E): Sound set 'IZH18_silencerHomeMade_SoundSet' references missing sound shader 'IZH18_Closure_SoundShader'
+21:45:27.364 WORLD        : Create entity type 'LeeEnfield_Base'
+21:45:27.364  RESOURCES    : GetResourceObject @"{547244D924C753A2}/DZ/anims/anm/player/reloads/LeeEnfield/w_enfield_states.anm"
+21:45:27.364   RESOURCES (E): Failed to open
+21:45:32.14  RESOURCES    : GetResourceObject '.ptc'
+21:45:32.14   RESOURCES (E): Failed to open
+21:45:32.16  RESOURCES    : GetResourceObject 'graphics/particles/debug_dot.ptc'
+21:45:32.16   RESOURCES (E): Bad texture name 'alpha'
+21:45:32.16   MATERIAL  (E): Can't load 'AlbedoMap' 'alpha', in material @"Graphics/Particles/materials/glow/glow1.emat"
+21:45:32.137 RESOURCES    : GetResourceObject 'graphics/particles/tandoor_fire_small_house_01_start.ptc'
+21:45:32.137  MATERIAL  (E): Can't load 'NormalMap' 'Particles/Textures/_Normals/8x16_sphere_N.edds', in material @"Graphics/Particles/materials/smoke/Smoke_Swirl_anim_03.emat"
+21:45:32.335 RESOURCES    : GetResourceObject 'graphics/particles/explosion_grenade_sand.ptc'
+21:45:32.335  MATERIAL  (E): Can't load 'NormalMap' 'Particles/Textures/_Normals/8x16_sphere_N.edds', in material @"Graphics/Particles/materials/smoke/Smoke_Smooth_anim.emat"
+21:45:32.458 RESOURCES    : GetResourceObject 'graphics/particles/smoking_barrel.ptc'
+21:45:32.458  PARTICLES (E): ParticleEffect graphics/particles/smoking_barrel.ptc cannot find material Graphics/Particles/materials/smoke/gunsmoke_muzzle_1.emat
+21:46:14.880 NETWORK      : Network simulation
+21:46:14.880  Loading landscape 'chernarusplus'
+21:46:14.880   WORLD        : Create entity type 'Land_power_pole_conc1_amp'
+21:46:14.880    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+21:46:14.910   ENTITY       : Load entity type 'Land_Mil_Barracks5'
+21:46:14.910    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:14.913   WORLD        : Create entity type 'Land_radio_panelpas'
+21:46:14.913    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASBroadcasterType'
+21:46:14.936   ENTITY       : Load entity type 'Land_Prison_Side'
+21:46:14.936    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:14.936    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:14.936    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:46:14.936    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:46:14.936    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:46:14.936    ENTITY    (W): Door 'DoorsTwin6' is missing geometry components for selection 'DoorsTwin6', check model+config
+21:46:14.936    ENTITY    (W): Door 'DoorsTwin7' is missing geometry components for selection 'DoorsTwin7', check model+config
+21:46:14.936    ENTITY    (W): Door 'DoorsTwin8' is missing geometry components for selection 'DoorsTwin8', check model+config
+21:46:14.959   WORLD        : Create entity type 'Land_power_pole_wood1_amp'
+21:46:14.959    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+21:46:14.970   ENTITY       : Load entity type 'Land_Container_1Mo'
+21:46:14.970    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:14.970    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:14.970   ENTITY       : Load entity type 'Land_Workshop3'
+21:46:14.970    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:14.970    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.01    WORLD        : Create entity type 'Land_lamp_city1_amp'
+21:46:15.01     ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+21:46:15.15    ENTITY       : Load entity type 'Land_Workshop1'
+21:46:15.15     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.44    ENTITY       : Load entity type 'Land_Wall_Gate_FenG_Big'
+21:46:15.44     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.62    ENTITY       : Load entity type 'Land_Wreck_sed01_aban1_white'
+21:46:15.62     ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.62    ENTITY       : Load entity type 'Land_Wreck_hb02_aban1_blue'
+21:46:15.62     ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.62    ENTITY       : Load entity type 'Land_House_2W03_Brown'
+21:46:15.62     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.63    ENTITY       : Load entity type 'Land_House_2W03'
+21:46:15.63     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.77    ENTITY       : Load entity type 'Land_Wall_Gate_FenR_Big'
+21:46:15.77     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.77    ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_yellow'
+21:46:15.77     ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.77     ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:15.77     ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.99    ENTITY       : Load entity type 'Land_Wall_Gate_FenR_Big_Open'
+21:46:15.99     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.112   WORLD        : Create entity type 'Land_power_pole_wood1_lamp_amp'
+21:46:15.113    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+21:46:15.123   ENTITY       : Load entity type 'Land_Church2_2'
+21:46:15.123    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.140   ENTITY       : Load entity type 'Land_Wreck_sed01_aban2_wine'
+21:46:15.140    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.151   ENTITY       : Load entity type 'Land_Wreck_sed01_aban2_white'
+21:46:15.152    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.153   ENTITY       : Load entity type 'Land_Tenement_Small'
+21:46:15.153    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.153    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.153    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.153    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.153    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.153    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.153    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.186   ENTITY       : Load entity type 'Land_Tenement_Big'
+21:46:15.186    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.186    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.186    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.187    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.187    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.187    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.188    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.188    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.188    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.206   ENTITY       : Load entity type 'Land_City_Store'
+21:46:15.206    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.206    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.206    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:46:15.206    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:46:15.206    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:46:15.207   ENTITY       : Load entity type 'Land_Wreck_sed01_aban2_black'
+21:46:15.207    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.214   ENTITY       : Load entity type 'Land_Wreck_sed01_aban1_black'
+21:46:15.214    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.214   ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_red'
+21:46:15.214    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.214    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:15.214    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.251   ENTITY       : Load entity type 'Land_Wreck_hb01_aban1_blue'
+21:46:15.251    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.251    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:15.251   ENTITY       : Load entity type 'Land_City_School'
+21:46:15.251    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.251    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:46:15.251    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:46:15.251    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:46:15.251    ENTITY    (W): Door 'DoorsTwin6' is missing geometry components for selection 'DoorsTwin6', check model+config
+21:46:15.251    ENTITY    (W): Door 'DoorsTwin7' is missing geometry components for selection 'DoorsTwin7', check model+config
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.258    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.259    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.259    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.259    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.259    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.259    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.259    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.259    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.259    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.259    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:46:15.287   ENTITY       : Load entity type 'Land_Garage_Row_Small'
+21:46:15.287    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.287    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.287    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:46:15.299   ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_grey'
+21:46:15.299    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.299    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:15.299    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.303   ENTITY       : Load entity type 'Land_Wreck_hb01_aban1_white'
+21:46:15.303    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.303    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:15.312   ENTITY       : Load entity type 'Land_Wreck_hb02_aban1_red'
+21:46:15.312    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.329   ENTITY       : Load entity type 'Land_Wreck_hb01_aban2_green'
+21:46:15.329    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.329    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:15.350   ENTITY       : Load entity type 'Land_HouseBlock_1F4'
+21:46:15.350    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.350   ENTITY       : Load entity type 'Land_HouseBlock_2F_Corner'
+21:46:15.350    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.350    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.350   ENTITY       : Load entity type 'Land_HouseBlock_2F8'
+21:46:15.350    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.357   ENTITY       : Load entity type 'Land_House_2W02'
+21:46:15.357    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.367   ENTITY       : Load entity type 'Land_HouseBlock_2F1'
+21:46:15.367    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.367    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.369   ENTITY       : Load entity type 'Land_HouseBlock_2F2'
+21:46:15.369    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.369    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.369    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.369    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.370    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.377   ENTITY       : Load entity type 'Land_Garage_Small'
+21:46:15.377    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.377   ENTITY       : Load entity type 'Land_House_2W04_Yellow'
+21:46:15.377    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.378   ENTITY       : Load entity type 'Land_HouseBlock_1F1'
+21:46:15.378    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.378    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.379    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.386   ENTITY       : Load entity type 'Land_Church3'
+21:46:15.386    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.416   ENTITY       : Load entity type 'Land_HouseBlock_3F2'
+21:46:15.416    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.416    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.417   ENTITY       : Load entity type 'Land_HouseBlock_3F_Corner1'
+21:46:15.417    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.417    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.417    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.418    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.418    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.437   ENTITY       : Load entity type 'Land_Wreck_hb02_aban1_black'
+21:46:15.437    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.438   ENTITY       : Load entity type 'Land_HouseBlock_2F6'
+21:46:15.438    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.443   ENTITY       : Load entity type 'Land_Wreck_sed01_aban1_wine'
+21:46:15.443    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.446   ENTITY       : Load entity type 'Land_Workshop4'
+21:46:15.446    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.449   ENTITY       : Load entity type 'Land_Workshop2'
+21:46:15.449    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.459   WORLD        : Create entity type 'Land_power_pole_conc4_lamp_amp'
+21:46:15.459    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+21:46:15.466   ENTITY       : Load entity type 'Land_Wreck_sed02_aban2_red'
+21:46:15.466    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.466    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:15.466    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.473   ENTITY       : Load entity type 'Land_HouseBlock_1F3'
+21:46:15.473    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.491   ENTITY       : Load entity type 'Land_HouseBlock_2F4'
+21:46:15.491    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.501   ENTITY       : Load entity type 'Land_HouseBlock_2F9'
+21:46:15.501    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.507   ENTITY       : Load entity type 'Land_Wreck_sed02_aban2_yellow'
+21:46:15.507    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.507    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:15.507    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.524   ENTITY       : Load entity type 'Land_Wreck_hb01_aban2_blue'
+21:46:15.524    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.524    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:15.525   ENTITY       : Load entity type 'Land_Rail_Station_Big'
+21:46:15.525    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.541   ENTITY       : Load entity type 'Land_Wall_Gate_FenG_Big_Open'
+21:46:15.541    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.543   ENTITY       : Load entity type 'Land_City_PoliceStation'
+21:46:15.543    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.543    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.543    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:46:15.573   ENTITY       : Load entity type 'Land_Wreck_sed02_aban2_grey'
+21:46:15.573    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.573    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:15.573    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:15.578   ENTITY       : Load entity type 'Land_Garage_Row_Big'
+21:46:15.578    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.578    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.578    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:46:15.578    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:46:15.592   ENTITY       : Load entity type 'Land_City_Hospital'
+21:46:15.592    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.605   ENTITY       : Load entity type 'Land_Container_1Bo'
+21:46:15.605    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.605    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.605   ENTITY       : Load entity type 'Land_City_Store_WithStairs'
+21:46:15.605    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.605    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.605    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:46:15.605    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:46:15.605    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:46:15.618   ENTITY       : Load entity type 'Land_House_2W04'
+21:46:15.618    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.635   ENTITY       : Load entity type 'Land_Office2'
+21:46:15.635    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.635    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.635    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:46:15.635    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:46:15.635    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:46:15.665   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:15.718   ENTITY       : Load entity type 'Land_House_1W12_Brown'
+21:46:15.718    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.718    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.718    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.739   ENTITY       : Load entity type 'Land_House_1W08_Brown'
+21:46:15.739    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.739    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.739    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:46:15.799   ENTITY       : Load entity type 'Land_Wreck_hb01_aban2_white'
+21:46:15.799    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.799    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:15.843   ENTITY       : Load entity type 'Land_Office1'
+21:46:15.843    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.843    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.843    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:46:15.843    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:46:15.843    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:46:15.843    ENTITY    (W): Door 'DoorsTwin6' is missing geometry components for selection 'DoorsTwin6', check model+config
+21:46:15.843    ENTITY    (W): Door 'DoorsTwin7' is missing geometry components for selection 'DoorsTwin7', check model+config
+21:46:15.878   ENTITY       : Load entity type 'Land_Workshop5'
+21:46:15.878    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.879   ENTITY       : Load entity type 'Land_Factory_Small'
+21:46:15.879    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:15.879    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:15.959   ENTITY       : Load entity type 'Land_Wreck_hb01_aban1_green'
+21:46:15.959    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:46:15.959    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:16.51    ENTITY       : Load entity type 'Land_Mil_Barracks3'
+21:46:16.51     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.76    ENTITY       : Load entity type 'Land_wreck_truck01_aban2_firetruck'
+21:46:16.76     ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:16.76     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.76     ENTITY    (W): Door 'Doors5' is missing geometry components for selection 'Doors5', check model+config
+21:46:16.76     ENTITY    (W): Door 'Doors6' is missing geometry components for selection 'Doors6', check model+config
+21:46:16.76     ENTITY    (W): Door 'Doors7' is missing geometry components for selection 'Doors7', check model+config
+21:46:16.76     ENTITY    (W): Door 'Doors8' is missing geometry components for selection 'Doors8', check model+config
+21:46:16.76     ENTITY    (W): Door 'Doors9' is missing geometry components for selection 'Doors9', check model+config
+21:46:16.76    ENTITY       : Load entity type 'Land_wreck_truck01_aban1_firetruck'
+21:46:16.76     ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:46:16.76     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.76     ENTITY    (W): Door 'Doors5' is missing geometry components for selection 'Doors5', check model+config
+21:46:16.76     ENTITY    (W): Door 'Doors6' is missing geometry components for selection 'Doors6', check model+config
+21:46:16.76     ENTITY    (W): Door 'Doors7' is missing geometry components for selection 'Doors7', check model+config
+21:46:16.76     ENTITY    (W): Door 'Doors8' is missing geometry components for selection 'Doors8', check model+config
+21:46:16.77     ENTITY    (W): Door 'Doors9' is missing geometry components for selection 'Doors9', check model+config
+21:46:16.96    ENTITY       : Load entity type 'Land_Container_1Moh'
+21:46:16.96     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.96    ENTITY       : Load entity type 'Land_Rail_Warehouse_Small'
+21:46:16.96     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.96     ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:16.101   ENTITY       : Load entity type 'Land_Container_1Aoh'
+21:46:16.101    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.118   ENTITY       : Load entity type 'Land_Village_HealthCare'
+21:46:16.118    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.118    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:16.312   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_38_01.p3d)
+21:46:16.312   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_38_02.p3d)
+21:46:16.482   ENTITY       : Load entity type 'Land_Farm_CowshedA'
+21:46:16.482    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.482    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:16.482   ENTITY       : Load entity type 'Land_Farm_CowshedC'
+21:46:16.482    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.518   ENTITY       : Load entity type 'Land_CementWorks_Hall2_Brick'
+21:46:16.518    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.562   ENTITY       : Load entity type 'Land_Wreck_offroad02_aban2'
+21:46:16.562    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:46:16.614   ENTITY       : Load entity type 'Land_Mil_Airfield_HQ'
+21:46:16.614    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.640   ENTITY       : Load entity type 'Land_Mil_Barracks1'
+21:46:16.640    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.684   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_06.p3d)
+21:46:16.694   WORLD        : Create entity type 'Land_radio_panelbig'
+21:46:16.694    ENTITY    (E): Type 'HouseType' must be inherited from class 'StaticTransmitterType'
+21:46:16.702   ENTITY       : Load entity type 'Land_Radio_building'
+21:46:16.702    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:16.811   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:16.957   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:16.968   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:17.08    ENTITY       : Load entity type 'Land_Garage_Big'
+21:46:17.08     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:17.28    ENTITY       : Load entity type 'Land_Tisy_HQ'
+21:46:17.28     ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:17.305   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_20.p3d)
+21:46:17.365   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_02.p3d)
+21:46:17.501   ENTITY       : Load entity type 'Land_Office_Municipal2'
+21:46:17.501    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:17.504   ENTITY       : Load entity type 'Land_HouseBlock_5F'
+21:46:17.504    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:18.14   SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,589": No need to use 'Cast' for up-casting
+21:46:18.17   SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,1741": No need to use 'Cast' for up-casting
+21:46:18.19   SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,2364": No need to use 'Cast' for up-casting
+21:46:18.175  GUI       (W): String "STR_DN_FLAG" not found (not in localization table)
+21:46:18.206  SCRIPT    (E):    -- Stack trace --
+21:46:18.206  SCRIPT    (E):    GetPlugin() scripts/4_World/plugins/pluginmanager.c : 341
+21:46:18.206  SCRIPT    (E):    OnInit() scripts/4_World/plugins/pluginbase/pluginitemdiagnostic.c : 94
+21:46:18.206  SCRIPT    (E):    PluginsInit() scripts/4_World/plugins/pluginmanager.c : 136
+21:46:18.206  SCRIPT    (E):    PluginManagerInit() scripts/4_World/plugins/pluginmanager.c : 304
+21:46:18.206  SCRIPT    (E):    MissionBase() scripts/5_Mission/mission/missionbase.c : 21
+21:46:18.206  SCRIPT    (E):    CreateMission() scripts/5_Mission/somemission.c : 23
+21:46:18.206  SCRIPT    (E):    -----------------
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_ice_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_ice_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_snow_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_snow_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_ground_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_ground_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_metal_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_metal_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_organic_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_organic_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_foliage_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_foliage_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_plastic_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_plastic_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_wood_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_wood_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_glass_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_glass_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_sand_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_sand_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_mud_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_mud_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.255  AUDIO        : Loading SoundSet 'Impact_organic_textile_Soundset'
+21:46:18.255   AUDIO     (E): Sound set 'Impact_organic_textile_Soundset' references missing sound shader 'Impact_Item_organic_SoundShader'
+21:46:18.258  AUDIO        : Loading SoundSet 'Impact_textile_ice_Soundset'
+21:46:18.258   AUDIO     (E): Sound set 'Impact_textile_ice_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.258  AUDIO        : Loading SoundSet 'Impact_textile_snow_Soundset'
+21:46:18.258   AUDIO     (E): Sound set 'Impact_textile_snow_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.258  AUDIO        : Loading SoundSet 'Impact_textile_ground_Soundset'
+21:46:18.258   AUDIO     (E): Sound set 'Impact_textile_ground_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.258  AUDIO        : Loading SoundSet 'Impact_textile_metal_Soundset'
+21:46:18.258   AUDIO     (E): Sound set 'Impact_textile_metal_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.258  AUDIO        : Loading SoundSet 'Impact_textile_organic_Soundset'
+21:46:18.258   AUDIO     (E): Sound set 'Impact_textile_organic_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.258  AUDIO        : Loading SoundSet 'Impact_textile_foliage_Soundset'
+21:46:18.258   AUDIO     (E): Sound set 'Impact_textile_foliage_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.258  AUDIO        : Loading SoundSet 'Impact_textile_plastic_Soundset'
+21:46:18.258   AUDIO     (E): Sound set 'Impact_textile_plastic_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.258  AUDIO        : Loading SoundSet 'Impact_textile_wood_Soundset'
+21:46:18.258   AUDIO     (E): Sound set 'Impact_textile_wood_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.258  AUDIO        : Loading SoundSet 'Impact_textile_glass_Soundset'
+21:46:18.258   AUDIO     (E): Sound set 'Impact_textile_glass_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.259  AUDIO        : Loading SoundSet 'Impact_textile_sand_Soundset'
+21:46:18.259   AUDIO     (E): Sound set 'Impact_textile_sand_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.259  AUDIO        : Loading SoundSet 'Impact_textile_mud_Soundset'
+21:46:18.259   AUDIO     (E): Sound set 'Impact_textile_mud_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.259  AUDIO        : Loading SoundSet 'Impact_textile_textile_Soundset'
+21:46:18.259   AUDIO     (E): Sound set 'Impact_textile_textile_Soundset' references missing sound shader 'Impact_Item_textile_SoundShader'
+21:46:18.282  AUDIO        : Loading SoundSet 'Impact_metal_ice_Soundset'
+21:46:18.282   AUDIO     (E): Sound set 'Impact_metal_ice_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.282  AUDIO        : Loading SoundSet 'Impact_metal_snow_Soundset'
+21:46:18.282   AUDIO     (E): Sound set 'Impact_metal_snow_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.283  AUDIO        : Loading SoundSet 'Impact_metal_ground_Soundset'
+21:46:18.283   AUDIO     (E): Sound set 'Impact_metal_ground_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.283  AUDIO        : Loading SoundSet 'Impact_metal_metal_Soundset'
+21:46:18.283   AUDIO     (E): Sound set 'Impact_metal_metal_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.283  AUDIO        : Loading SoundSet 'Impact_metal_organic_Soundset'
+21:46:18.283   AUDIO     (E): Sound set 'Impact_metal_organic_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.283  AUDIO        : Loading SoundSet 'Impact_metal_foliage_Soundset'
+21:46:18.283   AUDIO     (E): Sound set 'Impact_metal_foliage_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.283  AUDIO        : Loading SoundSet 'Impact_metal_plastic_Soundset'
+21:46:18.283   AUDIO     (E): Sound set 'Impact_metal_plastic_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.283  AUDIO        : Loading SoundSet 'Impact_metal_wood_Soundset'
+21:46:18.283   AUDIO     (E): Sound set 'Impact_metal_wood_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.283  AUDIO        : Loading SoundSet 'Impact_metal_glass_Soundset'
+21:46:18.283   AUDIO     (E): Sound set 'Impact_metal_glass_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.283  AUDIO        : Loading SoundSet 'Impact_metal_sand_Soundset'
+21:46:18.283   AUDIO     (E): Sound set 'Impact_metal_sand_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.283  AUDIO        : Loading SoundSet 'Impact_metal_mud_Soundset'
+21:46:18.283   AUDIO     (E): Sound set 'Impact_metal_mud_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.283  AUDIO        : Loading SoundSet 'Impact_metal_textile_Soundset'
+21:46:18.283   AUDIO     (E): Sound set 'Impact_metal_textile_Soundset' references missing sound shader 'Impact_Item_metal_SoundShader'
+21:46:18.292  AUDIO        : Loading SoundSet 'Impact_plastic_ice_Soundset'
+21:46:18.292   AUDIO     (E): Sound set 'Impact_plastic_ice_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.292  AUDIO        : Loading SoundSet 'Impact_plastic_snow_Soundset'
+21:46:18.292   AUDIO     (E): Sound set 'Impact_plastic_snow_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.292  AUDIO        : Loading SoundSet 'Impact_plastic_ground_Soundset'
+21:46:18.292   AUDIO     (E): Sound set 'Impact_plastic_ground_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.293  AUDIO        : Loading SoundSet 'Impact_plastic_metal_Soundset'
+21:46:18.293   AUDIO     (E): Sound set 'Impact_plastic_metal_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.293  AUDIO        : Loading SoundSet 'Impact_plastic_organic_Soundset'
+21:46:18.293   AUDIO     (E): Sound set 'Impact_plastic_organic_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.293  AUDIO        : Loading SoundSet 'Impact_plastic_foliage_Soundset'
+21:46:18.293   AUDIO     (E): Sound set 'Impact_plastic_foliage_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.293  AUDIO        : Loading SoundSet 'Impact_plastic_plastic_Soundset'
+21:46:18.293   AUDIO     (E): Sound set 'Impact_plastic_plastic_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.293  AUDIO        : Loading SoundSet 'Impact_plastic_wood_Soundset'
+21:46:18.293   AUDIO     (E): Sound set 'Impact_plastic_wood_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.293  AUDIO        : Loading SoundSet 'Impact_plastic_glass_Soundset'
+21:46:18.293   AUDIO     (E): Sound set 'Impact_plastic_glass_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.293  AUDIO        : Loading SoundSet 'Impact_plastic_sand_Soundset'
+21:46:18.293   AUDIO     (E): Sound set 'Impact_plastic_sand_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.293  AUDIO        : Loading SoundSet 'Impact_plastic_mud_Soundset'
+21:46:18.293   AUDIO     (E): Sound set 'Impact_plastic_mud_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.293  AUDIO        : Loading SoundSet 'Impact_plastic_textile_Soundset'
+21:46:18.293   AUDIO     (E): Sound set 'Impact_plastic_textile_Soundset' references missing sound shader 'Impact_Item_plastic_SoundShader'
+21:46:18.306  ENTITY       : Load entity type 'Land_Boathouse'
+21:46:18.306   ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:18.313  ENTITY       : Load entity type 'MakarovIJ70'
+21:46:18.313   RESOURCES    : GetResourceObject @"{934CA9D85BFC36AB}dz/characters/bodies/player_testing.xob"
+21:46:18.313    MATERIAL  (E): Object dz/characters/bodies/player_testing.xob - cannot load material cross_red.emat
+21:46:18.326  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:19.845 NETWORK      : Network simulation
+21:46:19.845  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:19.846  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:19.852  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:19.852  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:19.853  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:22.974 NETWORK      : Network simulation
+21:46:22.974  WORLD        : Create entity type 'SurvivorM_Boris'
+21:46:22.974   AUDIO        : Loading SoundSet 'Gag_Drowning_SoundVoice_Char_SoundSet'
+21:46:22.974    AUDIO     (E): Sound set 'Gag_Drowning_SoundVoice_Char_SoundSet' references missing sound shader 'Drowning_male_2_gag_SoundVoice_Char_SoundShader'
+21:46:22.974   AUDIO        : Loading SoundSet 'Gag_UnderwaterBreathHold_SoundVoice_Char_SoundSet'
+21:46:22.974    AUDIO     (E): Sound set 'Gag_UnderwaterBreathHold_SoundVoice_Char_SoundSet' references missing sound shader 'UnderwaterBreathHold_male_2_gag_SoundVoice_Char_SoundShader'
+21:46:22.975   AUDIO        : Loading SoundSet 'Motohelmet_pushHeavy_SoundVoice_Char_SoundSet'
+21:46:22.975    AUDIO     (E): Sound set 'Motohelmet_pushHeavy_SoundVoice_Char_SoundSet' references missing sound shader 'pushHeavy_female_1_motohelmet_SoundVoice_Char_SoundShader'
+21:46:22.977   AUDIO        : Loading SoundSet 'walkErc_sakhal_snow_forest_Char_Soundset'
+21:46:22.977    AUDIO     (E): Sound set 'walkErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_heel_Char_SoundShader'
+21:46:22.977    AUDIO     (E): Sound set 'walkErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_thump_Char_SoundShader'
+21:46:22.978   AUDIO        : Loading SoundSet 'walkErc_sakhal_forest_spruce_Char_Soundset'
+21:46:22.978    AUDIO     (E): Sound set 'walkErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_heel_Char_SoundShader'
+21:46:22.978    AUDIO     (E): Sound set 'walkErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+21:46:22.978    AUDIO     (E): Sound set 'walkErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+21:46:22.982   AUDIO        : Loading SoundSet 'runErc_sakhal_snow_forest_Char_Soundset'
+21:46:22.982    AUDIO     (E): Sound set 'runErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+21:46:22.982    AUDIO     (E): Sound set 'runErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+21:46:22.983   AUDIO        : Loading SoundSet 'runErc_sakhal_forest_spruce_Char_Soundset'
+21:46:22.983    AUDIO     (E): Sound set 'runErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+21:46:22.983    AUDIO     (E): Sound set 'runErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+21:46:22.986   AUDIO        : Loading SoundSet 'sprintErc_sakhal_snow_forest_Char_Soundset'
+21:46:22.987    AUDIO     (E): Sound set 'sprintErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'sprintErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+21:46:22.987    AUDIO     (E): Sound set 'sprintErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'sprintErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+21:46:22.987   AUDIO        : Loading SoundSet 'sprintErc_sakhal_forest_spruce_Char_Soundset'
+21:46:22.987    AUDIO     (E): Sound set 'sprintErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'sprintErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+21:46:22.987    AUDIO     (E): Sound set 'sprintErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'sprintErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+21:46:23.05    AUDIO        : Loading SoundSet 'walkCro_sakhal_snow_forest_Char_Soundset'
+21:46:23.05     AUDIO     (E): Sound set 'walkCro_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_heel_Char_SoundShader'
+21:46:23.05     AUDIO     (E): Sound set 'walkCro_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_thump_Char_SoundShader'
+21:46:23.06    AUDIO        : Loading SoundSet 'walkCro_sakhal_forest_spruce_Char_Soundset'
+21:46:23.06     AUDIO     (E): Sound set 'walkCro_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_heel_Char_SoundShader'
+21:46:23.06     AUDIO     (E): Sound set 'walkCro_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+21:46:23.06     AUDIO     (E): Sound set 'walkCro_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+21:46:23.10    AUDIO        : Loading SoundSet 'runCro_sakhal_snow_forest_Char_Soundset'
+21:46:23.10     AUDIO     (E): Sound set 'runCro_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+21:46:23.10     AUDIO     (E): Sound set 'runCro_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+21:46:23.10    AUDIO        : Loading SoundSet 'runCro_sakhal_forest_spruce_Char_Soundset'
+21:46:23.10     AUDIO     (E): Sound set 'runCro_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+21:46:23.10     AUDIO     (E): Sound set 'runCro_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+21:46:23.16    AUDIO        : Loading SoundSet 'walkProne_nasdara_desert_Char_Soundset'
+21:46:23.16     AUDIO     (E): Sound set 'walkProne_nasdara_desert_Char_Soundset' references missing sound shader 'Handstep_nasdara_desert_Char_SoundShader'
+21:46:23.16    AUDIO        : Loading SoundSet 'walkProne_nasdara_grass_dry_Char_Soundset'
+21:46:23.16     AUDIO     (E): Sound set 'walkProne_nasdara_grass_dry_Char_Soundset' references missing sound shader 'Handstep_nasdara_grass_dry_Char_SoundShader'
+21:46:23.18    AUDIO        : Loading SoundSet 'runProne_nasdara_desert_Char_Soundset'
+21:46:23.18     AUDIO     (E): Sound set 'runProne_nasdara_desert_Char_Soundset' references missing sound shader 'Handstep_nasdara_desert_Char_SoundShader'
+21:46:23.18    AUDIO        : Loading SoundSet 'runProne_nasdara_grass_dry_Char_Soundset'
+21:46:23.18     AUDIO     (E): Sound set 'runProne_nasdara_grass_dry_Char_Soundset' references missing sound shader 'Handstep_nasdara_grass_dry_Char_SoundShader'
+21:46:23.21    AUDIO        : Loading SoundSet 'walkProneElbow_nasdara_desert_Char_Soundset'
+21:46:23.21     AUDIO     (E): Sound set 'walkProneElbow_nasdara_desert_Char_Soundset' references missing sound shader 'Elbowstep_nasdara_desert_Char_SoundShader'
+21:46:23.21    AUDIO        : Loading SoundSet 'walkProneElbow_nasdara_grass_dry_Char_Soundset'
+21:46:23.21     AUDIO     (E): Sound set 'walkProneElbow_nasdara_grass_dry_Char_Soundset' references missing sound shader 'Elbowstep_nasdara_grass_dry_Char_SoundShader'
+21:46:23.24    AUDIO        : Loading SoundSet 'runProneElbow_nasdara_desert_Char_Soundset'
+21:46:23.24     AUDIO     (E): Sound set 'runProneElbow_nasdara_desert_Char_Soundset' references missing sound shader 'Elbowstep_nasdara_desert_Char_SoundShader'
+21:46:23.24    AUDIO        : Loading SoundSet 'runProneElbow_nasdara_grass_dry_Char_Soundset'
+21:46:23.24     AUDIO     (E): Sound set 'runProneElbow_nasdara_grass_dry_Char_Soundset' references missing sound shader 'Elbowstep_nasdara_grass_dry_Char_SoundShader'
+21:46:23.25    AUDIO        : Loading SoundSet 'jumpErc_sakhal_snow_forest_Char_Soundset'
+21:46:23.25     AUDIO     (E): Sound set 'jumpErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+21:46:23.25     AUDIO     (E): Sound set 'jumpErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+21:46:23.25    AUDIO        : Loading SoundSet 'jumpErc_sakhal_forest_spruce_Char_Soundset'
+21:46:23.25     AUDIO     (E): Sound set 'jumpErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+21:46:23.25     AUDIO     (E): Sound set 'jumpErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+21:46:23.29    AUDIO        : Loading SoundSet 'landFootErc_sakhal_snow_forest_Char_Soundset'
+21:46:23.29     AUDIO     (E): Sound set 'landFootErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+21:46:23.29     AUDIO     (E): Sound set 'landFootErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+21:46:23.29    AUDIO        : Loading SoundSet 'landFootErc_sakhal_forest_spruce_Char_Soundset'
+21:46:23.29     AUDIO     (E): Sound set 'landFootErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+21:46:23.29     AUDIO     (E): Sound set 'landFootErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+21:46:23.33    AUDIO        : Loading SoundSet 'walkRasErc_sakhal_snow_forest_Char_Soundset'
+21:46:23.33     AUDIO     (E): Sound set 'walkRasErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_heel_Char_SoundShader'
+21:46:23.33     AUDIO     (E): Sound set 'walkRasErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'walkErc_sakhal_snow_bare_sakhal_snow_walkErc_thump_Char_SoundShader'
+21:46:23.34    AUDIO        : Loading SoundSet 'walkRasErc_sakhal_forest_spruce_Char_Soundset'
+21:46:23.34     AUDIO     (E): Sound set 'walkRasErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_heel_Char_SoundShader'
+21:46:23.34     AUDIO     (E): Sound set 'walkRasErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+21:46:23.34     AUDIO     (E): Sound set 'walkRasErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'walkErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+21:46:23.38    AUDIO        : Loading SoundSet 'runRasErc_sakhal_snow_forest_Char_Soundset'
+21:46:23.38     AUDIO     (E): Sound set 'runRasErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_heel_Char_SoundShader'
+21:46:23.38     AUDIO     (E): Sound set 'runRasErc_sakhal_snow_forest_Char_Soundset' references missing sound shader 'runErc_sakhal_snow_forest_bare_sakhal_snow_forest_runErc_thump_Char_SoundShader'
+21:46:23.38    AUDIO        : Loading SoundSet 'runRasErc_sakhal_forest_spruce_Char_Soundset'
+21:46:23.38     AUDIO     (E): Sound set 'runRasErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_thump_Char_SoundShader'
+21:46:23.38     AUDIO     (E): Sound set 'runRasErc_sakhal_forest_spruce_Char_Soundset' references missing sound shader 'runErc_sakhal_forest_spruce_bare_wood_parquet_int_walkErc_toe_Char_SoundShader'
+21:46:23.87    AUDIO        : Loading SoundSet 'repeater_empty_SoundSet'
+21:46:23.87     AUDIO     (E): Sound set 'repeater_empty_SoundSet' references missing sound shader 'repeater_empty_TailInterior_SoundShader'
+21:46:23.94    AUDIO        : Loading SoundSet 'WaltherP1_charge_open_SoundSet'
+21:46:23.94     AUDIO     (E): Sound set 'WaltherP1_charge_open_SoundSet' references missing sound shader 'WaltherP1_charge_open_SoundShader_TailInterio_SoundShader'
+21:46:23.94    AUDIO        : Loading SoundSet 'WaltherP1_charge_close_SoundSet'
+21:46:23.94     AUDIO     (E): Sound set 'WaltherP1_charge_close_SoundSet' references missing sound shader 'WaltherP1_charge_close_SoundShader_TailInterio_SoundShader'
+21:46:23.94    AUDIO        : Loading SoundSet 'WaltherP1_charge_close_release_SoundSet'
+21:46:23.94     AUDIO     (E): Sound set 'WaltherP1_charge_close_release_SoundSet' references missing sound shader 'WaltherP1_charge_close_release_SoundShader_TailInterio_SoundShader'
+21:46:23.94    AUDIO        : Loading SoundSet 'WaltherP1_pullout_SoundSet'
+21:46:23.94     AUDIO     (E): Sound set 'WaltherP1_pullout_SoundSet' references missing sound shader 'WaltherP1_pullout_SoundShader_TailInterio_SoundShader'
+21:46:23.94    AUDIO        : Loading SoundSet 'WaltherP1_mag_in_SoundSet'
+21:46:23.94     AUDIO     (E): Sound set 'WaltherP1_mag_in_SoundSet' references missing sound shader 'WaltherP1_mag_in_SoundShader_TailInterio_SoundShader'
+21:46:23.94    AUDIO        : Loading SoundSet 'WaltherP1_mag_load_SoundSet'
+21:46:23.94     AUDIO     (E): Sound set 'WaltherP1_mag_load_SoundSet' references missing sound shader 'WaltherP1_mag_load_SoundShader_TailInterio_SoundShader'
+21:46:23.94    AUDIO        : Loading SoundSet 'WaltherP1_mag_out_SoundSet'
+21:46:23.94     AUDIO     (E): Sound set 'WaltherP1_mag_out_SoundSet' references missing sound shader 'WaltherP1_mag_out_SoundShader_TailInterio_SoundShader'
+21:46:23.94    AUDIO        : Loading SoundSet 'WaltherP1_mag_remove_SoundSet'
+21:46:23.94     AUDIO     (E): Sound set 'WaltherP1_mag_remove_SoundSet' references missing sound shader 'WaltherP1_mag_remove_SoundShader_TailInterio_SoundShader'
+21:46:23.97    AUDIO        : Loading SoundSet 'Offroad_Horn_Start_SoundSet'
+21:46:23.97     AUDIO     (E): Sound set 'Offroad_Horn_Start_SoundSet' references missing sound shader 'Offroad_Horn_Start_SoundShader'
+21:46:23.127  PLAYER    (E): Can't load 
+21:46:23.127  PLAYER    (E): Failed to open file, line 0, column 0
+21:47:55.899 [ErrorModuleHandler] :: Error thrown: 0x00040001 ()
+21:47:56.71  SCRIPT       : Cleaning up script module globals 'Mission'
+21:47:56.71   SCRIPT    (E): Leaked 'DSBX_QA_Callback' script instance (2x)!
+21:47:56.71   SCRIPT    (E): ==== Total Leaks (2x)! ====
+21:47:56.450 SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,589": No need to use 'Cast' for up-casting
+21:47:56.452 SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,1741": No need to use 'Cast' for up-casting
+21:47:56.453 SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,2364": No need to use 'Cast' for up-casting
+21:47:56.590 SCRIPT    (E):    -- Stack trace --
+21:47:56.590 SCRIPT    (E):    GetPlugin() scripts/4_World/plugins/pluginmanager.c : 341
+21:47:56.590 SCRIPT    (E):    OnInit() scripts/4_World/plugins/pluginbase/pluginitemdiagnostic.c : 94
+21:47:56.590 SCRIPT    (E):    PluginsInit() scripts/4_World/plugins/pluginmanager.c : 136
+21:47:56.590 SCRIPT    (E):    PluginManagerInit() scripts/4_World/plugins/pluginmanager.c : 304
+21:47:56.590 SCRIPT    (E):    MissionBase() scripts/5_Mission/mission/missionbase.c : 21
+21:47:56.590 SCRIPT    (E):    CreateMission() scripts/5_Mission/somemission.c : 23
+21:47:56.590 SCRIPT    (E):    -----------------
+21:47:56.603 PLAYER    (E): Can't load 
+21:47:56.603 PLAYER    (E): Failed to open file, line 0, column 0
+21:47:56.624 GUI       (W): String "STR_main_menu_root_character_name_xbox_background_character_name_xbox0" not found (not in localization table)
+21:47:56.627 PLAYER    (E): Can't load 
+21:47:56.627 PLAYER    (E): Failed to open file, line 0, column 0
+21:47:56.630 GUI       (W): String "" not found (not in localization table)
+21:47:56.632 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:56.632 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:56.634 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:56.634 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:56.634 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:56.634 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:56.634 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:56.634 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:56.636 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:56.636 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:56.636 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:56.636 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:56.651 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:56.655 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:56.687 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:56.710 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:56.723 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:56.781 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_38_01.p3d)
+21:47:56.909 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:57.112 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:57.142 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:57.179 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:57.338 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_19.p3d)
+21:47:57.663 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:58.367 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_06.p3d)
+21:47:58.460 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:58.486 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_22.p3d)
+21:47:58.486 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_27.p3d)
+21:47:58.532 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:58.692 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_24.p3d)
+21:47:59.394 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.394 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.399 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.399 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.409 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.409 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.415 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.415 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.421 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.421 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.427 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.427 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.433 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.433 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.439 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.439 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.445 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.445 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.451 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.451 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.457 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.457 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.463 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.463 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.470 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.470 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.475 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.475 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.481 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.482 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.488 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.488 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.494 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.494 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.500 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.500 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.506 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.506 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.512 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.512 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.518 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.518 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.524 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.524 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.530 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.530 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.536 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.536 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.542 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.542 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.548 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.548 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.555 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.555 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.560 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.560 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.567 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.567 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.573 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.573 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.578 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.578 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.585 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.585 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.591 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.591 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.597 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.597 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.603 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.603 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.609 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.609 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.615 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.615 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.621 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.621 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.627 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.627 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.633 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.633 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.639 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.639 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.645 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.645 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.651 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.651 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.657 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.657 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.664 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.664 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.670 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.670 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.676 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.676 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.682 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.682 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.688 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.688 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.694 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.694 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.700 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.700 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.706 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.706 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.712 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.712 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.718 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.718 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.724 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.724 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.730 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.730 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.736 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.736 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.742 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.742 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.749 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.749 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.754 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.754 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.761 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.761 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.767 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.767 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.773 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.773 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:47:59.779 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:47:59.779 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.395 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.395 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.401 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.401 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.407 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.407 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.413 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.413 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.420 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.420 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.425 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.425 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.432 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.432 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.438 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.438 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.444 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.444 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.450 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.450 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.456 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.456 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.462 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.462 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.468 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.468 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.474 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.474 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.480 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.480 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.486 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.486 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.492 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.492 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.498 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.498 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.504 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.504 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.510 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.510 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.516 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.516 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.522 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.522 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.529 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.529 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.534 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.534 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.540 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.541 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.547 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.547 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.553 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.553 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.559 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.559 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.565 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.565 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.571 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.571 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.577 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.577 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.583 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.583 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.589 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.589 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.595 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.595 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.601 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.601 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.607 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.607 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.613 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.613 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.620 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.620 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.626 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.626 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.632 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.632 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.637 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.638 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.644 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.644 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.650 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.650 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.656 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.656 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.662 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.662 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.668 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.668 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.674 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.674 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.680 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.680 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.686 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.686 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.692 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.692 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.699 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.699 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.704 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.704 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.710 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.710 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.717 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.717 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.722 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.722 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.729 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.729 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.735 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.735 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.741 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.741 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.747 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.747 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.753 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.753 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.759 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.759 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.765 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.765 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.771 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.771 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.777 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.777 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:02.783 GUI       (E): ImageWidget::LoadImageFile can't set image 'set:dayz_gui image:externallink'
+21:48:02.783 GUI       (E): ImageWidget::LoadImageFile can't load 'set:dayz_gui image:externallink'
+21:48:06.864 ENGINE       : Destroying game
+21:48:06.865  SCRIPT       : Cleaning up script module globals 'Game'
+21:48:06.865   SCRIPT    (E): Leaked 'BunkerBroadcastManager' script instance (1x)!
+21:48:06.865   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (3x)!
+21:48:06.865   SCRIPT    (E): ==== Total Leaks (4x)! ====
+21:48:06.944 RESOURCES (E): ==== Resource leaks ====
+21:48:06.944 DEFAULT   (E): Leaked @"dz/anims/workspaces/player/player_main/player_main.asi"   2
+21:48:07.01  RESOURCES (E): gui/fonts/sdf_MetronLight36.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/sdf_MetronLight30.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronLight58.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronLight48.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronLight28.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronLight22.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronLight16.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronLight14.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronLight12.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/AmorSerifPro16.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/sdf_MetronLight72.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronBook-Bold58.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/Metron58.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/Metron48.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/Metron28.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/Metron22.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/Metron16.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/Metron14.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/Metron12.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/sdf_MetronBook72.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/sdf_MetronLight24.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/sdf_MetronBook24.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/AmorSerifPro-Bold58.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/AmorSerifPro-Bold48.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/AmorSerifPro-Bold28.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/AmorSerifPro-Bold22.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/AmorSerifPro-Bold16.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/AmorSerifPro-Bold14.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/AmorSerifPro-Bold12.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronBook58.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronBook48.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronBook28.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronBook22.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronBook16.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronBook14.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/MetronBook12.edds   1
+21:48:07.01  RESOURCES (E): system/system.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/Metron-Bold12.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/etelkatextpro58.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/etelkatextpro48.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/etelkatextpro28.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/etelkatextpro22.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/etelkatextpro16.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/etelkatextpro14.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/etelkatextpro12.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/Metron-Bold14.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/sdf_MetronLight42.edds   1
+21:48:07.01  RESOURCES (E): Graphics/Textures/Water/envForest_stream_co.edds   1
+21:48:07.01  RESOURCES (E): Graphics/Textures/Water/caustic.edds   1
+21:48:07.01  RESOURCES (E): Graphics/Textures/Water/dayzwater1_no.edds   1
+21:48:07.01  RESOURCES (E): Graphics/Textures/Water/sand_no.edds   1
+21:48:07.01  RESOURCES (E): Graphics/Textures/Water/foam_ca.edds   1
+21:48:07.01  RESOURCES (E): gui/fonts/system.edds   1
+21:48:07.702  --- Termination successfully completed --- 

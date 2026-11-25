@@ -90,7 +90,9 @@ class DSBX_Catalog
 
 	void AddClassPair(string clsName, string baseName)
 	{
-		if (m_EmptyPageBytes <= 0 || DSBX_Wire.WireId(clsName) == "" || DSBX_Wire.WireId(baseName) == "")
+		string clsWire = DSBX_Wire.WireId(clsName);
+		string baseWire = DSBX_Wire.WireId(baseName);
+		if (m_EmptyPageBytes <= 0 || clsWire == "" || baseWire == "")
 		{
 			m_SkippedCount = m_SkippedCount + 1;
 			return;
@@ -134,7 +136,7 @@ class DSBX_Catalog
 			m_ScanIdx = m_ScanIdx + 1;
 			steps = steps + 1;
 			int scope = g_Game.ConfigGetInt("CfgVehicles " + clsName + " scope");
-			if (scope == 2)
+			if (scope >= 1)
 			{
 				string baseName = "";
 				g_Game.ConfigGetBaseName("CfgVehicles " + clsName, baseName);

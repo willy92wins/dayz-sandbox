@@ -1,0 +1,172 @@
+{
+  "checks": [
+    {
+      "detail": "ok",
+      "id": "F2P-01",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-02",
+      "status": "pass"
+    },
+    {
+      "detail": "stimulus_not_observed",
+      "id": "F2P-03",
+      "status": "missing"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-04",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-05",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-06",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-07",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-08",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-09",
+      "status": "pass"
+    },
+    {
+      "detail": "0:22916:coverage_gap;0:22917:coverage_gap;0:22918:coverage_gap;0:22923:coverage_gap;0:22924:coverage_gap",
+      "id": "F2P-10",
+      "status": "missing"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-11",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-12",
+      "status": "pass"
+    },
+    {
+      "detail": "missing_witness_window:P2n:apply",
+      "id": "F2P-13",
+      "status": "missing"
+    }
+  ],
+  "error": null,
+  "exit_code": 2,
+  "id": "F2P",
+  "members": [
+    {
+      "exit_code": 2,
+      "id": "run",
+      "reasons": [
+        "stimulus_not_observed",
+        "F2P-03",
+        "0:22916:coverage_gap;0:22917:coverage_gap;0:22918:coverage_gap;0:22923:coverage_gap;0:22924:coverage_gap",
+        "F2P-10",
+        "missing_witness_window:P2n:apply",
+        "F2P-13"
+      ],
+      "verdict": "INCONCLUSO"
+    }
+  ],
+  "metrics": {
+    "delete_confirm_max_ms": 7.0,
+    "execution_identities": {
+      "run": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "98efc6db94ee0476",
+          "server": "a4cd82a59e135ab0"
+        },
+        "peer_insts": {
+          "client": [
+            "614ccd0561a74254a4c2e7ac3f408067",
+            "9d65817bc6d7464d913010d84f4381fd",
+            "28aaed88fa7e4781a0cc760b028baaf3"
+          ],
+          "server": [
+            "cff5703774d4415197f616ac3acc2dd3",
+            "c791e31b94ec40fd9d46559fa22ef055",
+            "b7cfcbcdc1ca49929ce6f9b5e3fdfac3"
+          ]
+        },
+        "port": 57873
+      }
+    },
+    "reevaluated_from": "7980132e7334a98e793bce7ed456811f3ff24852",
+    "reevaluated_with": "75ecb097eb28467367ba1e20014eb09c3c491950",
+    "server_lives": [
+      {
+        "casa": true,
+        "desde_t_ms": null,
+        "hasta_t_ms": 651794.331,
+        "motivo": "",
+        "producto": [
+          "d33e8599890e4774aeac747e55832bc9",
+          "1a426983642e4e94827dea23007e1d5a"
+        ],
+        "sonda": [
+          "cff5703774d4415197f616ac3acc2dd3",
+          "cff5703774d4415197f616ac3acc2dd3"
+        ]
+      },
+      {
+        "casa": true,
+        "desde_t_ms": 651794.331,
+        "hasta_t_ms": 835643.324,
+        "motivo": "",
+        "producto": [
+          "dc63ea9adc1b43639dc84ced422f1a07",
+          "3d388c218beb4347a44cc0204046b934"
+        ],
+        "sonda": [
+          "c791e31b94ec40fd9d46559fa22ef055",
+          "c791e31b94ec40fd9d46559fa22ef055"
+        ]
+      },
+      {
+        "casa": true,
+        "desde_t_ms": 835643.324,
+        "hasta_t_ms": null,
+        "motivo": "",
+        "producto": [
+          "2987df7d014e4d66a102c5549cf25b5c",
+          "39105fff83954bd1b985a94273daf856"
+        ],
+        "sonda": [
+          "b7cfcbcdc1ca49929ce6f9b5e3fdfac3",
+          "b7cfcbcdc1ca49929ce6f9b5e3fdfac3"
+        ]
+      }
+    ],
+    "witness_census_max_delta_m": 0.0
+  },
+  "reasons": [
+    "stimulus_not_observed",
+    "F2P-03",
+    "0:22916:coverage_gap;0:22917:coverage_gap;0:22918:coverage_gap;0:22923:coverage_gap;0:22924:coverage_gap",
+    "F2P-10",
+    "missing_witness_window:P2n:apply",
+    "F2P-13"
+  ],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "INCONCLUSO"
+}

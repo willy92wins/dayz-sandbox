@@ -90,7 +90,9 @@ class DSBX_Wire
 			{
 				int hi = (c >> 4) & 15;
 				int lo = c & 15;
-				outStr = outStr + "\\u00" + HexDigit(hi) + HexDigit(lo);
+				string hiHex = HexDigit(hi);
+				string loHex = HexDigit(lo);
+				outStr = outStr + "\\u00" + hiHex + loHex;
 			}
 			else
 			{
@@ -177,16 +179,21 @@ class DSBX_Wire
 			body = body + ",\"world_size\":" + worldSize;
 			body = body + ",\"modset\":[" + modsetItems + "]";
 			body = body + ",\"actor_engine\":\"none\"";
+			body = body + ",\"scene\":1";
 		}
 		body = body + "}";
 		return body;
 	}
 
-	static string WorldReadJson(DSBX_World world)
+	static string WorldReadJson(DSBX_World world, DSBX_Scene scene = null, DSBX_Args args = null)
 	{
 		if (!world)
 		{
 			return "{}";
+		}
+		if (args && args.f2 == 1 && scene && args.doc_id != "")
+		{
+			return DSBX_SceneWire.SceneReadJson(world.GetEpoch(), scene, args.doc_id, "");
 		}
 		string epochJson = WireId(world.GetEpoch());
 		string regShaJson = WireId(world.GetRegistrySha256());

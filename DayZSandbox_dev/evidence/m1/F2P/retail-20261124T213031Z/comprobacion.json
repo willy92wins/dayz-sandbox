@@ -1,0 +1,81 @@
+{
+  "ok": true,
+  "head": "e7cbf060647a9d10016b84b5cb33b65713af451a",
+  "checks": [
+    {
+      "id": "oraculo",
+      "ok": true,
+      "detalle": "7980132e7334a98e793bce7ed456811f3ff24852"
+    },
+    {
+      "id": "git_limpio",
+      "ok": true,
+      "detalle": "HEAD e7cbf060647a9d10016b84b5cb33b65713af451a"
+    },
+    {
+      "id": "pbo_sonda",
+      "ok": true,
+      "detalle": "C:\\dsbx-m1\\t4-e7cbf06\\pbo\\@DayZSandbox_QA\\addons\\DayZSandbox_QA.pbo sha256=f48a149b6ada867f1666f94580a82bf9a3dffb5fe54c9c5631e62a8321e40633"
+    },
+    {
+      "id": "pbo_producto",
+      "ok": true,
+      "detalle": "C:\\dsbx-m1\\t4-e7cbf06\\pbo\\@DayZSandbox\\addons\\DayZSandbox.pbo sha256=f782bd5fac10f52f6c2c753620d85b3c4de3eacd588d1d054624763575e19539"
+    },
+    {
+      "id": "procedencia_sonda",
+      "ok": true,
+      "detalle": "build e7cbf060647a9d10016b84b5cb33b65713af451a pbo_sha256=f48a149b6ada867f1666f94580a82bf9a3dffb5fe54c9c5631e62a8321e40633, el del paquete=f48a149b6ada867f1666f94580a82bf9a3dffb5fe54c9c5631e62a8321e40633"
+    },
+    {
+      "id": "sello_sonda",
+      "ok": true,
+      "detalle": "PBO 3a8b852f8d1437b3, esperado en HEAD 3a8b852f8d1437b3"
+    },
+    {
+      "id": "procedencia_producto",
+      "ok": true,
+      "detalle": "build None pbo_sha256=f782bd5fac10f52f6c2c753620d85b3c4de3eacd588d1d054624763575e19539, el del paquete=f782bd5fac10f52f6c2c753620d85b3c4de3eacd588d1d054624763575e19539"
+    },
+    {
+      "id": "exe_servidor",
+      "ok": true,
+      "detalle": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\DayZServer\\DayZServer_x64.exe"
+    },
+    {
+      "id": "exe_cliente",
+      "ok": true,
+      "detalle": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\DayZ\\DayZ_BE.exe"
+    },
+    {
+      "id": "mision",
+      "ok": true,
+      "detalle": "serverDZ.cfg=True mision=True globals_a_cero=True"
+    },
+    {
+      "id": "puerto_udp_2302",
+      "ok": true,
+      "detalle": "libre"
+    },
+    {
+      "id": "puerto_udp_2304",
+      "ok": true,
+      "detalle": "libre"
+    },
+    {
+      "id": "backend_y_tap",
+      "ok": true,
+      "detalle": "bridge 56260, tap 56262"
+    },
+    {
+      "id": "dsbx_peer_profile-server",
+      "ok": true,
+      "detalle": "C:\\dsbx-m1\\t4-e7cbf06\\trabajo\\profile-server\\dsbx_peer.json url=http://127.0.0.1:56262/"
+    },
+    {
+      "id": "dsbx_peer_profile-client",
+      "ok": true,
+      "detalle": "C:\\dsbx-m1\\t4-e7cbf06\\trabajo\\profile-client\\dsbx_peer.json url=http://127.0.0.1:56262/"
+    }
+  ]
+}
