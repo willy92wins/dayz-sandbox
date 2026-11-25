@@ -81,6 +81,7 @@ class Backend:
         self.horizon = horizon
         self.log = log if log is not None else sys.stderr
         self.paused = False
+        self.ai_last_call = None  # clock() de la última petición de la IA (F6-web parte 2 §2.1)
         self.take_state = "libre"
         self.seq = 0
         self.ring = deque(maxlen=horizon)  # (seq, tipo, data_json)
@@ -241,6 +242,16 @@ class Backend:
     def unsubscribe(self, q):
         with self.store.lock:
             self.clients.discard(q)
+
+    def coedit_view(self):
+        """GET /api/coedit (F6-web parte 2 §2.1): pausa, última llamada de la IA y pilas de la persona."""
+        with self.store.lock:
+            paused = self.paused
+            last = self.ai_last_call
+        age = None if last is None else max(0, int((self.clock() - last) * 1000))
+        view = {"ok": True, "paused": paused, "ai_last_call_age_ms": age}
+        view.update(self.store.stacks(HUMAN))
+        return view
 
     def set_paused(self, paused):
         with self.store.lock:
@@ -466,6 +477,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.discard_body()
                 self.send_json(401, fail("unauthorized", "Credencial no válida"))
                 return None
+            if author["role"] == "ai":
+                self.backend.ai_last_call = self.backend.clock()
             return author, "bearer", None
         session = self.backend.session_for(self.headers.get("Cookie"), self.backend.port)
         if session is None:
@@ -578,6 +591,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(403, fail("forbidden", "Solo la persona lee el perfil"))
             else:
                 self.send_json(200, self.backend.profile.get_profile())
+        elif self.path == "/api/coedit":
+            if author["role"] != "human":
+                self.send_json(403, fail("forbidden", "Solo la persona lee la vista de coedición"))
+            else:
+                self.send_json(200, self.backend.coedit_view())
         elif url.path == "/api/scene/changes":
             q = parse_qs(url.query)
             try:

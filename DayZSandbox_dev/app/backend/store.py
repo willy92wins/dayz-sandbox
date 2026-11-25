@@ -121,6 +121,21 @@ class Store:
                 author, request_id, canon, info, label, revert_of=batch_id, direction=-1
             )
 
+    def stacks(self, author) -> dict:
+        """Solo lectura (F6-web parte 2 §2.2): la misma regla que _undo_redo_locked, sin podar."""
+        with self.lock:
+            key = _author_key(author)
+
+            def top_reverted(stack):
+                pile = stack.get(key) or []
+                if not pile:
+                    return None
+                info = self._inv.get(pile[-1])
+                return None if info is None else bool(info.get("reverted"))
+
+            return {"can_undo": top_reverted(self._undo) is False,
+                    "can_redo": top_reverted(self._redo) is True}
+
     def freeze(self, doc_id, rev, hash) -> dict:
         with self.lock:
             if doc_id != self._doc.get("doc_id"):
