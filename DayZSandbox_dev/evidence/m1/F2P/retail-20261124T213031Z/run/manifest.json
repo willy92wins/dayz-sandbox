@@ -1,0 +1,141 @@
+{
+  "argv": [],
+  "both": true,
+  "build": "retail",
+  "ended_utc": "2026-11-24T21:46:38Z",
+  "execution_identity": {
+    "fake_peer_pids": {
+      "client": null,
+      "server": null
+    },
+    "key_sha256": {
+      "client": "fd0f59d5c7ecde48",
+      "server": "95174f2b5e21fe42"
+    },
+    "peer_insts": {
+      "client": [
+        "58b0f8e332b444c49c4e21e70aab92f1",
+        "ce11fd7ade1d48d7ac4251405c0d6f26",
+        "06482560e21d4281a9af907906ff3211"
+      ],
+      "server": [
+        "24363c0729fc44df96e698b12f803d96",
+        "8e28f80efd90488bbe7eb438be3d7905",
+        "652dedc5ebc04b1291e42954004a89ae"
+      ]
+    },
+    "port": 56906
+  },
+  "f2p": {
+    "oracle_commit": "7980132e7334a98e793bce7ed456811f3ff24852",
+    "oracle_files": {
+      "f2p_eval.py": "4d17ff533e458e787e4e157d07947608d66d72131410059bdfcb46b35ea6cac9",
+      "f2p_mutants.py": "71856a640ce80ef49e8640d5a9990ceff8ddc8b9e29311fd3f5bfbd3abf8d26b"
+    },
+    "p2n_variant": "create_failed_after",
+    "parts": [
+      {
+        "end_t_ms": 42691.682,
+        "name": "P1",
+        "start_t_ms": 31123.301,
+        "storage_id": "storage_1-20261124T213031Z"
+      },
+      {
+        "end_t_ms": 92635.097,
+        "name": "P2",
+        "start_t_ms": 42692.62,
+        "storage_id": "storage_1-20261124T213031Z"
+      },
+      {
+        "end_t_ms": 144852.676,
+        "name": "P2n",
+        "start_t_ms": 92636.283,
+        "storage_id": "storage_1-20261124T213031Z"
+      },
+      {
+        "end_t_ms": 400275.947,
+        "name": "P3",
+        "start_t_ms": 144853.761,
+        "storage_id": "storage_1-20261124T213031Z"
+      },
+      {
+        "end_t_ms": 447706.013,
+        "name": "P3c",
+        "start_t_ms": 400276.891,
+        "storage_id": "storage_1-20261124T213031Z"
+      },
+      {
+        "end_t_ms": 600595.26,
+        "name": "P4a",
+        "start_t_ms": 447707.309,
+        "storage_id": "storage_1-20261124T213031Z"
+      },
+      {
+        "end_t_ms": 734363.624,
+        "name": "P4b",
+        "start_t_ms": 600596.493,
+        "storage_id": "storage_1-20261124T213031Z"
+      },
+      {
+        "end_t_ms": 861973.248,
+        "name": "P4c",
+        "start_t_ms": 734364.614,
+        "storage_id": "storage_1-20261124T213031Z"
+      },
+      {
+        "end_t_ms": 965897.041,
+        "name": "P5",
+        "start_t_ms": 861974.458,
+        "storage_id": "storage_1-20261124T213031Z"
+      }
+    ],
+    "storage": {
+      "id": "storage_1-20261124T213031Z",
+      "path": "C:\\dsbx-m1\\t4-e7cbf06\\trabajo\\storage_1"
+    },
+    "witness_follow_ticks": 3
+  },
+  "faults": [],
+  "harness": {
+    "git_dirty": false,
+    "git_head": "e7cbf060647a9d10016b84b5cb33b65713af451a",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "python": "3.14.7"
+  },
+  "id": "F2P",
+  "identity": {
+    "build": "retail",
+    "git_dirty": false,
+    "git_head": "e7cbf060647a9d10016b84b5cb33b65713af451a",
+    "oracle_commit": "7980132e7334a98e793bce7ed456811f3ff24852",
+    "params": {
+      "hold_ms": 2000,
+      "lease_ms": 3000,
+      "probe_budget_log_poll_ms": 10,
+      "probe_budget_retry_ms": 1000,
+      "retry_ms": 2000,
+      "seed": 20261026,
+      "ttl_ms": 5000,
+      "wire_cap": 3500
+    },
+    "pbo_sha256": "f48a149b6ada867f1666f94580a82bf9a3dffb5fe54c9c5631e62a8321e40633",
+    "peer_builds": {
+      "client": "retail",
+      "server": "retail"
+    },
+    "probe_stamp": "3a8b852f8d1437b3",
+    "product_pbo_sha256": "f782bd5fac10f52f6c2c753620d85b3c4de3eacd588d1d054624763575e19539"
+  },
+  "kind": "spike",
+  "params": {
+    "hold_ms": 2000,
+    "lease_ms": 3000,
+    "port": 56906,
+    "retry_ms": 2000,
+    "run_id": "f6c03de1",
+    "seed": 20261026,
+    "ttl_ms": 5000
+  },
+  "schema": "dsbx-qa-manifest/1",
+  "started_utc": "2026-11-24T21:30:31Z"
+}

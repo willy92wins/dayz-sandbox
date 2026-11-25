@@ -1,0 +1,73 @@
+---------------------------------------------
+Log C:\dsbx-m1\t4-e7cbf06\trabajo\profile-client\script_2026-11-24_22-44-04.log started at 2026-11-24 22:44:14 (2026-11-24 21:44:14 UTC)
+
+22:44:14.920 SCRIPT       : Module: GameLib; loaded 13x files; 13x classes; used 7/2097 kB (0%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,RELEASE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: dd77776f
+22:44:14.933 SCRIPT       : Registered 314 temporary action enum(s), UAN==314
+22:44:15.318 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableCrouchCameraHorizontalRotation'
+22:44:15.318 SCRIPT    (W): @"scripts/3_Game/human.c,241": Method not linked 'HumanInputController.DisableCrouchCameratHorizontalRotation'
+22:44:15.318 SCRIPT    (W): @"scripts/3_Game/human.c,240": Method not linked 'HumanInputController.DisableErectCameratHorizontalRotation'
+22:44:15.318 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableErectHorizontalRotation'
+22:44:15.319 SCRIPT       : Module: Game; loaded 450x files; 1535x classes; used 4412/33554 kB (13%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,RELEASE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: 88e0d64c
+22:44:15.384 SCRIPT       : ... Backlit Effects Enabled
+22:44:16.781 SCRIPT    (W): @"scripts/4_World/entities/building/underground/entrance/land_underground_entrance.c,149": 'UpdatePathgraphDoorByAnimationSourceName' is obsolete: 1.30: Use UpdatePathgraphEntityState
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetActions'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.SetRoboRespawn'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.SetName'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetInitialState'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetEvents'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.SetRoboRespawnTime'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetName'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetFromStates'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetToStates'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetRoboRespawn'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetActive'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetRoboRespawnTime'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'BotStateMachineData.GetGuards'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.GetDefaultRoboRespawn'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.ReadStateMachines'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.GetDefaultRoboRespawnTime'
+22:44:17.114 SCRIPT    (W): @"scripts/4_World/entities/itembase/edible_base/disinfectantspray.c,16": Missing script declaration for method 'RoboclientUtils.GetStateMachines'
+22:44:17.168 SCRIPT       : Module: World; loaded 2324x files; 6199x classes; used 9653/33554 kB (28%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,RELEASE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: 16d8e2e1
+22:44:46.389  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,589": No need to use 'Cast' for up-casting
+22:44:46.392  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,1741": No need to use 'Cast' for up-casting
+22:44:46.393  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,2364": No need to use 'Cast' for up-casting
+22:44:46.432  SCRIPT       : Module: Mission; loaded 234x files; 527x classes; used 3590/33554 kB (10%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,RELEASE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,ENABLE_CAROUSEL"; CRC32: 354f631f
+22:44:46.437  SCRIPT       : Creating Mission: mpmissions\__cur_mp.chernarusplus\mission.c
+22:44:46.539  SCRIPT       : SyncEvents -> RegisterEvents
+22:44:46.659 SCRIPT       : [DSBX] clock tick_ms=42326
+22:44:46.659 SCRIPT       : [DSBX] config status=ok
+22:44:46.659 SCRIPT       : [DSBX_QA] config usable
+22:44:46.698 SCRIPT       : [DSBX_QA] hello accepted
+22:44:46.878  SCRIPT       : [DSBX] client epoch received
+22:44:46.880 SCRIPT       : [DSBX] state HELLO
+22:44:47.050 SCRIPT       : [DSBX] hello accepted session=7504059950c62877 conn=3
+22:44:51.916 SCRIPT       : [DSBX] clock tick_ms=47584
+22:44:56.921 SCRIPT       : [DSBX] clock tick_ms=52589
+22:44:59.754 SCRIPT       : [DSBX] rest error ch=P kind=2 state=6 tick_ms=55420
+22:45:00.059 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=55727
+22:45:00.059 SCRIPT       : [DSBX] state HELLO: client error on P
+22:45:00.365 SCRIPT       : [DSBX] hello accepted session=da75445c6f4784f4 conn=1
+22:45:01.922 SCRIPT       : [DSBX] clock tick_ms=57590
+22:45:06.923 SCRIPT       : [DSBX] clock tick_ms=62590
+22:45:11.922 SCRIPT       : [DSBX] clock tick_ms=67590
+22:45:16.924 SCRIPT       : [DSBX] clock tick_ms=72591
+22:45:21.928 SCRIPT       : [DSBX] clock tick_ms=77595
+22:45:26.932 SCRIPT       : [DSBX] clock tick_ms=82599
+22:45:31.937 SCRIPT       : [DSBX] clock tick_ms=87604
+22:45:36.937 SCRIPT       : [DSBX] clock tick_ms=92604
+22:45:41.940 SCRIPT       : [DSBX] clock tick_ms=97607
+22:45:46.941 SCRIPT       : [DSBX] clock tick_ms=102609
+22:45:51.948 SCRIPT       : [DSBX] clock tick_ms=107616
+22:45:56.954 SCRIPT       : [DSBX] clock tick_ms=112622
+22:46:01.957 SCRIPT       : [DSBX] clock tick_ms=117624
+22:46:06.957 SCRIPT       : [DSBX] clock tick_ms=122624
+22:46:11.962 SCRIPT       : [DSBX] clock tick_ms=127628
+22:46:16.962 SCRIPT       : [DSBX] clock tick_ms=132629
+22:46:21.963 SCRIPT       : [DSBX] clock tick_ms=137630
+22:46:26.964 SCRIPT       : [DSBX] clock tick_ms=142631
+22:46:31.964 SCRIPT       : [DSBX] clock tick_ms=147631
+22:46:36.966 SCRIPT       : [DSBX] clock tick_ms=152633
+22:46:38.784 SCRIPT       : [DSBX] rest error ch=P kind=2 state=6 tick_ms=154450
+22:46:42.104  SCRIPT       : [DSBX] shutdown role=client created_n=3 inflight_p=1 inflight_r=0
+22:46:42.105  SCRIPT       : [DSBX_QA] shutdown
+22:46:42.139  SCRIPT       : ~DayZGame()
