@@ -107,8 +107,10 @@ class DSBX_Peer : Managed
 	string m_Epoch;
 	string m_Session;
 	string m_CatSession;
+	int m_CatConn;
 	string m_HelloEpoch;
 	string m_CatSendSession;
+	int m_CatSendConn;
 	int m_Conn;
 	int m_State;
 
@@ -268,6 +270,8 @@ class DSBX_Peer : Managed
 		m_WorldSize = 0;
 		m_Modset = new array<string>();
 
+		m_CatConn = 0;
+		m_CatSendConn = 0;
 		m_CatPageIdx = 0;
 		m_CatFailures = 0;
 		m_CatNextTryMs = 0.0;
@@ -864,7 +868,7 @@ class DSBX_Peer : Managed
 		}
 		if (kind == DSBX_Const.KIND_CATALOG)
 		{
-			if (m_CatSendSession != m_CatSession)
+			if (m_CatSendSession != m_CatSession || m_CatSendConn != m_CatConn)
 			{
 				return;
 			}
@@ -1001,7 +1005,10 @@ class DSBX_Peer : Managed
 				OnChannelPError(0, false);
 				return;
 			}
-			bool isNewSession = m_CatSession != resp.session;
+			// Cada hello aceptado abre una presentacion nueva (conn nueva). El backend descarta el catalogo a
+			// medias y tambien el completo (C-03 y D4/A1), asi que se vuelve a subir entero aunque la sesion
+			// sea la misma, como tras perder el lease (T4 917bc73).
+			bool isNewCatPresentation = m_CatSession != resp.session || m_CatConn != resp.conn;
 			m_Session = resp.session;
 			m_Conn = resp.conn;
 			m_LeaseMs = resp.lease_ms;
@@ -1011,9 +1018,10 @@ class DSBX_Peer : Managed
 			m_HasLastOkPoll = true;
 			m_FailCountP = 0;
 			m_HelloTooLargeLogged = false;
-			if (!m_IsClient && isNewSession)
+			if (!m_IsClient && isNewCatPresentation)
 			{
 				m_CatSession = resp.session;
+				m_CatConn = resp.conn;
 				m_CatPageIdx = 0;
 				m_CatFailures = 0;
 				m_CatNextTryMs = 0.0;
@@ -1080,7 +1088,7 @@ class DSBX_Peer : Managed
 		}
 		if (kind == DSBX_Const.KIND_CATALOG)
 		{
-			if (m_CatSendSession != m_CatSession)
+			if (m_CatSendSession != m_CatSession || m_CatSendConn != m_CatConn)
 			{
 				return;
 			}
@@ -1607,6 +1615,7 @@ class DSBX_Peer : Managed
 			string pageBody = m_Catalog.GetPage(m_CatPageIdx);
 			m_NextKindR = DSBX_Const.KIND_CATALOG;
 			m_CatSendSession = m_CatSession;
+			m_CatSendConn = m_CatConn;
 			int catRc = Send(DSBX_Const.CH_R, "catalog?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&session=" + m_Session, pageBody);
 			if (catRc != 0)
 			{

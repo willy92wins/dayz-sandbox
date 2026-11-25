@@ -90,7 +90,9 @@ class DSBX_Catalog
 
 	void AddClassPair(string clsName, string baseName)
 	{
-		if (m_EmptyPageBytes <= 0 || DSBX_Wire.WireId(clsName) == "" || DSBX_Wire.WireId(baseName) == "")
+		string clsWire = DSBX_Wire.WireId(clsName);
+		string baseWire = DSBX_Wire.WireId(baseName);
+		if (m_EmptyPageBytes <= 0 || clsWire == "" || baseWire == "")
 		{
 			m_SkippedCount = m_SkippedCount + 1;
 			return;

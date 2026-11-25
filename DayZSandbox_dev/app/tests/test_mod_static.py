@@ -867,7 +867,7 @@ def check_m11_errores(mod_dir: Path) -> list[str]:
         violations.append("M11: R_MAX_FAILURES debe valer 4 y asignarse a m_RMaxFailures")
 
     ok_body = _find_method_body(peer_code, "HandleChannelRSuccess")
-    stale_re = re.compile(r"if\s*\(\s*m_CatSendSession\s*!=\s*m_CatSession\s*\)\s*\{\s*return\s*;\s*\}")
+    stale_re = re.compile(r"if\s*\(\s*m_CatSendSession\s*!=\s*m_CatSession\s*\|\|\s*m_CatSendConn\s*!=\s*m_CatConn\s*\)\s*\{\s*return\s*;\s*\}")
     stale_ok = True
     for body in (ok_body, r_err_body or ""):
         m_st = stale_re.search(body)
@@ -875,7 +875,7 @@ def check_m11_errores(mod_dir: Path) -> list[str]:
         if not m_st or first_mod < 0 or m_st.start() > first_mod:
             stale_ok = False
     if not stale_ok or "m_CatSendSession = m_CatSession;" not in peer_code:
-        violations.append("M11: el acuse y el error de una pagina de otra sesion se descartan con return (m_CatSendSession)")
+        violations.append("M11: el acuse y el error de una pagina de otra sesion o conn se descartan con return (m_CatSendSession, m_CatSendConn)")
 
     if not lease_body:
         violations.append("M11: falta CheckLeaseTimeout en DSBX_Peer.c")
@@ -1022,6 +1022,86 @@ def check_m15_cuarentena(mod_dir: Path) -> list[str]:
     return violations
 
 
+def check_m16_catalogo_por_presentacion(mod_dir: Path) -> list[str]:
+    """T4 917bc73 (24-nov): el servidor perdio el lease y volvio a saludar con la misma sesion y conn nueva. El
+    backend descarta el catalogo en cada hello, a medias y completo (bridge.py C-03; scene_live.py D4/A1), y el mod
+    seguia por la pagina 85 porque solo reiniciaba con sesion nueva. El catalogo se reinicia con cada hello aceptado
+    (sesion o conn distintas) y una respuesta de catalogo de otra presentacion no mueve el indice."""
+    violations = []
+    peer = _read_stripped_c_files(mod_dir).get("scripts/3_Game/DSBX_Peer.c", "")
+    flat = re.sub(r"\s+", " ", peer)
+    if "bool isNewCatPresentation = m_CatSession != resp.session || m_CatConn != resp.conn;" not in flat:
+        violations.append("M16: el hello aceptado abre una presentacion de catalogo nueva si cambian la sesion o la conn")
+    if "if (!m_IsClient && isNewCatPresentation) { m_CatSession = resp.session; m_CatConn = resp.conn; " \
+            "m_CatPageIdx = 0;" not in flat:
+        violations.append("M16: con presentacion nueva, el servidor guarda la sesion y la conn y vuelve a la pagina 0")
+    if "m_CatSendSession = m_CatSession; m_CatSendConn = m_CatConn;" not in flat:
+        violations.append("M16: cada pagina enviada se ata a la sesion y la conn vigentes")
+    return violations
+
+
+def _blank_string_literals(text: str) -> str:
+    """Vacia el contenido de los literales de cadena (conserva las comillas y los saltos de linea)."""
+    out = []
+    i = 0
+    n = len(text)
+    in_str = False
+    while i < n:
+        ch = text[i]
+        if in_str:
+            if ch == "\\" and i + 1 < n:
+                out.append("  ")
+                i += 2
+                continue
+            if ch == '"':
+                in_str = False
+                out.append(ch)
+            else:
+                out.append("\n" if ch == "\n" else " ")
+            i += 1
+            continue
+        if ch == '"':
+            in_str = True
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def check_m17_una_llamada_string_por_expresion(mod_dir: Path) -> list[str]:
+    """PER-08 de S-persist (24-nov): `AppendPurgeRow(..., FormatPersId(ent), ..., ParentPersIdOf(ent), ...)` saco en
+    el motor el valor de la segunda llamada en las dos (el mecanismo es hipotesis). Dos llamadas a funciones del
+    producto que devuelven string no van hermanas en la misma expresion ni en la misma lista de argumentos: cada una
+    pasa antes a una variable local. Las anidadas (`WireId(world.GetEpoch())`) no cuentan."""
+    violations = []
+    c_files = {rel: _blank_string_literals(code) for rel, code in _read_stripped_c_files(mod_dir).items()}
+    names = set()
+    for code in c_files.values():
+        names.update(m.group(1) for m in re.finditer(r"\bstring\s+(\w+)\s*\(", code))
+    if not names:
+        return ["M17: no aparece ninguna funcion del producto que devuelva string"]
+    call = re.compile(r"(?<![\w.])(?:\w+\.)*(?:" + "|".join(sorted(map(re.escape, names))) + r")\s*\(")
+    for rel, code in sorted(c_files.items()):
+        for stmt in re.split(r"[;{}]", code):
+            if re.search(r"\bstring\s+\w+\s*\(", stmt):
+                continue
+            starts = {m.start() for m in call.finditer(stmt)}
+            if len(starts) < 2:
+                continue
+            stack = []
+            per_container = {}
+            for i, ch in enumerate(stmt):
+                if i in starts:
+                    key = stack[-1] if stack else -1
+                    per_container[key] = per_container.get(key, 0) + 1
+                if ch == "(":
+                    stack.append(i)
+                elif ch == ")" and stack:
+                    stack.pop()
+            if any(k >= 2 for k in per_container.values()):
+                violations.append(f"M17: {rel}: " + " ".join(stmt.split())[:120])
+    return violations
+
+
 ALL_CHECKS = {
     "M1": check_m1_forma,
     "M2": check_m2_tokens_prohibidos,
@@ -1038,6 +1118,8 @@ ALL_CHECKS = {
     "M13": check_m13_gancho_diag,
     "M14": check_m14_peer_managed,
     "M15": check_m15_cuarentena,
+    "M16": check_m16_catalogo_por_presentacion,
+    "M17": check_m17_una_llamada_string_por_expresion,
 }
 
 
@@ -1088,6 +1170,30 @@ class TestModStatic(unittest.TestCase):
 
     def test_m15_cuarentena(self):
         self.assertEqual(check_m15_cuarentena(REAL_MOD_DIR), [])
+
+    def test_m16_catalogo_por_presentacion(self):
+        self.assertEqual(check_m16_catalogo_por_presentacion(REAL_MOD_DIR), [])
+
+    def test_m17_una_llamada_string_por_expresion(self):
+        self.assertEqual(check_m17_una_llamada_string_por_expresion(REAL_MOD_DIR), [])
+
+    def test_x4_m16_reinicio_solo_por_sesion(self):
+        # T4 917bc73: volver a reiniciar el catalogo solo con sesion nueva tumba M16 y nada mas.
+        self._assert_only_rule_fails(
+            "scripts/3_Game/DSBX_Peer.c",
+            "bool isNewCatPresentation = m_CatSession != resp.session || m_CatConn != resp.conn;",
+            "bool isNewCatPresentation = m_CatSession != resp.session;",
+            "M16",
+        )
+
+    def test_x4_m17_dos_llamadas_hermanas(self):
+        # PER-08: volver a las dos llamadas a WireId en la misma condicion tumba M17 y nada mas.
+        self._assert_only_rule_fails(
+            "scripts/3_Game/DSBX_Catalog.c",
+            'if (m_EmptyPageBytes <= 0 || clsWire == "" || baseWire == "")',
+            'if (m_EmptyPageBytes <= 0 || DSBX_Wire.WireId(clsName) == "" || DSBX_Wire.WireId(baseName) == "")',
+            "M17",
+        )
 
     def _assert_only_rule_fails(self, rel_file: str, old: str, new: str, expected_rule: str):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1161,11 +1267,12 @@ class TestModStatic(unittest.TestCase):
                 "m_Key = cfg.key; m_Url = m_Key;",
                 "M4",
             ),
-            # (e) M4: KeyQuery() dentro del cuerpo de un envio
+            # (e) M4: KeyQuery() dentro del cuerpo de un envio. La ruta va sin la suya: con las dos, el envio
+            # llevaria dos llamadas string hermanas y tumbaria tambien M17 (PER-08).
             (
                 "scripts/3_Game/DSBX_Peer.c",
                 'Send(DSBX_Const.CH_P, "hello?" + KeyQuery(), body);',
-                'Send(DSBX_Const.CH_P, "hello?" + KeyQuery(), KeyQuery());',
+                'Send(DSBX_Const.CH_P, "hello?", KeyQuery());',
                 "M4",
             ),
             # (f) M4: quitar la comprobacion del alfabeto
@@ -1395,14 +1502,14 @@ class TestModStatic(unittest.TestCase):
             # Sol r2 C-05: la guarda de sesion del acuse sin return
             (
                 "scripts/3_Game/DSBX_Peer.c",
-                "if (m_CatSendSession != m_CatSession)\n\t\t\t{\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tm_CatFailures = 0;",
-                "if (m_CatSendSession != m_CatSession)\n\t\t\t{\n\t\t\t}\n\t\t\tm_CatFailures = 0;",
+                "if (m_CatSendSession != m_CatSession || m_CatSendConn != m_CatConn)\n\t\t\t{\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tm_CatFailures = 0;",
+                "if (m_CatSendSession != m_CatSession || m_CatSendConn != m_CatConn)\n\t\t\t{\n\t\t\t}\n\t\t\tm_CatFailures = 0;",
                 "M11",
             ),
             # C-01: el acuse de una pagina de otra sesion ya no se descarta
             (
                 "scripts/3_Game/DSBX_Peer.c",
-                "\t\t{\n\t\t\tif (m_CatSendSession != m_CatSession)\n\t\t\t{\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tm_CatFailures = 0;\n",
+                "\t\t{\n\t\t\tif (m_CatSendSession != m_CatSession || m_CatSendConn != m_CatConn)\n\t\t\t{\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tm_CatFailures = 0;\n",
                 "\t\t{\n\t\t\tm_CatFailures = 0;\n",
                 "M11",
             ),

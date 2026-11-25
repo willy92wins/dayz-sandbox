@@ -607,7 +607,10 @@ class DSBX_Scene
 			{
 				parentJson = DSBX_Wire.WireText(r.m_ParentLid);
 			}
-			canon = canon + "[" + DSBX_Wire.WireText(r.m_DocId) + "," + DSBX_Wire.WireText(r.m_Lid) + "," + parentJson + "," + DSBX_Wire.WireText(r.m_Cls) + "," + r.m_GenN.ToString() + "]";
+			string recDocJson = DSBX_Wire.WireText(r.m_DocId);
+			string recLidJson = DSBX_Wire.WireText(r.m_Lid);
+			string recClsJson = DSBX_Wire.WireText(r.m_Cls);
+			canon = canon + "[" + recDocJson + "," + recLidJson + "," + parentJson + "," + recClsJson + "," + r.m_GenN.ToString() + "]";
 			k = k + 1;
 		}
 		canon = canon + "]";

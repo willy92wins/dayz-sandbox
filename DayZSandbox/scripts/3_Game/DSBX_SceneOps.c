@@ -1051,7 +1051,9 @@ class DSBX_SceneOps
 						FinishActive(peer, "rejected", "stale_epoch", CurrentReadJson(m_DocId, ""));
 						return;
 					}
-					FinishActive(peer, "rejected", peer.GetGuardFailReason(), CurrentReadJson(m_DocId, ""));
+					string guardReason = peer.GetGuardFailReason();
+					string guardRead = CurrentReadJson(m_DocId, "");
+					FinishActive(peer, "rejected", guardReason, guardRead);
 					return;
 				}
 			}
@@ -1109,7 +1111,9 @@ class DSBX_SceneOps
 					FinishActive(peer, "rejected", "stale_epoch", CurrentReadJson(m_DocId, ""));
 					return;
 				}
-				FinishActive(peer, "rejected", peer.GetGuardFailReason(), CurrentReadJson(m_DocId, ""));
+				string guardReason = peer.GetGuardFailReason();
+				string guardRead = CurrentReadJson(m_DocId, "");
+				FinishActive(peer, "rejected", guardReason, guardRead);
 				return;
 			}
 			if (m_World.GetEpoch() != m_OrderEpoch)

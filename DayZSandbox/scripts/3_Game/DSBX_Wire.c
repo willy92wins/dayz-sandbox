@@ -90,7 +90,9 @@ class DSBX_Wire
 			{
 				int hi = (c >> 4) & 15;
 				int lo = c & 15;
-				outStr = outStr + "\\u00" + HexDigit(hi) + HexDigit(lo);
+				string hiHex = HexDigit(hi);
+				string loHex = HexDigit(lo);
+				outStr = outStr + "\\u00" + hiHex + loHex;
 			}
 			else
 			{
