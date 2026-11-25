@@ -5859,8 +5859,8 @@ Version 1.30.164289.70
 16:33:03.220 El jugador DSBXQA se está conectando.
 16:33:03.221 [StateMachine]: Player DSBXQA (dpnid 18519936 uid ) Entering WaitPlayerAssignedLoginState
 16:33:03.350 [StateMachine]: Player DSBXQA (dpnid 18519936 uid ) Entering PlayerAssignedLoginState
-16:33:03.351 [StateMachine]: Player DSBXQA (dpnid 18519936 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBGetLoginTimeLoginState
-16:33:03.353 [StateMachine]: Player DSBXQA (dpnid 18519936 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBWaitLoginTimeLoginState
+16:33:03.351 [StateMachine]: Player DSBXQA (dpnid 18519936 uid uid-redactado-1) Entering DBGetLoginTimeLoginState
+16:33:03.353 [StateMachine]: Player DSBXQA (dpnid 18519936 uid uid-redactado-1) Entering DBWaitLoginTimeLoginState
 16:33:06.153 SCRIPT       : [DSBX] clock tick_ms=83047
 16:33:07.110 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_29_02_moss.p3d)
 16:33:07.110 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_03_moss.p3d)
@@ -5911,8 +5911,8 @@ Version 1.30.164289.70
 16:33:13.899 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_26_moss.p3d)
 16:33:13.899 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_25_moss.p3d)
 16:33:16.154 SCRIPT       : [DSBX] clock tick_ms=93047
-16:33:18.354 [StateMachine]: Player DSBXQA (dpnid 18519936 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBGetCharacterLoginState
-16:33:18.355 [StateMachine]: Player DSBXQA (dpnid 18519936 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering CreateNetObjectsLoginState
+16:33:18.354 [StateMachine]: Player DSBXQA (dpnid 18519936 uid uid-redactado-1) Entering DBGetCharacterLoginState
+16:33:18.355 [StateMachine]: Player DSBXQA (dpnid 18519936 uid uid-redactado-1) Entering CreateNetObjectsLoginState
 16:33:18.355 [CE][PlayerSpawnPoints][GRP_DBG] :: Selected: WestElektro | idx: 2 (ut: 95250 | lt: 120000 | ctr: 2)
 16:33:18.355 [CE][PlayerSpawnPoints][GRP_DBG] :: Current: WestElektro | idx: 2 (ct: 95250 | ut: 95250 | lt: 120000 | ctr: 2)
 16:33:18.355 [CE][PlayerSpawnPoints][GRP_DBG] :: Current: WestElektro index: 2 (lt: 120000 | ctr: 2)
@@ -5922,10 +5922,10 @@ Version 1.30.164289.70
 16:33:18.356  NETWORK      : server: Player dpid=18519936 added at playerIndex=1
 16:33:18.358  NETWORK      : server: sending World state to remote player... id=18519936
 16:33:18.358  NETWORK      : Server: SetClientState dpid=18519936 id=0 name=DSBXQA MISSION RECEIVED -> GAME LOADED
-16:33:18.358 [StateMachine]: Player DSBXQA (dpnid 18519936 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering PreloadCamLoginState
+16:33:18.358 [StateMachine]: Player DSBXQA (dpnid 18519936 uid uid-redactado-1) Entering PreloadCamLoginState
 16:33:18.359 NETWORK      : Network simulation
 16:33:18.359  NETWORK      : Login: Player DSBXQA (18519936) preloading at: 9538.868164 0.000000 1998.900269, yaw: 0.000000, new: 1
-16:33:18.359 [StateMachine]: Player DSBXQA (dpnid 18519936 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering WaitPreloadCamLoginState
+16:33:18.359 [StateMachine]: Player DSBXQA (dpnid 18519936 uid uid-redactado-1) Entering WaitPreloadCamLoginState
 16:33:21.153 SCRIPT       : [DSBX] clock tick_ms=98047
 16:33:21.244 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_03_moss.p3d)
 16:33:21.593 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_03_moss.p3d)
@@ -5936,7 +5936,7 @@ Version 1.30.164289.70
 16:33:21.926 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_27_moss.p3d)
 16:33:21.926 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_26_moss.p3d)
 16:33:21.926 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_25_moss.p3d)
-16:33:24.788 [StateMachine]: Player DSBXQA (dpnid 18519936 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering GetNewCharLoginState
+16:33:24.788 [StateMachine]: Player DSBXQA (dpnid 18519936 uid uid-redactado-1) Entering GetNewCharLoginState
 16:33:26.471 NETWORK      : Network simulation
 16:33:26.471  WORLD        : Create entity type 'SurvivorM_Denis'
 16:33:26.471   AUDIO        : Loading SoundSet 'Gag_Drowning_SoundVoice_Char_SoundSet'
@@ -5959,8 +5959,8 @@ Version 1.30.164289.70
 16:33:26.488 Warning: No components in dz\characters\shoes\feet3_m.p3d:geometry
 16:33:26.488 Warning: No components in dz\characters\heads\m_denis_2.p3d:geometry
 16:33:26.490 Warning: No components in dz\characters\pants\legs3_m.p3d:geometry
-16:33:26.493 El jugador DSBXQA (id=HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= pos=<9538.9, 1998.9, 5.6>) se ha conectado.
-16:33:26.493 Player "DSBXQA" (steamID=76561198141021937 pos=<9538.9, 1998.9, 5.6>) is connected
+16:33:26.493 El jugador DSBXQA (id=uid-redactado-1 pos=<9538.9, 1998.9, 5.6>) se ha conectado.
+16:33:26.493 Player "DSBXQA" (steamID=<redacted> pos=<9538.9, 1998.9, 5.6>) is connected
 16:33:26.494 Warning: No components in dz\gear\food\plum.p3d:geometry
 16:33:26.495  SCRIPT       : 11-15 16:33:26 | Server | Debug | Connect | n/a | n/a | InvokeOnConnect:CustomMission<0x000001CEE56F0040>
 16:33:26.496  SCRIPT       : 11-15 16:33:26 | Server | Debug | Connect | n/a | n/a | Player connected:SurvivorBase<0x000001D1E890EFF0> SurvivorM_Denis:20673
@@ -5968,7 +5968,7 @@ Version 1.30.164289.70
     charID 1
     playerID 1
     dpnid 18519936
-    uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=
+    uid uid-redactado-1
 16:33:26.501 SCRIPT       : [DSBX] clock tick_ms=103394
 16:33:26.804 Warning Message: No entry 'config.bin/CfgAIBehaviours/InfectedMale/BehaviourHLZombie/SlotCalm/BehaviourZombieCalm/SoundsDuring/Sound1.sounds'.
 16:33:26.804 Warning Message: No entry 'config.bin/CfgAIBehaviours/InfectedMale/BehaviourHLZombie/SlotAlerted/BehaviourZombieAlerted/SoundsEntering/Sound1.sounds'.
@@ -6804,7 +6804,7 @@ Version 1.30.164289.70
 16:43:29.26  [Disconnect]: Client 18519936 early disconnect
 16:43:29.26  [Disconnect]: Start script disconnect 18519936 (dbCharacterId 1 dbPlayerId 1) logoutTime 15
 16:43:29.26  NETWORK      : Network simulation
-16:43:29.26   SCRIPT       : [Logout]: New player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= with logout time 15
+16:43:29.26   SCRIPT       : [Logout]: New player uid-redactado-1 with logout time 15
 16:43:31.508 SCRIPT       : [DSBX] clock tick_ms=708401
 16:43:32.688 [Disconnect]: Remove player info 18519936
 16:43:32.694 NetServer::SendMsg: cannot find channel #18519936, users.card=0

@@ -1,0 +1,180 @@
+{
+  "checks": [
+    {
+      "detail": "ok",
+      "id": "F2P-01",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-02",
+      "status": "pass"
+    },
+    {
+      "detail": "stimulus_not_observed",
+      "id": "F2P-03",
+      "status": "missing"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-04",
+      "status": "pass"
+    },
+    {
+      "detail": "apply1:ani-01:coverage_gap",
+      "id": "F2P-05",
+      "status": "missing"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-06",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-07",
+      "status": "pass"
+    },
+    {
+      "detail": "ani-01:coverage_gap",
+      "id": "F2P-08",
+      "status": "missing"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-09",
+      "status": "pass"
+    },
+    {
+      "detail": "0:22916:coverage_gap;0:22917:coverage_gap;0:22918:coverage_gap;0:22923:coverage_gap;0:22924:coverage_gap",
+      "id": "F2P-10",
+      "status": "missing"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-11",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "F2P-12",
+      "status": "pass"
+    },
+    {
+      "detail": "missing_witness_window:P2n:apply",
+      "id": "F2P-13",
+      "status": "missing"
+    }
+  ],
+  "error": null,
+  "exit_code": 2,
+  "id": "F2P",
+  "members": [
+    {
+      "exit_code": 2,
+      "id": "run",
+      "reasons": [
+        "stimulus_not_observed",
+        "F2P-03",
+        "apply1:ani-01:coverage_gap",
+        "F2P-05",
+        "ani-01:coverage_gap",
+        "F2P-08",
+        "0:22916:coverage_gap;0:22917:coverage_gap;0:22918:coverage_gap;0:22923:coverage_gap;0:22924:coverage_gap",
+        "F2P-10",
+        "missing_witness_window:P2n:apply",
+        "F2P-13"
+      ],
+      "verdict": "INCONCLUSO"
+    }
+  ],
+  "metrics": {
+    "delete_confirm_max_ms": 4.0,
+    "execution_identities": {
+      "run": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "fd0f59d5c7ecde48",
+          "server": "95174f2b5e21fe42"
+        },
+        "peer_insts": {
+          "client": [
+            "58b0f8e332b444c49c4e21e70aab92f1",
+            "ce11fd7ade1d48d7ac4251405c0d6f26",
+            "06482560e21d4281a9af907906ff3211"
+          ],
+          "server": [
+            "24363c0729fc44df96e698b12f803d96",
+            "8e28f80efd90488bbe7eb438be3d7905",
+            "652dedc5ebc04b1291e42954004a89ae"
+          ]
+        },
+        "port": 56906
+      }
+    },
+    "reevaluated_from": "7980132e7334a98e793bce7ed456811f3ff24852",
+    "reevaluated_with": "75ecb097eb28467367ba1e20014eb09c3c491950",
+    "server_lives": [
+      {
+        "casa": true,
+        "desde_t_ms": null,
+        "hasta_t_ms": 619572.468,
+        "motivo": "",
+        "producto": [
+          "60984df55bac480b98c30ecf50fdbcb8",
+          "4edc7d7a84d4414eb064d33a50518d90"
+        ],
+        "sonda": [
+          "24363c0729fc44df96e698b12f803d96",
+          "24363c0729fc44df96e698b12f803d96"
+        ]
+      },
+      {
+        "casa": true,
+        "desde_t_ms": 619572.468,
+        "hasta_t_ms": 797012.183,
+        "motivo": "",
+        "producto": [
+          "c182678ca35147a694e424008360e8de",
+          "e84c0c2d7c6c454395e16f4349fc4544"
+        ],
+        "sonda": [
+          "8e28f80efd90488bbe7eb438be3d7905",
+          "8e28f80efd90488bbe7eb438be3d7905"
+        ]
+      },
+      {
+        "casa": true,
+        "desde_t_ms": 797012.183,
+        "hasta_t_ms": null,
+        "motivo": "",
+        "producto": [
+          "124ef3742c024c3ba3e2334256ca86c0",
+          "497c20731e91475ab684b3cf0b825f24"
+        ],
+        "sonda": [
+          "652dedc5ebc04b1291e42954004a89ae",
+          "652dedc5ebc04b1291e42954004a89ae"
+        ]
+      }
+    ],
+    "witness_census_max_delta_m": 0.0
+  },
+  "reasons": [
+    "stimulus_not_observed",
+    "F2P-03",
+    "apply1:ani-01:coverage_gap",
+    "F2P-05",
+    "ani-01:coverage_gap",
+    "F2P-08",
+    "0:22916:coverage_gap;0:22917:coverage_gap;0:22918:coverage_gap;0:22923:coverage_gap;0:22924:coverage_gap",
+    "F2P-10",
+    "missing_witness_window:P2n:apply",
+    "F2P-13"
+  ],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "INCONCLUSO"
+}

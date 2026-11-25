@@ -5770,26 +5770,26 @@ Version 1.30.164289.70
 17:54:42.475 El jugador DSBXQA se está conectando.
 17:54:42.485 [StateMachine]: Player DSBXQA (dpnid 28816812 uid ) Entering WaitPlayerAssignedLoginState
 17:54:42.663 [StateMachine]: Player DSBXQA (dpnid 28816812 uid ) Entering PlayerAssignedLoginState
-17:54:42.664 [StateMachine]: Player DSBXQA (dpnid 28816812 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBGetLoginTimeLoginState
-17:54:42.667 [StateMachine]: Player DSBXQA (dpnid 28816812 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBWaitLoginTimeLoginState
+17:54:42.664 [StateMachine]: Player DSBXQA (dpnid 28816812 uid uid-redactado-1) Entering DBGetLoginTimeLoginState
+17:54:42.667 [StateMachine]: Player DSBXQA (dpnid 28816812 uid uid-redactado-1) Entering DBWaitLoginTimeLoginState
 17:54:43.737 [IdleMode] Leaving OUT
 17:54:47.39  SCRIPT       : [DSBX] clock tick_ms=121822
 17:54:52.39  SCRIPT       : [DSBX] clock tick_ms=126822
 17:54:57.39  SCRIPT       : [DSBX] clock tick_ms=131822
-17:54:57.667 [StateMachine]: Player DSBXQA (dpnid 28816812 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBGetCharacterLoginState
-17:54:57.669 [StateMachine]: Player DSBXQA (dpnid 28816812 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering CreateNetObjectsLoginState
+17:54:57.667 [StateMachine]: Player DSBXQA (dpnid 28816812 uid uid-redactado-1) Entering DBGetCharacterLoginState
+17:54:57.669 [StateMachine]: Player DSBXQA (dpnid 28816812 uid uid-redactado-1) Entering CreateNetObjectsLoginState
 17:54:57.669 NETWORK      : Network simulation
 17:54:57.669  NETWORK      : Server: SetClientState dpid=28816812 id=0 name=DSBXQA PLAYER ASSIGNED -> MISSION RECEIVED
 17:54:57.669  NETWORK      : server: Player dpid=28816812 added at playerIndex=1
 17:54:57.674  NETWORK      : server: sending World state to remote player... id=28816812
 17:54:57.674  NETWORK      : Server: SetClientState dpid=28816812 id=0 name=DSBXQA MISSION RECEIVED -> GAME LOADED
-17:54:57.674 [StateMachine]: Player DSBXQA (dpnid 28816812 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering PreloadCamLoginState
+17:54:57.674 [StateMachine]: Player DSBXQA (dpnid 28816812 uid uid-redactado-1) Entering PreloadCamLoginState
 17:54:57.674 NETWORK      : Network simulation
 17:54:57.674  NETWORK      : Login: Player DSBXQA (28816812) preloading at: 9538.868164 5.672999 1998.900269, yaw: -0.000048, new: 0
-17:54:57.674 [StateMachine]: Player DSBXQA (dpnid 28816812 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering WaitPreloadCamLoginState
+17:54:57.674 [StateMachine]: Player DSBXQA (dpnid 28816812 uid uid-redactado-1) Entering WaitPreloadCamLoginState
 17:55:02.40  SCRIPT       : [DSBX] clock tick_ms=136822
 17:55:07.40  SCRIPT       : [DSBX] clock tick_ms=141822
-17:55:08.255 [StateMachine]: Player DSBXQA (dpnid 28816812 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering GetLoadedCharLoginState
+17:55:08.255 [StateMachine]: Player DSBXQA (dpnid 28816812 uid uid-redactado-1) Entering GetLoadedCharLoginState
 17:55:11.366 NETWORK      : Network simulation
 17:55:11.366  WORLD        : Create entity type 'SurvivorM_Denis'
 17:55:11.366   AUDIO        : Loading SoundSet 'Gag_Drowning_SoundVoice_Char_SoundSet'
@@ -5812,13 +5812,13 @@ Version 1.30.164289.70
 17:55:11.404 Warning: No components in dz\characters\pants\legs3_m.p3d:geometry
 17:55:11.404  PHYSICS      : Initializing ragdoll DZ/characters/bodies/human.ragdoll
 17:55:11.409 Warning: No components in dz\gear\food\plum.p3d:geometry
-17:55:11.413 El jugador DSBXQA (id=HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= pos=<9538.9, 1998.9, 5.7>) se ha conectado.
-17:55:11.413 Player "DSBXQA" (steamID=76561198141021937 pos=<9538.9, 1998.9, 5.7>) is connected
+17:55:11.413 El jugador DSBXQA (id=uid-redactado-1 pos=<9538.9, 1998.9, 5.7>) se ha conectado.
+17:55:11.413 Player "DSBXQA" (steamID=<redacted> pos=<9538.9, 1998.9, 5.7>) is connected
 17:55:11.413 <LOAD EXISTING CHAR>:
     charID 1
     playerID 1
     dpnid 28816812
-    uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=
+    uid uid-redactado-1
 17:55:11.422 SCRIPT       : [DSBX] lease lost age_ms=5146 tick_ms=146205
 17:55:11.422 SCRIPT       : [DSBX] lease expired: returning to HELLO
 17:55:11.523 SCRIPT       : [DSBX] hello accepted session=2dce6644cf73e8ea conn=2
@@ -6094,7 +6094,7 @@ Version 1.30.164289.70
 17:58:26.551 [Disconnect]: Client 28816812 early disconnect
 17:58:26.551 [Disconnect]: Start script disconnect 28816812 (dbCharacterId 1 dbPlayerId 1) logoutTime 15
 17:58:26.551 NETWORK      : Network simulation
-17:58:26.551  SCRIPT       : [Logout]: New player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= with logout time 15
+17:58:26.551  SCRIPT       : [Logout]: New player uid-redactado-1 with logout time 15
 17:58:27.53  SCRIPT       : [DSBX] clock tick_ms=341835
 17:58:27.476 [Disconnect]: Remove player info 28816812
 17:58:27.480 [Disconnect]: Player destroy 28816812 

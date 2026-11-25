@@ -44,6 +44,9 @@ from app.backend.bridge import WIRE_CAP, valid_world_read
 POS_TOL = 500
 EPS_Q = 2
 POS_TOL_M = POS_TOL  # nombre del brief (§3.1); desde v1.3 el valor va en mm
+# Apoyo vertical maximo de objetos en mm (brief de F2-partida §6.1 :664 y §12, R-13 y V-10; el origen del
+# Land_Wreck_Ikarus queda a +1291 mm). Con el margen EPS_Q de D12: se acepta |y - gy| <= SUPPORT_TOL_OBJETO - EPS_Q.
+SUPPORT_TOL_OBJETO = 2000
 SCENE_BATCH = 8
 
 NON_ACTOR_KINDS = ("objeto", "infectado", "animal")
@@ -994,8 +997,15 @@ def check_apply_predicate(order, read, expectation=None, world_size=_MAX_WORLD_S
             return False
         if x is None or y is None or z is None or gy is None:
             return False
-        if dist3((x, y, z), (x_doc, gy, z_doc)) >= limit:
-            return False
+        kind = KIND_BY_PREFIX.get(lid.split("-", 1)[0])
+        if kind == "objeto":
+            if math.hypot(float(x) - float(x_doc), float(z) - float(z_doc)) >= limit:
+                return False
+            if abs(float(y) - float(gy)) > SUPPORT_TOL_OBJETO - EPS_Q:
+                return False
+        else:
+            if dist3((x, y, z), (x_doc, gy, z_doc)) >= limit:
+                return False
 
     return seen_lids == set(exp.keys())
 

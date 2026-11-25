@@ -1,0 +1,109 @@
+{
+  "checks": [
+    {
+      "detail": "ok",
+      "id": "PER-01",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-02",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-03",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-04",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-05",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-06",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-07",
+      "status": "pass"
+    },
+    {
+      "detail": "reappeared_in_area_d:Barrel_Red;reappeared_in_t5_post_restart_census:t5_track_b_ani_1_p0_r0:Barrel_Red",
+      "id": "PER-08",
+      "status": "fail"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-09",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-10",
+      "status": "pass"
+    }
+  ],
+  "error": null,
+  "exit_code": 1,
+  "id": "S-persist",
+  "metrics": {
+    "grill_foreign_in_unreset_own_container": {
+      "post": null,
+      "pre": {
+        "class_name": "OrienteeringCompass",
+        "health_hp": 43.04999923706055,
+        "inv_children_n": 0,
+        "loc_kind": "cargo",
+        "max_hp": 70.0,
+        "net_id": "0:992",
+        "ori_deg": [
+          0.0,
+          0.0,
+          -0.0
+        ],
+        "parent_class": "SeaChest",
+        "parent_net_id": "0:981",
+        "pers_id": "52424552:1581676320:-1931289950:873611309",
+        "pos_m": [
+          4686.0,
+          339.0,
+          10206.0
+        ],
+        "slot_name": "Cargo:0:0:0"
+      },
+      "readings_available_b": 1
+    },
+    "q9_selected_pathway": "a",
+    "runner_purge": {
+      "accredited": [
+        "ac_act_1_gloves_dir",
+        "b_act_1_gloves_dir"
+      ],
+      "accredited_n": 2,
+      "bajas_n": 1,
+      "done_b": 1,
+      "order_n": 2,
+      "pre_n": 7,
+      "state": "done"
+    },
+    "storage_auxiliary_fingerprint": {
+      "restore_ok_b": 1,
+      "t0_files_n": 32,
+      "t1_present_b": 1,
+      "t2_present_b": 1
+    }
+  },
+  "reasons": [
+    "PER-08"
+  ],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "FALLA"
+}

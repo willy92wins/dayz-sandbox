@@ -1,0 +1,90 @@
+---------------------------------------------
+Log C:\dsbx-m1\t4-3723120\trabajo\profile-client\script_2026-11-24_21-45-19.log started at 2026-11-24 21:45:24 (2026-11-24 20:45:24 UTC)
+
+21:45:24.359 SCRIPT       : Module: GameLib; loaded 13x files; 13x classes; used 8/2097 kB (0%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: dd77776f
+21:45:24.374 SCRIPT       : Registered 324 temporary action enum(s), UAN==324
+21:45:24.795 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableCrouchCameraHorizontalRotation'
+21:45:24.795 SCRIPT    (W): @"scripts/3_Game/human.c,241": Method not linked 'HumanInputController.DisableCrouchCameratHorizontalRotation'
+21:45:24.795 SCRIPT    (W): @"scripts/3_Game/human.c,240": Method not linked 'HumanInputController.DisableErectCameratHorizontalRotation'
+21:45:24.795 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableErectHorizontalRotation'
+21:45:24.796 SCRIPT       : Module: Game; loaded 450x files; 1555x classes; used 5588/33554 kB (16%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: 88e0d64c
+21:45:24.858 SCRIPT       : ... Backlit Effects Enabled
+21:45:26.330 SCRIPT    (W): @"scripts/4_World/entities/building/underground/entrance/land_underground_entrance.c,149": 'UpdatePathgraphDoorByAnimationSourceName' is obsolete: 1.30: Use UpdatePathgraphEntityState
+21:45:26.709 SCRIPT       : Module: World; loaded 2324x files; 6338x classes; used 12651/33554 kB (37%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION"; CRC32: 16d8e2e1
+21:46:18.014  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,589": No need to use 'Cast' for up-casting
+21:46:18.017  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,1741": No need to use 'Cast' for up-casting
+21:46:18.019  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,2364": No need to use 'Cast' for up-casting
+21:46:18.060  SCRIPT       : Module: Mission; loaded 234x files; 544x classes; used 4441/33554 kB (13%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,ENABLE_CAROUSEL,BROADCAST_BUNKER_SP_VIS_ENABLED"; CRC32: 354f631f
+21:46:18.065  SCRIPT       : Creating Mission: mpmissions\__cur_mp.chernarusplus\mission.c
+21:46:18.206  SCRIPT       : string s =    'Module PluginConfigDebugProfile is not Registred in PluginManager.c!'
+21:46:18.206  SCRIPT    (E):    -- Stack trace --
+21:46:18.206  SCRIPT    (E):    GetPlugin() scripts/4_World/plugins/pluginmanager.c : 341
+21:46:18.206  SCRIPT    (E):    OnInit() scripts/4_World/plugins/pluginbase/pluginitemdiagnostic.c : 94
+21:46:18.206  SCRIPT    (E):    PluginsInit() scripts/4_World/plugins/pluginmanager.c : 136
+21:46:18.206  SCRIPT    (E):    PluginManagerInit() scripts/4_World/plugins/pluginmanager.c : 304
+21:46:18.206  SCRIPT    (E):    MissionBase() scripts/5_Mission/mission/missionbase.c : 21
+21:46:18.206  SCRIPT    (E):    CreateMission() scripts/5_Mission/somemission.c : 23
+21:46:18.206  SCRIPT    (E):    -----------------
+21:46:18.225  SCRIPT       : SyncEvents -> RegisterEvents
+21:46:18.329 SCRIPT       : [DSBX] clock tick_ms=59018
+21:46:18.329 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+21:46:18.329 SCRIPT       : [DSBX] config status=ok
+21:46:18.329 SCRIPT       : [DSBX_QA] config usable
+21:46:18.367 SCRIPT       : [DSBX_QA] hello accepted
+21:46:18.589  SCRIPT       : [DSBX] client epoch received
+21:46:18.590 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+21:46:18.590 SCRIPT       : [DSBX] state HELLO
+21:46:18.742 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+21:46:18.754 SCRIPT       : [DSBX] hello accepted session=15ba7e6252ac41db conn=3
+21:46:23.334 SCRIPT       : [DSBX] clock tick_ms=64022
+21:46:28.334 SCRIPT       : [DSBX] clock tick_ms=69023
+21:46:31.455 SCRIPT       : [DSBX] rest error ch=P kind=2 state=6 tick_ms=72144
+21:46:32.280 SCRIPT       : [DSBX] rest error ch=P kind=2 state=5 tick_ms=72969
+21:46:32.280 SCRIPT       : [DSBX] state HELLO: client error on P
+21:46:32.535 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+21:46:32.591 SCRIPT       : [DSBX] hello accepted session=3f9de25894410cbf conn=1
+21:46:33.335 SCRIPT       : [DSBX] clock tick_ms=74024
+21:46:38.337 SCRIPT       : [DSBX] clock tick_ms=79025
+21:46:43.338 SCRIPT       : [DSBX] clock tick_ms=84027
+21:46:48.340 SCRIPT       : [DSBX] clock tick_ms=89028
+21:46:53.341 SCRIPT       : [DSBX] clock tick_ms=94029
+21:46:58.343 SCRIPT       : [DSBX] clock tick_ms=99031
+21:47:03.343 SCRIPT       : [DSBX] clock tick_ms=104032
+21:47:08.345 SCRIPT       : [DSBX] clock tick_ms=109034
+21:47:13.347 SCRIPT       : [DSBX] clock tick_ms=114035
+21:47:18.348 SCRIPT       : [DSBX] clock tick_ms=119036
+21:47:23.349 SCRIPT       : [DSBX] clock tick_ms=124037
+21:47:28.350 SCRIPT       : [DSBX] clock tick_ms=129039
+21:47:33.352 SCRIPT       : [DSBX] clock tick_ms=134041
+21:47:38.354 SCRIPT       : [DSBX] clock tick_ms=139042
+21:47:43.354 SCRIPT       : [DSBX] clock tick_ms=144043
+21:47:48.356 SCRIPT       : [DSBX] clock tick_ms=149044
+21:47:53.357 SCRIPT       : [DSBX] clock tick_ms=154046
+21:47:55.216 SCRIPT       : [DSBX] rest error ch=P kind=2 state=6 tick_ms=155904
+21:47:55.899  SCRIPT       : 0x00040001
+21:47:56.039 SCRIPT       : [DSBX] shutdown role=client created_n=3 inflight_p=1 inflight_r=0
+21:47:56.040 SCRIPT       : [DSBX_QA] shutdown
+21:47:56.071 SCRIPT       : Cleaning up script module globals 'Mission'
+21:47:56.071  SCRIPT    (E): Leaked 'DSBX_QA_Callback' script instance (2x)!
+21:47:56.071  SCRIPT    (E): ==== Total Leaks (2x)! ====
+21:47:56.450 SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,589": No need to use 'Cast' for up-casting
+21:47:56.452 SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,1741": No need to use 'Cast' for up-casting
+21:47:56.453 SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,2364": No need to use 'Cast' for up-casting
+21:47:56.490 SCRIPT       : Module: Mission; loaded 234x files; 544x classes; used 4436/33554 kB (13%) of static memory; defines: "DAYZ_1_30,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,ENABLE_CAROUSEL,BROADCAST_BUNKER_SP_VIS_ENABLED"; CRC32: 354f631f
+21:47:56.495 SCRIPT       : Creating Mission: dz\Worlds\ChernarusPlus\data\scenes\intro.ChernarusPlus\mission.c
+21:47:56.590 SCRIPT       : string s =    'Module PluginConfigDebugProfile is not Registred in PluginManager.c!'
+21:47:56.590 SCRIPT    (E):    -- Stack trace --
+21:47:56.590 SCRIPT    (E):    GetPlugin() scripts/4_World/plugins/pluginmanager.c : 341
+21:47:56.590 SCRIPT    (E):    OnInit() scripts/4_World/plugins/pluginbase/pluginitemdiagnostic.c : 94
+21:47:56.590 SCRIPT    (E):    PluginsInit() scripts/4_World/plugins/pluginmanager.c : 136
+21:47:56.590 SCRIPT    (E):    PluginManagerInit() scripts/4_World/plugins/pluginmanager.c : 304
+21:47:56.590 SCRIPT    (E):    MissionBase() scripts/5_Mission/mission/missionbase.c : 21
+21:47:56.590 SCRIPT    (E):    CreateMission() scripts/5_Mission/somemission.c : 23
+21:47:56.590 SCRIPT    (E):    -----------------
+21:47:56.604 SCRIPT       : ---- PlayerBase OnStoreLoad SUCCESS ----
+21:47:56.627 SCRIPT       : ---- PlayerBase OnStoreLoad SUCCESS ----
+21:48:06.205  SCRIPT       : ~DayZGame()
+21:48:06.865  SCRIPT       : Cleaning up script module globals 'Game'
+21:48:06.865   SCRIPT    (E): Leaked 'BunkerBroadcastManager' script instance (1x)!
+21:48:06.865   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (3x)!
+21:48:06.865   SCRIPT    (E): ==== Total Leaks (4x)! ====

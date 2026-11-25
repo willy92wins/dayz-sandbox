@@ -160,7 +160,7 @@ Log C:\tmp\dsbx-f1bpeers-work\partida\profiles_retail\server\script_2026-11-15_1
 17:58:24.160 SCRIPT       : [DSBX] rest error ch=P kind=2 state=7 tick_ms=338943
 17:58:25.361 SCRIPT       : [DSBX] effect step=retirar session=b2c7404bcb294471 op=op-207 tick_ms=340144
 17:58:25.362 SCRIPT       : [DSBX] effect step=anotar session=b2c7404bcb294471 op=op-207 tick_ms=340144
-17:58:26.551  SCRIPT       : [Logout]: New player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= with logout time 15
+17:58:26.551  SCRIPT       : [Logout]: New player uid-redactado-1 with logout time 15
 17:58:27.053 SCRIPT       : [DSBX] clock tick_ms=341835
 17:58:32.286  SCRIPT       : [DSBX] shutdown role=server created_n=37 inflight_p=1 inflight_r=0
 17:58:32.294  SCRIPT       : ~DayZGame()

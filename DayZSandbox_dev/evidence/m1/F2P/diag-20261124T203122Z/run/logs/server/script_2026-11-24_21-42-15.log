@@ -1,0 +1,158 @@
+---------------------------------------------
+Log C:\dsbx-m1\t4-3723120\trabajo\profile-server\script_2026-11-24_21-42-15.log started at 2026-11-24 21:42:19 (2026-11-24 20:42:19 UTC)
+
+21:42:19.108 SCRIPT       : Module: GameLib; loaded 13x files; 13x classes; used 8/2097 kB (0%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT"; CRC32: dd77776f
+21:42:19.123 SCRIPT       : Registered 324 temporary action enum(s), UAN==324
+21:42:19.562 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableCrouchCameraHorizontalRotation'
+21:42:19.562 SCRIPT    (W): @"scripts/3_Game/human.c,241": Method not linked 'HumanInputController.DisableCrouchCameratHorizontalRotation'
+21:42:19.562 SCRIPT    (W): @"scripts/3_Game/human.c,240": Method not linked 'HumanInputController.DisableErectCameratHorizontalRotation'
+21:42:19.562 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableErectHorizontalRotation'
+21:42:19.562 SCRIPT       : Module: Game; loaded 450x files; 1554x classes; used 5574/33554 kB (16%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT"; CRC32: 88e0d64c
+21:42:19.566 SCRIPT       : ... Backlit Effects Enabled
+21:42:20.792 SCRIPT    (W): @"scripts/4_World/entities/building/underground/entrance/land_underground_entrance.c,149": 'UpdatePathgraphDoorByAnimationSourceName' is obsolete: 1.30: Use UpdatePathgraphEntityState
+21:42:21.170 SCRIPT       : Module: World; loaded 2324x files; 6335x classes; used 12588/33554 kB (37%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT"; CRC32: 16d8e2e1
+21:42:36.190  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,589": No need to use 'Cast' for up-casting
+21:42:36.193  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,1741": No need to use 'Cast' for up-casting
+21:42:36.194  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,2364": No need to use 'Cast' for up-casting
+21:42:36.235  SCRIPT       : Module: Mission; loaded 234x files; 544x classes; used 4432/33554 kB (13%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,DayZSandbox_QA,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT,ENABLE_CAROUSEL,BROADCAST_BUNKER_SP_VIS_ENABLED"; CRC32: 354f631f
+21:42:36.363  SCRIPT       : string s =    'Module PluginConfigDebugProfile is not Registred in PluginManager.c!'
+21:42:36.363  SCRIPT    (E):    -- Stack trace --
+21:42:36.363  SCRIPT    (E):    GetPlugin() scripts/4_World/plugins/pluginmanager.c : 341
+21:42:36.363  SCRIPT    (E):    OnInit() scripts/4_World/plugins/pluginbase/pluginitemdiagnostic.c : 94
+21:42:36.363  SCRIPT    (E):    PluginsInit() scripts/4_World/plugins/pluginmanager.c : 136
+21:42:36.363  SCRIPT    (E):    PluginManagerInit() scripts/4_World/plugins/pluginmanager.c : 304
+21:42:36.363  SCRIPT    (E):    MissionBase() scripts/5_Mission/mission/missionbase.c : 21
+21:42:36.363  SCRIPT    (E):    CreateCustomMission() C:\dsbx-m1\t4-3723120\trabajo\mission\mpmissions\dayzOffline.chernarusplus\init.c : 97
+21:42:36.363  SCRIPT    (E):    -----------------
+21:42:36.392  SCRIPT       : 11-24 21:42:36 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-Bow
+21:42:36.459  SCRIPT       : 11-24 21:42:36 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-Center
+21:42:36.462  SCRIPT       : 11-24 21:42:36 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-Stern
+21:42:36.466  SCRIPT       : 11-24 21:42:36 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-East
+21:42:36.470  SCRIPT       : 11-24 21:42:36 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-North-Uphill
+21:42:36.476  SCRIPT       : 11-24 21:42:36 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-South-Building1
+21:42:36.481  SCRIPT       : 11-24 21:42:36 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-South-Building2
+21:42:36.490  SCRIPT       : 11-24 21:42:36 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-South-Downhill
+21:42:36.493  SCRIPT       : 11-24 21:42:36 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-West-Uphill
+21:42:52.936 SCRIPT       : [DSBX] clock tick_ms=37608
+21:42:52.937 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+21:42:52.937 SCRIPT       : [DSBX] config status=ok
+21:42:52.937 SCRIPT       : [DSBX] state HELLO
+21:42:52.938 SCRIPT       : [DSBX_QA] config usable
+21:42:53.256 SCRIPT       : [DSBX_QA] hello accepted
+21:42:53.512 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+21:42:53.700 SCRIPT       : [DSBX] hello accepted session=15ba7e6252ac41db conn=3
+21:42:55.717 SCRIPT       : [DSBX] catalog scan finished pages=92 skipped=0
+21:42:57.935 SCRIPT       : [DSBX] clock tick_ms=42608
+21:43:02.936 SCRIPT       : [DSBX] clock tick_ms=47608
+21:43:04.877 SCRIPT       : [DSBX] catalog complete pages=92
+21:43:07.936 SCRIPT       : [DSBX] clock tick_ms=52608
+21:43:12.935 SCRIPT       : [DSBX] clock tick_ms=57608
+21:43:18.414  SCRIPT       : ---- PlayerBase OnStoreLoad SUCCESS ----
+21:43:18.421  SCRIPT       : 11-24 21:43:18 | Server | Debug | Connect | n/a | n/a | InvokeOnConnect:CustomMission<0x0000015EA2557F60>
+21:43:18.421  SCRIPT       : 11-24 21:43:18 | Server | Debug | Connect | n/a | n/a | Player connected:SurvivorBase<0x0000016111484000> SurvivorM_Boris:22891
+21:43:18.427 SCRIPT       : [DSBX] clock tick_ms=63098
+21:43:18.427 SCRIPT       : [DSBX] lease lost age_ms=3348 tick_ms=63098
+21:43:18.427 SCRIPT       : [DSBX] lease expired: returning to HELLO
+21:43:18.439 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+21:43:18.529 SCRIPT       : [DSBX] hello accepted session=15ba7e6252ac41db conn=4
+21:43:23.426 SCRIPT       : [DSBX] clock tick_ms=68098
+21:43:27.832 SCRIPT       : [DSBX] catalog complete pages=92
+21:43:28.426 SCRIPT       : [DSBX] clock tick_ms=73098
+21:43:33.426 SCRIPT       : [DSBX] clock tick_ms=78098
+21:43:38.425 SCRIPT       : [DSBX] clock tick_ms=83098
+21:43:43.426 SCRIPT       : [DSBX] clock tick_ms=88098
+21:43:48.426 SCRIPT       : [DSBX] clock tick_ms=93098
+21:43:53.426 SCRIPT       : [DSBX] clock tick_ms=98098
+21:43:58.426 SCRIPT       : [DSBX] clock tick_ms=103098
+21:44:03.426 SCRIPT       : [DSBX] clock tick_ms=108098
+21:44:08.426 SCRIPT       : [DSBX] clock tick_ms=113098
+21:44:13.426 SCRIPT       : [DSBX] clock tick_ms=118098
+21:44:18.426 SCRIPT       : [DSBX] clock tick_ms=123098
+21:44:18.780 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123452 frame=172517 lid=obj-01 net_low=22898 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.781 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123452 frame=172518 lid=obj-01 net_low=22898 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123452
+21:44:18.781 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123453 frame=172518 lid=obj-02 net_low=22899 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.782 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123454 frame=172519 lid=obj-02 net_low=22899 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123454
+21:44:18.782 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123454 frame=172519 lid=obj-03 net_low=22900 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.783 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123455 frame=172520 lid=obj-03 net_low=22900 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123455
+21:44:18.783 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123455 frame=172520 lid=obj-04 net_low=22901 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.784 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123456 frame=172521 lid=obj-04 net_low=22901 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123456
+21:44:18.784 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123456 frame=172521 lid=obj-05 net_low=22902 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.785 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123457 frame=172522 lid=obj-05 net_low=22902 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123457
+21:44:18.785 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123457 frame=172522 lid=obj-06 net_low=22903 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.786 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123457 frame=172523 lid=obj-06 net_low=22903 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123457
+21:44:18.786 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123458 frame=172523 lid=obj-07 net_low=22904 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.787 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123458 frame=172524 lid=obj-07 net_low=22904 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123458
+21:44:18.787 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123458 frame=172524 lid=obj-08 net_low=22905 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.794 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123466 frame=172525 lid=obj-08 net_low=22905 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123466
+21:44:18.794 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123466 frame=172525 lid=obj-09 net_low=22906 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.796 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123468 frame=172526 lid=obj-09 net_low=22906 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123468
+21:44:18.796 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123468 frame=172526 lid=obj-10 net_low=22907 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.798 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123470 frame=172527 lid=obj-10 net_low=22907 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123470
+21:44:18.799 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123470 frame=172527 lid=obj-11 net_low=22908 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.800 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123471 frame=172528 lid=obj-11 net_low=22908 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123471
+21:44:18.800 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123471 frame=172528 lid=obj-12 net_low=22909 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.801 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123472 frame=172529 lid=obj-12 net_low=22909 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123472
+21:44:18.801 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123473 frame=172529 lid=obj-13 net_low=22910 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.802 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123474 frame=172530 lid=obj-13 net_low=22910 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123474
+21:44:18.802 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123474 frame=172530 lid=obj-14 net_low=22911 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.803 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123475 frame=172531 lid=obj-14 net_low=22911 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123475
+21:44:18.803 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123475 frame=172531 lid=obj-15 net_low=22912 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.804 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123476 frame=172532 lid=obj-15 net_low=22912 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123476
+21:44:18.805 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123476 frame=172532 lid=obj-16 net_low=22913 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.806 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123478 frame=172533 lid=obj-16 net_low=22913 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123478
+21:44:18.806 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123478 frame=172533 lid=obj-17 net_low=22914 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.807 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123479 frame=172534 lid=obj-17 net_low=22914 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123479
+21:44:18.808 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123479 frame=172534 lid=obj-18 net_low=22915 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.808 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123480 frame=172535 lid=obj-18 net_low=22915 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123480
+21:44:18.809 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123480 frame=172535 lid=obj-19 net_low=22916 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.809 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123481 frame=172536 lid=obj-19 net_low=22916 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123481
+21:44:18.809 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123481 frame=172536 lid=obj-20 net_low=22917 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.810 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123482 frame=172537 lid=obj-20 net_low=22917 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123482
+21:44:18.810 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123482 frame=172537 lid=zmb-01 net_low=22918 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.811 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123483 frame=172538 lid=zmb-01 net_low=22918 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123483
+21:44:18.811 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123483 frame=172538 lid=zmb-02 net_low=22919 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.812 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123483 frame=172539 lid=zmb-02 net_low=22919 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123483
+21:44:18.812 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123483 frame=172539 lid=zmb-03 net_low=22920 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.812 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123484 frame=172540 lid=zmb-03 net_low=22920 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123484
+21:44:18.812 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123484 frame=172540 lid=zmb-04 net_low=22921 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.813 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123485 frame=172541 lid=zmb-04 net_low=22921 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123485
+21:44:18.813 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123485 frame=172541 lid=zmb-05 net_low=22922 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.814 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123486 frame=172542 lid=zmb-05 net_low=22922 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123486
+21:44:18.814 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123486 frame=172542 lid=zmb-06 net_low=22923 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.815 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123487 frame=172543 lid=zmb-06 net_low=22923 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123487
+21:44:18.815 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123487 frame=172543 lid=zmb-07 net_low=22924 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.816 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123487 frame=172544 lid=zmb-07 net_low=22924 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123487
+21:44:18.816 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123488 frame=172544 lid=zmb-08 net_low=22925 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.817 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123488 frame=172545 lid=zmb-08 net_low=22925 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123488
+21:44:18.817 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123488 frame=172545 lid=zmb-09 net_low=22926 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.817 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123489 frame=172546 lid=zmb-09 net_low=22926 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123489
+21:44:18.817 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123489 frame=172546 lid=zmb-10 net_low=22927 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.819 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123490 frame=172547 lid=zmb-10 net_low=22927 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123490
+21:44:18.819 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123490 frame=172547 lid=ani-01 net_low=22928 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.819 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123491 frame=172548 lid=ani-01 net_low=22928 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123491
+21:44:18.819 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123491 frame=172548 lid=ani-02 net_low=22929 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.821 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123493 frame=172549 lid=ani-02 net_low=22929 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123493
+21:44:18.821 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123493 frame=172549 lid=ani-03 net_low=22930 net_high=0 signal_ref_b=0 signal_pending_b=1 signal_by_netid_b=0 deleted_confirmed_b=0 delete_failed_b=0 confirm_tick_ms=0
+21:44:18.821 SCRIPT       : [DSBX] DSBX_SCENE_DEL tick_ms=123494 frame=172550 lid=ani-03 net_low=22930 net_high=0 signal_ref_b=1 signal_pending_b=1 signal_by_netid_b=1 deleted_confirmed_b=1 delete_failed_b=0 confirm_tick_ms=123494
+21:44:23.426 SCRIPT       : [DSBX] clock tick_ms=128098
+21:44:28.426 SCRIPT       : [DSBX] clock tick_ms=133098
+21:44:33.426 SCRIPT       : [DSBX] clock tick_ms=138098
+21:44:38.425 SCRIPT       : [DSBX] clock tick_ms=143098
+21:44:43.426 SCRIPT       : [DSBX] clock tick_ms=148098
+21:44:45.250 SCRIPT       : 11-24 21:44:45 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Dynamic area (<341.000000, 294.925323, 9401.000000>)
+21:44:48.426 SCRIPT       : [DSBX] clock tick_ms=153098
+21:44:53.426 SCRIPT       : [DSBX] clock tick_ms=158098
+21:44:58.426 SCRIPT       : [DSBX] clock tick_ms=163098
+21:45:03.426 SCRIPT       : [DSBX] clock tick_ms=168098
+21:45:08.428 SCRIPT       : [DSBX] clock tick_ms=173099
+21:45:08.471  SCRIPT       : [Logout]: New player uid-redactado-1 with logout time 15
+21:45:12.405  SCRIPT       : [DSBX] shutdown role=server created_n=2 inflight_p=1 inflight_r=0
+21:45:12.407  SCRIPT       : [DSBX_QA] shutdown
+21:45:12.411  SCRIPT       : Cleaning up script module globals 'Mission'
+21:45:12.411   SCRIPT    (E): Leaked 'DSBX_QA_Callback' script instance (2x)!
+21:45:12.411   SCRIPT    (E): ==== Total Leaks (2x)! ====
+21:45:12.411  SCRIPT       : ~DayZGame()
+21:45:14.483  SCRIPT       : Cleaning up script module globals 'Game'
+21:45:14.483   SCRIPT    (E): Leaked 'BunkerBroadcastManager' script instance (1x)!
+21:45:14.483   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (2x)!
+21:45:14.483   SCRIPT    (E): ==== Total Leaks (3x)! ====

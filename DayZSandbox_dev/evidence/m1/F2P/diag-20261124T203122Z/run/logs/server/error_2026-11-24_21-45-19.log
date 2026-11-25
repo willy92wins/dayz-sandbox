@@ -1,0 +1,668 @@
+---------------------------------------------
+Log C:\dsbx-m1\t4-3723120\trabajo\profile-server\error_2026-11-24_21-45-19.log started at 2026-11-24 21:45:23 (2026-11-24 20:45:23 UTC)
+
+21:45:23.350 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableCrouchCameraHorizontalRotation'
+21:45:23.350 SCRIPT    (W): @"scripts/3_Game/human.c,241": Method not linked 'HumanInputController.DisableCrouchCameratHorizontalRotation'
+21:45:23.350 SCRIPT    (W): @"scripts/3_Game/human.c,240": Method not linked 'HumanInputController.DisableErectCameratHorizontalRotation'
+21:45:23.350 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableErectHorizontalRotation'
+21:45:23.542 ANIMATION (E): Can't load C:\dsbx-m1\t4-3723120\pbo\@DayZSandbox_QA/Anims/cfg/skeletons.anim.xml
+21:45:23.542 ANIMATION (E): Failed to open file, line 0, column 0
+21:45:23.542 ANIMATION (E): Can't load C:\dsbx-m1\t4-3723120\pbo\@DayZSandbox/Anims/cfg/skeletons.anim.xml
+21:45:23.542 ANIMATION (E): Failed to open file, line 0, column 0
+21:45:23.542 ANIMATION (E): Can't load nasdara/Anims/cfg/skeletons.anim.xml
+21:45:23.542 ANIMATION (E): Failed to open file, line 0, column 0
+21:45:23.542 ANIMATION (E): Can't load sakhal/Anims/cfg/skeletons.anim.xml
+21:45:23.542 ANIMATION (E): Failed to open file, line 0, column 0
+21:45:23.662 RESOURCES (E): IRenderer::CreateTextureFromImage(Gui/fonts/robotomono_msdf_28.edds) failed
+21:45:24.587 SCRIPT    (W): @"scripts/4_World/entities/building/underground/entrance/land_underground_entrance.c,149": 'UpdatePathgraphDoorByAnimationSourceName' is obsolete: 1.30: Use UpdatePathgraphEntityState
+21:45:24.932 WORLD        : Create entity type 'Static'
+21:45:24.932  WORLD        : Create entity type 'All'
+21:45:24.932   GUI       (W): String "STR_DN_UNKNOWN" not found (not in localization table)
+21:45:24.932 WORLD        : Create entity type 'Air'
+21:45:24.932  WORLD        : Create entity type 'Transport'
+21:45:24.932   GUI       (W): String "STR_DN_TRANSPORT" not found (not in localization table)
+21:45:24.932  GUI       (W): String "STR_DN_HELICOPTER" not found (not in localization table)
+21:45:24.932 WORLD        : Create entity type 'Car'
+21:45:24.932  GUI       (W): String "STR_DN_CAR" not found (not in localization table)
+21:45:24.932 WORLD        : Create entity type 'Man'
+21:45:24.932  GUI       (W): String "STR_DN_MAN" not found (not in localization table)
+21:45:24.960 WORLD        : Create entity type 'Boat'
+21:45:24.960  GUI       (W): String "STR_DN_BOAT" not found (not in localization table)
+21:45:24.960 WORLD        : Create entity type 'Motorbike'
+21:45:24.960  GUI       (W): String "STR_DN_MOTORBIKE" not found (not in localization table)
+21:45:24.960 WORLD        : Create entity type 'Animal'
+21:45:24.960  GUI       (W): String "STR_DN_ANIMAL" not found (not in localization table)
+21:45:24.960 WORLD        : Create entity type 'Fortress'
+21:45:24.960  GUI       (W): String "STR_DN_BUNKER" not found (not in localization table)
+21:45:25.450 WORLD        : Create entity type 'M79_Base'
+21:45:25.450  AUDIO        : Loading SoundSet 'IZH18_silencerHomeMade_SoundSet'
+21:45:25.450   AUDIO     (E): Sound set 'IZH18_silencerHomeMade_SoundSet' references missing sound shader 'IZH18_Closure_SoundShader'
+21:45:25.481 WORLD        : Create entity type 'LeeEnfield_Base'
+21:45:25.481  RESOURCES    : GetResourceObject @"{547244D924C753A2}/DZ/anims/anm/player/reloads/LeeEnfield/w_enfield_states.anm"
+21:45:25.481   RESOURCES (E): Failed to open
+21:45:35.596 NETWORK      : Network simulation
+21:45:35.596  Loading landscape 'chernarusplus'
+21:45:35.596   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:35.597   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:35.598   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:35.598   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:35.599   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:35.600   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:35.601   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:35.602   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:35.602   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:35.603   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:35.604   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:36.099   WORLD        : Create entity type 'Land_power_pole_conc1_amp'
+21:45:36.099    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+21:45:36.129   ENTITY       : Load entity type 'Land_Mil_Barracks5'
+21:45:36.129    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.131   WORLD        : Create entity type 'Land_radio_panelpas'
+21:45:36.131    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASBroadcasterType'
+21:45:36.152   ENTITY       : Load entity type 'Land_Prison_Side'
+21:45:36.152    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.152    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.152    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:45:36.152    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:45:36.152    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:45:36.152    ENTITY    (W): Door 'DoorsTwin6' is missing geometry components for selection 'DoorsTwin6', check model+config
+21:45:36.152    ENTITY    (W): Door 'DoorsTwin7' is missing geometry components for selection 'DoorsTwin7', check model+config
+21:45:36.152    ENTITY    (W): Door 'DoorsTwin8' is missing geometry components for selection 'DoorsTwin8', check model+config
+21:45:36.175   WORLD        : Create entity type 'Land_power_pole_wood1_amp'
+21:45:36.175    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+21:45:36.186   ENTITY       : Load entity type 'Land_Container_1Mo'
+21:45:36.186    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.186    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.186   ENTITY       : Load entity type 'Land_Workshop3'
+21:45:36.186    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.186    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.203   WORLD        : Create entity type 'Land_lamp_city1_amp'
+21:45:36.203    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+21:45:36.216   ENTITY       : Load entity type 'Land_Workshop1'
+21:45:36.216    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.248   ENTITY       : Load entity type 'Land_Wall_Gate_FenG_Big'
+21:45:36.248    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.266   ENTITY       : Load entity type 'Land_Wreck_sed01_aban1_white'
+21:45:36.266    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.266   ENTITY       : Load entity type 'Land_Wreck_hb02_aban1_blue'
+21:45:36.266    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.267   ENTITY       : Load entity type 'Land_House_2W03_Brown'
+21:45:36.267    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.267   ENTITY       : Load entity type 'Land_House_2W03'
+21:45:36.267    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.282   ENTITY       : Load entity type 'Land_Wall_Gate_FenR_Big'
+21:45:36.282    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.282   ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_yellow'
+21:45:36.282    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:36.282    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:36.282    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.304   ENTITY       : Load entity type 'Land_Wall_Gate_FenR_Big_Open'
+21:45:36.304    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.320   WORLD        : Create entity type 'Land_power_pole_wood1_lamp_amp'
+21:45:36.320    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+21:45:36.351   ENTITY       : Load entity type 'Land_Church2_2'
+21:45:36.351    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.368   ENTITY       : Load entity type 'Land_Wreck_sed01_aban2_wine'
+21:45:36.368    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.380   ENTITY       : Load entity type 'Land_Wreck_sed01_aban2_white'
+21:45:36.380    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.382   ENTITY       : Load entity type 'Land_Tenement_Small'
+21:45:36.382    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.382    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.382    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.382    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.382    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.382    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.382    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.429   ENTITY       : Load entity type 'Land_Tenement_Big'
+21:45:36.429    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.429    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.429    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.431    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.431    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.431    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.431    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.431    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.431    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.456   ENTITY       : Load entity type 'Land_City_Store'
+21:45:36.456    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.456    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.456    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:45:36.456    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:45:36.456    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:45:36.457   ENTITY       : Load entity type 'Land_Wreck_sed01_aban2_black'
+21:45:36.457    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.464   ENTITY       : Load entity type 'Land_Wreck_sed01_aban1_black'
+21:45:36.464    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.464   ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_red'
+21:45:36.464    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:36.464    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:36.464    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.500   ENTITY       : Load entity type 'Land_Wreck_hb01_aban1_blue'
+21:45:36.500    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:36.500    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:36.501   ENTITY       : Load entity type 'Land_City_School'
+21:45:36.501    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.501    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:45:36.501    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:45:36.501    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:45:36.501    ENTITY    (W): Door 'DoorsTwin6' is missing geometry components for selection 'DoorsTwin6', check model+config
+21:45:36.501    ENTITY    (W): Door 'DoorsTwin7' is missing geometry components for selection 'DoorsTwin7', check model+config
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.508    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.509    ENTITY    (W): Unknown object class 'thing' (dz\structures\proxy_buildingparts\lightningcond\lightningconductormiddle\lightningconductormiddle.p3d)
+21:45:36.558   ENTITY       : Load entity type 'Land_Garage_Row_Small'
+21:45:36.558    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.558    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.558    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:45:36.589   ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_grey'
+21:45:36.589    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:36.589    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:36.589    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.604   ENTITY       : Load entity type 'Land_Wreck_hb01_aban1_white'
+21:45:36.604    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:36.604    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:36.619   ENTITY       : Load entity type 'Land_Wreck_hb02_aban1_red'
+21:45:36.619    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.634   ENTITY       : Load entity type 'Land_Wreck_hb01_aban2_green'
+21:45:36.634    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:36.634    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:36.656   ENTITY       : Load entity type 'Land_HouseBlock_1F4'
+21:45:36.656    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.656   ENTITY       : Load entity type 'Land_HouseBlock_2F_Corner'
+21:45:36.656    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.656    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.656   ENTITY       : Load entity type 'Land_HouseBlock_2F8'
+21:45:36.656    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.663   ENTITY       : Load entity type 'Land_House_2W02'
+21:45:36.663    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.672   ENTITY       : Load entity type 'Land_HouseBlock_2F1'
+21:45:36.672    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.672    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.674   ENTITY       : Load entity type 'Land_HouseBlock_2F2'
+21:45:36.674    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.674    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.674    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.675    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.675    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.682   ENTITY       : Load entity type 'Land_Garage_Small'
+21:45:36.682    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.683   ENTITY       : Load entity type 'Land_House_2W04_Yellow'
+21:45:36.683    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.683   ENTITY       : Load entity type 'Land_HouseBlock_1F1'
+21:45:36.683    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.684    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.684    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.692   ENTITY       : Load entity type 'Land_Church3'
+21:45:36.692    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.724   ENTITY       : Load entity type 'Land_HouseBlock_3F2'
+21:45:36.724    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.724    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.725   ENTITY       : Load entity type 'Land_HouseBlock_3F_Corner1'
+21:45:36.725    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.725    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.725    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.726    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.726    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:36.746   ENTITY       : Load entity type 'Land_Wreck_hb02_aban1_black'
+21:45:36.746    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.747   ENTITY       : Load entity type 'Land_HouseBlock_2F6'
+21:45:36.747    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.755   ENTITY       : Load entity type 'Land_Wreck_sed01_aban1_wine'
+21:45:36.755    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.758   ENTITY       : Load entity type 'Land_Workshop4'
+21:45:36.758    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.770   ENTITY       : Load entity type 'Land_Workshop2'
+21:45:36.770    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.809   WORLD        : Create entity type 'Land_power_pole_conc4_lamp_amp'
+21:45:36.809    ENTITY    (E): Type 'HouseType' must be inherited from class 'PASReceiverType'
+21:45:36.817   ENTITY       : Load entity type 'Land_Wreck_sed02_aban2_red'
+21:45:36.817    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:36.817    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:36.817    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.825   ENTITY       : Load entity type 'Land_HouseBlock_1F3'
+21:45:36.825    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.845   ENTITY       : Load entity type 'Land_HouseBlock_2F4'
+21:45:36.845    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.856   ENTITY       : Load entity type 'Land_HouseBlock_2F9'
+21:45:36.856    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.863   ENTITY       : Load entity type 'Land_Wreck_sed02_aban2_yellow'
+21:45:36.863    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:36.863    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:36.863    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.884   ENTITY       : Load entity type 'Land_Wreck_hb01_aban2_blue'
+21:45:36.884    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:36.884    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:36.885   ENTITY       : Load entity type 'Land_Rail_Station_Big'
+21:45:36.885    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.899   ENTITY       : Load entity type 'Land_Wall_Gate_FenG_Big_Open'
+21:45:36.899    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.901   ENTITY       : Load entity type 'Land_City_PoliceStation'
+21:45:36.901    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.901    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.901    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:45:36.973   ENTITY       : Load entity type 'Land_Wreck_sed02_aban2_grey'
+21:45:36.973    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:36.973    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:36.973    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:36.978   ENTITY       : Load entity type 'Land_Garage_Row_Big'
+21:45:36.978    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:36.978    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:36.978    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:45:36.978    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:45:36.989   ENTITY       : Load entity type 'Land_City_Hospital'
+21:45:36.989    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.001   ENTITY       : Load entity type 'Land_Container_1Bo'
+21:45:37.001    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.001    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:37.002   ENTITY       : Load entity type 'Land_City_Store_WithStairs'
+21:45:37.002    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.002    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:37.002    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:45:37.002    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:45:37.002    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:45:37.022   ENTITY       : Load entity type 'Land_House_2W04'
+21:45:37.022    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.038   ENTITY       : Load entity type 'Land_Office2'
+21:45:37.038    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.038    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:37.038    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:45:37.038    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:45:37.038    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:45:37.066   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:37.117   ENTITY       : Load entity type 'Land_House_1W12_Brown'
+21:45:37.117    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:37.117    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:37.117    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:37.148   ENTITY       : Load entity type 'Land_House_1W08_Brown'
+21:45:37.149    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:37.149    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:37.149    ENTITY    (W): Unknown object class 'thing' (dz\structures\furniture\eletrical_appliances\washing_machine\washing_machine.p3d)
+21:45:37.345   ENTITY       : Load entity type 'Land_Wreck_hb01_aban2_white'
+21:45:37.345    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:37.345    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:37.425   ENTITY       : Load entity type 'Land_Office1'
+21:45:37.425    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.425    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:37.425    ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:45:37.425    ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:45:37.425    ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:45:37.425    ENTITY    (W): Door 'DoorsTwin6' is missing geometry components for selection 'DoorsTwin6', check model+config
+21:45:37.425    ENTITY    (W): Door 'DoorsTwin7' is missing geometry components for selection 'DoorsTwin7', check model+config
+21:45:37.494   ENTITY       : Load entity type 'Land_Workshop5'
+21:45:37.494    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.495   ENTITY       : Load entity type 'Land_Factory_Small'
+21:45:37.495    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.495    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:37.582   ENTITY       : Load entity type 'Land_Wreck_hb01_aban1_green'
+21:45:37.582    ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:37.582    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:37.677   ENTITY       : Load entity type 'Land_Mil_Barracks3'
+21:45:37.677    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.702   ENTITY       : Load entity type 'Land_wreck_truck01_aban2_firetruck'
+21:45:37.702    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:37.702    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.702    ENTITY    (W): Door 'Doors5' is missing geometry components for selection 'Doors5', check model+config
+21:45:37.702    ENTITY    (W): Door 'Doors6' is missing geometry components for selection 'Doors6', check model+config
+21:45:37.702    ENTITY    (W): Door 'Doors7' is missing geometry components for selection 'Doors7', check model+config
+21:45:37.702    ENTITY    (W): Door 'Doors8' is missing geometry components for selection 'Doors8', check model+config
+21:45:37.702    ENTITY    (W): Door 'Doors9' is missing geometry components for selection 'Doors9', check model+config
+21:45:37.703   ENTITY       : Load entity type 'Land_wreck_truck01_aban1_firetruck'
+21:45:37.703    ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:37.703    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.703    ENTITY    (W): Door 'Doors5' is missing geometry components for selection 'Doors5', check model+config
+21:45:37.703    ENTITY    (W): Door 'Doors6' is missing geometry components for selection 'Doors6', check model+config
+21:45:37.703    ENTITY    (W): Door 'Doors7' is missing geometry components for selection 'Doors7', check model+config
+21:45:37.703    ENTITY    (W): Door 'Doors8' is missing geometry components for selection 'Doors8', check model+config
+21:45:37.703    ENTITY    (W): Door 'Doors9' is missing geometry components for selection 'Doors9', check model+config
+21:45:37.723   ENTITY       : Load entity type 'Land_Container_1Moh'
+21:45:37.723    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.723   ENTITY       : Load entity type 'Land_Rail_Warehouse_Small'
+21:45:37.723    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.723    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:37.729   ENTITY       : Load entity type 'Land_Container_1Aoh'
+21:45:37.729    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.746   ENTITY       : Load entity type 'Land_Village_HealthCare'
+21:45:37.746    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:37.746    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:37.951   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_38_01.p3d)
+21:45:37.951   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_38_02.p3d)
+21:45:38.127   ENTITY       : Load entity type 'Land_Farm_CowshedA'
+21:45:38.128    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:38.128    ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:38.128   ENTITY       : Load entity type 'Land_Farm_CowshedC'
+21:45:38.128    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:38.165   ENTITY       : Load entity type 'Land_CementWorks_Hall2_Brick'
+21:45:38.165    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:38.208   ENTITY       : Load entity type 'Land_Wreck_offroad02_aban2'
+21:45:38.208    ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:38.261   ENTITY       : Load entity type 'Land_Mil_Airfield_HQ'
+21:45:38.261    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:38.289   ENTITY       : Load entity type 'Land_Mil_Barracks1'
+21:45:38.289    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:38.333   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_06.p3d)
+21:45:38.344   WORLD        : Create entity type 'Land_radio_panelbig'
+21:45:38.344    ENTITY    (E): Type 'HouseType' must be inherited from class 'StaticTransmitterType'
+21:45:38.352   ENTITY       : Load entity type 'Land_Radio_building'
+21:45:38.352    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:38.471   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:38.641   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:38.652   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:38.692   ENTITY       : Load entity type 'Land_Garage_Big'
+21:45:38.692    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:38.712   ENTITY       : Load entity type 'Land_Tisy_HQ'
+21:45:38.712    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:39.070   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_20.p3d)
+21:45:39.134   ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_02.p3d)
+21:45:39.269   ENTITY       : Load entity type 'Land_Office_Municipal2'
+21:45:39.269    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:39.273   ENTITY       : Load entity type 'Land_HouseBlock_5F'
+21:45:39.273    ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:39.783  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,589": No need to use 'Cast' for up-casting
+21:45:39.786  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,1741": No need to use 'Cast' for up-casting
+21:45:39.787  SCRIPT    (W): @"DayZSandbox_QA/scripts/5_Mission/dsbx_qa_x_persist.c,2364": No need to use 'Cast' for up-casting
+21:45:39.919  GUI       (W): String "STR_DN_FLAG" not found (not in localization table)
+21:45:39.947  SCRIPT    (E):    -- Stack trace --
+21:45:39.947  SCRIPT    (E):    GetPlugin() scripts/4_World/plugins/pluginmanager.c : 341
+21:45:39.947  SCRIPT    (E):    OnInit() scripts/4_World/plugins/pluginbase/pluginitemdiagnostic.c : 94
+21:45:39.947  SCRIPT    (E):    PluginsInit() scripts/4_World/plugins/pluginmanager.c : 136
+21:45:39.947  SCRIPT    (E):    PluginManagerInit() scripts/4_World/plugins/pluginmanager.c : 304
+21:45:39.947  SCRIPT    (E):    MissionBase() scripts/5_Mission/mission/missionbase.c : 21
+21:45:39.947  SCRIPT    (E):    CreateCustomMission() C:\dsbx-m1\t4-3723120\trabajo\mission\mpmissions\dayzOffline.chernarusplus\init.c : 97
+21:45:39.947  SCRIPT    (E):    -----------------
+21:45:40.104  ENTITY       : Load entity type 'Land_Boathouse'
+21:45:40.104   ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:40.145  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+21:45:40.145  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+21:45:40.187  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_06_moss.p3d)
+21:45:40.478  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+21:45:40.482  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_04_moss.p3d)
+21:45:40.482  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+21:45:40.486  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+21:45:40.487  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+21:45:40.573  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_39_03.p3d)
+21:45:40.573  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_39_01.p3d)
+21:45:40.573  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_39_02.p3d)
+21:45:40.573  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_big_39_04.p3d)
+21:45:40.743  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_30_01_moss.p3d)
+21:45:40.744  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_30_04_moss.p3d)
+21:45:40.744  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_30_02_moss.p3d)
+21:45:40.750  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_38_04_moss.p3d)
+21:45:40.750  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_32_02_moss.p3d)
+21:45:40.750  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_38_02_moss.p3d)
+21:45:40.750  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_32_03_moss.p3d)
+21:45:40.751  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_32_01_moss.p3d)
+21:45:40.751  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_40_02_moss.p3d)
+21:45:40.752  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_40_01_moss.p3d)
+21:45:40.752  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_40_04_moss.p3d)
+21:45:40.752  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_40_03_moss.p3d)
+21:45:40.752  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_30_03_moss.p3d)
+21:45:41.227  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_27.p3d)
+21:45:41.228  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_19.p3d)
+21:45:41.230  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_25.p3d)
+21:45:45.884  WORLD     (E): PRESET LOAD ERROR: Spawnable type '(null)' could not load preset item 'Flaregun' because it is ignored.
+21:45:45.884  WORLD     (E): PRESET LOAD ERROR: Spawnable type '(null)' could not load preset item 'Ammo_Flare' because it is ignored.
+21:45:45.884  WORLD     (E): PRESET LOAD ERROR: Spawnable type '(null)' could not load preset item 'Ammo_FlareRed' because it is ignored.
+21:45:45.884  WORLD     (E): PRESET LOAD ERROR: Spawnable type '(null)' could not load preset item 'Ammo_FlareGreen' because it is ignored.
+21:45:45.884  WORLD     (E): PRESET LOAD ERROR: Spawnable type '(null)' could not load preset item 'Ammo_FlareBlue' because it is ignored.
+21:45:48.050  WORLD        : Create entity type 'ChernarusMap'
+21:45:48.050   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:48.050   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:48.051   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:48.052   RESOURCES (E): IRenderer::CreateTextureFromImage(gui/fonts/MetronBook-Bold28.edds) failed
+21:45:48.086  ENTITY       : Load entity type 'UMP45'
+21:45:48.086   RESOURCES    : GetResourceObject @"{934CA9D85BFC36AB}dz/characters/bodies/player_testing.xob"
+21:45:48.086    MATERIAL  (E): Object dz/characters/bodies/player_testing.xob - cannot load material cross_red.emat
+21:45:48.184  WORLD        : Create entity type 'Megaphone'
+21:45:48.184   ENTITY    (E): Type 'Inventory_BaseType' must be inherited from class 'ItemMegaphoneType'
+21:45:48.205  WORLD        : Create entity type 'Headtorch_Grey'
+21:45:48.205   ENTITY    (E): Type 'Inventory_BaseType' must be inherited from class 'ClothingType'
+21:45:48.588  WORLD        : Create entity type 'Headtorch_Black'
+21:45:48.588   ENTITY    (E): Type 'Inventory_BaseType' must be inherited from class 'ClothingType'
+21:45:50.333  INVENTORY    : StreamLoad entity Barrel_Yellow:6086
+21:45:50.333   INVENTORY    : StreamLoad entity Fireplace:0
+21:45:50.333    INVENTORY (E): inv: Fireplace:0 dropped 3 duplicate attachment locks of 3 on load
+21:45:55.316  WORLD        : Create entity type 'Motorbike_01_Blue'
+21:45:55.316   WORLD        : Create entity type 'Motorbike_01_ColorBase'
+21:45:55.316    AUDIO        : Loading SoundSet 'Motorbike_01_skid_dirt_SoundSet'
+21:45:55.316     AUDIO     (E): Sound set 'Motorbike_01_skid_dirt_SoundSet' references missing sound shader 'Motorbike_01_skid_dirt_SoundShader'
+21:45:55.318  ENTITY       : Load entity type 'Motorbike_01_Blue'
+21:45:55.318   PHYSICS   (W): Second driver found when parsing class Crew::Crew , ignoring this value
+21:45:55.371  ENTITY       : Load entity type 'Motorbike_02_Red'
+21:45:55.371   PHYSICS   (W): Second driver found when parsing class Crew::Crew , ignoring this value
+21:45:55.403  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_02_moss.p3d)
+21:45:55.403  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_21_moss.p3d)
+21:45:55.404  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_24_moss.p3d)
+21:45:55.415  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_31_03_moss.p3d)
+21:45:55.415  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_31_04_moss.p3d)
+21:45:55.415  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_01_moss.p3d)
+21:45:55.415  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_31_01_moss.p3d)
+21:45:55.415  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_31_02_moss.p3d)
+21:45:55.416  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_15_moss.p3d)
+21:45:55.440  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:55.777  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:55.912  WORLD        : Create entity type 'PersonalRadio'
+21:45:55.912   ENTITY    (E): Type 'Inventory_BaseType' must be inherited from class 'ItemTransmitterType'
+21:45:55.917  WORLD        : Create entity type 'BaseRadio'
+21:45:55.917   ENTITY    (E): Type 'Inventory_BaseType' must be inherited from class 'ItemTransmitterType'
+21:45:56.000  ENTITY    (W): Unknown object class 'building' (dz\structures\military\airfield\mil_blastcover4_grass_r.p3d)
+21:45:56.000  ENTITY    (W): Unknown object class 'building' (dz\structures\military\airfield\mil_blastcover4_grass_l.p3d)
+21:45:56.071  ENTITY       : Load entity type 'Land_Wreck_offroad02_aban2_DE'
+21:45:56.071   ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:56.083  ENTITY       : Load entity type 'Land_Wreck_hb01_aban1_white_DE'
+21:45:56.083   ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:56.083   ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:56.084  ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_grey_DE'
+21:45:56.084   ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:56.084   ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:56.084   ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:56.085  ENTITY       : Load entity type 'Land_Wreck_sed01_aban1_police_DE'
+21:45:56.085   ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:56.088  ENTITY       : Load entity type 'Land_Wreck_hb01_aban2_green_DE'
+21:45:56.088   ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:56.088   ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:56.089  ENTITY       : Load entity type 'Land_Wreck_sed01_aban2_police_DE'
+21:45:56.089   ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:56.089  ENTITY       : Load entity type 'Land_Wreck_hb02_aban1_red_DE'
+21:45:56.089   ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:56.097  ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_red_DE'
+21:45:56.097   ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:56.097   ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:56.097   ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:56.104  ENTITY       : Load entity type 'Land_Wreck_sed01_aban1_white_DE'
+21:45:56.104   ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:56.109  ENTITY       : Load entity type 'Land_Wreck_sed02_aban1_yellow_DE'
+21:45:56.109   ENTITY    (W): Door 'Doors1' is missing geometry components for selection 'Doors1', check model+config
+21:45:56.109   ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:56.110   ENTITY    (W): Door 'Doors3' is missing geometry components for selection 'Doors3', check model+config
+21:45:56.110  ENTITY       : Load entity type 'Land_wreck_truck01_aban1_firetruck_DE'
+21:45:56.110   ENTITY    (W): Door 'Doors2' is missing geometry components for selection 'Doors2', check model+config
+21:45:56.111   ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:56.111   ENTITY    (W): Door 'Doors5' is missing geometry components for selection 'Doors5', check model+config
+21:45:56.111   ENTITY    (W): Door 'Doors6' is missing geometry components for selection 'Doors6', check model+config
+21:45:56.111   ENTITY    (W): Door 'Doors7' is missing geometry components for selection 'Doors7', check model+config
+21:45:56.111   ENTITY    (W): Door 'Doors8' is missing geometry components for selection 'Doors8', check model+config
+21:45:56.111   ENTITY    (W): Door 'Doors9' is missing geometry components for selection 'Doors9', check model+config
+21:45:56.118  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\lake_50x50.p3d)
+21:45:56.119  ENTITY       : Load entity type 'Land_Container_1Mo_DE'
+21:45:56.119   ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:56.120   ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:56.121  ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\lake_50x50.p3d)
+21:45:56.122  ENTITY       : Load entity type 'Land_Container_1Moh_DE'
+21:45:56.122   ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:56.160  ENTITY       : Load entity type 'Land_Prison_Main'
+21:45:56.160   ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:45:56.161   ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:45:56.161   ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:45:56.161   ENTITY    (W): Door 'DoorsTwin4' is missing geometry components for selection 'DoorsTwin4', check model+config
+21:45:56.161   ENTITY    (W): Door 'DoorsTwin5' is missing geometry components for selection 'DoorsTwin5', check model+config
+21:45:56.161   ENTITY    (W): Door 'DoorsTwin6' is missing geometry components for selection 'DoorsTwin6', check model+config
+21:45:56.161   ENTITY    (W): Door 'DoorsTwin7' is missing geometry components for selection 'DoorsTwin7', check model+config
+21:45:56.161   ENTITY    (W): Door 'DoorsTwin8' is missing geometry components for selection 'DoorsTwin8', check model+config
+21:45:57.160 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_04_moss.p3d)
+21:45:57.163 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:57.165 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:57.349 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_04_moss.p3d)
+21:45:57.350 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_03_moss.p3d)
+21:45:57.351 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_34_01_moss.p3d)
+21:45:57.351 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_34_03_moss.p3d)
+21:45:57.351 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_02_moss.p3d)
+21:45:57.532 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_03_moss.p3d)
+21:45:57.532 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_04_moss.p3d)
+21:45:57.533 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_29_02_moss.p3d)
+21:45:57.533 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_30_04_moss.p3d)
+21:45:57.533 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_08_moss.p3d)
+21:45:57.543 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:57.543 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:57.544 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:57.544 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:57.544 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:57.715 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:57.717 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_03_moss.p3d)
+21:45:57.717 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_31_03_moss.p3d)
+21:45:57.717 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_31_04_moss.p3d)
+21:45:57.718 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_26_moss.p3d)
+21:45:57.718 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_25_moss.p3d)
+21:45:57.718 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_04_moss.p3d)
+21:45:57.718 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_01_moss.p3d)
+21:45:57.719 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_37_02_moss.p3d)
+21:45:57.721 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:57.826 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:57.843 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_14.p3d)
+21:45:57.932 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:57.932 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:58.061 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:58.252 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_21.p3d)
+21:45:58.692 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_small_03.p3d)
+21:45:58.701 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:58.701 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:45:58.781 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:15.023 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_29_02_moss.p3d)
+21:46:15.023 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_03_moss.p3d)
+21:46:15.023 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_29_04_moss.p3d)
+21:46:15.023 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_01_moss.p3d)
+21:46:15.354 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_29_02_moss.p3d)
+21:46:15.354 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_03_moss.p3d)
+21:46:15.354 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_29_04_moss.p3d)
+21:46:15.354 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_01_moss.p3d)
+21:46:15.354 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_01_moss.p3d)
+21:46:15.354 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_04_moss.p3d)
+21:46:15.355 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_02_moss.p3d)
+21:46:21.507 NETWORK      : Network simulation
+21:46:21.507  WORLD        : Create entity type 'SurvivorM_Boris'
+21:46:21.507   AUDIO        : Loading SoundSet 'Gag_Drowning_SoundVoice_Char_SoundSet'
+21:46:21.507    AUDIO     (E): Sound set 'Gag_Drowning_SoundVoice_Char_SoundSet' references missing sound shader 'Drowning_male_2_gag_SoundVoice_Char_SoundShader'
+21:46:21.507   AUDIO        : Loading SoundSet 'Gag_UnderwaterBreathHold_SoundVoice_Char_SoundSet'
+21:46:21.507    AUDIO     (E): Sound set 'Gag_UnderwaterBreathHold_SoundVoice_Char_SoundSet' references missing sound shader 'UnderwaterBreathHold_male_2_gag_SoundVoice_Char_SoundShader'
+21:46:21.508   AUDIO        : Loading SoundSet 'Motohelmet_pushHeavy_SoundVoice_Char_SoundSet'
+21:46:21.508    AUDIO     (E): Sound set 'Motohelmet_pushHeavy_SoundVoice_Char_SoundSet' references missing sound shader 'pushHeavy_female_1_motohelmet_SoundVoice_Char_SoundShader'
+21:46:21.523  PLAYER    (E): Can't load 
+21:46:21.523  PLAYER    (E): Failed to open file, line 0, column 0
+21:46:24.089 ENTITY       : Load entity type 'Land_Mil_AircraftShelter'
+21:46:24.089  ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:46:24.089  ENTITY    (W): Door 'DoorsTwin2' is missing geometry components for selection 'DoorsTwin2', check model+config
+21:46:24.089  ENTITY    (W): Door 'DoorsTwin3' is missing geometry components for selection 'DoorsTwin3', check model+config
+21:46:24.092 ENTITY    (W): Unknown object class 'building' (dz\structures\military\airfield\mil_aircraftshelter_grass_r.p3d)
+21:46:24.092 ENTITY    (W): Unknown object class 'building' (dz\structures\military\airfield\mil_aircraftshelter_grass_l.p3d)
+21:46:24.094 ENTITY    (W): Unknown object class 'building' (dz\structures\military\airfield\mil_aircraftshelter_grass_r.p3d)
+21:46:24.094 ENTITY    (W): Unknown object class 'building' (dz\structures\military\airfield\mil_aircraftshelter_grass_r.p3d)
+21:46:24.094 ENTITY    (W): Unknown object class 'building' (dz\structures\military\airfield\mil_aircraftshelter_grass_l.p3d)
+21:46:24.094 ENTITY    (W): Unknown object class 'building' (dz\structures\military\airfield\mil_aircraftshelter_grass_l.p3d)
+21:46:27.352 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:46:30.988 ENTITY       : Load entity type 'Land_Wreck_Volha_Police'
+21:46:30.988  ENTITY    (W): Door 'Doors5' is missing geometry components for selection 'Doors5', check model+config
+21:46:31.004 WORLD        : Create entity type 'ZmbM_FarmerFat_Brown'
+21:46:31.004  RESOURCES    : GetResourceObject @"{F3850CA6D49ADFD2}dz/characters/zombies/z_hermit_m.xob"
+21:46:31.004   MATERIAL  (E): Object dz/characters/zombies/z_hermit_m.xob - cannot load material Material_1.emat
+21:46:31.037 WORLD        : Create entity type 'Animal_CervusElaphus'
+21:46:31.037  ENTITY    (E): Type 'ManType' must be inherited from class 'DayZAnimalType'
+21:46:31.043 WORLD        : Create entity type 'Animal_CapreolusCapreolus'
+21:46:31.043  ENTITY    (E): Type 'ManType' must be inherited from class 'DayZAnimalType'
+21:46:31.050 WORLD        : Create entity type 'Animal_GallusGallusDomesticus'
+21:46:31.050  ENTITY    (E): Type 'ManType' must be inherited from class 'DayZAnimalType'
+21:46:39.360 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_01_moss.p3d)
+21:46:39.361 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_big_28_02_moss.p3d)
+21:46:39.361 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_03_moss.p3d)
+21:46:45.808 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_03_moss.p3d)
+21:46:46.238 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_03_moss.p3d)
+21:46:46.239 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_27_moss.p3d)
+21:46:46.239 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_26_moss.p3d)
+21:46:46.239 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_25_moss.p3d)
+21:46:46.629 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_03_moss.p3d)
+21:46:46.629 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_27_moss.p3d)
+21:46:46.629 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_26_moss.p3d)
+21:46:46.629 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_small_25_moss.p3d)
+21:47:13.112 ENTITY       : Load entity type 'Land_Wreck_Volha_Police'
+21:47:13.112  ENTITY    (W): Door 'Doors5' is missing geometry components for selection 'Doors5', check model+config
+21:47:26.889 ENTITY       : Load entity type 'Land_CementWorks_MillC'
+21:47:26.889  ENTITY    (W): Door 'DoorsTwin1' is missing geometry components for selection 'DoorsTwin1', check model+config
+21:47:35.913 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:36.258 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:36.591 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:47.810 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:47.814 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:49.740 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:50.094 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:50.096 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:53.129 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\pond_50x50.p3d)
+21:47:54.135 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+21:47:54.135 ENTITY    (W): Unknown object class 'pond' (dz\water\ponds\moss\pond_50x50_moss.p3d)
+21:47:58.491 ENGINE       : Destroying game
+21:47:58.491  SCRIPT       : Cleaning up script module globals 'Mission'
+21:47:58.491   SCRIPT    (E): Leaked 'DSBX_QA_Callback' script instance (2x)!
+21:47:58.491   SCRIPT    (E): ==== Total Leaks (2x)! ====
+21:48:00.756  SCRIPT       : Cleaning up script module globals 'Game'
+21:48:00.756   SCRIPT    (E): Leaked 'BunkerBroadcastManager' script instance (1x)!
+21:48:00.756   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (7x)!
+21:48:00.756   SCRIPT    (E): ==== Total Leaks (8x)! ====
+21:48:00.895 RESOURCES (E): ==== Resource leaks ====
+21:48:00.895 DEFAULT   (E): Leaked @"dz/anims/workspaces/player/player_main/player_main.asi"   1
+21:48:02.854 RENDER    (W): Render release fix

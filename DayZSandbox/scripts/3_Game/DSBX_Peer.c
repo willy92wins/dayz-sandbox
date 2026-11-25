@@ -107,8 +107,10 @@ class DSBX_Peer : Managed
 	string m_Epoch;
 	string m_Session;
 	string m_CatSession;
+	int m_CatConn;
 	string m_HelloEpoch;
 	string m_CatSendSession;
+	int m_CatSendConn;
 	int m_Conn;
 	int m_State;
 
@@ -170,12 +172,15 @@ class DSBX_Peer : Managed
 	bool m_BudgetLogged;
 
 	ref DSBX_World m_World;
+	ref DSBX_Scene m_Scene;
+	ref DSBX_SceneOps m_SceneOps;
 	ref DSBX_Cache m_Cache;
 	ref DSBX_Catalog m_Catalog;
 	ref array<ref DSBX_CacheEntry> m_PendingResults;
 	DSBX_CacheEntry m_SendingEntry;
 	DSBX_CacheEntry m_ActiveEntry;
 	string m_GuardFailReason;
+	int m_TickFrame;
 
 	string m_MapName;
 	int m_WorldSize;
@@ -251,17 +256,22 @@ class DSBX_Peer : Managed
 		m_BudgetLogged = false;
 
 		m_World = world;
+		m_Scene = null;
+		m_SceneOps = null;
 		m_Cache = new DSBX_Cache(m_CacheCap);
 		m_Catalog = null;
 		m_PendingResults = new array<ref DSBX_CacheEntry>();
 		m_SendingEntry = null;
 		m_ActiveEntry = null;
 		m_GuardFailReason = "";
+		m_TickFrame = 0;
 
 		m_MapName = "";
 		m_WorldSize = 0;
 		m_Modset = new array<string>();
 
+		m_CatConn = 0;
+		m_CatSendConn = 0;
 		m_CatPageIdx = 0;
 		m_CatFailures = 0;
 		m_CatNextTryMs = 0.0;
@@ -278,6 +288,8 @@ class DSBX_Peer : Managed
 			}
 			m_Epoch = m_World.GetEpoch();
 			GatherServerEnv();
+			m_Scene = new DSBX_Scene();
+			m_SceneOps = new DSBX_SceneOps(m_World, m_Scene);
 			m_Catalog = new DSBX_Catalog();
 			m_Catalog.StartScan(CatalogBuildName(), m_Modset);
 			s_ServerPeer = this;
@@ -348,6 +360,12 @@ class DSBX_Peer : Managed
 		m_PoolR.Clear();
 		DetachAll(m_QuarantineP);
 		DetachAll(m_QuarantineR);
+		if (m_SceneOps)
+		{
+			m_SceneOps.ResetActive();
+			m_SceneOps = null;
+		}
+		m_Scene = null;
 		m_Ctx = null;
 		// created_n and the in-flight requests bound the engine's exit report
 		// "Leaked 'DSBX_Callback' script instance (Nx)!" (G1 smoke, diag, 15-nov).
@@ -850,7 +868,7 @@ class DSBX_Peer : Managed
 		}
 		if (kind == DSBX_Const.KIND_CATALOG)
 		{
-			if (m_CatSendSession != m_CatSession)
+			if (m_CatSendSession != m_CatSession || m_CatSendConn != m_CatConn)
 			{
 				return;
 			}
@@ -987,7 +1005,10 @@ class DSBX_Peer : Managed
 				OnChannelPError(0, false);
 				return;
 			}
-			bool isNewSession = m_CatSession != resp.session;
+			// Cada hello aceptado abre una presentacion nueva (conn nueva). El backend descarta el catalogo a
+			// medias y tambien el completo (C-03 y D4/A1), asi que se vuelve a subir entero aunque la sesion
+			// sea la misma, como tras perder el lease (T4 917bc73).
+			bool isNewCatPresentation = m_CatSession != resp.session || m_CatConn != resp.conn;
 			m_Session = resp.session;
 			m_Conn = resp.conn;
 			m_LeaseMs = resp.lease_ms;
@@ -997,9 +1018,10 @@ class DSBX_Peer : Managed
 			m_HasLastOkPoll = true;
 			m_FailCountP = 0;
 			m_HelloTooLargeLogged = false;
-			if (!m_IsClient && isNewSession)
+			if (!m_IsClient && isNewCatPresentation)
 			{
 				m_CatSession = resp.session;
+				m_CatConn = resp.conn;
 				m_CatPageIdx = 0;
 				m_CatFailures = 0;
 				m_CatNextTryMs = 0.0;
@@ -1066,7 +1088,7 @@ class DSBX_Peer : Managed
 		}
 		if (kind == DSBX_Const.KIND_CATALOG)
 		{
-			if (m_CatSendSession != m_CatSession)
+			if (m_CatSendSession != m_CatSession || m_CatSendConn != m_CatConn)
 			{
 				return;
 			}
@@ -1172,6 +1194,41 @@ class DSBX_Peer : Managed
 		StartOrderExecution(entry);
 	}
 
+	int GetWorldSize()
+	{
+		return m_WorldSize;
+	}
+
+	int GetWireCap()
+	{
+		return m_WireCap;
+	}
+
+	int GetTickFrame()
+	{
+		return m_TickFrame;
+	}
+
+	string GetGuardFailReason()
+	{
+		return m_GuardFailReason;
+	}
+
+	void ActivateEntry(DSBX_CacheEntry entry)
+	{
+		m_ActiveEntry = entry;
+		m_KeepaliveNextMs = NowMs() + m_KeepaliveMs;
+	}
+
+	void CompleteActiveEntry(DSBX_CacheEntry entry, string status, string reason, string readJson)
+	{
+		if (m_ActiveEntry == entry)
+		{
+			m_ActiveEntry = null;
+		}
+		FinishEntry(entry, status, reason, readJson);
+	}
+
 	void StartOrderExecution(DSBX_CacheEntry entry)
 	{
 		if (m_IsClient || !m_World)
@@ -1182,7 +1239,20 @@ class DSBX_Peer : Managed
 		string verb = entry.m_Order.verb;
 		if (verb == "state.read")
 		{
-			FinishEntry(entry, "done", "", DSBX_Wire.WorldReadJson(m_World));
+			FinishEntry(entry, "done", "", DSBX_Wire.WorldReadJson(m_World, m_Scene, entry.m_Order.args));
+			return;
+		}
+		if (entry.m_Order.args && entry.m_Order.args.f2 == 1)
+		{
+			if (verb == "scene.apply" || verb == "scene.reset" || verb == "scene.observe")
+			{
+				if (m_SceneOps)
+				{
+					m_SceneOps.StartOrder(this, entry);
+					return;
+				}
+			}
+			FinishEntry(entry, "rejected", "unknown_verb", "{}");
 			return;
 		}
 		if (verb != "scene.apply")
@@ -1274,8 +1344,17 @@ class DSBX_Peer : Managed
 
 	void AdvanceExecution()
 	{
+		m_TickFrame = m_TickFrame + 1;
 		if (!m_ActiveEntry)
 		{
+			return;
+		}
+		if (m_ActiveEntry.m_Order && m_ActiveEntry.m_Order.args && m_ActiveEntry.m_Order.args.f2 == 1)
+		{
+			if (m_SceneOps)
+			{
+				m_SceneOps.AdvanceTick(this);
+			}
 			return;
 		}
 		if (m_ActiveEntry.m_StepsDone == 0)
@@ -1497,10 +1576,22 @@ class DSBX_Peer : Managed
 			int rc = Send(DSBX_Const.CH_R, "result?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&session=" + m_Session, body);
 			if (rc == -2)
 			{
-				entry.m_Status = "error";
+				string rtlStatus = "error";
+				if (entry.m_Order && entry.m_Order.args && entry.m_Order.args.f2 == 1)
+				{
+					if (entry.m_Order.verb == "scene.observe")
+					{
+						rtlStatus = "rejected";
+					}
+					else if ((entry.m_Order.verb == "scene.apply" || entry.m_Order.verb == "scene.reset") && entry.m_StepsDone == 0)
+					{
+						rtlStatus = "rejected";
+					}
+				}
+				entry.m_Status = rtlStatus;
 				entry.m_Reason = "result_too_large";
 				entry.m_ReadJson = "{}";
-				string subBody = DSBX_Wire.ResultTooLargeBody(entry.m_Order.op_id, entry.m_Order.session, entry.m_Order.epoch, entry.m_SendDup);
+				string subBody = DSBX_Wire.ResultBody(entry.m_Order.op_id, entry.m_Order.session, entry.m_Order.epoch, rtlStatus, "result_too_large", entry.m_SendDup, "{}");
 				m_NextKindR = DSBX_Const.KIND_RESULT;
 				rc = Send(DSBX_Const.CH_R, "result?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&session=" + m_Session, subBody);
 			}
@@ -1524,6 +1615,7 @@ class DSBX_Peer : Managed
 			string pageBody = m_Catalog.GetPage(m_CatPageIdx);
 			m_NextKindR = DSBX_Const.KIND_CATALOG;
 			m_CatSendSession = m_CatSession;
+			m_CatSendConn = m_CatConn;
 			int catRc = Send(DSBX_Const.CH_R, "catalog?" + KeyQuery() + "&peer=" + m_Role + "&inst=" + m_Inst + "&session=" + m_Session, pageBody);
 			if (catRc != 0)
 			{

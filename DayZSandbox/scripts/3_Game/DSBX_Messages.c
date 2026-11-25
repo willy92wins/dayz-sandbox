@@ -17,11 +17,36 @@ class DSBX_HelloResp
 	int wire_cap;
 }
 
+class DSBX_Caps
+{
+	int objeto;
+	int infectado;
+	int animal;
+	int total;
+}
+
+class DSBX_IfPending
+{
+	string session;
+	string op_id;
+}
+
 class DSBX_Args
 {
+	int f2;
 	string doc_id;
 	int rev;
 	string hash;
+	string plan_sha256;
+	ref DSBX_Caps caps;
+	ref array<string> classes;
+	ref array<string> lid;
+	ref array<int> ci;
+	ref array<int> x_mm;
+	ref array<int> z_mm;
+	ref array<int> yaw_mdeg;
+	ref DSBX_IfPending if_pending;
+	string at;
 }
 
 class DSBX_Order
