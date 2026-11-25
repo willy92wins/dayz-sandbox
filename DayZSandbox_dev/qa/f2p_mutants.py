@@ -11425,16 +11425,54 @@ def _t4r_p5_object_inside_p1(c: dict[str, Any]) -> None:
     _add_row(c, "P5:post_apply", _t4r_extra_row(c, "1:998", 6150.0, 7650.0))
 
 
+def _t4r_retain_p3_creature(c: dict[str, Any], net: str) -> None:
+    """Hace que la criatura `net` de doc1 sea la única propia retenida con un ajeno dentro: mueve el
+    ajeno `1:238` (Apple, `foreign_in_container`) bajo `net` en `P3:pre_reset` y `P3:post_reset1`,
+    quita `1:217` de `P3:post_reset1` (ya no tiene ajeno) y copia la criatura de `P3:pre_reset` a
+    `P3:post_reset1`. Así `retained_set2` la exige tras el segundo reset y `second_reset_diff` la
+    sigue como identidad propia."""
+    for tag in ("P3:pre_reset", "P3:post_reset1"):
+        _mutate_row(c, tag, lambda r: str(r.get("net_id")) == "1:238",
+                    lambda r: r.__setitem__("parent_net_id", net))
+    _remove_row(c, "P3:post_reset1", lambda r: str(r.get("net_id")) == "1:217")
+    rows = _r2_rows(c, "P3:pre_reset")
+    row = next((r for r in rows if str(r.get("net_id")) == net), None)
+    assert row is not None, f"sin la criatura {net} en P3:pre_reset"
+    _add_row(c, "P3:post_reset1", copy.deepcopy(row))
+
+
+def _t4r_p3_creature_missing_post_reset2(c: dict[str, Any]) -> None:
+    """H11: la criatura de doc1 `1:231` (Animal_CervusElaphus) es la propia retenida tras el primer
+    reset y falta de `P3:post_reset2` sin que ningún componente cubra su disco de incertidumbre.
+    F2P-05 da FALLA por `retained_set2`, pero la ausencia va a `gaps` (`coverage_gap`): el detalle
+    NO incluye `second_reset_diff:1:231` entre los FALLA."""
+    _t4r_retain_p3_creature(c, "1:231")
+
+
+def _t4r_p3_creature_missing_post_reset2_covered(c: dict[str, Any]) -> None:
+    """Control de H11: la misma ausencia, pero Δt pequeño y el disco principal cubre el disco de
+    incertidumbre. `second_reset_diff:1:231` sí está entre los FALLA."""
+    _t4r_retain_p3_creature(c, "1:231")
+    _t4r_set_snap(c, "P3:post_reset2", 383100.0)
+
+
 T4R_POSITIVES: dict[str, dict[str, Any]] = {
+    "t4r_p5_object_outside_p1": {"apply": _t4r_p5_object_outside_p1},
+}
+
+T4R_INCONCLUSO: dict[str, dict[str, Any]] = {
     "t4r_p3_creature_coverage_gap": {"apply": _t4r_p3_creature_coverage_gap},
     "t4r_p4a_apply2_coverage_gap": {"apply": _t4r_p4a_apply2_coverage_gap},
-    "t4r_p5_object_outside_p1": {"apply": _t4r_p5_object_outside_p1},
 }
 
 T4R_NEGATIVES: dict[str, dict[str, Any]] = {
     "t4r_p3_creature_covered": {"apply": _t4r_p3_creature_covered, "expected_exit_code": 1},
     "t4r_p4a_apply2_covered": {"apply": _t4r_p4a_apply2_covered, "expected_exit_code": 1},
     "t4r_p5_object_inside_p1": {"apply": _t4r_p5_object_inside_p1, "expected_exit_code": 1},
+    "t4r_p3_creature_missing_post_reset2": {
+        "apply": _t4r_p3_creature_missing_post_reset2, "expected_exit_code": 1},
+    "t4r_p3_creature_missing_post_reset2_covered": {
+        "apply": _t4r_p3_creature_missing_post_reset2_covered, "expected_exit_code": 1},
 }
 
 
@@ -11594,7 +11632,7 @@ def mutate(campaign: dict[str, Any], name: str) -> dict[str, Any]:
             SOL_NEGATIVES_R15.get(name) or SOL_POSITIVES_R15.get(name) or
             ID_POSITIVES.get(name) or ID_NEGATIVES.get(name) or
             R2_POSITIVES.get(name) or R2_NEGATIVES.get(name) or
-            T4R_POSITIVES.get(name) or T4R_NEGATIVES.get(name))
+            T4R_POSITIVES.get(name) or T4R_NEGATIVES.get(name) or T4R_INCONCLUSO.get(name))
     if spec is None:
         raise KeyError(name)
     spec["apply"](c)

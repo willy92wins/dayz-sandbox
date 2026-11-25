@@ -1744,6 +1744,36 @@ class TestF2POracleOffline(unittest.TestCase):
         self.assertTrue(str(c_map["F2P-09"]["detail"]).startswith("extras:"),
                         msg=c_map["F2P-09"])
 
+    def test_t4r_f2p05_second_reset_creature_missing_not_fail(self) -> None:
+        # H11: una criatura de doc1 (`1:231`) es la propia retenida tras el primer reset y falta de
+        # P3:post_reset2 sin que ningún componente cubra su disco de incertidumbre. F2P-05 da FALLA
+        # por retained_set2, pero el detalle NO incluye `second_reset_diff:1:231` entre los FALLA:
+        # la ausencia queda en `gaps` como coverage_gap. Deshacer esa regla en second_reset_diff (o
+        # el evaluador de 7980132) mete la identidad en los FALLA y este test falla por aserción.
+        campaign = f2p_mutants.mutate(_load_fixture(), "t4r_p3_creature_missing_post_reset2")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "t4r_h11"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 1, msg=json.dumps(v, indent=2))
+        c_map = _checks(v)
+        self.assertEqual(c_map["F2P-05"]["status"], "fail", msg=c_map["F2P-05"])
+        fail_details = [str(c["detail"]) for c in v["checks"] if c["status"] == "fail"]
+        self.assertFalse(any("second_reset_diff:1:231" in d for d in fail_details),
+                         msg=fail_details)
+
+    def test_t4r_f2p05_second_reset_creature_missing_covered_fails(self) -> None:
+        # Control de H11: la misma ausencia, con Δt pequeño y el disco principal cubriendo el disco
+        # de incertidumbre. La regla deja el FALLA `second_reset_diff:1:231` (también con 7980132 y
+        # con el mutante).
+        campaign = f2p_mutants.mutate(_load_fixture(),
+                                      "t4r_p3_creature_missing_post_reset2_covered")
+        with tempfile.TemporaryDirectory() as tmp:
+            v = f2p_eval.evaluate(_build(campaign, Path(tmp) / "t4r_h11n"), repo_root=REPO_ROOT)
+        self.assertEqual(v["exit_code"], 1, msg=json.dumps(v, indent=2))
+        c_map = _checks(v)
+        self.assertEqual(c_map["F2P-05"]["status"], "fail", msg=c_map["F2P-05"])
+        self.assertIn("second_reset_diff:1:231", str(c_map["F2P-05"]["detail"]),
+                      msg=c_map["F2P-05"])
+
     def test_t4r_reevaluated_identity_accepts_7980132(self) -> None:
         # La identidad grabada de 7980132 se acepta solo con el sha256 de su manifest en la lista
         # fijada. El veredicto dice de dónde y con qué commit se re-evaluó.
