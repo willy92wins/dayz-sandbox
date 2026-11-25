@@ -9,8 +9,10 @@ import math
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 QA_DIR = Path(__file__).resolve().parents[1]
@@ -217,7 +219,19 @@ class _SyntheticPartBuilder:
         new_epoch_tick0_ms: float = 200.0,
         old_keepalive_after_stop: bool = True,
         t5_radius_m: float = 60.0,
+        baseline_sentinel_glove: bool = False,
+        purge_returning: tuple[str, ...] | None = None,
+        purge_hook: Any = None,
+        t0_players_n: tuple[int, ...] = (1,),
     ) -> None:
+        # O2 (brief, secciones finales): un guante basal de clase centinela en el director desde t0 (arbitraje 6), las
+        # prendas QA que vuelven con el personaje tras el reinicio (por defecto los dos guantes), un gancho que puede
+        # cambiar el plan de la purga antes de emitirla y la secuencia de `players_n` de los `per_status` de t0.
+        self.baseline_sentinel_glove = baseline_sentinel_glove
+        self.purge_returning = purge_returning
+        self.purge_hook = purge_hook
+        self.t0_players_n = t0_players_n
+        self.purge_plan: dict[str, Any] = {}
         self.t2_hold_ms = t2_hold_ms
         # N49: hueco del bridge entre el keepalive viejo y el hello nuevo, tick_ms del peer nuevo en su hello
         # (tiempo desde el arranque del proceso) y keepalive del peer viejo tras su ultima lectura.
@@ -288,6 +302,7 @@ class _SyntheticPartBuilder:
         status: str = "done",
         reason: str = "",
         op_id: str | None = None,
+        enq_inst: str | None = None,
     ) -> str:
         oid = op_id or self._next_op_id()
         recv_ms = self.tick_ms
@@ -298,7 +313,7 @@ class _SyntheticPartBuilder:
         frame_done = self.frame
         t_done = self.h_ms
 
-        self.bridge_events.append({
+        enq_ev: dict[str, Any] = {
             "ev": "enq",
             "peer": peer,
             "op_id": oid,
@@ -306,7 +321,11 @@ class _SyntheticPartBuilder:
             "args": args,
             "h_ms": recv_ms,
             "t_ms": t_recv,
-        })
+        }
+        if enq_inst is not None:
+            # como el puente real (bridge_qa.enqueue): el `enq` lleva el `inst` destino (`target_inst`)
+            enq_ev["inst"] = enq_inst
+        self.bridge_events.append(enq_ev)
         self.bridge_events.append({
             "ev": "poll",
             "peer": peer,
@@ -406,8 +425,12 @@ class _SyntheticPartBuilder:
         if stage == "contention_probe":
             area_tag = f"contention_probe:{area_id}"
         radius_m = self.t5_radius_m if stage == "t5_post_restart_census" or area_id.startswith("t5_track_") else 60.0
+        census_strings = {"area_tag": area_tag}
+        if include_director_b == 1:
+            # brief, ronda 2 (`:533`): el censo con el director lleva su uid explicito
+            census_strings["director_uid"] = self.director_uid
         in_args = self._pack_ext_args(
-            strings={"area_tag": area_tag},
+            strings=census_strings,
             numbers={
                 "center_x_m": center_x,
                 "center_z_m": center_z,
@@ -541,6 +564,223 @@ class _SyntheticPartBuilder:
         self._emit_op("server", inst, "job_free", jf_args, jf_read)
         return job_id
 
+    # Columnas de las filas del trabajo `per_purge_start` (brief, ronda 2 `:568` y arbitraje 4: `net_id` y
+    # `parent_net_id` del epoch nuevo; aclaracion, punto 2: `confirm_tick_ms` al final de `ncol`).
+    PURGE_SCOL = ["phase", "pers_id", "class_name", "parent_pers_id", "owner_uid", "result", "net_id", "parent_net_id"]
+    PURGE_NCOL = ["depth_n", "emit_tick_ms", "lease_age_ms", "lease_limit_ms", "max_hp", "health_hp", "confirm_tick_ms"]
+    PURGE_PAGE_SIZE = 8
+
+    def purge_row(
+        self,
+        phase: str,
+        ent: dict[str, Any],
+        *,
+        result: str = "",
+        emit_tick_ms: float = 0.0,
+        lease_age_ms: float = 0.0,
+        lease_limit_ms: float = 0.0,
+        confirm_tick_ms: float = 0.0,
+    ) -> dict[str, Any]:
+        """Una fila del trabajo de purga para la entidad ``ent`` del arbol del director (claves de ``plan["tree"]``)."""
+        return {
+            "phase": phase,
+            "pers_id": ent["pers_id"],
+            "class_name": ent["class_name"],
+            "parent_pers_id": ent.get("parent_pers_id", ""),
+            "owner_uid": ent.get("owner_uid", self.director_uid),
+            "result": result,
+            "net_id": ent.get("net_id", ""),
+            "parent_net_id": ent.get("parent_net_id", ""),
+            "depth_n": float(ent.get("depth_n", 0.0)),
+            "emit_tick_ms": float(emit_tick_ms),
+            "lease_age_ms": float(lease_age_ms),
+            "lease_limit_ms": float(lease_limit_ms),
+            "max_hp": float(ent.get("max_hp", 100.0)),
+            "health_hp": float(ent.get("health_hp", 100.0)),
+            "confirm_tick_ms": float(confirm_tick_ms),
+        }
+
+    def honest_purge_rows(self, plan: dict[str, Any]) -> list[dict[str, Any]]:
+        """Filas honestas: el arbol previo (`pre`) y, por cada autorizado en orden, su baja (`emit`, con la guarda E1
+        del momento) y su `result` en un tick posterior; `absent` si no esta, `ambiguous` si esta mas de una vez,
+        `retained_foreign` si su arbol tiene algo no autorizado. O3 (aclaracion, punto 2): el `deleted` lleva en
+        `confirm_tick_ms` el tick en que se confirmo, posterior a su `emit_tick_ms`; las demas filas, `0`."""
+        tree = plan["tree"]
+        rows = [self.purge_row("pre", ent) for ent in tree]
+        authorized = {r["pers_id"] for r in plan["order_rows"]}
+        tick = plan["start_tick_ms"]
+        for orow in plan["order_rows"]:
+            matches = [ent for ent in tree if ent["pers_id"] == orow["pers_id"]]
+            if not matches:
+                rows.append(self.purge_row("result", {"pers_id": orow["pers_id"], "class_name": orow["class_name"]}, result="absent"))
+                continue
+            if len(matches) > 1:
+                rows.append(self.purge_row("result", matches[0], result="ambiguous"))
+                continue
+            ent = matches[0]
+            subtree = [e for e in tree if e.get("parent_net_id") == ent["net_id"]]
+            if any(e["pers_id"] not in authorized for e in subtree):
+                rows.append(self.purge_row("result", ent, result="retained_foreign"))
+                continue
+            tick += 50.0
+            rows.append(self.purge_row(
+                "emit", ent, emit_tick_ms=tick, lease_age_ms=plan["lease_age_ms"], lease_limit_ms=plan["lease_limit_ms"],
+            ))
+            tick += 50.0
+            rows.append(self.purge_row("result", ent, result="deleted", confirm_tick_ms=tick))
+        return rows
+
+    def _purge_job_read(self, job_id: str, state: str, reason: str, rows: list[dict[str, Any]], page: int,
+                        start_tick: float, end_tick: float, enq_inst: str | None) -> None:
+        ps = self.PURGE_PAGE_SIZE
+        pages_n = (len(rows) + ps - 1) // ps if rows else 0
+        chunk = rows[page * ps:(page + 1) * ps]
+        self._emit_op(
+            "server",
+            self.server_epoch_new,
+            "job_read",
+            self._pack_ext_args(strings={"job": job_id}, numbers={"page_n": float(page)}),
+            self._pack_ext_read(
+                strings={"job": job_id, "state": state, "reason": reason, "resource": "per_purge"},
+                numbers={
+                    "page_n": float(page),
+                    "pages_n": float(pages_n),
+                    "rows_total_n": float(len(rows)),
+                    "start_tick_ms": start_tick,
+                    "end_tick_ms": end_tick,
+                    "onjobend_tick_ms": end_tick,
+                    "released_tick_ms": end_tick,
+                    "elapsed_dtsum_ms": max(0.0, end_tick - start_tick),
+                },
+                ncol=self.PURGE_NCOL,
+                scol=self.PURGE_SCOL,
+                rows=chunk,
+            ),
+            enq_inst=enq_inst,
+        )
+
+    def _emit_runner_purge(self) -> None:
+        """t4 del runner (brief, ronda 2 `:570-574`, arbitraje 1, 4, 5 y 7): orden con las acreditadas, acuse con
+        `pre_n`, sondeo de `job_read` (pagina 0) hasta un estado terminal, todas las paginas una a una con
+        `target_inst` = epoch nuevo, y `job_free`. Las prendas QA que vuelven con el personaje (mismo `pers_id`,
+        `net_id` nuevo) aparecen en `pre` y se borran; despues faltan en t5."""
+        epoch = self.server_epoch_new
+        acc_lids = ["ac_act_1_gloves_dir", "b_act_1_gloves_dir"]
+        jeans = self.baseline_dir_rows[0]
+        tree: list[dict[str, Any]] = []
+        for row in self.baseline_dir_rows:
+            tree.append({
+                "pers_id": row["pers_id"],
+                "class_name": row["class_name"],
+                "net_id": row["net_id"],
+                "parent_net_id": row["parent_net_id"],
+                "parent_pers_id": jeans["pers_id"] if row["parent_net_id"] == jeans["net_id"] else "",
+                "depth_n": 1.0 if row["parent_net_id"] == jeans["net_id"] else 0.0,
+                "owner_uid": self.director_uid,
+            })
+        returning = acc_lids if self.purge_returning is None else list(self.purge_returning)
+        for lid in returning:
+            ent = self.entities_by_lid[lid]
+            tree.append({
+                "pers_id": ent["pers_id"],
+                "class_name": ent["class_name"],
+                "net_id": self._alloc_net_id(),
+                "parent_net_id": jeans["net_id"],
+                "parent_pers_id": jeans["pers_id"],
+                "depth_n": 1.0,
+                "owner_uid": self.director_uid,
+                "logical_id": lid,
+            })
+        self._advance(100.0, 3)
+        plan: dict[str, Any] = {
+            "send_order": True,
+            "order_strings": {"director_uid": self.director_uid, "expect_epoch": epoch},
+            "order_rows": [
+                {"pers_id": self.entities_by_lid[lid]["pers_id"], "class_name": self.entities_by_lid[lid]["class_name"]}
+                for lid in acc_lids
+            ],
+            "order_status": "done",
+            "order_reason": "",
+            "tree": tree,
+            "rows": None,
+            "state": "done",
+            "reason": "ok",
+            "pre_n": None,
+            "lease_age_ms": 400.0,
+            "lease_limit_ms": 3000.0,
+            "enq_inst": epoch,
+            "start_tick_ms": self.tick_ms,
+            "end_tick_ms": None,
+            "running_poll": True,
+            "read_pages": True,
+            "job_free": True,
+            "authorized_rows": None,
+        }
+        if self.purge_hook is not None:
+            self.purge_hook(self, plan)
+        self.purge_plan = plan
+        rows = plan["rows"] if plan["rows"] is not None else self.honest_purge_rows(plan)
+        plan["final_rows"] = rows
+        self.scenario_events.append({
+            "ev": "purge_authorized",
+            "director_uid": self.director_uid,
+            "rows": plan["authorized_rows"] if plan["authorized_rows"] is not None else [
+                {
+                    "pers_id": orow["pers_id"],
+                    "logical_id": lid,
+                    "net_id": self.entities_by_lid[lid]["net_id"],
+                    "censuses": ["t1_post_transition_census", "t3_pre_reset_census"]
+                    + (["t3_post_reset_census"] if lid.startswith("b_") else []),
+                }
+                for lid, orow in zip(acc_lids, plan["order_rows"])
+            ],
+        })
+        if not plan["send_order"]:
+            return
+        job_id = self._next_op_id()
+        pre_rows = [r for r in rows if r["phase"] == "pre"]
+        start_tick = self.tick_ms
+        self._emit_op(
+            "server",
+            epoch,
+            "per_purge_start",
+            self._pack_ext_args(strings=plan["order_strings"], ncol=[], scol=["pers_id", "class_name"], rows=plan["order_rows"]),
+            self._pack_ext_read(
+                strings={"job": job_id, "state": "running", "resource": "per_purge"},
+                numbers={"pre_n": float(len(pre_rows) if plan["pre_n"] is None else plan["pre_n"])},
+            ),
+            status=plan["order_status"],
+            reason=plan["order_reason"],
+            op_id=job_id,
+            enq_inst=plan["enq_inst"],
+        )
+        if plan["order_status"] != "done":
+            return
+        if plan["running_poll"]:
+            self._purge_job_read(job_id, "running", "", pre_rows, 0, start_tick, 0.0, plan["enq_inst"])
+        steps = sum(1 for r in rows if r["phase"] in ("emit", "result"))
+        self._advance(50.0 * (steps + 1), 3)
+        end_tick = self.tick_ms if plan["end_tick_ms"] is None else float(plan["end_tick_ms"])
+        state = plan["state"]
+        if state not in ("done", "failed", "stopped", "expired"):
+            # el trabajo sigue vivo al vencer la espera: el sondeo solo ve la pagina 0 en `running`
+            self._purge_job_read(job_id, state, "", rows, 0, start_tick, 0.0, plan["enq_inst"])
+            return
+        self._purge_job_read(job_id, state, plan["reason"], rows, 0, start_tick, end_tick, plan["enq_inst"])
+        if plan["read_pages"]:
+            pages_n = (len(rows) + self.PURGE_PAGE_SIZE - 1) // self.PURGE_PAGE_SIZE if rows else 1
+            for page in range(pages_n):
+                self._purge_job_read(job_id, state, plan["reason"], rows, page, start_tick, end_tick, plan["enq_inst"])
+        if plan["job_free"]:
+            self._emit_op(
+                "server",
+                epoch,
+                "job_free",
+                self._pack_ext_args(strings={"job": job_id}),
+                self._pack_ext_read(strings={"job": job_id, "freed": "1", "resource": "per_purge"}),
+                enq_inst=plan["enq_inst"],
+            )
+
     def build_into(self, part_dir: Path) -> Path:
         part_dir.mkdir(parents=True, exist_ok=True)
         samples_dir = part_dir / "samples"
@@ -611,29 +851,33 @@ class _SyntheticPartBuilder:
             "t_ms": 110.0,
         })
 
-        # Initial per_status
-        self._emit_op(
-            "server",
-            self.server_epoch_old,
-            "per_status",
-            self._pack_ext_args(),
-            self._pack_ext_read(
-                strings={"server_epoch": self.server_epoch_old, "director_uid": self.director_uid},
-                numbers={
-                    "tick_ms": self.tick_ms,
-                    "frame": float(self.frame),
-                    "registered_total_n": 0.0,
-                    "scenes_count_n": 0.0,
-                    "director_present_b": 1.0,
-                    "director_alive_b": 1.0,
-                    "director_inv_readable_b": 1.0,
-                    "director_inv_count_n": 2.0,
-                },
-                ncol=["gen_n", "own_alive_n"],
-                scol=["scene_id", "last_op_id"],
-                rows=[],
-            ),
-        )
+        # Initial per_status (brief, ronda 2 `:531` y arbitraje 8): en t0 va sin `director_uid` y la salida trae
+        # `players_n`; solo con un jugador listo trae su uid y su estado. Con cero se sigue esperando.
+        for t0_pn in self.t0_players_n:
+            one = t0_pn == 1
+            self._emit_op(
+                "server",
+                self.server_epoch_old,
+                "per_status",
+                self._pack_ext_args(strings={"director_uid": ""}),
+                self._pack_ext_read(
+                    strings={"server_epoch": self.server_epoch_old, "director_uid": self.director_uid if one else ""},
+                    numbers={
+                        "tick_ms": self.tick_ms,
+                        "frame": float(self.frame),
+                        "registered_total_n": 0.0,
+                        "scenes_count_n": 0.0,
+                        "players_n": float(t0_pn),
+                        "director_present_b": 1.0 if one else 0.0,
+                        "director_alive_b": 1.0 if one else 0.0,
+                        "director_inv_readable_b": 1.0 if one else 0.0,
+                        "director_inv_count_n": (3.0 if self.baseline_sentinel_glove else 2.0) if one else 0.0,
+                    },
+                    ncol=["gen_n", "own_alive_n"],
+                    scol=["scene_id", "last_op_id"],
+                    rows=[],
+                ),
+            )
 
         # Baseline director foreign items (non-sentinel)
         dir_jeans_row = {
@@ -687,6 +931,19 @@ class _SyntheticPartBuilder:
             "spawn_tick_ms": 500.0,
         }
         baseline_dir_rows = [dir_jeans_row, dir_apple_row]
+        if self.baseline_sentinel_glove:
+            # arbitraje 6: unos guantes vanilla de la misma clase que los de scene_a_clean, puestos desde t0
+            baseline_dir_rows.append({
+                **copy.deepcopy(dir_jeans_row),
+                "class_name": "WorkingGloves_Beige",
+                "slot_name": "Gloves",
+                "net_id": "1:12",
+                "pers_id": self._alloc_pers_id(),
+                "max_hp": 100.0,
+                "health_hp": 100.0,
+                "inv_children_n": 0.0,
+            })
+        self.baseline_dir_rows = baseline_dir_rows
 
         for aid in base_areas:
             ainfo = self.fixture["areas"][aid]
@@ -701,10 +958,17 @@ class _SyntheticPartBuilder:
                 include_director_b=inc_d,
                 contention_probe=(aid == "area_a"),
             )
+        sentinel_set = set(self.fixture["sentinel_classes"])
         self.scenario_events.append({
             "ev": "baseline_director_foreign",
             "director_uid": self.director_uid,
-            "rows": copy.deepcopy(baseline_dir_rows),
+            "rows": copy.deepcopy([r for r in baseline_dir_rows if r["class_name"] not in sentinel_set]),
+        })
+        # brief, ronda 2 (`:537`): el basal es completo; las filas de clase centinela del director van aparte
+        self.scenario_events.append({
+            "ev": "baseline_director_sentinel",
+            "director_uid": self.director_uid,
+            "rows": copy.deepcopy([r for r in baseline_dir_rows if r["class_name"] in sentinel_set]),
         })
 
         # t1: ledger_entry, ground_query, per_apply_scene, per_spawn_raw
@@ -1217,16 +1481,17 @@ class _SyntheticPartBuilder:
                 ent["slot_name"] = "Cargo:0:0:0"
                 ent["owner_uid"] = ""
 
-            t_args = self._pack_ext_args(
-                strings={
-                    "scene_id": sc_id,
-                    "logical_id": lid,
-                    "action": act,
-                    "expect_epoch": self.server_epoch_old,
-                    "target_scene_id": tgt_sc,
-                    "target_parent_id": tgt_pid,
-                }
-            )
+            t_strings = {
+                "scene_id": sc_id,
+                "logical_id": lid,
+                "action": act,
+                "expect_epoch": self.server_epoch_old,
+                "target_scene_id": tgt_sc,
+                "target_parent_id": tgt_pid,
+            }
+            if act == "move_to_director":
+                t_strings["director_uid"] = self.director_uid
+            t_args = self._pack_ext_args(strings=t_strings)
             t_read = self._pack_ext_read(
                 strings={
                     "transition_status": "ok",
@@ -1439,7 +1704,7 @@ class _SyntheticPartBuilder:
             "server",
             self.server_epoch_old,
             "per_status",
-            self._pack_ext_args(),
+            self._pack_ext_args(strings={"director_uid": self.director_uid}),
             self._pack_ext_read(
                 strings={"server_epoch": self.server_epoch_old, "director_uid": self.director_uid},
                 numbers={
@@ -1491,12 +1756,13 @@ class _SyntheticPartBuilder:
         })
         self._advance(300.0, 5)
 
-        # Primera orden del epoch nuevo: lectura per_status del peer
+        # Primera orden del epoch nuevo: el per_status de la espera, que valida al director (por su uid y con
+        # `target_inst` = epoch nuevo, arbitraje 7)
         self._emit_op(
             "server",
             self.server_epoch_new,
             "per_status",
-            self._pack_ext_args(),
+            self._pack_ext_args(strings={"director_uid": self.director_uid}),
             self._pack_ext_read(
                 strings={"server_epoch": self.server_epoch_new, "director_uid": self.director_uid},
                 numbers={
@@ -1507,13 +1773,18 @@ class _SyntheticPartBuilder:
                     "director_present_b": 1.0,
                     "director_alive_b": 1.0,
                     "director_inv_readable_b": 1.0,
-                    "director_inv_count_n": 2.0,
+                    "director_inv_count_n": float(len(self.baseline_dir_rows)),
                 },
                 ncol=["gen_n", "own_alive_n"],
                 scol=["scene_id", "last_op_id"],
                 rows=[],
             ),
+            enq_inst=self.server_epoch_new,
         )
+
+        # Purga ordenada por el runner (brief, secciones finales): con el director validado y antes del primer censo
+        # t5, la orden con las acreditadas, su trabajo `per_purge_start`, su sondeo, sus paginas y su `job_free`.
+        self._emit_runner_purge()
 
         # Simulate world restart: only c_persistent_control (+ child) and d_prop_leak (if mut-unprotected_leak) survive
         for lid, ent in self.entities_by_lid.items():
@@ -1684,7 +1955,7 @@ class _SyntheticPartBuilder:
                 "server",
                 self.server_epoch_new,
                 "per_status",
-                self._pack_ext_args(),
+                self._pack_ext_args(strings={"director_uid": self.director_uid}),
                 self._pack_ext_read(
                     strings={"server_epoch": self.server_epoch_new, "director_uid": self.director_uid},
                     numbers={
@@ -2494,7 +2765,12 @@ class TestSPersistOracleOffline(unittest.TestCase):
                 verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
                 c_map = _checks_by_id(verdict)
                 self.assertEqual(verdict["exit_code"], 1, msg=f"receipts={with_receipts}")
-                self.assertEqual(_only_non_pass(verdict), {"PER-01": "fail", "PER-09": "fail"}, msg=f"receipts={with_receipts}")
+                # O2 (contrato de la purga, `:542` y arbitraje 3): con el `pers_id` copiado del control los guantes no
+                # se pueden acreditar -> PER-08 `missing` (falta de evidencia), ademas de los dos `fail` de siempre.
+                self.assertEqual(
+                    _only_non_pass(verdict), {"PER-01": "fail", "PER-08": "missing", "PER-09": "fail"}, msg=f"receipts={with_receipts}"
+                )
+                self.assertIn("purge_accredited_unidentified:b_act_1_gloves_dir:pers_id_shared", c_map["PER-08"]["detail"])
                 self.assertIn(f"t1_pers_id_shared_by_distinct_entities:{ctrl_pid}", c_map["PER-01"]["detail"])
                 self.assertIn(f"witness_pers_id_shared_by_distinct_entities:{ctrl_pid}", c_map["PER-09"]["detail"])
         with tempfile.TemporaryDirectory() as tmp:
@@ -2698,9 +2974,14 @@ class TestSPersistOracleOffline(unittest.TestCase):
         ``t5_track_*``.
 
         a) Una prenda QA (``own_b=1``) dentro del director tras la limpieza -> FALLA/PER-09; una prenda de inicio del
-        director sin identidad QA (``BandageDressing`` centinela, vida completa) -> PASA. b) Con el disco t5
-        ``t5_track_b_inf_1_t2``: el ``Fireplace`` del control superviviente en su censo t6 -> FALLA/PER-09; un
-        ``Barrel_Yellow`` del mundo ahi -> PASA; sin su censo t6, o con el censo t6 en otro centro -> INCONCLUSO/PER-09.
+        director sin identidad QA (``BandageDressing`` centinela, vida completa) no es superviviente de la limpieza
+        (PER-09 pasa). b) Con el disco t5 ``t5_track_b_inf_1_t2``: el ``Fireplace`` del control superviviente en su
+        censo t6 -> FALLA/PER-09; un ``Barrel_Yellow`` del mundo ahi -> PASA; sin su censo t6, o con el censo t6 en otro
+        centro -> INCONCLUSO/PER-09.
+        O3 (aclaracion del brief, punto 4: lo observado tras la purga se juzga en cualquier censo posterior, t6 incluido):
+        en a), el guante QA es ademas un remanente por identidad -> PER-08 `fail` (`purge_remnant`); y la venda, de clase
+        centinela y con un `pers_id` que no es del basal ni de una prenda acreditada, es una centinela sin atribuir ->
+        PER-08 `missing` (`:588`), aunque PER-09 siga pasando.
         """
         disc = "t5_track_b_inf_1_t2"
         for name in ("qa_garment_in_director", "director_start_item", "qa_survivor_in_track_disc",
@@ -2709,19 +2990,22 @@ class TestSPersistOracleOffline(unittest.TestCase):
                 builder = _SyntheticPartBuilder("run", creature_far_move_m=75.0, include_t5_track_disks=True)
                 part_dir = builder.build_into(Path(tmp) / name)
                 needle = ""
+                per08_needle = ""
                 if name == "qa_garment_in_director":
                     gloves = dict(builder.entities_by_lid["b_act_1_gloves_dir"], alive_b=1.0)
                     self.assertEqual(gloves["owner_uid"], builder.director_uid)
                     self._add_t6_rows(part_dir, builder, "area_a", [gloves])
-                    expected = {"PER-09": "fail"}
+                    expected = {"PER-08": "fail", "PER-09": "fail"}
                     needle = f"t6_cleanup_survivors:WorkingGloves_Yellow:{gloves['net_id']}"
+                    per08_needle = "purge_remnant:b_act_1_gloves_dir"
                 elif name == "director_start_item":
                     self._add_t6_rows(part_dir, builder, "area_a", [self._t6_row(
                         class_name="BandageDressing", loc_kind="cargo", parent_class="Jeans_Blue", parent_net_id="1:10",
                         slot_name="Cargo:0:2:0", owner_uid=builder.director_uid, net_id="1:8020", ai_agent_b=0.0,
                         pers_id="1357924680:-1357924680:24681357:-97531", max_hp=50.0, health_hp=50.0,
                     )])
-                    expected = {}
+                    expected = {"PER-08": "missing"}
+                    per08_needle = "director_sentinel_unattributable:BandageDressing"
                 elif name == "qa_survivor_in_track_disc":
                     fp = dict(builder.entities_by_lid["c_persistent_control_child"], alive_b=1.0, loc_kind="ground",
                               parent_class="", parent_net_id="", slot_name="")
@@ -2747,9 +3031,12 @@ class TestSPersistOracleOffline(unittest.TestCase):
                     needle = f"t6_cleanup_census_absent:{disc}"
                 verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
                 self.assertEqual(_only_non_pass(verdict), expected, msg=name)
-                self.assertEqual(verdict["exit_code"], {"fail": 1, "missing": 2}.get(expected.get("PER-09", ""), 0), msg=name)
+                statuses = set(expected.values())
+                self.assertEqual(verdict["exit_code"], 1 if "fail" in statuses else (2 if statuses else 0), msg=name)
                 if needle:
                     self.assertIn(needle, _checks_by_id(verdict)["PER-09"]["detail"], msg=name)
+                if per08_needle:
+                    self.assertIn(per08_needle, _checks_by_id(verdict)["PER-08"]["detail"], msg=name)
 
     def test_neg_foreign_pose_without_before_and_after_or_altered_pose(self) -> None:
         # Case A: missing t3_pre_reset_census
@@ -3213,12 +3500,17 @@ class TestSPersistOracleOffline(unittest.TestCase):
                 "op-prep-status", "per_status", wire.pack_payload(), now_box[0]
             )
             peer._start_op(prep_status_op, now_box[0], time.monotonic(), prep_results)
+            # Ronda 2 de la enmienda (`brief:529-535`): el runner toma el `director_uid` del `per_status` de t0 y lo
+            # pasa explicito; un censo con `include_director_b = 1` sin el se rechaza con `rejected/bad_args`
+            # (arreglo del orquestador, 22-nov).
+            prep_status_s, _, _ = _unpack(next(r for r in prep_results if r["op_id"] == "op-prep-status")["read"])
+            prep_director_uid = prep_status_s.get("director_uid", "")
 
             prep_census_op = _make_valid_op(
                 "op-prep-census",
                 "per_census_start",
                 wire.pack_payload(
-                    scalars_str={"area_tag": "t1_pre_transition_census:area_a"},
+                    scalars_str={"area_tag": "t1_pre_transition_census:area_a", "director_uid": prep_director_uid},
                     scalars_num={
                         "center_x_m": 4500.0,
                         "center_z_m": 10200.0,
@@ -5285,6 +5577,2909 @@ class TestSPersistOracleOffline(unittest.TestCase):
             })
             _write_events(part_dir, events)
             self._n49_expect_unaccredited(part_dir, "sol3_08")
+
+    # =========================================================================
+    # E9: enmienda del oraculo. (A) PER-09 sin FALLA falso por causa tecnica del director o de un censo t5;
+    # (B) PER-07/PER-08 exigen el mismo PERSONAJE del director (y un ancla de identidad); (C) purga de arranque
+    # acreditada con `per_purge_read` en PER-08 (brief, enmienda del 2026-11-17).
+    # =========================================================================
+
+    _E9_MUT_FAULTS = {"run": "", "mut-foreign_wiped": "reset_wipe_radius_25m", "mut-unprotected_leak": "omit_nopersistency_flag"}
+
+    def _e9_build(self, tmp: str, part: str = "run", name: str = "p", **kw: Any) -> tuple["_SyntheticPartBuilder", Path]:
+        builder = _SyntheticPartBuilder(part, fault_code=self._E9_MUT_FAULTS[part], **kw)
+        return builder, builder.build_into(Path(tmp) / name)
+
+    @staticmethod
+    def _e9_results(events: list[dict[str, Any]], verb: str, status: str | None = "done") -> Iterable[dict[str, Any]]:
+        """Resultados de bridge del verbo ``verb`` (con ese estado; ``None`` = cualquiera), en orden de evidencia."""
+        for ev in events:
+            if ev.get("ev") == "result":
+                yield from (r for r in ev.get("results") or [] if r.get("verb") == verb and status in (None, r.get("status")))
+
+    @staticmethod
+    def _e9_page(res: dict[str, Any]) -> types.SimpleNamespace:
+        """La lectura empaquetada de ``res`` como un objeto editable: ``.strs``, ``.nums`` y ``.rows``."""
+        strs, nums, rows = _unpack(res["read"])
+        return types.SimpleNamespace(strs=strs, nums=nums, rows=rows)
+
+    @staticmethod
+    def _e9_store(res: dict[str, Any], page: types.SimpleNamespace) -> None:
+        res["read"] = _repack_read(page.strs, page.nums, page.rows, res["read"])
+
+    @staticmethod
+    def _e9_director_rows(page: types.SimpleNamespace, builder: "_SyntheticPartBuilder") -> list[dict[str, Any]]:
+        return [row for row in page.rows if row["owner_uid"] == builder.director_uid]
+
+    def _e9_jobs_of(self, events: list[dict[str, Any]], tags: set[str]) -> dict[str, str]:
+        """``{job_id: area_tag}`` de los censos aceptados cuya etiqueta esta en ``tags``."""
+        pages = (self._e9_page(res) for res in self._e9_results(events, "per_census_start"))
+        return {pg.strs["job"]: pg.strs["area_tag"] for pg in pages if pg.strs.get("area_tag", "") in tags}
+
+    def _e9_edit_start_reads(self, part_dir: Path, tags: set[str], edit: Any) -> None:
+        events = _read_events(part_dir)
+        done = 0
+        for res in self._e9_results(events, "per_census_start"):
+            page = self._e9_page(res)
+            if page.strs.get("area_tag", "") not in tags:
+                continue
+            edit(page)
+            self._e9_store(res, page)
+            done += 1
+        self.assertEqual(done, len(tags), msg=f"census starts edited: {tags}")
+        _write_events(part_dir, events)
+
+    def _e9_edit_pages(self, part_dir: Path, tags: set[str], edit: Any) -> None:
+        events = _read_events(part_dir)
+        jobs = self._e9_jobs_of(events, tags)
+        self.assertEqual(len(jobs), len(tags), msg=f"census jobs found: {tags}")
+        done = 0
+        for res in self._e9_results(events, "job_read"):
+            page = self._e9_page(res)
+            if page.strs.get("job", "") not in jobs:
+                continue
+            edit(page)
+            self._e9_store(res, page)
+            done += 1
+        self.assertTrue(done, msg=f"no census page edited: {tags}")
+        _write_events(part_dir, events)
+
+    def _e9_director_gone(self, part_dir: Path, areas: tuple[str, ...], *, present: int, readable: int) -> None:
+        def edit(page: types.SimpleNamespace) -> None:
+            page.nums.update(director_present_b=float(present), director_alive_b=float(present),
+                             director_inv_readable_b=float(readable))
+            if not present:
+                page.strs["director_uid"] = ""
+
+        self._e9_edit_start_reads(part_dir, {f"t5_post_restart_census:{a}" for a in areas}, edit)
+
+    def _e9_census_down(self, part_dir: Path, tag: str, how: str) -> None:
+        """Cae el censo ``tag`` por causa tecnica: ``failed`` / ``expired`` / ``stopped`` (estado de sus paginas) o
+        ``absent`` (todas sus ordenes desaparecen)."""
+        if how == "absent":
+            events = _read_events(part_dir)
+            ops = self._t6_census_op_ids(events, tag)
+            self.assertGreaterEqual(len(ops), 3, msg=tag)
+            _write_events(part_dir, _drop_ops(events, ops))
+            return
+
+        def edit(page: types.SimpleNamespace) -> None:
+            page.strs.update(state=how, reason="lease_expired" if how == "expired" else "")
+
+        self._e9_edit_pages(part_dir, {tag}, edit)
+
+    def _e9_director_row(self, builder: "_SyntheticPartBuilder", cls: str, net_id: str, pers_id: str, slot: str) -> dict[str, Any]:
+        return self._t6_row(
+            class_name=cls, loc_kind="attachment", parent_class="SurvivorM_Mirek", parent_net_id="1:2", slot_name=slot,
+            owner_uid=builder.director_uid, net_id=net_id, pers_id=pers_id, ai_agent_b=0.0, max_hp=100.0,
+            health_hp=100.0, inv_children_n=0.0,
+        )
+
+    def _e9_add_rows_to_census(self, part_dir: Path, tag: str, extra: list[dict[str, Any]]) -> None:
+        """Anade filas a la ultima pagina del censo ``tag`` y ajusta sus contadores."""
+        events = _read_events(part_dir)
+        jobs = self._e9_jobs_of(events, {tag})
+        self.assertEqual(list(jobs.values()), [tag])
+        done_pages = 0
+        for ev in events:
+            if ev.get("ev") != "result":
+                continue
+            for res in ev.get("results") or []:
+                if res.get("status") != "done" or res.get("verb") not in ("per_census_start", "job_read"):
+                    continue
+                u_s, u_n, u_r = _unpack(res["read"])
+                if res.get("verb") == "per_census_start" and u_s.get("job") in jobs:
+                    u_n["rows_captured_n"] += len(extra)
+                    u_n["director_inv_count_n"] += len(extra)
+                    res["read"] = _repack_read(u_s, u_n, u_r, res["read"])
+                elif res.get("verb") == "job_read" and u_s.get("job") in jobs:
+                    u_n["rows_total_n"] += len(extra)
+                    if int(round(u_n["page_n"])) == int(round(u_n["pages_n"])) - 1:
+                        u_r.extend(copy.deepcopy(extra))
+                        done_pages += 1
+                    res["read"] = _repack_read(u_s, u_n, u_r, res["read"])
+        self.assertEqual(done_pages, 1, msg=tag)
+        _write_events(part_dir, events)
+
+    def _e9_swap_director_pers_ids(self, part_dir: Path, builder: "_SyntheticPartBuilder", areas: tuple[str, ...],
+                                   only_class: str = "") -> None:
+        """Deja al director de t5 de las ``areas`` con ``pers_id`` nuevos (personaje nuevo del mismo jugador)."""
+        serial = iter(range(1, 10_000))
+
+        def edit(page: types.SimpleNamespace) -> None:
+            for row in self._e9_director_rows(page, builder):
+                if only_class in ("", row["class_name"]):
+                    k = next(serial)
+                    row["pers_id"] = f"{1900000 + k}:{-2900000 - k}:{3900000 + k}:{-1100000 - k}"
+
+        self._e9_edit_pages(part_dir, {f"t5_post_restart_census:{a}" for a in areas}, edit)
+
+    # O2: la purga la ordena el runner (`per_purge_start`); estos ayudantes sustituyen a los de `per_purge_read`.
+    def _e9_purge_reads(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Resultados `job_read` del trabajo de purga, en orden de evidencia."""
+        jobs = {res["op_id"] for res in self._e9_results(events, "per_purge_start", None)}
+        return [res for res in self._e9_results(events, "job_read") if self._e9_page(res).strs.get("job") in jobs]
+
+    def _e9_edit_purge_reads(self, part_dir: Path, edit: Any, *, terminal_only: bool = True) -> None:
+        events = _read_events(part_dir)
+        n = 0
+        for res in self._e9_purge_reads(events):
+            page = self._e9_page(res)
+            if terminal_only and page.strs.get("state") == "running":
+                continue
+            edit(page)
+            self._e9_store(res, page)
+            n += 1
+        self.assertTrue(n, msg="no purge job_read edited")
+        _write_events(part_dir, events)
+
+    @staticmethod
+    def _e9_purge_rows(part_dir: Path) -> list[dict[str, Any]]:
+        """Filas del trabajo de purga leidas de las paginas terminales (para afirmar sobre la evidencia)."""
+        events = _read_events(part_dir)
+        jobs = {r["op_id"] for ev in events if ev.get("ev") == "result" for r in ev["results"] if r["verb"] == "per_purge_start"}
+        pages: dict[int, list[dict[str, Any]]] = {}
+        for ev in events:
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                if res.get("verb") == "job_read" and res.get("status") == "done":
+                    u_s, u_n, u_r = _unpack(res["read"])
+                    if u_s.get("job") in jobs and u_s.get("state") != "running":
+                        pages[int(round(u_n["page_n"]))] = u_r
+        return [row for p in sorted(pages) for row in pages[p]]
+
+    @staticmethod
+    def _e9_first_t5_start_tick(part_dir: Path) -> float:
+        ticks = []
+        for ev in _read_events(part_dir):
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                if res.get("verb") == "per_census_start" and res.get("status") == "done":
+                    u_s, u_n, _ = _unpack(res["read"])
+                    if u_s.get("area_tag", "").startswith("t5_post_restart_census:"):
+                        ticks.append(float(u_n["snap_tick_ms"]))
+        return min(ticks)
+
+    def _e9_expect(self, verdict: dict[str, Any], expected: dict[str, str], msg: str, **details: str) -> None:
+        self.assertEqual(_only_non_pass(verdict), expected, msg=msg)
+        statuses = set(expected.values())
+        self.assertEqual(verdict["exit_code"], 1 if "fail" in statuses else (2 if statuses else 0), msg=msg)
+        c_map = _checks_by_id(verdict)
+        for cid, needle in details.items():
+            self.assertIn(needle, c_map[cid.replace("_", "-")]["detail"], msg=f"{msg}: {cid}={c_map[cid.replace('_', '-')]['detail']}")
+
+    # ---- (A) PER-09 -------------------------------------------------------
+
+    def test_e9_a_director_gone_in_t5_is_missing_not_fail(self) -> None:
+        """Hallazgo A, brief :309 (la fila de PER-09 no exige nada del director) y :295 (missing -> exit 2):
+        director ausente o inventario ilegible en t5 -> PER-09 `missing`, nunca `fail`."""
+        variants = (
+            ("absent_both_areas", "run", ("area_a", "area_b"), 0, 0,
+             {"PER-07": "missing", "PER-08": "missing", "PER-09": "missing"}),
+            ("inventory_unreadable_area_b", "run", ("area_b",), 1, 0, {"PER-08": "missing", "PER-09": "missing"}),
+            ("absent_area_a_only", "run", ("area_a",), 0, 0, {"PER-07": "missing", "PER-09": "missing"}),
+        )
+        for name, part, areas, present, readable, expected in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, part, name)
+                    self._e9_director_gone(part_dir, areas, present=present, readable=readable)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, expected, name)
+                    detail = _checks_by_id(verdict)["PER-09"]["detail"]
+                    for a in areas:
+                        self.assertIn(f"t5_director_unreadable:{a}", detail, msg=name)
+
+    def test_e9_a_director_gone_in_t5_of_a_mutant_part_is_missing_not_fail(self) -> None:
+        """Hallazgo A en las partes mutantes: el `missing` de PER-09 no tapa el `fail` propio de la mutacion, y no se
+        crea ningun `fail` nuevo."""
+        # (con el director ausente la puerta de PER-08 da `missing` antes que el `fail` propio del mutante `leak`)
+        mutants = (
+            ("mut-foreign_wiped", {"PER-04": "fail", "PER-05": "fail"}),
+            ("mut-unprotected_leak", set()),
+        )
+        for part, own in mutants:
+            with self.subTest(part):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, part, part)
+                    self._e9_director_gone(part_dir, ("area_a", "area_b"), present=0, readable=0)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-09"]["status"], "missing", msg=part)
+                    self.assertIn("t5_director_unreadable:area_a", c_map["PER-09"]["detail"], msg=part)
+                    fails = {cid for cid, c in c_map.items() if c["status"] == "fail"}
+                    self.assertEqual(fails, set(own), msg=part)
+
+    def test_e9_a_t5_census_down_by_technical_cause_is_missing_not_fail(self) -> None:
+        """Hallazgo A: censo t5 de un area obligatoria `failed` / `expired` / `stopped` o ausente -> PER-09 `missing`."""
+        variants = (
+            ("area_b_failed", "area_b", "failed"),
+            ("area_b_expired", "area_b", "expired"),
+            ("area_a_stopped", "area_a", "stopped"),
+            ("area_b_absent", "area_b", "absent"),
+        )
+        for name, area, how in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name)
+                    self._e9_census_down(part_dir, f"t5_post_restart_census:{area}", how)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-09"]["status"], "missing", msg=name)
+                    self.assertIn(f"t5_missing_census:{area}", c_map["PER-09"]["detail"], msg=name)
+                    self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=json.dumps(_only_non_pass(verdict)))
+                    self.assertEqual(verdict["exit_code"], 2, msg=name)
+
+    def test_e9_a_director_not_included_where_matrix_requires_it_still_fails(self) -> None:
+        """Hallazgo A (negativa de la regla): `include_director_b = 0` donde :234 lo exige sigue en `fail`, tambien
+        cuando ademas el director no esta."""
+        variants = (
+            ("area_b_include0", ("area_b",), 1, 1),
+            ("area_a_include0_and_director_absent", ("area_a",), 0, 0),
+            ("both_areas_include0", ("area_a", "area_b"), 1, 1),
+        )
+        for name, areas, present, readable in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name)
+
+                    def edit(page: types.SimpleNamespace) -> None:
+                        page.nums.update(include_director_b=0.0, director_present_b=float(present),
+                                         director_inv_readable_b=float(readable))
+
+                    self._e9_edit_start_reads(part_dir, {f"t5_post_restart_census:{a}" for a in areas}, edit)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-09"]["status"], "fail", msg=name)
+                    for a in areas:
+                        self.assertIn(f"t5_director_not_included:{a}", c_map["PER-09"]["detail"], msg=name)
+                    self.assertEqual(verdict["exit_code"], 1, msg=name)
+
+    def test_e9_a_real_per09_fail_overrides_the_t5_missing(self) -> None:
+        """Hallazgo A (regla 4): con el director ausente en t5, un `fail` real de PER-09 manda y su parte se sigue
+        evaluando: testigo cambiado, `stale_epoch` no rechazado, supervivientes en t6."""
+        for name in ("witness_changed", "stale_reset_not_rejected", "t6_survivor", "census_down_and_survivor"):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    self._e9_director_gone(part_dir, ("area_b",), present=0, readable=0)
+                    if name == "witness_changed":
+                        self._set_census_pers_id(part_dir, builder, "t5_witness_post_census:area_b", "b_prop_1", "7:7:7:7")
+                        needle = "witness_entity_changed:"
+                    elif name == "stale_reset_not_rejected":
+                        events = _read_events(part_dir)
+                        n = 0
+                        for ev in events:
+                            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                                if (
+                                    ev.get("inst") == builder.server_epoch_new
+                                    and res.get("verb") == "per_reset_scene"
+                                    and res.get("status") == "rejected"
+                                ):
+                                    res["reason"] = "busy"
+                                    n += 1
+                        self.assertEqual(n, 1)
+                        _write_events(part_dir, events)
+                        needle = "stale_reset_not_rejected"
+                    else:
+                        if name == "census_down_and_survivor":
+                            self._e9_census_down(part_dir, "t5_post_restart_census:area_a", "failed")
+                        self._add_t6_rows(part_dir, builder, "area_c", [self._t6_row(
+                            class_name="Barrel_Yellow", ai_agent_b=0.0, max_hp=1300.0, health_hp=1300.0 * 0.845)])
+                        needle = "t6_cleanup_survivors:Barrel_Yellow:1:8001"
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-09"]["status"], "fail", msg=name)
+                    self.assertIn(needle, c_map["PER-09"]["detail"], msg=name)
+                    self.assertNotIn("t5_director_unreadable", c_map["PER-09"]["detail"], msg=name)
+                    self.assertEqual(verdict["exit_code"], 1, msg=name)
+
+    def test_e9_a_equivalent_of_the_real_run_director_unreadable_and_t6_discs_absent(self) -> None:
+        """Hallazgo A, positiva: equivalente sintetico de `run_20261117T194421Z` (director ilegible en t5 y censos t6
+        de los discos ausentes o caidos) -> PER-09 `missing` (con `t6_cleanup_census_absent`), exit 2."""
+        disc = "t5_track_b_inf_1_t2"
+        for name in ("disc_t6_absent", "disc_t6_failed", "disc_t6_absent_and_base_t6_absent"):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, creature_far_move_m=75.0, include_t5_track_disks=True)
+                    self._e9_director_gone(part_dir, ("area_a", "area_b"), present=0, readable=0)
+                    self._e9_census_down(part_dir, f"t6_post_cleanup_census:{disc}", "absent" if "absent" in name else "failed")
+                    if name.endswith("base_t6_absent"):
+                        self._e9_census_down(part_dir, "t6_post_cleanup_census:area_c", "absent")
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-09"]["status"], "missing", msg=name)
+                    self.assertTrue(c_map["PER-09"]["detail"].startswith("t6_cleanup_census_absent:"), msg=name)
+                    self.assertIn(disc, c_map["PER-09"]["detail"], msg=name)
+                    self.assertIn("t5_director_unreadable:area_a", c_map["PER-09"]["detail"], msg=name)
+                    self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=name)
+                    self.assertEqual(verdict["exit_code"], 2, msg=name)
+                    self.assertEqual(verdict["verdict"], "INCONCLUSO", msg=name)
+
+    # ---- (B) PER-07 / PER-08: mismo personaje del director -------------------
+
+    def test_e9_b_director_replaced_by_a_new_character_is_missing_not_pass(self) -> None:
+        """Hallazgo B, brief :307, :308, :28 y :276: mismo `director_uid` pero ningun `pers_id` de la linea base de t0
+        en el director de t5 -> PER-07 / PER-08 `missing` (`director_character_replaced`).
+
+        O2 (Sol 2 sobre 433d535): se quita la variante `one_baseline_item_gone_in_unreset_branch` (la Apple con otro
+        `pers_id` y los Jeans con el suyo). Exigia que sobreviviera todo el basal: es el INCONCLUSO falso de Sol 2. El
+        caso pasa ahora a `test_pos_o2_sol2_consumed_or_swapped_baseline_item_keeps_the_same_character` (PASA)."""
+        variants = (
+            ("both_branches", ("area_a", "area_b"), "", {"PER-07": "missing", "PER-08": "missing"}),
+            ("reset_branch_only", ("area_a",), "", {"PER-07": "missing"}),
+            ("unreset_branch_only", ("area_b",), "", {"PER-08": "missing"}),
+        )
+        for name, areas, only_class, expected in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    self._e9_swap_director_pers_ids(part_dir, builder, areas, only_class)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    self._e9_expect(verdict, expected, name)
+                    for cid in expected:
+                        self.assertEqual(c_map[cid]["detail"], "director_character_replaced", msg=f"{name}:{cid}")
+
+    def test_e9_b_replaced_character_in_the_mutant_part_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            builder, part_dir = self._e9_build(tmp, "mut-unprotected_leak", "leak")
+            self._e9_swap_director_pers_ids(part_dir, builder, ("area_a", "area_b"))
+            c_map = _checks_by_id(s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT))
+            for cid in ("PER-07", "PER-08"):
+                self.assertEqual((c_map[cid]["status"], c_map[cid]["detail"]), ("missing", "director_character_replaced"), msg=cid)
+
+    def test_e9_b_reloaded_character_keeps_passing_and_reappeared_gloves_keep_failing(self) -> None:
+        """Hallazgo B, controles: personaje recargado (los mismos `pers_id`, `net_id` nuevos como al reiniciar) ->
+        PASA; guantes que reaparecen en el director recargado -> `fail` como antes.
+
+        O2 (brief, secciones finales, `:582` y arbitraje 6): el remanente se juzga por identidad, no por clase. Los
+        guantes que reaparecen llevan ahora el `pers_id` acreditado (el de la prenda QA): antes llevaban uno inventado,
+        que con el contrato nuevo es una centinela sin atribuir (`missing`, lo cubre
+        `test_e9_c_sentinel_garment_still_in_the_director_after_the_purge_fails`)."""
+        def reload_net_ids(builder: "_SyntheticPartBuilder", part_dir: Path) -> None:
+            def edit(page: types.SimpleNamespace) -> None:
+                for row in self._e9_director_rows(page, builder):
+                    row["net_id"] = f"2:{row['net_id'].split(':')[1]}0"
+                    if row.get("parent_net_id") == "1:10":
+                        row["parent_net_id"] = "2:100"
+
+            self._e9_edit_pages(part_dir, {"t5_post_restart_census:area_a", "t5_post_restart_census:area_b"}, edit)
+
+        cases = (
+            ("reloaded_only", None, {}),
+            ("yellow_gloves_back_in_unreset_branch", ("area_b", "b_act_1_gloves_dir", "Gloves"),
+             {"PER-08": "fail"}),
+            ("beige_gloves_back_in_reset_branch", ("area_a", "ac_act_1_gloves_dir", "Gloves"),
+             {"PER-07": "fail", "PER-08": "fail"}),
+        )
+        for name, extra, expected in cases:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    reload_net_ids(builder, part_dir)
+                    if extra:
+                        area, lid, slot = extra
+                        glove = builder.entities_by_lid[lid]
+                        self._e9_add_rows_to_census(
+                            part_dir, f"t5_post_restart_census:{area}",
+                            [self._e9_director_row(builder, glove["class_name"], "2:9001", glove["pers_id"], slot)],
+                        )
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, expected, name)
+                    c_map = _checks_by_id(verdict)
+                    if name == "yellow_gloves_back_in_unreset_branch":
+                        self.assertIn("purge_remnant:b_act_1_gloves_dir", c_map["PER-08"]["detail"])
+                    if name == "beige_gloves_back_in_reset_branch":
+                        self.assertIn("reappeared_director_gloves:WorkingGloves_Beige", c_map["PER-07"]["detail"])
+                        self.assertIn("purge_remnant:ac_act_1_gloves_dir", c_map["PER-08"]["detail"])
+
+    def test_e9_b_unanchored_identity_is_missing_not_pass(self) -> None:
+        """Hallazgo B (ancla): si la linea base de `pers_id` del director en t0 queda vacia (ninguno valido, o todos
+        `0:0:0:0`) PER-07 y PER-08 no pueden saltarse la comprobacion: `missing` (`director_identity_unanchored`)."""
+        for name, bad in (("all_zero", "0:0:0:0"), ("not_a_pers_id", "garbage"), ("empty", "")):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+
+                    def edit(page: types.SimpleNamespace) -> None:
+                        for row in self._e9_director_rows(page, builder):
+                            row["pers_id"] = bad
+
+                    # el director sin pers_id utilizable en t0 (y, como el motor lo haria, en todas las etapas)
+                    tags = {f"{stage}:area_a" for stage in (
+                        "t0_baseline_census", "t1_pre_transition_census", "t1_post_transition_census",
+                        "t3_pre_reset_census", "t3_post_reset_census", "t5_post_restart_census")}
+                    tags |= {"t0_baseline_census:area_a", "t5_post_restart_census:area_b", "t3_post_reset_census:area_b",
+                             "t3_pre_reset_census:area_b", "t1_pre_transition_census:area_b", "t1_post_transition_census:area_b"}
+                    self._e9_edit_pages(part_dir, tags, edit)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    for cid in ("PER-07", "PER-08"):
+                        self.assertEqual(
+                            (c_map[cid]["status"], c_map[cid]["detail"]), ("missing", "director_identity_unanchored"),
+                            msg=f"{name}:{cid}:{_only_non_pass(verdict)}")
+                    self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=name)
+                    self.assertEqual(verdict["exit_code"], 2, msg=name)
+
+    def test_e9_b_one_valid_anchor_is_enough_to_anchor(self) -> None:
+        """Control del ancla: con UN `pers_id` valido en la linea base (y el otro a cero) el director queda anclado y
+        sigue en PASA si ese `pers_id` persiste."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder, part_dir = self._e9_build(tmp, "run", "one_anchor")
+
+            def edit(page: types.SimpleNamespace) -> None:
+                for row in self._e9_director_rows(page, builder):
+                    if row["class_name"] == "Apple":
+                        row["pers_id"] = "0:0:0:0"
+
+            tags = {f"{stage}:{a}" for stage in (
+                "t0_baseline_census", "t1_pre_transition_census", "t1_post_transition_census", "t3_pre_reset_census",
+                "t3_post_reset_census", "t5_post_restart_census") for a in ("area_a",)}
+            tags |= {"t5_post_restart_census:area_b", "t3_post_reset_census:area_b", "t3_pre_reset_census:area_b",
+                     "t1_pre_transition_census:area_b", "t1_post_transition_census:area_b"}
+            self._e9_edit_pages(part_dir, tags, edit)
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            c_map = _checks_by_id(verdict)
+            self.assertEqual((c_map["PER-07"]["status"], c_map["PER-08"]["status"]), ("pass", "pass"), msg=json.dumps(_only_non_pass(verdict)))
+
+    # ---- (C) la purga que ordena el runner (PER-08, brief, secciones finales del 2026-11-22) ------
+    # O2: estos seis tests juzgaban `per_purge_read` (enmienda del 2026-11-17, `:503-514`), que el contrato nuevo
+    # quita. Se reescriben con el trabajo `per_purge_start`, conservando lo que cada uno protegia.
+
+    def test_e9_c_honest_purge_record_passes(self) -> None:
+        """La evidencia sana lleva la purga honesta: orden igual a las acreditadas (los dos guantes, tambien el que
+        borro el reset de t3), acuse con `pre_n`, `done` antes del primer censo t5, las bajas de los guantes que volvieron
+        con el personaje (fila `pre`) y una fila `result` por autorizado. Sigue en PASA tambien si vuelve un solo guante
+        o ninguno (`result = absent`)."""
+        for name, returning, results in (
+            ("two_gloves", None, ["deleted", "deleted"]),
+            ("one_glove", ("b_act_1_gloves_dir",), ["absent", "deleted"]),
+            ("nothing_returns", (), ["absent", "absent"]),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_returning=returning)
+                    order = list(self._e9_results(_read_events(part_dir), "per_purge_start"))
+                    self.assertEqual(len(order), 1)
+                    o_s, o_n, _o_rows = _unpack(order[0]["read"])
+                    self.assertEqual((o_s["state"], o_s["resource"]), ("running", "per_purge"))
+                    self.assertEqual(o_n["pre_n"], float(sum(1 for r in self._e9_purge_rows(part_dir) if r["phase"] == "pre")))
+                    rows = self._e9_purge_rows(part_dir)
+                    self.assertEqual([r["result"] for r in rows if r["phase"] == "result"], results)
+                    pre_pids = {r["pers_id"] for r in rows if r["phase"] == "pre"}
+                    for lid in (returning if returning is not None else ("ac_act_1_gloves_dir", "b_act_1_gloves_dir")):
+                        # el guante vuelve con el mismo pers_id antes de purgar (MEN 10)
+                        self.assertIn(builder.entities_by_lid[lid]["pers_id"], pre_pids)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=name)
+                    self.assertEqual(verdict["verdict"], "PASA", msg=name)
+                    self.assertEqual(
+                        verdict["metrics"]["runner_purge"]["accredited"], ["ac_act_1_gloves_dir", "b_act_1_gloves_dir"]
+                    )
+
+    def test_e9_c_no_purge_record_of_the_new_epoch_is_missing(self) -> None:
+        """Sin orden `per_purge_start` aceptada del epoch nuevo -> PER-08 `missing`: sin orden, con la orden dirigida
+        al epoch viejo o con la orden rechazada."""
+        def no_order(_b: Any, plan: dict[str, Any]) -> None:
+            plan["send_order"] = False
+
+        def other_instance(_b: Any, plan: dict[str, Any]) -> None:
+            # otra instancia que no es la del epoch nuevo (con la vieja, un `enq` tras el hello nuevo cuenta ademas
+            # como actividad del mundo viejo y N49 tapa el detalle de la purga)
+            plan["enq_inst"] = "srv-epoch-9999"
+            plan["order_strings"]["expect_epoch"] = "srv-epoch-9999"
+
+        def rejected(_b: Any, plan: dict[str, Any]) -> None:
+            plan["order_status"], plan["order_reason"] = "rejected", "busy"
+
+        for name, hook, needle in (
+            ("no_order", no_order, "purge_not_done:no_order"),
+            ("order_to_another_instance", other_instance, "purge_order_not_after_restart"),
+            ("order_rejected", rejected, "purge_not_done:order_rejected"),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name, PER_08=needle)
+
+    def test_e9_c_purge_not_done_or_counts_inconsistent_is_missing(self) -> None:
+        """Un trabajo que no acaba en `done`, o un recibo incompleto o incoherente -> PER-08 `missing` (`:584`): estado
+        `failed` / `expired` / `stopped` o la espera vencida sin estado terminal; una pagina sin leer; `rows_total_n`
+        distinto de las filas leidas; `pre_n` distinto de las filas `pre`; un autorizado sin su fila `result`; dos
+        bajas del mismo `pers_id`."""
+        def state(st: str, reason: str) -> Any:
+            def hook(_b: Any, plan: dict[str, Any]) -> None:
+                plan["state"], plan["reason"] = st, reason
+            return hook
+
+        def unread_page(_b: Any, plan: dict[str, Any]) -> None:
+            plan["read_pages"] = False
+
+        def pre_n(_b: Any, plan: dict[str, Any]) -> None:
+            plan["pre_n"] = 3
+
+        def no_result_for_yellow(b: Any, plan: dict[str, Any]) -> None:
+            yellow = b.entities_by_lid["b_act_1_gloves_dir"]["pers_id"]
+            plan["rows"] = [
+                r for r in b.honest_purge_rows(plan) if not (r["phase"] == "result" and r["pers_id"] == yellow)
+            ]
+
+        def double_baja(b: Any, plan: dict[str, Any]) -> None:
+            rows = b.honest_purge_rows(plan)
+            emit = next(r for r in rows if r["phase"] == "emit")
+            rows.insert(rows.index(emit) + 1, {**emit, "emit_tick_ms": emit["emit_tick_ms"] + 1.0})
+            plan["rows"] = rows
+
+        variants = (
+            ("failed_lease_expired", state("failed", "lease_expired"), {}, "purge_not_done:failed"),
+            ("expired", state("expired", "job_timeout"), {}, "purge_not_done:expired"),
+            ("stopped", state("stopped", ""), {}, "purge_not_done:stopped"),
+            ("wait_expired_still_running", state("running", ""), {}, "purge_not_done:wait_expired"),
+            ("second_page_unread", unread_page, {"baseline_sentinel_glove": True}, "purge_pages_incomplete"),
+            ("rows_total_over_rows_read", None, {}, "purge_pages_incomplete"),
+            ("pre_n_differs", pre_n, {}, "purge_pre_n_mismatch"),
+            ("authorized_without_result_row", no_result_for_yellow, {}, "purge_result_missing_or_repeated"),
+            ("two_bajas_same_pers_id", double_baja, {}, "purge_duplicate_baja"),
+        )
+        for name, hook, kw, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook, **kw)
+                    if name == "rows_total_over_rows_read":
+                        self._e9_edit_purge_reads(part_dir, lambda pg: pg.nums.update(rows_total_n=pg.nums["rows_total_n"] + 1))
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=f"{name}:{_only_non_pass(verdict)}")
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-08"]["status"], "missing", msg=name)
+                    self.assertIn(needle, c_map["PER-08"]["detail"], msg=f"{name}:{c_map['PER-08']['detail']}")
+                    self.assertEqual(verdict["exit_code"], 2, msg=name)
+
+    def test_e9_c_purge_after_the_first_t5_census_fails(self) -> None:
+        """El fin de la purga (`end_tick_ms` del trabajo) mayor o igual que el inicio del primer censo t5 aceptado ->
+        PER-08 `fail` (`:581`, `>=` como en `:512`); un fin justo anterior sigue en PASA."""
+        timings = (
+            ("same_tick_as_first_census", 0.0, False),
+            ("after_first_census_before_the_next", 5.0, False),
+            ("long_after_all_t5", 1.0e6, False),
+            ("one_ms_before_first_census", -1.0, True),
+        )
+        for name, delta, ok in timings:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name)
+                    first = self._e9_first_t5_start_tick(part_dir)
+                    self._e9_edit_purge_reads(
+                        part_dir,
+                        lambda pg, end=first + delta: pg.nums.update(end_tick_ms=end, onjobend_tick_ms=end, released_tick_ms=end),
+                    )
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    if ok:
+                        self.assertEqual(_only_non_pass(verdict), {}, msg=name)
+                    else:
+                        self._e9_expect(verdict, {"PER-08": "fail"}, name, PER_08="purge_not_before_t5_census")
+
+    def test_e9_c_purge_row_of_a_non_sentinel_class_fails(self) -> None:
+        """Una baja que la orden no autoriza -> PER-08 `fail` (`:577-578`). Antes se juzgaba por clase no centinela;
+        ahora por identidad: un objeto ajeno del director (la camiseta que cogio despues de t0), los Jeans basales o
+        la Apple basal."""
+        def deleting(cls: str, extra: bool) -> Any:
+            def hook(b: Any, plan: dict[str, Any]) -> None:
+                if extra:
+                    plan["tree"].append({
+                        "pers_id": "1600101:-1600102:1600103:-1600104", "class_name": cls, "net_id": "1:9601",
+                        "parent_net_id": "1:2", "parent_pers_id": "", "depth_n": 0.0, "owner_uid": b.director_uid,
+                    })
+                rows = b.honest_purge_rows(plan)
+                victim = next(e for e in plan["tree"] if e["class_name"] == cls)
+                rows.insert(len(rows) - 1, b.purge_row(
+                    "emit", victim, emit_tick_ms=plan["start_tick_ms"] + 400.0, lease_age_ms=500.0, lease_limit_ms=3000.0,
+                ))
+                plan["rows"] = rows
+            return hook
+
+        variants = (
+            ("tshirt_added", deleting("TShirt_Green", True), "purge_deleted_unordered:TShirt_Green"),
+            ("baseline_jeans_deleted", deleting("Jeans_Blue", False), "purge_deleted_baseline:Jeans_Blue"),
+            ("only_apple_deleted", deleting("Apple", False), "purge_deleted_baseline:Apple"),
+        )
+        for name, hook, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "fail"}, name, PER_08=needle)
+
+    def test_e9_c_sentinel_garment_still_in_the_director_after_the_purge_fails(self) -> None:
+        """Tras una purga `done`, una prenda con un `pers_id` acreditado en el director de un censo posterior -> `fail`
+        por identidad (`:582`): el guante amarillo en t5 de area_b (PER-08) o el beige en t5 de area_a (PER-07 y
+        PER-08). Una centinela que no se puede atribuir (`pers_id` que no es del basal ni de una prenda prevista) ->
+        `missing` (`:588`), ya no `fail` por clase."""
+        variants = (
+            ("yellow_gloves_area_b", "area_b", "b_act_1_gloves_dir", "Gloves", {"PER-08": "fail"},
+             {"PER-08": "purge_remnant:b_act_1_gloves_dir"}),
+            ("beige_gloves_area_a", "area_a", "ac_act_1_gloves_dir", "Gloves", {"PER-07": "fail", "PER-08": "fail"},
+             {"PER-07": "reappeared_director_gloves:WorkingGloves_Beige", "PER-08": "purge_remnant:ac_act_1_gloves_dir"}),
+            ("radar_cap_unattributable_area_b", "area_b", "RadarCap_Black", "Headgear", {"PER-08": "missing"},
+             {"PER-08": "director_sentinel_unattributable:RadarCap_Black"}),
+            ("armband_unattributable_area_a", "area_a", "Armband_Blue", "Armband", {"PER-07": "missing", "PER-08": "missing"},
+             {"PER-07": "director_sentinel_unattributable:Armband_Blue", "PER-08": "director_sentinel_unattributable:Armband_Blue"}),
+        )
+        for name, area, what, slot, expected, needles in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    if what in builder.entities_by_lid:
+                        cls, pid = builder.entities_by_lid[what]["class_name"], builder.entities_by_lid[what]["pers_id"]
+                    else:
+                        cls, pid = what, "1500201:-1500202:1500203:-1500204"
+                    self._e9_add_rows_to_census(
+                        part_dir, f"t5_post_restart_census:{area}", [self._e9_director_row(builder, cls, "1:9101", pid, slot)],
+                    )
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, expected, name, **{k.replace("-", "_"): v for k, v in needles.items()})
+
+    def test_e9_c_start_garment_in_the_director_is_not_a_sentinel_remnant(self) -> None:
+        """Control: una prenda de inicio (clase no centinela) en el director tras la purga no es un resto."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder, part_dir = self._e9_build(tmp, "run", "start_garment")
+            self._e9_add_rows_to_census(
+                part_dir, "t5_post_restart_census:area_b",
+                [self._e9_director_row(builder, "TShirt_Green", "1:9201", "1500301:-1500302:1500303:-1500304", "Body")],
+            )
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(_only_non_pass(verdict), {})
+
+
+    # =========================================================================
+    # O2 (ronda acotada del oraculo, 22-nov): los seis hallazgos de Sol sobre 433d535, el arbitraje 6 y la purga que
+    # ordena el runner (brief, secciones finales `:517-601` y `:603-648`). `test_neg_o2_*` dan `fail` o `missing`
+    # donde corresponde; `test_pos_o2_*` son evidencia honesta que debe pasar.
+    # =========================================================================
+
+    _O2_X_PID = "1600101:-1600102:1600103:-1600104"
+
+    def _o2_edit_census_args(self, part_dir: Path, tag: str, edit: Any) -> None:
+        """Edita los `args` de la orden de censo ``tag`` en su `enq` y en su `poll` (de ahi sale `include_director_b`)."""
+        events = _read_events(part_dir)
+        (job,) = list(self._e9_jobs_of(events, {tag}))
+        n = 0
+        for ev in events:
+            holders = [ev] if ev.get("ev") == "enq" else (list(ev.get("ops") or []) if ev.get("ev") == "poll" else [])
+            for h in holders:
+                if h.get("op_id") == job:
+                    u_s, u_n, u_r = _unpack(h["args"])
+                    page = types.SimpleNamespace(strs=u_s, nums=u_n, rows=u_r)
+                    edit(page)
+                    h["args"] = _repack_read(page.strs, page.nums, page.rows, h["args"])
+                    n += 1
+        self.assertEqual(n, 2, msg=tag)
+        _write_events(part_dir, events)
+
+    def _o2_map_new_epoch_director_rows(self, part_dir: Path, builder: "_SyntheticPartBuilder", fn: Any) -> None:
+        """Aplica ``fn(fila) -> fila | None`` a las filas del director de todos los censos del epoch nuevo (t5, testigo y
+        t6) y ajusta `rows_total_n`, `rows_captured_n` y `director_inv_count_n` sin mover paginas."""
+        events = _read_events(part_dir)
+        dropped: dict[str, int] = {}
+        for ev in events:
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" and ev.get("inst") == builder.server_epoch_new else []:
+                if res.get("verb") == "per_census_start" and res.get("status") == "done":
+                    dropped[_unpack(res["read"])[0]["job"]] = 0
+        for ev in events:
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                if res.get("verb") != "job_read" or res.get("status") != "done":
+                    continue
+                u_s, u_n, u_r = _unpack(res["read"])
+                if u_s.get("job") not in dropped:
+                    continue
+                kept = []
+                for row in u_r:
+                    if row.get("owner_uid") != builder.director_uid:
+                        kept.append(row)
+                        continue
+                    out = fn(dict(row))
+                    if out is None:
+                        dropped[u_s["job"]] += 1
+                    else:
+                        kept.append(out)
+                res["read"] = _repack_read(u_s, u_n, kept, res["read"])
+        for ev in events:
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                if res.get("status") != "done" or res.get("verb") not in ("job_read", "per_census_start"):
+                    continue
+                u_s, u_n, u_r = _unpack(res["read"])
+                d = dropped.get(u_s.get("job", ""), 0)
+                if not d:
+                    continue
+                if res["verb"] == "job_read":
+                    u_n["rows_total_n"] -= d
+                else:
+                    u_n["rows_captured_n"] -= d
+                    u_n["director_inv_count_n"] -= d
+                res["read"] = _repack_read(u_s, u_n, u_r, res["read"])
+        _write_events(part_dir, events)
+
+    @staticmethod
+    def _o2_op_events(events: list[dict[str, Any]], op_id: str) -> list[int]:
+        """Indices de los eventos (`enq`, `poll`/`deliver`, `result`) de la orden ``op_id``."""
+        out = []
+        for i, ev in enumerate(events):
+            if ev.get("op_id") == op_id and ev.get("ev") in ("enq", "deliver"):
+                out.append(i)
+            elif ev.get("ev") == "poll" and any(o.get("op_id") == op_id for o in ev.get("ops") or []):
+                out.append(i)
+            elif ev.get("ev") == "result" and any(r.get("op_id") == op_id for r in ev.get("results") or []):
+                out.append(i)
+        return out
+
+    def _o2_purge_op_ids(self, events: list[dict[str, Any]]) -> dict[str, Any]:
+        """``order``, ``reads`` (todas las `job_read` del trabajo, en orden) y ``free`` de la purga."""
+        (order,) = [r["op_id"] for r in self._e9_results(events, "per_purge_start", None)]
+        reads = [r["op_id"] for r in self._e9_results(events, "job_read") if self._e9_page(r).strs.get("job") == order]
+        frees = [r["op_id"] for r in self._e9_results(events, "job_free") if self._e9_page(r).strs.get("job") == order]
+        return {"order": order, "reads": reads, "free": frees[0] if frees else ""}
+
+    @staticmethod
+    def _o2_insert_op(events: list[dict[str, Any]], at: int, *, op_id: str, verb: str, inst: str, args: dict[str, Any],
+                      read: dict[str, Any], t_ms: float, status: str = "done", reason: str = "",
+                      tick_ms: float = 1.0) -> None:
+        evs = [
+            {"ev": "enq", "peer": "server", "op_id": op_id, "verb": verb, "args": args, "inst": inst, "t_ms": t_ms},
+            {"ev": "poll", "peer": "server", "inst": inst, "ops": [{"op_id": op_id, "verb": verb, "args": args}], "t_ms": t_ms},
+            {"ev": "result", "peer": "server", "inst": inst, "t_ms": t_ms + 1.0, "results": [{
+                "op_id": op_id, "verb": verb, "status": status, "reason": reason, "dup": 0, "recv_ms": tick_ms,
+                "done_ms": tick_ms + 1.0, "frame_recv": 1, "frame_done": 2, "read": read,
+            }]},
+        ]
+        events[at:at] = evs
+
+    def _o2_glove_row(self, builder: "_SyntheticPartBuilder", lid: str, net_id: str) -> dict[str, Any]:
+        glove = builder.entities_by_lid[lid]
+        return self._e9_director_row(builder, glove["class_name"], net_id, glove["pers_id"], "Gloves")
+
+    # ---- 1. FALLA e INCONCLUSO falsos --------------------------------------------------------------------------
+
+    def test_neg_o2_sol1_explicit_include_director_0_is_judged_before_the_technical_failure(self) -> None:
+        """Sol 1 sobre 433d535 (BLOQ A; brief :309 y :234): un `include_director_b = 0` explicito en la orden aceptada
+        del censo t5 de un area que lo exige da `fail` en PER-09 aunque su trabajo acabe en `failed`, `expired` o
+        `stopped`: el pedido demostrable se juzga antes de clasificar la caida tecnica."""
+        for name, area, how in (
+            ("area_b_failed", "area_b", "failed"),
+            ("area_b_expired", "area_b", "expired"),
+            ("area_a_stopped", "area_a", "stopped"),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name)
+                    tag = f"t5_post_restart_census:{area}"
+                    self._o2_edit_census_args(part_dir, tag, lambda pg: pg.nums.update(include_director_b=0.0))
+                    self._e9_census_down(part_dir, tag, how)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-09"]["status"], "fail", msg=f"{name}:{_only_non_pass(verdict)}")
+                    self.assertIn(f"t5_director_not_included:{area}", c_map["PER-09"]["detail"], msg=name)
+                    self.assertEqual({cid for cid, c in c_map.items() if c["status"] == "fail"}, {"PER-09"}, msg=name)
+                    self.assertEqual(verdict["exit_code"], 1, msg=name)
+
+    def test_pos_o2_sol1_census_down_without_an_explicit_zero_stays_missing(self) -> None:
+        """Control de Sol 1: con `include_director_b = 1`, o sin la clave en la orden, un censo t5 caido por causa tecnica
+        sigue dando `missing` en PER-09, nunca `fail` (brief :309)."""
+        for name, area, how, drop_key in (
+            ("area_b_failed_with_include_1", "area_b", "failed", False),
+            ("area_a_expired_without_the_key", "area_a", "expired", True),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name)
+                    tag = f"t5_post_restart_census:{area}"
+                    if drop_key:
+                        self._o2_edit_census_args(part_dir, tag, lambda pg: pg.nums.pop("include_director_b"))
+                    self._e9_census_down(part_dir, tag, how)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-09"]["status"], "missing", msg=f"{name}:{_only_non_pass(verdict)}")
+                    self.assertIn(f"t5_missing_census:{area}", c_map["PER-09"]["detail"], msg=name)
+                    self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=name)
+                    self.assertEqual(verdict["exit_code"], 2, msg=name)
+
+    def test_pos_o2_sol2_consumed_or_swapped_baseline_item_keeps_the_same_character(self) -> None:
+        """Sol 2 sobre 433d535 (BLOQ B): el mismo personaje no se da por sustituido por gastar un objeto basal. La Apple
+        basal se come despues de t3 (falta en t5, en el testigo, en t6 y en las filas `pre`, con recuentos coherentes) o
+        se sustituye por otra Apple con otro `pers_id`; los Jeans conservan el suyo (el ancla) y la purga es correcta ->
+        PASA. La continuidad del inventario corrobora; no se exige que sobreviva todo."""
+        def eat_apple(row: dict[str, Any]) -> dict[str, Any] | None:
+            if row["class_name"] == "Apple":
+                return None
+            if row["class_name"] == "Jeans_Blue":
+                row["inv_children_n"] = 0.0
+            return row
+
+        def swap_apple(row: dict[str, Any]) -> dict[str, Any]:
+            if row["class_name"] == "Apple":
+                row["pers_id"] = "1700201:-1700202:1700203:-1700204"
+            return row
+
+        def hook_eat(_b: Any, plan: dict[str, Any]) -> None:
+            plan["tree"] = [e for e in plan["tree"] if e["class_name"] != "Apple"]
+
+        def hook_swap(_b: Any, plan: dict[str, Any]) -> None:
+            for e in plan["tree"]:
+                if e["class_name"] == "Apple":
+                    e["pers_id"] = "1700201:-1700202:1700203:-1700204"
+
+        for name, fn, hook in (("apple_eaten_after_t3", eat_apple, hook_eat), ("apple_swapped_for_another", swap_apple, hook_swap)):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    self._o2_map_new_epoch_director_rows(part_dir, builder, fn)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+                    self.assertEqual(verdict["verdict"], "PASA", msg=name)
+
+    def test_neg_o2_sol2_no_baseline_item_left_in_the_director_is_missing(self) -> None:
+        """Control de Sol 2 (el ancla no se afloja): sin ningun `pers_id` del basal en el director de t5 (los objetos
+        basales desaparecen, o todos traen `pers_id` nuevos) -> PER-07 y PER-08 `missing`
+        (`director_character_replaced`)."""
+        def all_gone(_row: dict[str, Any]) -> None:
+            return None
+
+        def all_new(row: dict[str, Any]) -> dict[str, Any]:
+            row["pers_id"] = f"18{row['net_id'].split(':')[1]}01:-1800002:1800003:-1800004"
+            return row
+
+        for name, fn in (("all_baseline_items_gone", all_gone), ("all_baseline_items_with_new_pers_ids", all_new)):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    self._o2_map_new_epoch_director_rows(part_dir, builder, fn)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    for cid in ("PER-07", "PER-08"):
+                        self.assertEqual(
+                            (c_map[cid]["status"], c_map[cid]["detail"]), ("missing", "director_character_replaced"),
+                            msg=f"{name}:{cid}:{_only_non_pass(verdict)}",
+                        )
+                    self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=name)
+
+    def test_neg_o2_sol4_foreign_deletion_in_the_purge_fails_even_without_the_anchor(self) -> None:
+        """Sol 4 sobre 433d535 (BLOQ C) y brief `:589`: un borrado ajeno acreditado en las filas del trabajo
+        `per_purge_start` da `fail` en PER-08 aunque falte el ancla del personaje (en t5 o en las filas `pre`) o el
+        director no este legible en t5: el `fail` con evidencia del epoch correcto manda sobre el `missing`."""
+        def delete_baseline(cls: str, *, unanchored_pre: bool = False, tshirt: bool = False) -> Any:
+            def hook(b: Any, plan: dict[str, Any]) -> None:
+                if unanchored_pre:
+                    plan["tree"] = [e for e in plan["tree"] if e.get("logical_id")]
+                if tshirt:
+                    plan["tree"].append({
+                        "pers_id": self._O2_X_PID, "class_name": "TShirt_Green", "net_id": "1:9601",
+                        "parent_net_id": "1:2", "parent_pers_id": "", "depth_n": 0.0, "owner_uid": b.director_uid,
+                    })
+                rows = b.honest_purge_rows(plan)
+                victim = next(e for e in plan["tree"] if e["class_name"] == cls)
+                rows.insert(len(rows) - 1, b.purge_row(
+                    "emit", victim, emit_tick_ms=plan["start_tick_ms"] + 400.0, lease_age_ms=500.0, lease_limit_ms=3000.0,
+                ))
+                plan["rows"] = rows
+            return hook
+
+        variants = (
+            ("baseline_apple_deleted_character_replaced_in_t5", delete_baseline("Apple"), "swap",
+             {"PER-07": "missing", "PER-08": "fail"}, "purge_deleted_baseline:Apple"),
+            ("unordered_deletion_pre_rows_without_anchor", delete_baseline("TShirt_Green", unanchored_pre=True, tshirt=True), "",
+             {"PER-08": "fail"}, "purge_deleted_unordered:TShirt_Green"),
+            ("baseline_jeans_deleted_director_unreadable_in_t5", delete_baseline("Jeans_Blue"), "gone",
+             {"PER-08": "fail", "PER-09": "missing"}, "purge_deleted_baseline:Jeans_Blue"),
+        )
+        for name, hook, t5_edit, expected, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    if t5_edit == "swap":
+                        self._e9_swap_director_pers_ids(part_dir, builder, ("area_a", "area_b"))
+                    elif t5_edit == "gone":
+                        self._e9_director_gone(part_dir, ("area_b",), present=0, readable=0)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, expected, name, PER_08=needle)
+
+    def test_pos_o2_arb6_baseline_glove_of_the_same_class_beside_the_qa_glove_passes(self) -> None:
+        """Arbitraje 6 (BLOQ 6 de Sol r2): unos guantes `WorkingGloves_Beige` del basal de t0, junto al guante QA de la
+        misma clase que vuelve tras el reset de t3 con otro `net_id` y el mismo `pers_id`. Solo se autoriza el QA; el
+        basal se conserva y no tumba PER-07 ni PER-08, ni aborta t0 (`:537`). Tambien en la parte `mut-foreign_wiped`
+        (solo sus fallos propios) y si solo vuelve el guante beige. Con 9 filas, el recibo ocupa dos paginas."""
+        for name, part, returning, expected in (
+            ("run", "run", None, {}),
+            ("run_only_the_beige_glove_returns", "run", ("ac_act_1_gloves_dir",), {}),
+            ("mut_foreign_wiped", "mut-foreign_wiped", None, {"PER-04": "fail", "PER-05": "fail"}),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, part, name, baseline_sentinel_glove=True, purge_returning=returning)
+                    base_glove = next(r for r in builder.baseline_dir_rows if r["class_name"] == "WorkingGloves_Beige")
+                    qa_glove = builder.entities_by_lid["ac_act_1_gloves_dir"]
+                    self.assertNotIn(base_glove["pers_id"], {r["pers_id"] for r in builder.purge_plan["order_rows"]})
+                    beige_pre = {r["pers_id"] for r in self._e9_purge_rows(part_dir) if r["phase"] == "pre" and r["class_name"] == "WorkingGloves_Beige"}
+                    self.assertEqual(beige_pre, {base_glove["pers_id"], qa_glove["pers_id"]})
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), expected, msg=f"{name}:{json.dumps(verdict['checks'])}")
+                    self.assertNotIn("dirty_initial_area", verdict["reasons"], msg=name)
+
+    def test_neg_o2_arb6_qa_glove_remnant_or_deleted_baseline_glove_fails(self) -> None:
+        """Arbitraje 6, negativas: con el guante basal presente, (1) el guante QA beige (`pers_id` acreditado) se queda
+        en t5 a su lado -> PER-07 y PER-08 `fail`; (2) la purga borra el guante basal -> PER-08 `fail`; (3) la orden
+        autoriza el guante basal -> PER-08 `fail`."""
+        def delete_base_glove(b: Any, plan: dict[str, Any]) -> None:
+            rows = b.honest_purge_rows(plan)
+            base = next(e for e in plan["tree"] if e["class_name"] == "WorkingGloves_Beige" and not e.get("logical_id"))
+            rows.insert(len(rows) - 1, b.purge_row("emit", base, emit_tick_ms=plan["start_tick_ms"] + 400.0, lease_age_ms=500.0, lease_limit_ms=3000.0))
+            plan["rows"] = rows
+
+        def authorize_base_glove(b: Any, plan: dict[str, Any]) -> None:
+            base = next(r for r in b.baseline_dir_rows if r["class_name"] == "WorkingGloves_Beige")
+            plan["order_rows"].append({"pers_id": base["pers_id"], "class_name": base["class_name"]})
+
+        variants = (
+            ("qa_glove_stays_beside_the_baseline_one", None, {"PER-07": "fail", "PER-08": "fail"},
+             {"PER_07": "reappeared_director_gloves:WorkingGloves_Beige", "PER_08": "purge_remnant:ac_act_1_gloves_dir"}),
+            ("purge_deletes_the_baseline_glove", delete_base_glove, {"PER-08": "fail"},
+             {"PER_08": "purge_deleted_baseline:WorkingGloves_Beige"}),
+            ("order_authorizes_the_baseline_glove", authorize_base_glove, {"PER-08": "fail"},
+             {"PER_08": "purge_order_differs_from_accredited"}),
+        )
+        for name, hook, expected, needles in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, baseline_sentinel_glove=True, purge_hook=hook)
+                    if hook is None:
+                        for area in ("area_a", "area_b"):
+                            self._e9_add_rows_to_census(
+                                part_dir, f"t5_post_restart_census:{area}", [self._o2_glove_row(builder, "ac_act_1_gloves_dir", "1:9301")]
+                            )
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, expected, name, **needles)
+
+    # ---- 2. PASA falsos de identidad ---------------------------------------------------------------------------
+
+    def test_neg_o2_sol3_per07_anchor_is_checked_in_every_director_census(self) -> None:
+        """Sol 3 sobre 433d535 (BLOQ B): PER-07 verifica el ancla en cada censo del director que usa. En
+        `mut-foreign_wiped`, un censo t5 (area_a o area_a_mut) con el mismo uid y todos los `pers_id` nuevos no se
+        acredita con los del otro censo -> PER-07 `missing`; el mutante sigue fallando solo por PER-04 y PER-05."""
+        for name, area in (("area_a_replaced", "area_a"), ("area_a_mut_replaced", "area_a_mut")):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "mut-foreign_wiped", name)
+                    self._e9_swap_director_pers_ids(part_dir, builder, (area,))
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(
+                        verdict, {"PER-04": "fail", "PER-05": "fail", "PER-07": "missing"}, name,
+                        PER_07="director_character_replaced",
+                    )
+
+    def test_pos_o2_sol3_reloaded_character_in_every_census_passes(self) -> None:
+        """Control de Sol 3: el personaje recargado (mismos `pers_id`, `net_id` nuevos) en todos los censos t5 -> PASA en
+        `run` y, en `mut-foreign_wiped`, solo los fallos propios del mutante."""
+        def reload(row: dict[str, Any]) -> dict[str, Any]:
+            row["net_id"] = f"2:{row['net_id'].split(':')[1]}0"
+            if row.get("parent_net_id") == "1:10":
+                row["parent_net_id"] = "2:100"
+            return row
+
+        for name, part, expected in (("run", "run", {}), ("mut_foreign_wiped", "mut-foreign_wiped", {"PER-04": "fail", "PER-05": "fail"})):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, part, name)
+                    areas = ("area_a", "area_b") + (("area_a_mut",) if part == "mut-foreign_wiped" else ())
+                    self._e9_edit_pages(
+                        part_dir, {f"t5_post_restart_census:{a}" for a in areas},
+                        lambda pg: [reload(r) for r in self._e9_director_rows(pg, builder)],
+                    )
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), expected, msg=f"{name}:{json.dumps(verdict['checks'])}")
+
+    def _o2_edit_area_c(self, part_dir: Path, stage: str, edit_row: Any) -> None:
+        def edit(pg: types.SimpleNamespace) -> None:
+            for row in pg.rows:
+                edit_row(row)
+
+        self._e9_edit_pages(part_dir, {f"{stage}:area_c"}, edit)
+
+    def test_neg_o2_sol6_control_child_with_another_pers_id_not_pasa(self) -> None:
+        """Sol 6 sobre 433d535 (fuera del delta; brief :306): el hijo `Fireplace` del control persistente de area_c se
+        compara entre t3 y t5 tambien por su `pers_id`. Otro de la misma clase en el mismo barril -> PER-06 `fail`; sin
+        un `pers_id` utilizable en t3 o en t5 la identidad del hijo no se puede verificar -> `missing`. PER-07 y PER-08
+        quedan en `missing` porque dependen de PER-06."""
+        def set_fireplace_pid(pid: str) -> Any:
+            def edit_row(row: dict[str, Any]) -> None:
+                if row["class_name"] == "Fireplace":
+                    row["pers_id"] = pid
+            return edit_row
+
+        variants = (
+            ("fireplace_swapped_same_class_same_barrel", "t5_post_restart_census", "1700001:-1700002:1700003:-1700004",
+             "fail", "control_child_pers_id_mismatch"),
+            ("t3_child_with_zero_pers_id", "t3_post_reset_census", "0:0:0:0", "missing", "control_child_identity_unverifiable"),
+            ("t5_child_with_malformed_pers_id", "t5_post_restart_census", "55:66:77", "missing", "control_child_identity_unverifiable"),
+        )
+        for name, stage, pid, status, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name)
+                    self._o2_edit_area_c(part_dir, stage, set_fireplace_pid(pid))
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(
+                        verdict, {"PER-06": status, "PER-07": "missing", "PER-08": "missing"}, name, PER_06=needle,
+                    )
+
+    def test_pos_o2_sol6_control_child_keeps_its_pers_id_with_new_net_ids_passes(self) -> None:
+        """Control de Sol 6: tras el reinicio el barril y su `Fireplace` traen `net_id` nuevos y los mismos `pers_id`
+        -> PASA."""
+        def renumber(row: dict[str, Any]) -> None:
+            if row["class_name"] == "Barrel_Yellow":
+                row["net_id"] = "3:801"
+            elif row["class_name"] == "Fireplace":
+                row["net_id"], row["parent_net_id"] = "3:802", "3:801"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _builder, part_dir = self._e9_build(tmp, "run", "renumbered")
+            self._o2_edit_area_c(part_dir, "t5_post_restart_census", renumber)
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(_only_non_pass(verdict), {}, msg=json.dumps(verdict["checks"]))
+
+    # ---- 3. La purga ordenada por el runner -------------------------------------------------------------------
+
+    def test_neg_o2_purge_order_differs_from_the_accredited_fails(self) -> None:
+        """Brief, arbitraje 3: el oraculo recalcula las acreditadas (alta, `move_to_director` y censos del epoch viejo
+        con el director) y las compara por igualdad con la orden cruda del puente, aunque no haya bajas. Una orden que
+        omite el guante amarillo, que anade los Jeans basales, que cambia la clase de un guante o que anade un
+        `pers_id` desconocido sin que vuelva nada -> PER-08 `fail`."""
+        def omit_yellow(_b: Any, plan: dict[str, Any]) -> None:
+            plan["order_rows"] = plan["order_rows"][:1]
+
+        def add_jeans(b: Any, plan: dict[str, Any]) -> None:
+            jeans = b.baseline_dir_rows[0]
+            plan["order_rows"].append({"pers_id": jeans["pers_id"], "class_name": jeans["class_name"]})
+
+        def wrong_class(_b: Any, plan: dict[str, Any]) -> None:
+            plan["order_rows"][1] = {**plan["order_rows"][1], "class_name": "WorkingGloves_Beige"}
+
+        def unknown_and_nothing_returns(_b: Any, plan: dict[str, Any]) -> None:
+            plan["order_rows"].append({"pers_id": self._O2_X_PID, "class_name": "WorkingGloves_Yellow"})
+
+        for name, hook, returning in (
+            ("order_omits_the_yellow_glove", omit_yellow, None),
+            ("order_adds_the_baseline_jeans", add_jeans, None),
+            ("order_with_a_wrong_class", wrong_class, None),
+            ("order_adds_an_unknown_pers_id_zero_bajas", unknown_and_nothing_returns, ()),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook, purge_returning=returning)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "fail"}, name, PER_08="purge_order_differs_from_accredited")
+
+    def test_pos_o2_purge_accredited_are_recomputed_without_trusting_the_runner(self) -> None:
+        """Las acreditadas salen de la evidencia, nunca de `purge_authorized` (`:575`): un evento del runner que miente
+        (lista los Jeans basales, o nada) no cambia el veredicto de una orden correcta. Y el guante que borro el reset
+        de t3 sigue acreditado con sus lecturas de t1_post y t3_pre (arbitraje 3)."""
+        def lying_event(rows: Any) -> Any:
+            def hook(b: Any, plan: dict[str, Any]) -> None:
+                plan["authorized_rows"] = rows(b)
+            return hook
+
+        for name, hook in (
+            ("event_lists_the_baseline_jeans", lying_event(lambda b: [{"pers_id": b.baseline_dir_rows[0]["pers_id"], "logical_id": "", "net_id": "1:10", "censuses": []}])),
+            ("event_lists_nothing", lying_event(lambda _b: [])),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+                    self.assertIn("ac_act_1_gloves_dir", verdict["metrics"]["runner_purge"]["accredited"])
+
+    def test_neg_o2_purge_accredited_unidentifiable_is_missing(self) -> None:
+        """Brief, arbitraje 3 (`:626`): si falta evidencia para identificar una prenda prevista, `missing` (ni `fail` ni
+        PASA): el guante amarillo leido con otro `pers_id` en t1_post que en t3, su `move_to_director` con un `net_id`
+        que no es el de su alta, o sin el director como dueno tras la transicion."""
+        def edit_t1_post_yellow(builder: "_SyntheticPartBuilder", part_dir: Path) -> None:
+            yellow_nid = builder.entities_by_lid["b_act_1_gloves_dir"]["net_id"]
+
+            def edit(pg: types.SimpleNamespace) -> None:
+                for row in pg.rows:
+                    if row["net_id"] == yellow_nid:
+                        row["pers_id"] = self._O2_X_PID
+
+            self._e9_edit_pages(part_dir, {"t1_post_transition_census:area_a", "t1_post_transition_census:area_b"}, edit)
+
+        def edit_transition_net_id(builder: "_SyntheticPartBuilder", part_dir: Path) -> None:
+            events = _read_events(part_dir)
+            n = 0
+            for res in self._e9_results(events, "per_child_transition"):
+                page = self._e9_page(res)
+                if page.strs.get("net_id") == builder.entities_by_lid["b_act_1_gloves_dir"]["net_id"]:
+                    page.strs["net_id"] = "1:9999"
+                    self._e9_store(res, page)
+                    n += 1
+            self.assertEqual(n, 1)
+            _write_events(part_dir, events)
+
+        def edit_transition_owner(builder: "_SyntheticPartBuilder", part_dir: Path) -> None:
+            # la transicion `ok` no acredita que el destino sea el director: prenda prevista sin identificar, no una
+            # autorizacion indebida (sin FALLA falso)
+            events = _read_events(part_dir)
+            n = 0
+            for res in self._e9_results(events, "per_child_transition"):
+                page = self._e9_page(res)
+                if page.strs.get("net_id") == builder.entities_by_lid["b_act_1_gloves_dir"]["net_id"]:
+                    page.strs["post_owner_uid"] = ""
+                    self._e9_store(res, page)
+                    n += 1
+            self.assertEqual(n, 1)
+            _write_events(part_dir, events)
+
+        for name, edit, needle in (
+            ("yellow_glove_read_with_two_pers_ids", edit_t1_post_yellow, "purge_accredited_unidentified:b_act_1_gloves_dir:inconsistent_readings"),
+            ("transition_net_id_is_not_the_apply_one", edit_transition_net_id, "purge_accredited_unidentified:b_act_1_gloves_dir:apply_transition_mismatch"),
+            ("transition_without_the_director_as_owner", edit_transition_owner, "purge_accredited_unidentified:b_act_1_gloves_dir:transition_not_to_director"),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    edit(builder, part_dir)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name, PER_08=needle)
+
+    def test_neg_o2_purge_pages_must_be_unique_and_complete(self) -> None:
+        """Brief, arbitraje 4: paginas unicas y completas del mismo trabajo. Con el recibo en dos paginas, una pagina 1
+        que repite una fila `pre` de la pagina 0 (el total cuadra), una lectura cuya `page_n` no es la pedida, o la
+        pagina 1 marcada como de otro trabajo -> PER-08 `missing`."""
+        def page1_repeats(pg: types.SimpleNamespace) -> None:
+            if int(round(pg.nums["page_n"])) == 1:
+                pg.rows = [dict(pg_rows0[0])]
+
+        def wrong_page_n(pg: types.SimpleNamespace) -> None:
+            if int(round(pg.nums["page_n"])) == 1:
+                pg.nums["page_n"] = 0.0
+
+        def other_job(pg: types.SimpleNamespace) -> None:
+            if int(round(pg.nums["page_n"])) == 1:
+                pg.strs["job"] = "otro-trabajo-1"
+
+        for name, edit, needle in (
+            ("page_1_repeats_a_pre_row_of_page_0", page1_repeats, "purge_pre_rows_duplicated_or_unidentified"),
+            ("read_with_a_page_n_that_was_not_asked", wrong_page_n, "purge_read_inconsistent"),
+            ("page_1_of_another_job", other_job, "purge_pages_incomplete"),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, baseline_sentinel_glove=True)
+                    pg_rows0 = [r for r in self._e9_purge_rows(part_dir) if r["phase"] == "pre"]
+                    self.assertEqual(len(self._e9_purge_rows(part_dir)), 9)
+                    self._e9_edit_purge_reads(part_dir, edit)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=f"{name}:{_only_non_pass(verdict)}")
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-08"]["status"], "missing", msg=name)
+                    self.assertIn(needle, c_map["PER-08"]["detail"], msg=f"{name}:{c_map['PER-08']['detail']}")
+
+    def test_neg_o2_purge_bad_baja_is_judged_in_any_terminal_state(self) -> None:
+        """Brief, arbitraje 5: el runner lee las paginas de cualquier estado terminal y el oraculo juzga sus bajas. La
+        baja de los Jeans basales da `fail` en un trabajo `failed` (lease), `expired` o `stopped`, y tambien con la
+        espera vencida (pagina 0 en `running`): manda sobre el `missing` de `purge_not_done`."""
+        def hook_for(st: str, reason: str) -> Any:
+            def hook(b: Any, plan: dict[str, Any]) -> None:
+                plan["state"], plan["reason"] = st, reason
+                rows = b.honest_purge_rows(plan)
+                jeans = next(e for e in plan["tree"] if e["class_name"] == "Jeans_Blue")
+                rows.insert(len(rows) - 1, b.purge_row("emit", jeans, emit_tick_ms=plan["start_tick_ms"] + 400.0, lease_age_ms=500.0, lease_limit_ms=3000.0))
+                plan["rows"] = rows
+            return hook
+
+        for st, reason in (("failed", "lease_expired"), ("expired", "job_timeout"), ("stopped", ""), ("running", "")):
+            with self.subTest(st):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", st, purge_hook=hook_for(st, reason))
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "fail"}, st, PER_08="purge_deleted_baseline:Jeans_Blue")
+
+    def test_neg_o2_purge_baja_identity_owner_class_and_lease(self) -> None:
+        """Brief, ronda 2 `:577-579` y arbitraje 2: una baja autorizada sin estar acreditada, fuera del arbol del director,
+        con otra clase que la autorizada o con `lease_age_ms > lease_limit_ms` -> PER-08 `fail`. Una baja con
+        `lease_limit_ms = 0` no acredita E1 -> `missing`. (La igualdad, en el control positivo de abajo.)"""
+        def authorize_unaccredited(b: Any, plan: dict[str, Any]) -> None:
+            plan["tree"].append({
+                "pers_id": self._O2_X_PID, "class_name": "TShirt_Green", "net_id": "1:9601",
+                "parent_net_id": "1:2", "parent_pers_id": "", "depth_n": 0.0, "owner_uid": b.director_uid,
+            })
+            plan["order_rows"].append({"pers_id": self._O2_X_PID, "class_name": "TShirt_Green"})
+
+        def edit_yellow_baja(**changes: Any) -> Any:
+            def hook(b: Any, plan: dict[str, Any]) -> None:
+                yellow = b.entities_by_lid["b_act_1_gloves_dir"]["pers_id"]
+                rows = b.honest_purge_rows(plan)
+                for r in rows:
+                    if r["phase"] == "emit" and r["pers_id"] == yellow:
+                        r.update(changes)
+                plan["rows"] = rows
+            return hook
+
+        variants = (
+            ("authorized_but_unaccredited", authorize_unaccredited, "fail", "purge_deleted_unaccredited:TShirt_Green"),
+            ("baja_outside_the_director", edit_yellow_baja(owner_uid="otro-uid-1"), "fail", "purge_deleted_outside_director:WorkingGloves_Yellow"),
+            ("baja_with_another_class", edit_yellow_baja(class_name="WorkingGloves_Beige"), "fail", "purge_deleted_class_mismatch:WorkingGloves_Beige"),
+            ("lease_age_over_the_limit", edit_yellow_baja(lease_age_ms=3001.0), "fail", "purge_emit_lease_expired:WorkingGloves_Yellow"),
+            ("lease_limit_zero", edit_yellow_baja(lease_limit_ms=0.0), "missing", "purge_emit_lease_unaccredited"),
+        )
+        for name, hook, status, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": status}, name, PER_08=needle)
+
+    def test_pos_o2_purge_lease_age_equal_to_the_limit_passes(self) -> None:
+        """Control: `LeaseOk()` admite la igualdad (`DSBX_QA_Probe.c:447-454`), asi que una baja con
+        `lease_age_ms == lease_limit_ms` sigue en PASA."""
+        def equal(b: Any, plan: dict[str, Any]) -> None:
+            plan["lease_age_ms"] = plan["lease_limit_ms"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _builder, part_dir = self._e9_build(tmp, "run", "equal", purge_hook=equal)
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(_only_non_pass(verdict), {}, msg=json.dumps(verdict["checks"]))
+
+    def _o2_rag_hook(self, *, only_in_emit: bool) -> Any:
+        """Una implementacion defectuosa: borra el guante amarillo con un trapo ajeno dentro (en `pre`, o que entro
+        despues y solo se ve en las filas `emit` del tick de la baja)."""
+        def hook(b: Any, plan: dict[str, Any]) -> None:
+            yellow = b.entities_by_lid["b_act_1_gloves_dir"]["pers_id"]
+            y_ent = next(e for e in plan["tree"] if e["pers_id"] == yellow)
+            rag = {
+                "pers_id": "1900001:-1900002:1900003:-1900004", "class_name": "Rag", "net_id": "1:9701",
+                "parent_net_id": y_ent["net_id"], "parent_pers_id": yellow, "depth_n": 2.0, "owner_uid": b.director_uid,
+            }
+            rows = b.honest_purge_rows(plan)
+            if only_in_emit:
+                at = next(i for i, r in enumerate(rows) if r["phase"] == "emit" and r["pers_id"] == yellow)
+                rows.insert(at, b.purge_row("emit", rag))
+            else:
+                at = max(i for i, r in enumerate(rows) if r["phase"] == "pre") + 1
+                rows.insert(at, b.purge_row("pre", rag))
+            plan["rows"] = rows
+        return hook
+
+    def test_neg_o2_purge_foreign_descendant_lost_with_its_parent_fails(self) -> None:
+        """Brief, ronda 2 `:580` y arbitraje 2 y 4: una entidad sin autorizar que cuelga de una baja en la captura de su
+        tick (que entro despues de `pre`, o que ya estaba en `pre`) y falta en t5: se borro algo ajeno con el padre ->
+        `fail`. Con el director ilegible en t5 la ausencia queda fuera de cobertura -> `missing`, no `fail`.
+        O3 (H2 de Sol sobre O2): el arrastre se atribuye con la captura del tick de la baja, no con `pre`. El trapo que
+        solo consta en `pre` y que la captura del tick ya no pone bajo el guante (`rag_in_pre`) no se le atribuye: su
+        ausencia en t5 no se explica -> `missing` (`purge_foreign_unaccounted:Rag`), ya no `fail`. La variante
+        `rag_in_pre_and_in_the_tick_capture` conserva el `fail` cuando la captura si lo pone bajo el guante."""
+        variants = (
+            ("rag_in_pre", self._o2_rag_hook(only_in_emit=False), False, "missing", "purge_foreign_unaccounted:Rag"),
+            ("rag_in_pre_and_in_the_tick_capture", self._o3_rag_hook(in_pre=True, in_capture="under_glove"), False,
+             "fail", "purge_foreign_lost_with_parent:Rag"),
+            ("rag_entered_after_pre", self._o2_rag_hook(only_in_emit=True), False, "fail", "purge_foreign_lost_with_parent:Rag"),
+            ("rag_in_pre_director_unreadable_in_t5", self._o2_rag_hook(only_in_emit=False), True, "missing", ""),
+        )
+        for name, hook, unreadable, status, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    if unreadable:
+                        self._e9_director_gone(part_dir, ("area_a", "area_b"), present=1, readable=0)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-08"]["status"], status, msg=f"{name}:{_only_non_pass(verdict)}")
+                    if needle:
+                        self.assertIn(needle, c_map["PER-08"]["detail"], msg=f"{name}:{c_map['PER-08']['detail']}")
+                    if status == "fail":
+                        self.assertEqual(_only_non_pass(verdict), {"PER-08": "fail"}, msg=name)
+                    else:
+                        self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=name)
+
+    def test_pos_o2_purge_foreign_content_still_in_t5_is_not_a_loss(self) -> None:
+        """Control: si el trapo ajeno sigue en el director en t5 (no se perdio con el guante), no hay `fail` por perdida."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder, part_dir = self._e9_build(tmp, "run", "rag_kept", purge_hook=self._o2_rag_hook(only_in_emit=False))
+            for area in ("area_a", "area_b"):
+                self._e9_add_rows_to_census(part_dir, f"t5_post_restart_census:{area}", [self._e9_director_row(
+                    builder, "Rag", "1:9702", "1900001:-1900002:1900003:-1900004", "Cargo:0:2:0")])
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(_only_non_pass(verdict), {}, msg=json.dumps(verdict["checks"]))
+
+    def test_neg_o2_purge_remnant_by_identity_after_done_fails(self) -> None:
+        """Brief, ronda 2 `:582`: tras un `done`, un `pers_id` acreditado en el director de un censo posterior es un
+        remanente -> `fail`: con `retained_foreign` (el guante tiene algo ajeno dentro y se queda), con un guante
+        `absent` en la purga que aparece despues en t5, o en el censo testigo."""
+        def retained(b: Any, plan: dict[str, Any]) -> None:
+            yellow = b.entities_by_lid["b_act_1_gloves_dir"]["pers_id"]
+            y_ent = next(e for e in plan["tree"] if e["pers_id"] == yellow)
+            plan["tree"].append({
+                "pers_id": "1900001:-1900002:1900003:-1900004", "class_name": "Rag", "net_id": "1:9701",
+                "parent_net_id": y_ent["net_id"], "parent_pers_id": yellow, "depth_n": 2.0, "owner_uid": b.director_uid,
+            })
+
+        variants = (
+            ("retained_foreign_glove_stays", retained, None, ("t5_post_restart_census:area_a", "t5_post_restart_census:area_b"), "b_act_1_gloves_dir"),
+            ("absent_in_the_purge_present_in_t5", None, ("ac_act_1_gloves_dir",), ("t5_post_restart_census:area_b",), "b_act_1_gloves_dir"),
+            ("remnant_in_the_witness_census", None, None, ("t5_witness_pre_census:area_b", "t5_witness_post_census:area_b"), "ac_act_1_gloves_dir"),
+        )
+        for name, hook, returning, tags, lid in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook, purge_returning=returning)
+                    if hook is retained:
+                        self.assertIn("retained_foreign", [r["result"] for r in self._e9_purge_rows(part_dir)])
+                    for tag in tags:
+                        self._e9_add_rows_to_census(part_dir, tag, [self._o2_glove_row(builder, lid, "1:9801")])
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-08"]["status"], "fail", msg=f"{name}:{_only_non_pass(verdict)}")
+                    self.assertIn(f"purge_remnant:{lid}", c_map["PER-08"]["detail"], msg=name)
+                    self.assertEqual(verdict["exit_code"], 1, msg=name)
+
+    def test_neg_o2_purge_epoch_link_is_required(self) -> None:
+        """Brief, ronda 2 `:574`, `:585` y arbitraje 7: el `per_status` que valida al director, la orden, las `job_read` y
+        el `job_free` van al epoch nuevo; cada resultado se casa con su `enq` y su entrega por `op_id`, y su epoch es el
+        del ultimo `hello` aceptado del servidor. Sin ese vinculo, o con la orden a otro epoch, PER-08 `missing`."""
+        def stale(b: Any, plan: dict[str, Any]) -> None:
+            plan["order_strings"]["expect_epoch"] = b.server_epoch_old
+
+        def edit_events(kind: str) -> Any:
+            def edit(builder: "_SyntheticPartBuilder", events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                ids = self._o2_purge_op_ids(events)
+                last_read = ids["reads"][-1]
+                if kind == "read_enq_other":
+                    for ev in events:
+                        if ev.get("ev") == "enq" and ev.get("op_id") == last_read:
+                            ev["inst"] = "srv-epoch-9999"
+                elif kind == "read_without_delivery":
+                    events = [ev for ev in events if not (ev.get("ev") == "poll" and any(o.get("op_id") == last_read for o in ev.get("ops") or []))]
+                elif kind == "order_enq_without_inst":
+                    for ev in events:
+                        if ev.get("ev") == "enq" and ev.get("op_id") == ids["order"]:
+                            ev.pop("inst")
+                elif kind == "order_result_of_another_epoch":
+                    for ev in events:
+                        if ev.get("ev") == "result" and any(r.get("op_id") == ids["order"] for r in ev.get("results") or []):
+                            ev["inst"] = "srv-epoch-9999"
+                elif kind == "director_not_validated":
+                    first_new = _status_op_ids(events, builder.server_epoch_new)[0]
+                    for ev in events:
+                        for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                            if res.get("op_id") == first_new:
+                                u_s, u_n, u_r = _unpack(res["read"])
+                                u_n["director_present_b"] = 0.0
+                                res["read"] = _repack_read(u_s, u_n, u_r, res["read"])
+                return events
+            return edit
+
+        variants = (
+            ("order_expects_the_old_epoch", stale, None, "purge_order_stale_epoch"),
+            ("read_enqueued_to_another_instance", None, edit_events("read_enq_other"), "purge_epoch_unlinked:job_read:enq_inst"),
+            ("read_without_delivery", None, edit_events("read_without_delivery"), "purge_epoch_unlinked:job_read:no_delivery"),
+            ("order_enq_without_inst", None, edit_events("order_enq_without_inst"), "purge_epoch_unlinked:per_purge_start:enq_inst"),
+            ("order_result_of_another_epoch", None, edit_events("order_result_of_another_epoch"), "purge_epoch_unlinked:per_purge_start:result_epoch"),
+            ("director_not_validated_before_the_order", None, edit_events("director_not_validated"), "purge_director_not_validated"),
+        )
+        for name, hook, edit, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    if edit is not None:
+                        _write_events(part_dir, edit(builder, _read_events(part_dir)))
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name, PER_08=needle)
+
+    def test_pos_o2_purge_epoch_linked_in_the_real_bridge_format(self) -> None:
+        """Control del vinculo: el trafico de t4 (el `per_status` de la espera y la purga) con el formato del puente real
+        (`enq` con `inst`, `poll` con `op_ids` y un `deliver` por orden, `result` sin `inst`) sigue en PASA."""
+        with tempfile.TemporaryDirectory() as tmp:
+            builder, part_dir = self._e9_build(tmp, "run", "real_format")
+            events = _read_events(part_dir)
+            ids = self._o2_purge_op_ids(events)
+            first_new = _status_op_ids(events, builder.server_epoch_new)[0]
+            targets = {first_new, ids["order"], ids["free"], *ids["reads"]}
+            out: list[dict[str, Any]] = []
+            for ev in events:
+                if ev.get("ev") == "poll" and any(o.get("op_id") in targets for o in ev.get("ops") or []):
+                    out.append({k: v for k, v in ev.items() if k != "ops"} | {"op_ids": [o["op_id"] for o in ev["ops"]], "http": 200})
+                    for o in ev["ops"]:
+                        out.append({"ev": "deliver", "peer": "server", "inst": ev["inst"], "op_id": o["op_id"],
+                                    "verb": o["verb"], "args": o["args"], "t_ms": ev.get("t_ms")})
+                elif ev.get("ev") == "result" and any(r.get("op_id") in targets for r in ev.get("results") or []):
+                    out.append({k: v for k, v in ev.items() if k != "inst"})
+                else:
+                    out.append(ev)
+            _write_events(part_dir, out)
+            verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            self.assertEqual(_only_non_pass(verdict), {}, msg=json.dumps(verdict["checks"]))
+
+    def test_neg_o2_sol5_purge_end_between_the_census_job_start_and_its_snapshot_fails(self) -> None:
+        """Sol 5 sobre 433d535 (BLOQ C): el primer trabajo t5 empieza en S-10 (su `job_read`) y su instantanea es S; un
+        fin de purga en S-5 queda despues del inicio del trabajo -> `fail` (`:581`, `>=`), aunque sea anterior a la
+        instantanea. Con el fin en S-11, antes del inicio del trabajo, sigue en PASA."""
+        for name, end_delta, ok in (("end_after_the_job_start", -5.0, False), ("end_before_the_job_start", -11.0, True)):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name)
+                    snap = self._e9_first_t5_start_tick(part_dir)
+                    self._e9_edit_pages(part_dir, {"t5_post_restart_census:area_a"}, lambda pg: pg.nums.update(start_tick_ms=snap - 10.0))
+                    self._e9_edit_purge_reads(
+                        part_dir,
+                        lambda pg, end=snap + end_delta: pg.nums.update(end_tick_ms=end, onjobend_tick_ms=end, released_tick_ms=end),
+                    )
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    if ok:
+                        self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+                    else:
+                        self._e9_expect(verdict, {"PER-08": "fail"}, name, PER_08="purge_not_before_t5_census")
+
+    def test_neg_o2_sol5_last_purge_read_after_the_first_t5_send_is_missing(self) -> None:
+        """Sol 5 / brief `:586`: la ultima lectura del trabajo de purga tiene que preceder, en la traza del puente, al
+        envio del primer censo t5. Si una lectura (la ultima pagina, o todas las terminales) llega despues -> `missing`
+        (el fin del trabajo sigue siendo anterior: no hay `fail`)."""
+        for name, how_many in (("last_page_read_after", 1), ("all_terminal_reads_after", 2)):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name)
+                    events = _read_events(part_dir)
+                    ids = self._o2_purge_op_ids(events)
+                    moved_ids = ids["reads"][-how_many:]
+                    idxs = sorted(i for oid in moved_ids for i in self._o2_op_events(events, oid))
+                    moved = [events[i] for i in idxs]
+                    rest = [ev for i, ev in enumerate(events) if i not in set(idxs)]
+                    (first_t5_job,) = list(self._e9_jobs_of(rest, {"t5_post_restart_census:area_a"}))
+                    at = next(i for i, ev in enumerate(rest) if ev.get("ev") == "enq" and ev.get("op_id") == first_t5_job) + 1
+                    _write_events(part_dir, rest[:at] + moved + rest[at:])
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name, PER_08="purge_read_not_before_t5")
+
+    def test_neg_o2_purge_pre_rows_without_the_character_anchor_is_missing(self) -> None:
+        """Brief, arbitraje 8: antes de la primera baja tiene que constar el mismo personaje (las filas `pre` contienen el
+        ancla de PER-07). Sin ella (solo los guantes, o los objetos basales con `pers_id` nuevos) -> `missing`; las bajas
+        honestas no dan `fail`."""
+        def only_gloves(_b: Any, plan: dict[str, Any]) -> None:
+            plan["tree"] = [e for e in plan["tree"] if e.get("logical_id")]
+
+        def new_pids(_b: Any, plan: dict[str, Any]) -> None:
+            for k, e in enumerate(plan["tree"]):
+                if not e.get("logical_id"):
+                    e["pers_id"] = f"170{k}301:-1700302:1700303:-1700304"
+
+        for name, hook in (("pre_rows_only_the_gloves", only_gloves), ("baseline_items_with_new_pers_ids", new_pids)):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name, PER_08="purge_character_unanchored")
+
+    def test_neg_o2_t0_director_ambiguous_only_with_two_or_more_players(self) -> None:
+        """Brief, ronda 2 `:531` y arbitraje 8: con dos o mas jugadores en el `per_status` de t0 -> `2 INCONCLUSO`
+        (`director_ambiguous`), tambien si antes hubo una espera con cero."""
+        for name, seq in (("two_players", (2,)), ("three_players", (3,)), ("zero_then_two", (0, 2))):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, t0_players_n=seq)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertIn("director_ambiguous", verdict["reasons"], msg=name)
+                    self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=name)
+                    self.assertEqual(verdict["exit_code"], 2, msg=name)
+
+    def test_pos_o2_t0_zero_players_keeps_waiting_and_one_player_fixes_the_uid(self) -> None:
+        """Control: con cero jugadores se sigue esperando y el uid se fija con exactamente uno -> PASA, sin
+        `director_ambiguous`."""
+        for name, seq in (("zero_then_one", (0, 1)), ("zero_zero_then_one", (0, 0, 1))):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, t0_players_n=seq)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{verdict['reasons']}")
+                    self.assertNotIn("director_ambiguous", verdict["reasons"], msg=name)
+
+    def test_neg_o2_t0_entity_outside_the_director_tree_still_aborts(self) -> None:
+        """Brief `:248` (ronda 2): una centinela dentro del arbol del director ya no aborta, pero cualquier entidad de las
+        areas de suelo en t0 (una centinela o un objeto cualquiera, `owner_uid` vacio) sigue abortando con
+        `dirty_initial_area`."""
+        for name, area, cls in (("sentinel_on_the_ground_area_b", "area_b", "RadarCap_Black"), ("bottle_on_the_ground_area_c", "area_c", "WaterBottle")):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    row = self._t6_row(class_name=cls, ai_agent_b=0.0, max_hp=100.0, health_hp=100.0, net_id="1:9901",
+                                       pers_id="1500901:-1500902:1500903:-1500904")
+                    events = _read_events(part_dir)
+                    (job,) = list(self._e9_jobs_of(events, {f"t0_baseline_census:{area}"}))
+                    for ev in events:
+                        for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                            if res.get("status") == "done" and res.get("verb") in ("per_census_start", "job_read"):
+                                u_s, u_n, u_r = _unpack(res["read"])
+                                if u_s.get("job") != job:
+                                    continue
+                                if res["verb"] == "per_census_start":
+                                    u_n["rows_captured_n"] += 1
+                                else:
+                                    u_n.update(rows_total_n=1.0, pages_n=1.0)
+                                    u_r = [row]
+                                res["read"] = _repack_read(u_s, u_n, u_r, res["read"])
+                    _write_events(part_dir, events)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertIn("dirty_initial_area", verdict["reasons"], msg=name)
+                    self.assertEqual(verdict["exit_code"], 2, msg=name)
+
+    def test_neg_o2_per_purge_read_no_longer_accredits_the_purge(self) -> None:
+        """Brief, ronda 2 `:526`: `per_purge_read` desaparece. Un registro honesto de `per_purge_read` (formato de la
+        enmienda del 2026-11-17) sin orden `per_purge_start`, con prendas acreditadas -> PER-08 `missing`."""
+        def no_order(_b: Any, plan: dict[str, Any]) -> None:
+            plan["send_order"] = False
+
+        for name in ("record_with_both_gloves", "record_with_nothing"):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=no_order)
+                    events = _read_events(part_dir)
+                    first_new = _status_op_ids(events, builder.server_epoch_new)[0]
+                    at = max(self._o2_op_events(events, first_new)) + 1
+                    rows = [] if name == "record_with_nothing" else [
+                        {"class_name": builder.entities_by_lid[lid]["class_name"], "pers_id": builder.entities_by_lid[lid]["pers_id"],
+                         "owner_uid": builder.director_uid}
+                        for lid in ("ac_act_1_gloves_dir", "b_act_1_gloves_dir")
+                    ]
+                    self._o2_insert_op(
+                        events, at, op_id="old-purge-read-1", verb="per_purge_read", inst=builder.server_epoch_new,
+                        args=builder._pack_ext_args(), t_ms=float(events[at - 1]["t_ms"]) + 1.0, tick_ms=700.0,
+                        read=builder._pack_ext_read(
+                            strings={"server_epoch": builder.server_epoch_new, "purge_state": "done"},
+                            numbers={"purge_tick_ms": 700.0, "purge_frame": 20.0, "purged_n": float(len(rows))},
+                            scol=["class_name", "pers_id", "owner_uid"], rows=rows,
+                        ),
+                    )
+                    _write_events(part_dir, events)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name, PER_08="purge_not_done:no_order")
+
+    def test_neg_o2_purge_second_order_in_the_run_is_missing(self) -> None:
+        """Brief `:538` y `:587`: la unica orden de purga de la corrida es la de t4. Otra en el epoch viejo (aunque se
+        rechace) o una segunda en el nuevo -> PER-08 `missing`."""
+        for name in ("rejected_order_in_the_old_epoch", "second_order_in_the_new_epoch"):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    events = _read_events(part_dir)
+                    ids = self._o2_purge_op_ids(events)
+                    order_enq = next(ev for ev in events if ev.get("ev") == "enq" and ev.get("op_id") == ids["order"])
+                    if name == "rejected_order_in_the_old_epoch":
+                        at = self._new_hello_index(events, builder)
+                        inst, status, reason, t_ms = builder.server_epoch_old, "rejected", "director_not_ready", float(events[at - 1]["t_ms"]) - 1.0
+                    else:
+                        at = max(self._o2_op_events(events, ids["free"])) + 1
+                        inst, status, reason, t_ms = builder.server_epoch_new, "done", "", float(events[at - 1]["t_ms"]) + 1.0
+                    self._o2_insert_op(
+                        events, at, op_id="extra-purge-1", verb="per_purge_start", inst=inst, args=order_enq["args"],
+                        t_ms=t_ms, status=status, reason=reason,
+                        read=builder._pack_ext_read(strings={"job": "extra-purge-1", "state": "running", "resource": "per_purge"}, numbers={"pre_n": 4.0}) if status == "done" else {},
+                    )
+                    _write_events(part_dir, events)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name, PER_08="purge_extra_order")
+
+    # =========================================================================
+    # O3 (ultima ronda del tope, 22-nov): los diez hallazgos de Sol sobre O2 (`a6a68f6`), el cierre parcial de Sol 5 y
+    # la aclaracion de la interfaz de la purga (brief `:650-670`). `test_neg_o3_*` dan `fail` o `missing` donde
+    # corresponde; `test_pos_o3_*` son evidencia honesta que debe pasar. Los reproductores de Sol son datos: estos
+    # tests se escriben desde cero.
+    # =========================================================================
+
+    _O3_RAG_PID = "1900011:-1900012:1900013:-1900014"
+    _O3_FOREIGN_PID = "1600301:-1600302:1600303:-1600304"
+
+    @staticmethod
+    def _o3_tree_ent(b: Any, plan: dict[str, Any], lid: str) -> dict[str, Any]:
+        pid = b.entities_by_lid[lid]["pers_id"]
+        return next(e for e in plan["tree"] if e["pers_id"] == pid)
+
+    @staticmethod
+    def _o3_insert_after_pre(rows: list[dict[str, Any]], extra: list[dict[str, Any]]) -> None:
+        at = max(i for i, r in enumerate(rows) if r["phase"] == "pre") + 1
+        rows[at:at] = extra
+
+    def _o3_rows_gloves_left_after_pre(self, b: Any, plan: dict[str, Any], lids: tuple[str, ...]) -> list[dict[str, Any]]:
+        """Los guantes ``lids`` constan en `pre` (la captura inicial) y salen del arbol antes de que se resuelva su
+        candidato: sin `emit` y con `result = absent` (P2c resuelve `absent` sobre el arbol del tick de resolucion)."""
+        gone = [self._o3_tree_ent(b, plan, lid) for lid in lids]
+        rows = b.honest_purge_rows({**plan, "tree": [e for e in plan["tree"] if all(e is not g for g in gone)]})
+        self._o3_insert_after_pre(rows, [b.purge_row("pre", g) for g in gone])
+        return rows
+
+    def _o3_rag_hook(self, *, in_pre: bool, in_capture: str) -> Any:
+        """Un trapo ajeno en el guante amarillo: en `pre` (captura inicial) y/o en la captura del tick de su baja
+        (``in_capture``: ``"under_glove"`` cuelga del guante, ``"elsewhere"`` cuelga de los Jeans, ``""`` no sale)."""
+        def hook(b: Any, plan: dict[str, Any]) -> None:
+            y_ent = self._o3_tree_ent(b, plan, "b_act_1_gloves_dir")
+            rag = {
+                "pers_id": self._O3_RAG_PID, "class_name": "Rag", "net_id": "1:9711", "parent_net_id": y_ent["net_id"],
+                "parent_pers_id": y_ent["pers_id"], "depth_n": 2.0, "owner_uid": b.director_uid,
+            }
+            rows = b.honest_purge_rows(plan)  # el trapo no esta en el arbol del plan: el guante resulta elegible
+            if in_pre:
+                self._o3_insert_after_pre(rows, [b.purge_row("pre", rag)])
+            if in_capture:
+                if in_capture == "elsewhere":
+                    jeans = next(e for e in plan["tree"] if e["class_name"] == "Jeans_Blue")
+                    rag = {**rag, "parent_net_id": jeans["net_id"], "parent_pers_id": jeans["pers_id"], "depth_n": 1.0}
+                at = next(i for i, r in enumerate(rows) if r["phase"] == "emit" and r["pers_id"] == y_ent["pers_id"])
+                rows.insert(at, b.purge_row("emit", rag))
+            plan["rows"] = rows
+        return hook
+
+    def _o3_rag_seen_in(self, part_dir: Path, builder: "_SyntheticPartBuilder", tags: tuple[str, ...]) -> None:
+        for tag in tags:
+            self._e9_add_rows_to_census(
+                part_dir, tag, [self._e9_director_row(builder, "Rag", "1:9711", self._O3_RAG_PID, "Cargo:0:2:0")]
+            )
+
+    def _o3_edit_result(self, part_dir: Path, op_id: str, edit: Any) -> None:
+        events = _read_events(part_dir)
+        n = 0
+        for ev in events:
+            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                if res.get("op_id") == op_id:
+                    page = self._e9_page(res)
+                    edit(page)
+                    self._e9_store(res, page)
+                    n += 1
+        self.assertEqual(n, 1, msg=op_id)
+        _write_events(part_dir, events)
+
+    @staticmethod
+    def _o3_drop_deliveries(events: list[dict[str, Any]], op_ids: set[str]) -> list[dict[str, Any]]:
+        """Quita las entregas (el `poll` que lleva la orden, o su `deliver`) y conserva `enq` y resultado."""
+        return [
+            ev for ev in events
+            if not (ev.get("ev") == "poll" and any(o.get("op_id") in op_ids for o in ev.get("ops") or []))
+            and not (ev.get("ev") == "deliver" and ev.get("op_id") in op_ids)
+        ]
+
+    def _o3_transition_op_ids(self, events: list[dict[str, Any]], builder: "_SyntheticPartBuilder", lids: tuple[str, ...]) -> set[str]:
+        nids = {builder.entities_by_lid[lid]["net_id"] for lid in lids}
+        ids = {res["op_id"] for res in self._e9_results(events, "per_child_transition") if self._e9_page(res).strs.get("net_id") in nids}
+        self.assertEqual(len(ids), len(lids))
+        return ids
+
+    # ---- H1: un `absent` legitimo no da INCONCLUSO ----------------------------------------------------------
+
+    def test_pos_o3_h1_absent_of_a_glove_that_was_in_pre_passes(self) -> None:
+        """H1 (Sol sobre O2): `pre` es la captura inicial. Un guante que consta en `pre` y sale del arbol antes de que se
+        resuelva su candidato, sin `emit`, con `result = absent` y ausente en t5 con el director cubierto -> PASA, no
+        INCONCLUSO (P2c resuelve `absent` sobre el arbol del tick de resolucion, `DSBX_QA_X_Persist.c:1570-1574`)."""
+        for name, lids, results in (
+            ("yellow_glove_left_the_tree_after_pre", ("b_act_1_gloves_dir",), ["deleted", "absent"]),
+            ("both_gloves_left_the_tree_after_pre", ("ac_act_1_gloves_dir", "b_act_1_gloves_dir"), ["absent", "absent"]),
+        ):
+            def hook(b: Any, plan: dict[str, Any], lids: tuple[str, ...] = lids) -> None:
+                plan["rows"] = self._o3_rows_gloves_left_after_pre(b, plan, lids)
+
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    rows = self._e9_purge_rows(part_dir)
+                    self.assertEqual([r["result"] for r in rows if r["phase"] == "result"], results)
+                    for lid in lids:
+                        pid = builder.entities_by_lid[lid]["pers_id"]
+                        self.assertIn(pid, {r["pers_id"] for r in rows if r["phase"] == "pre"})
+                        self.assertNotIn(pid, {r["pers_id"] for r in rows if r["phase"] == "emit"})
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+                    self.assertEqual(verdict["verdict"], "PASA", msg=name)
+
+    def test_neg_o3_h1_absent_after_pre_is_contrasted_with_emissions_and_later_coverage(self) -> None:
+        """H1, negativas: el `absent` de un guante de `pre` se contrasta con las emisiones y con lo observado despues. Con
+        una baja suya en el recibo -> `missing` (`purge_result_contradicts_baja`); si aparece despues en el director (t5)
+        -> `fail` (`purge_remnant`); con el director ilegible en t5 la ausencia no se acredita -> `missing`, sin `fail`."""
+        def yellow_absent(b: Any, plan: dict[str, Any]) -> None:
+            plan["rows"] = self._o3_rows_gloves_left_after_pre(b, plan, ("b_act_1_gloves_dir",))
+
+        def absent_with_its_baja(b: Any, plan: dict[str, Any]) -> None:
+            rows = self._o3_rows_gloves_left_after_pre(b, plan, ("b_act_1_gloves_dir",))
+            y_ent = self._o3_tree_ent(b, plan, "b_act_1_gloves_dir")
+            at = next(i for i, r in enumerate(rows) if r["phase"] == "result" and r["pers_id"] == y_ent["pers_id"])
+            rows.insert(at, b.purge_row(
+                "emit", y_ent, emit_tick_ms=plan["start_tick_ms"] + 160.0, lease_age_ms=400.0, lease_limit_ms=3000.0,
+            ))
+            plan["rows"] = rows
+
+        variants = (
+            ("absent_with_its_own_baja", absent_with_its_baja, "", {"PER-08": "missing"}, "purge_result_contradicts_baja"),
+            ("absent_but_in_the_director_in_t5", yellow_absent, "remnant", {"PER-08": "fail"}, "purge_remnant:b_act_1_gloves_dir"),
+            ("absent_with_the_director_unreadable_in_t5", yellow_absent, "unreadable", None, ""),
+        )
+        for name, hook, t5_edit, expected, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    if t5_edit == "remnant":
+                        self._e9_add_rows_to_census(
+                            part_dir, "t5_post_restart_census:area_b", [self._o2_glove_row(builder, "b_act_1_gloves_dir", "1:9801")]
+                        )
+                    elif t5_edit == "unreadable":
+                        self._e9_director_gone(part_dir, ("area_a", "area_b"), present=1, readable=0)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    if expected is None:
+                        self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=f"{name}:{_only_non_pass(verdict)}")
+                        self.assertEqual(_checks_by_id(verdict)["PER-08"]["status"], "missing", msg=name)
+                        self.assertEqual(verdict["exit_code"], 2, msg=name)
+                    else:
+                        self._e9_expect(verdict, expected, name, PER_08=needle)
+
+    # ---- H2: un objeto conservado no da FALLA por perdida ----------------------------------------------------
+
+    def test_pos_o3_h2_object_out_of_the_tick_capture_and_seen_after_is_not_a_loss(self) -> None:
+        """H2 (Sol sobre O2): un trapo cuelga del guante amarillo en `pre`; en la captura del tick de su baja ya no cuelga
+        de el (no sale, o sale bajo los Jeans), y los dos censos del testigo t5 lo muestran despues con el mismo `net_id`
+        y `pers_id` -> PASA: el arrastre se atribuye con la captura del tick y la supervivencia, con lo observado en t5."""
+        for name, in_capture in (("rag_out_of_the_capture", ""), ("rag_under_the_jeans_in_the_capture", "elsewhere")):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=self._o3_rag_hook(in_pre=True, in_capture=in_capture))
+                    self._o3_rag_seen_in(part_dir, builder, ("t5_witness_pre_census:area_b", "t5_witness_post_census:area_b"))
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+
+    def test_neg_o3_h2_dragged_or_unaccounted_object(self) -> None:
+        """H2, negativas: el trapo cuelga del guante en la captura del tick de su baja y no se ve despues -> `fail`
+        (borrado con el padre); solo en `pre`, fuera de la captura y sin verse despues -> `missing`
+        (`purge_foreign_unaccounted:Rag`), nunca `fail`; y con el director ilegible en t5 -> `missing`."""
+        variants = (
+            ("rag_in_the_tick_capture_lost", "under_glove", False, "fail", "purge_foreign_lost_with_parent:Rag"),
+            ("rag_only_in_pre_never_seen_after", "", False, "missing", "purge_foreign_unaccounted:Rag"),
+            ("rag_only_in_pre_director_unreadable_in_t5", "", True, "missing", ""),
+        )
+        for name, in_capture, unreadable, status, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=self._o3_rag_hook(in_pre=True, in_capture=in_capture))
+                    if unreadable:
+                        self._e9_director_gone(part_dir, ("area_a", "area_b"), present=1, readable=0)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-08"]["status"], status, msg=f"{name}:{_only_non_pass(verdict)}")
+                    if needle:
+                        self.assertIn(needle, c_map["PER-08"]["detail"], msg=f"{name}:{c_map['PER-08']['detail']}")
+                    if status == "missing":
+                        self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=name)
+                    else:
+                        self.assertEqual(_only_non_pass(verdict), {"PER-08": "fail"}, msg=name)
+
+    # ---- H3: un `pers_id` ambiguo no es un remanente acreditado ----------------------------------------------
+
+    def test_neg_o3_h3_ambiguous_pers_id_is_not_an_accredited_remnant(self) -> None:
+        """H3 (Sol sobre O2): la unicidad se resuelve antes de declarar el remanente. Dos guantes con el `pers_id` del
+        amarillo y `net_id` distintos en `pre` y en t5 (la purga registra `ambiguous` y no borra) -> `missing`, no `fail`;
+        igual si en t5 solo queda uno de los dos de `pre`, o si tras la baja del beige aparecen dos con su `pers_id` en
+        t5 de area_a (PER-07 y PER-08). Control: un remanente unico sigue en `fail`."""
+        def second_yellow(b: Any, plan: dict[str, Any]) -> None:
+            y_ent = self._o3_tree_ent(b, plan, "b_act_1_gloves_dir")
+            plan["tree"].append({**y_ent, "net_id": "1:9721"})
+
+        variants = (
+            ("two_yellow_gloves_in_pre_and_t5", second_yellow, "area_b", ("b_act_1_gloves_dir",), ("1:YELLOW", "1:9721"),
+             {"PER-08": "missing"}, "purge_remnant_ambiguous:b_act_1_gloves_dir"),
+            ("two_in_pre_one_left_in_t5", second_yellow, "area_b", ("b_act_1_gloves_dir",), ("1:9721",),
+             {"PER-08": "missing"}, "purge_remnant_ambiguous:b_act_1_gloves_dir"),
+            ("beige_deleted_then_two_copies_in_t5", None, "area_a", ("ac_act_1_gloves_dir",), ("1:9731", "1:9732"),
+             {"PER-07": "missing", "PER-08": "missing"}, "purge_remnant_ambiguous:ac_act_1_gloves_dir"),
+            ("control_unique_remnant_still_fails", None, "area_b", ("b_act_1_gloves_dir",), ("1:9741",),
+             {"PER-08": "fail"}, "purge_remnant:b_act_1_gloves_dir"),
+        )
+        for name, hook, area, (lid,), nids, expected, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    rows = self._e9_purge_rows(part_dir)
+                    if hook is second_yellow:
+                        self.assertIn("ambiguous", [r["result"] for r in rows if r["phase"] == "result"])
+                    pid = builder.entities_by_lid[lid]["pers_id"]
+                    pre_nid = next((r["net_id"] for r in rows if r["phase"] == "pre" and r["pers_id"] == pid), "")
+                    extra = [self._o2_glove_row(builder, lid, pre_nid if nid == "1:YELLOW" else nid) for nid in nids]
+                    self._e9_add_rows_to_census(part_dir, f"t5_post_restart_census:{area}", extra)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, expected, name, PER_08=needle)
+
+    def test_pos_o3_h3_one_entity_seen_in_several_windows_is_not_ambiguous(self) -> None:
+        """Control de H3: la misma entidad vista en varias ventanas (`pre`, censos t5 del reinicio y del testigo y t6, con
+        el mismo `net_id`) no es un `pers_id` repetido. El guante beige basal junto al QA de su clase, con los dos guantes
+        de vuelta o solo el beige -> PASA."""
+        for name, returning in (("both_gloves_return", None), ("only_the_beige_glove_returns", ("ac_act_1_gloves_dir",))):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, baseline_sentinel_glove=True, purge_returning=returning)
+                    base = next(r for r in builder.baseline_dir_rows if r["class_name"] == "WorkingGloves_Beige")
+                    self.assertIn(base["net_id"], {r["net_id"] for r in self._e9_purge_rows(part_dir) if r["phase"] == "pre"})
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+
+    # ---- H4: la identidad de cada baja ------------------------------------------------------------------------
+
+    def test_neg_o3_h4_baja_identity_is_crossed_with_pre_capture_and_result(self) -> None:
+        """H4 (Sol sobre O2): cada baja se cruza por la identidad del epoch nuevo con `pre`, con la captura de su tick y
+        con su `result`. Sin `net_id` en la baja y en su `deleted` -> `missing`; su `net_id` apunta a la Apple basal con
+        el `pers_id` del guante -> `missing`; un `net_id` que no esta en `pre` -> `missing`; un `deleted` con otro
+        `net_id` que su baja -> `missing`. Un trapo que aun cuelga del guante en la captura del tick, aunque sobreviva
+        en t5 -> `fail` (un padre solo se borra fisicamente vacio, arbitraje 2)."""
+        def edit_yellow(fn: Any, phases: tuple[str, ...] = ("emit", "result")) -> Any:
+            def hook(b: Any, plan: dict[str, Any]) -> None:
+                pid = b.entities_by_lid["b_act_1_gloves_dir"]["pers_id"]
+                rows = b.honest_purge_rows(plan)
+                apple = next(e for e in plan["tree"] if e["class_name"] == "Apple")
+                for r in rows:
+                    if r["pers_id"] == pid and r["phase"] in phases:
+                        fn(r, apple)
+                plan["rows"] = rows
+            return hook
+
+        def blank(r: dict[str, Any], _apple: dict[str, Any]) -> None:
+            r["net_id"] = r["parent_net_id"] = ""
+
+        def to_apple(r: dict[str, Any], apple: dict[str, Any]) -> None:
+            r["net_id"], r["parent_net_id"] = apple["net_id"], apple["parent_net_id"]
+
+        def unknown(r: dict[str, Any], _apple: dict[str, Any]) -> None:
+            r["net_id"] = "1:9990"
+
+        def other_result(r: dict[str, Any], _apple: dict[str, Any]) -> None:
+            r["net_id"] = "1:9991"
+
+        variants = (
+            ("emit_and_deleted_without_net_id", edit_yellow(blank), "", "missing", "purge_baja_unidentified"),
+            ("emit_net_id_points_to_the_baseline_apple", edit_yellow(to_apple), "", "missing", "purge_baja_identity_mismatch"),
+            ("emit_net_id_not_in_pre", edit_yellow(unknown), "", "missing", "purge_baja_not_in_pre"),
+            ("deleted_with_another_net_id", edit_yellow(other_result, ("result",)), "", "missing", "purge_result_identity_mismatch"),
+            ("rag_hanging_in_the_capture_and_kept", self._o3_rag_hook(in_pre=False, in_capture="under_glove"), "rag_kept",
+             "fail", "purge_baja_with_descendant:Rag"),
+        )
+        for name, hook, t5_edit, status, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    if t5_edit == "rag_kept":
+                        self._o3_rag_seen_in(part_dir, builder, ("t5_post_restart_census:area_a", "t5_post_restart_census:area_b"))
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": status}, name, PER_08=needle)
+
+    def test_pos_o3_h4_bajas_identified_in_their_tick_captures_pass(self) -> None:
+        """Control de H4: las dos bajas en ticks seguidos sin un `result` entre ellas (los `deleted` llegan despues), o la
+        confirmacion del primer guante en el mismo tick que la emision del segundo (P2c confirma y emite en el mismo
+        `TickPurge`) -> PASA."""
+        def consecutive(b: Any, plan: dict[str, Any]) -> None:
+            rows = b.honest_purge_rows(plan)
+            t = plan["start_tick_ms"]
+            pre = [r for r in rows if r["phase"] == "pre"]
+            emits = [r for r in rows if r["phase"] == "emit"]
+            results = [r for r in rows if r["phase"] == "result"]
+            for k, (e, r) in enumerate(zip(emits, results)):
+                e["emit_tick_ms"], r["confirm_tick_ms"] = t + 50.0 * (k + 1), t + 150.0 + 50.0 * k
+            plan["rows"] = pre + emits + results
+
+        def confirm_and_emit_in_one_tick(b: Any, plan: dict[str, Any]) -> None:
+            rows = b.honest_purge_rows(plan)
+            emits = [r for r in rows if r["phase"] == "emit"]
+            results = [r for r in rows if r["phase"] == "result"]
+            emits[1]["emit_tick_ms"] = results[0]["confirm_tick_ms"]
+            results[1]["confirm_tick_ms"] = emits[1]["emit_tick_ms"] + 50.0
+            plan["rows"] = rows
+
+        for name, hook in (("consecutive_emissions_results_later", consecutive), ("confirm_and_next_emission_in_one_tick", confirm_and_emit_in_one_tick)):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+
+    # ---- H5: la seleccion de t0 en el contrato nuevo ------------------------------------------------------------
+
+    def test_neg_o3_h5_t0_selection_not_ready_before_the_baseline_is_inconclusive(self) -> None:
+        """H5 (Sol sobre O2): en el contrato nuevo (`players_n` en t0 y purga del runner) el uid del director solo vale si
+        una seleccion lista (`players_n == 1`, uid no vacio, presente, vivo y legible) precede al primer censo basal.
+        La unica respuesta de t0 sin jugador listo (`players_n = 0`, uid vacio, 0/0/0), la seleccion lista despues del
+        primer censo basal, o un jugador con el inventario ilegible -> INCONCLUSO (`director_not_selected`), sin `fail`:
+        el uid de un censo o de otro `per_status` ya no la suple."""
+        def not_ready(page: types.SimpleNamespace) -> None:
+            page.strs["director_uid"] = ""
+            page.nums.update(players_n=0.0, director_present_b=0.0, director_alive_b=0.0, director_inv_readable_b=0.0)
+
+        def unreadable(page: types.SimpleNamespace) -> None:
+            page.nums.update(director_inv_readable_b=0.0)
+
+        for name, how in (("only_t0_status_not_ready", not_ready), ("ready_after_the_first_baseline_census", "move"),
+                          ("one_player_inventory_unreadable", unreadable)):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    events = _read_events(part_dir)
+                    t0_status = _status_op_ids(events, builder.server_epoch_old)[0]
+                    if how == "move":
+                        idxs = self._o2_op_events(events, t0_status)
+                        moved = [events[i] for i in idxs]
+                        rest = [ev for i, ev in enumerate(events) if i not in set(idxs)]
+                        (job,) = list(self._e9_jobs_of(rest, {"t0_baseline_census:area_a"}))
+                        enq_at = next(i for i, ev in enumerate(rest) if ev.get("ev") == "enq" and ev.get("op_id") == job)
+                        for ev in moved:
+                            ev["t_ms"] = float(rest[enq_at]["t_ms"])
+                        _write_events(part_dir, rest[:enq_at + 3] + moved + rest[enq_at + 3:])
+                    else:
+                        self._o3_edit_result(part_dir, t0_status, how)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertIn("director_not_selected", verdict["reasons"], msg=f"{name}:{verdict['reasons']}")
+                    self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=name)
+                    self.assertEqual(verdict["exit_code"], 2, msg=name)
+
+    def test_pos_o3_h5_ready_selection_before_the_baseline_passes(self) -> None:
+        """Control de H5: con cero jugadores se sigue esperando y la seleccion lista llega antes del basal -> PASA. Y una
+        traza antigua (sin `players_n` ni purga del runner) conserva el respaldo historico del uid: no da
+        `director_not_selected` (su PER-08 sigue en `missing` por la purga que no hubo)."""
+        for name, seq in (("zero_then_one", (0, 1)), ("zero_zero_then_one", (0, 0, 1))):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, t0_players_n=seq)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{verdict['reasons']}")
+                    self.assertEqual(verdict["verdict"], "PASA", msg=name)
+        with self.subTest("historical_trace_without_players_n"):
+            with tempfile.TemporaryDirectory() as tmp:
+                builder, part_dir = self._e9_build(
+                    tmp, "run", "historical", purge_hook=lambda _b, plan: plan.update(send_order=False),
+                )
+                t0_status = _status_op_ids(_read_events(part_dir), builder.server_epoch_old)[0]
+                self._o3_edit_result(part_dir, t0_status, lambda page: page.nums.pop("players_n"))
+                verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                self.assertNotIn("director_not_selected", verdict["reasons"])
+                self._e9_expect(verdict, {"PER-08": "missing"}, "historical", PER_08="purge_not_done:no_order")
+
+    # ---- H6: la procedencia vieja, eslabon a eslabon ------------------------------------------------------------
+
+    def test_neg_o3_h6_old_provenance_link_missing_leaves_the_glove_unidentified(self) -> None:
+        """H6 (Sol sobre O2): antes de autorizar por identidad se exige el enlace al epoch viejo del alta, la transicion
+        (con su entrega) y los censos que dan la lectura. Sin las entregas de los dos `move_to_director` (con sus `enq`,
+        resultados y censos), sin la del alta de scene_b o sin la de una pagina de t1_post de area_a -> la prenda queda
+        sin identificar y PER-08 `missing`."""
+        def drop(kind: str) -> Any:
+            def edit(builder: "_SyntheticPartBuilder", events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                if kind == "transitions":
+                    ids = self._o3_transition_op_ids(events, builder, ("ac_act_1_gloves_dir", "b_act_1_gloves_dir"))
+                elif kind == "apply_b":
+                    ids = {next(
+                        res["op_id"] for res in self._e9_results(events, "per_apply_scene")
+                        if self._e9_page(res).strs.get("scene_id") == "scene_b"
+                    )}
+                else:
+                    (job,) = list(self._e9_jobs_of(events, {"t1_post_transition_census:area_a"}))
+                    ids = {next(res["op_id"] for res in self._e9_results(events, "job_read") if self._e9_page(res).strs.get("job") == job)}
+                return self._o3_drop_deliveries(events, ids)
+            return edit
+
+        for name, kind, needle in (
+            ("both_move_to_director_without_delivery", "transitions", "purge_accredited_unidentified:ac_act_1_gloves_dir:old_link:per_child_transition:no_delivery"),
+            ("apply_of_scene_b_without_delivery", "apply_b", "purge_accredited_unidentified:b_act_1_gloves_dir:old_link:per_apply_scene:no_delivery"),
+            ("t1_post_page_without_delivery", "page", "old_link:job_read:no_delivery"),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    _write_events(part_dir, drop(kind)(builder, _read_events(part_dir)))
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name, PER_08=needle)
+
+    def test_pos_o3_h6_old_provenance_linked_in_the_real_bridge_format_passes(self) -> None:
+        """Control de H6: la procedencia vieja con el formato del puente real (`enq` con `inst` nulo, `poll` con `op_ids`
+        y un `deliver` por orden con el `inst` destino nulo, `result` sin `inst`; `qa/bridge_qa.py:371-378`, `:737-761`,
+        `:859-867`), o con las transiciones dirigidas al epoch viejo (`enq` con su `inst`) -> PASA."""
+        def real_format(builder: "_SyntheticPartBuilder", events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            upto = self._new_hello_index(events, builder)
+            out: list[dict[str, Any]] = []
+            for i, ev in enumerate(events):
+                if i >= upto or ev.get("peer") != "server":
+                    out.append(ev)
+                elif ev.get("ev") == "enq":
+                    out.append({**ev, "inst": ev.get("inst")})
+                elif ev.get("ev") == "poll" and ev.get("ops") is not None:
+                    out.append({k: v for k, v in ev.items() if k != "ops"} | {"op_ids": [o["op_id"] for o in ev["ops"]], "http": 200})
+                    out.extend(
+                        {"ev": "deliver", "peer": "server", "inst": None, "op_id": o["op_id"], "verb": o["verb"],
+                         "args": o["args"], "t_ms": ev.get("t_ms")}
+                        for o in ev["ops"]
+                    )
+                elif ev.get("ev") == "result":
+                    out.append({k: v for k, v in ev.items() if k != "inst"})
+                else:
+                    out.append(ev)
+            return out
+
+        def targeted_transitions(builder: "_SyntheticPartBuilder", events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            ids = self._o3_transition_op_ids(events, builder, ("ac_act_1_gloves_dir", "b_act_1_gloves_dir"))
+            for ev in events:
+                if ev.get("ev") == "enq" and ev.get("op_id") in ids:
+                    ev["inst"] = builder.server_epoch_old
+            return events
+
+        for name, edit in (("old_epoch_in_the_real_bridge_format", real_format), ("transitions_targeted_to_the_old_epoch", targeted_transitions)):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    _write_events(part_dir, edit(builder, _read_events(part_dir)))
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+
+    # ---- H7: la cronologia de la purga -----------------------------------------------------------------------
+
+    def test_neg_o3_h7_purge_chronology_is_verified(self) -> None:
+        """H7 (Sol sobre O2) y aclaracion, punto 2: como mucho una baja por tick, cada emision dentro de la ventana del
+        trabajo, `deleted` despues de su `emit` y con `confirm_tick_ms` posterior a su `emit_tick_ms`. Dos bajas en el
+        mismo tick, una baja despues del fin del trabajo, un `deleted` antes de su `emit`, una confirmacion en el tick de
+        la emision o sin `confirm_tick_ms` -> `missing`. Y el cierre parcial de Sol 5: un primer ENVIO de censo t5
+        rechazado (`purge_pending`) antes de la ultima lectura de la purga -> `missing`, aunque el primer trabajo
+        aceptado sea posterior."""
+        def edit_rows(fn: Any, **plan_kw: Any) -> Any:
+            def hook(b: Any, plan: dict[str, Any]) -> None:
+                plan.update(plan_kw)
+                rows = b.honest_purge_rows(plan)
+                fn(rows, plan)
+                plan["rows"] = rows
+            return hook
+
+        def same_tick(rows: list[dict[str, Any]], _plan: dict[str, Any]) -> None:
+            emits = [r for r in rows if r["phase"] == "emit"]
+            emits[1]["emit_tick_ms"] = emits[0]["emit_tick_ms"]
+
+        def after_end(rows: list[dict[str, Any]], plan: dict[str, Any]) -> None:
+            plan["end_tick_ms"] = plan["start_tick_ms"] + 120.0
+
+        def deleted_first(rows: list[dict[str, Any]], _plan: dict[str, Any]) -> None:
+            e = next(i for i, r in enumerate(rows) if r["phase"] == "emit")
+            rows[e], rows[e + 1] = rows[e + 1], rows[e]
+
+        def confirm_same_tick(rows: list[dict[str, Any]], _plan: dict[str, Any]) -> None:
+            e = next(i for i, r in enumerate(rows) if r["phase"] == "emit")
+            rows[e + 1]["confirm_tick_ms"] = rows[e]["emit_tick_ms"]
+
+        def confirm_missing(rows: list[dict[str, Any]], _plan: dict[str, Any]) -> None:
+            for r in rows:
+                if r["result"] == "deleted":
+                    r["confirm_tick_ms"] = 0.0
+
+        variants = (
+            ("two_bajas_in_one_tick", edit_rows(same_tick), "purge_two_bajas_in_one_tick"),
+            ("baja_after_the_end_of_the_job", edit_rows(after_end), "purge_emit_outside_the_job_window"),
+            ("deleted_before_its_emit", edit_rows(deleted_first), "purge_deleted_before_its_emit"),
+            ("confirmed_in_the_emission_tick", edit_rows(confirm_same_tick), "purge_confirm_not_after_emit"),
+            ("deleted_without_confirm_tick", edit_rows(confirm_missing), "purge_confirm_not_after_emit"),
+            ("first_t5_send_rejected_before_the_last_read", None, "purge_read_not_before_t5"),
+        )
+        for name, hook, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    if hook is None:
+                        events = _read_events(part_dir)
+                        ids = self._o2_purge_op_ids(events)
+                        (first_t5_job,) = list(self._e9_jobs_of(events, {"t5_post_restart_census:area_a"}))
+                        t5_enq = next(ev for ev in events if ev.get("ev") == "enq" and ev.get("op_id") == first_t5_job)
+                        at = min(self._o2_op_events(events, ids["reads"][-1]))
+                        self._o2_insert_op(
+                            events, at, op_id="o3-early-t5-send", verb="per_census_start", inst=builder.server_epoch_new,
+                            args=t5_enq["args"], read={}, t_ms=float(events[at - 1]["t_ms"]), status="rejected",
+                            reason="purge_pending",
+                        )
+                        _write_events(part_dir, events)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name, PER_08=needle)
+
+    def test_pos_o3_h7_purge_chronology_at_its_bounds_passes(self) -> None:
+        """Control de H7: la ventana del trabajo incluye sus extremos. La confirmacion del ultimo guante en el tick del fin
+        (P2c confirma, ve todo resuelto y cierra el trabajo en el mismo `TickPurge`) y la primera emision en el tick de
+        inicio del trabajo -> PASA."""
+        def confirm_at_end(b: Any, plan: dict[str, Any]) -> None:
+            rows = b.honest_purge_rows(plan)
+            plan["end_tick_ms"] = max(r["confirm_tick_ms"] for r in rows)
+            plan["rows"] = rows
+
+        def emit_at_start(b: Any, plan: dict[str, Any]) -> None:
+            rows = b.honest_purge_rows(plan)
+            next(r for r in rows if r["phase"] == "emit")["emit_tick_ms"] = plan["start_tick_ms"]
+            plan["rows"] = rows
+
+        for name, hook in (("last_confirm_at_the_end_tick", confirm_at_end), ("first_emission_at_the_start_tick", emit_at_start)):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    _builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+
+    # ---- H8: el trabajo de la orden y la rodaja contractual ---------------------------------------------------
+
+    def test_neg_o3_h8_job_of_the_order_and_contractual_slice(self) -> None:
+        """H8 (Sol sobre O2) y aclaracion, puntos 1 y 3: el `job` del acuse y de todas las lecturas es el `op_id` de la
+        orden, y cada pagina es la rodaja contractual de 8 filas. Un alias en el acuse y en todas las lecturas, paginas
+        de 4 filas, o 9 filas repartidas 7 + 2 -> `missing`."""
+        for name in ("job_alias_in_the_ack_and_every_read", "pages_of_four_rows", "nine_rows_split_seven_and_two"):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder = _SyntheticPartBuilder("run", baseline_sentinel_glove=True)
+                    if name == "pages_of_four_rows":
+                        builder.PURGE_PAGE_SIZE = 4
+                    part_dir = builder.build_into(Path(tmp) / name)
+                    events = _read_events(part_dir)
+                    ids = self._o2_purge_op_ids(events)
+                    if name == "job_alias_in_the_ack_and_every_read":
+                        alias = "o3-purge-alias-1"
+                        for ev in events:
+                            holders = [ev] if ev.get("ev") == "enq" else (list(ev.get("ops") or []) if ev.get("ev") == "poll" else [])
+                            for h in holders:
+                                if h.get("op_id") in {*ids["reads"], ids["free"]}:
+                                    u_s, u_n, u_r = _unpack(h["args"])
+                                    u_s["job"] = alias
+                                    h["args"] = _repack_read(u_s, u_n, u_r, h["args"])
+                            for res in (ev.get("results") or []) if ev.get("ev") == "result" else []:
+                                if res.get("op_id") in {ids["order"], *ids["reads"], ids["free"]}:
+                                    page = self._e9_page(res)
+                                    page.strs["job"] = alias
+                                    self._e9_store(res, page)
+                        needle = "purge_job_is_not_the_order_op_id"
+                    elif name == "pages_of_four_rows":
+                        needle = "purge_pages_incomplete"
+                    else:
+                        all_rows = self._e9_purge_rows(part_dir)
+                        self.assertEqual(len(all_rows), 9)
+                        for res in self._e9_purge_reads(events):
+                            page = self._e9_page(res)
+                            if page.strs.get("state") != "running":
+                                page.rows = copy.deepcopy(all_rows[:7] if int(round(page.nums["page_n"])) == 0 else all_rows[7:])
+                                self._e9_store(res, page)
+                        needle = "purge_pages_incomplete"
+                    _write_events(part_dir, events)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertNotIn("fail", {c["status"] for c in verdict["checks"]}, msg=f"{name}:{_only_non_pass(verdict)}")
+                    c_map = _checks_by_id(verdict)
+                    self.assertEqual(c_map["PER-08"]["status"], "missing", msg=name)
+                    self.assertIn(needle, c_map["PER-08"]["detail"], msg=f"{name}:{c_map['PER-08']['detail']}")
+
+    def test_pos_o3_h8_identical_rereads_and_full_pages_pass(self) -> None:
+        """Control de H8: una relectura identica de una pagina es valida y no cuenta dos veces (las dos paginas de 9 filas
+        releidas), y 16 filas en dos paginas llenas de 8 -> PASA."""
+        def sixteen_rows(b: Any, plan: dict[str, Any]) -> None:
+            for k in range(8):
+                plan["tree"].append({
+                    "pers_id": f"{1650001 + k}:-1650002:1650003:-1650004", "class_name": "Rag", "net_id": f"1:96{k:02d}",
+                    "parent_net_id": "1:2", "parent_pers_id": "", "depth_n": 0.0, "owner_uid": b.director_uid,
+                })
+
+        for name in ("identical_rereads_of_both_pages", "sixteen_rows_in_two_full_pages"):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    if name == "identical_rereads_of_both_pages":
+                        builder, part_dir = self._e9_build(tmp, "run", name, baseline_sentinel_glove=True)
+                        events = _read_events(part_dir)
+                        for k, res in enumerate([r for r in self._e9_purge_reads(events) if self._e9_page(r).strs.get("state") != "running"]):
+                            idxs = self._o2_op_events(events, res["op_id"])
+                            copies = copy.deepcopy([events[i] for i in idxs])
+                            new_id = f"o3-reread-{k}"
+                            for ev in copies:
+                                if "op_id" in ev:
+                                    ev["op_id"] = new_id
+                                for o in ev.get("ops") or []:
+                                    o["op_id"] = new_id
+                                for r in ev.get("results") or []:
+                                    r["op_id"] = new_id
+                            at = max(self._o2_op_events(events, res["op_id"])) + 1
+                            events[at:at] = copies
+                        _write_events(part_dir, events)
+                    else:
+                        builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=sixteen_rows)
+                        self.assertEqual(len(self._e9_purge_rows(part_dir)), 16)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+
+    # ---- H9: toda la espera de `per_status` ligada al epoch nuevo ---------------------------------------------
+
+    def _o3_insert_wait_status(self, builder: "_SyntheticPartBuilder", events: list[dict[str, Any]], op_id: str,
+                               *, server_epoch: str | None = None) -> None:
+        """Inserta antes de la validacion un `per_status` de la espera con «director aun no listo» (0/0/0), dirigido al
+        epoch nuevo y con el mismo `tick_ms` que la primera lectura (N49)."""
+        first_new = _status_op_ids(events, builder.server_epoch_new)[0]
+        res = next(r for ev in events if ev.get("ev") == "result" for r in ev.get("results") or [] if r.get("op_id") == first_new)
+        page = self._e9_page(res)
+        page.nums.update(director_present_b=0.0, director_alive_b=0.0, director_inv_readable_b=0.0)
+        if server_epoch is not None:
+            page.strs["server_epoch"] = server_epoch
+        enq = next(ev for ev in events if ev.get("ev") == "enq" and ev.get("op_id") == first_new)
+        at = min(self._o2_op_events(events, first_new))
+        self._o2_insert_op(
+            events, at, op_id=op_id, verb="per_status", inst=builder.server_epoch_new, args=enq["args"],
+            read=_repack_read(page.strs, page.nums, page.rows, res["read"]), t_ms=float(events[at - 1]["t_ms"]) + 0.5,
+            tick_ms=float(page.nums["tick_ms"]),
+        )
+
+    def test_neg_o3_h9_every_per_status_of_the_wait_is_linked(self) -> None:
+        """H9 (Sol sobre O2) y aclaracion, punto 5: toda la espera de `per_status` entre el `hello` nuevo y la orden se
+        liga al epoch nuevo, no solo la respuesta que valida. Un `per_status` «aun no listo» antes de la validacion sin su
+        entrega, encolado sin `target_inst`, o cuya respuesta trae otro `server_epoch` -> PER-08 `missing`."""
+        for name, needle in (
+            ("not_ready_status_without_delivery", "purge_epoch_unlinked:per_status_wait:no_delivery"),
+            ("not_ready_status_enqueued_without_target", "purge_epoch_unlinked:per_status_wait:enq_inst"),
+            ("not_ready_status_of_another_epoch", "purge_epoch_unlinked:per_status_wait:server_epoch"),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    events = _read_events(part_dir)
+                    self._o3_insert_wait_status(
+                        builder, events, "o3-wait-1",
+                        server_epoch="srv-epoch-9999" if name == "not_ready_status_of_another_epoch" else None,
+                    )
+                    if name == "not_ready_status_without_delivery":
+                        events = self._o3_drop_deliveries(events, {"o3-wait-1"})
+                    elif name == "not_ready_status_enqueued_without_target":
+                        next(ev for ev in events if ev.get("ev") == "enq" and ev.get("op_id") == "o3-wait-1").pop("inst")
+                    _write_events(part_dir, events)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name, PER_08=needle)
+
+    def test_pos_o3_h9_wait_with_several_linked_per_status_passes(self) -> None:
+        """Control de H9: dos `per_status` «aun no listo» antes del que valida, todos ligados al epoch nuevo, con el
+        formato del constructor o con el del puente real (`poll` con `op_ids`, `deliver` y `result` sin `inst`) -> PASA."""
+        for name in ("two_not_ready_status_then_ready", "two_not_ready_status_in_the_real_bridge_format"):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    events = _read_events(part_dir)
+                    self._o3_insert_wait_status(builder, events, "o3-wait-2")
+                    self._o3_insert_wait_status(builder, events, "o3-wait-1")
+                    if name.endswith("real_bridge_format"):
+                        targets = {"o3-wait-1", "o3-wait-2", _status_op_ids(events, builder.server_epoch_new)[2]}
+                        out: list[dict[str, Any]] = []
+                        for ev in events:
+                            if ev.get("ev") == "poll" and any(o.get("op_id") in targets for o in ev.get("ops") or []):
+                                out.append({k: v for k, v in ev.items() if k != "ops"} | {"op_ids": [o["op_id"] for o in ev["ops"]], "http": 200})
+                                out.extend(
+                                    {"ev": "deliver", "peer": "server", "inst": ev["inst"], "op_id": o["op_id"], "verb": o["verb"],
+                                     "args": o["args"], "t_ms": ev.get("t_ms")}
+                                    for o in ev["ops"]
+                                )
+                            elif ev.get("ev") == "result" and any(r.get("op_id") in targets for r in ev.get("results") or []):
+                                out.append({k: v for k, v in ev.items() if k != "inst"})
+                            else:
+                                out.append(ev)
+                        events = out
+                    _write_events(part_dir, events)
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+
+    # ---- H10: lo observado despues de la purga, tambien en t6 ---------------------------------------------------
+
+    def test_neg_o3_h10_post_purge_observations_include_t6(self) -> None:
+        """H10 (Sol sobre O2) y aclaracion, punto 4: un remanente o una centinela sin atribuir se juzgan en cualquier censo
+        posterior a la purga, tambien t6. Solo en t6 de area_a: un guante amarillo en el director con un `pers_id` ajeno
+        al basal y a las acreditadas -> `missing`; una centinela con `pers_id` nulo -> `missing`; el guante amarillo
+        acreditado -> `fail` (PER-08 por identidad y PER-09 como superviviente de la limpieza)."""
+        for name, cls, pid_of, slot, expected, needle in (
+            ("foreign_yellow_glove_only_in_t6", "WorkingGloves_Yellow", "foreign", "Gloves", {"PER-08": "missing"},
+             "director_sentinel_unattributable:WorkingGloves_Yellow"),
+            ("sentinel_with_a_null_pers_id_only_in_t6", "RadarCap_Black", "null", "Headgear", {"PER-08": "missing"},
+             "director_sentinel_unattributable:RadarCap_Black"),
+            ("accredited_yellow_glove_only_in_t6", "WorkingGloves_Yellow", "accredited", "Gloves",
+             {"PER-08": "fail", "PER-09": "fail"}, "purge_remnant:b_act_1_gloves_dir"),
+        ):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._e9_build(tmp, "run", name)
+                    pid = {"foreign": self._O3_FOREIGN_PID, "null": "0:0:0:0",
+                           "accredited": builder.entities_by_lid["b_act_1_gloves_dir"]["pers_id"]}[pid_of]
+                    self._e9_add_rows_to_census(
+                        part_dir, "t6_post_cleanup_census:area_a", [self._e9_director_row(builder, cls, "1:9811", pid, slot)]
+                    )
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, expected, name, PER_08=needle)
+
+    def test_pos_o3_h10_attributable_items_in_t6_pass(self) -> None:
+        """Control de H10: en t6, el guante beige basal (centinela del basal que se conserva) o una prenda de inicio de
+        clase no centinela con un `pers_id` ajeno -> PASA."""
+        for name in ("baseline_sentinel_glove_in_t6", "start_garment_in_t6"):
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    if name == "baseline_sentinel_glove_in_t6":
+                        builder, part_dir = self._e9_build(tmp, "run", name, baseline_sentinel_glove=True)
+                        base = next(r for r in builder.baseline_dir_rows if r["class_name"] == "WorkingGloves_Beige")
+                        t6_rows = [r for res in self._e9_results(_read_events(part_dir), "job_read")
+                                   for r in self._e9_page(res).rows if r.get("net_id") == base["net_id"]]
+                        self.assertTrue(t6_rows)
+                    else:
+                        builder, part_dir = self._e9_build(tmp, "run", name)
+                        self._e9_add_rows_to_census(
+                            part_dir, "t6_post_cleanup_census:area_a",
+                            [self._e9_director_row(builder, "TShirt_Green", "1:9821", self._O3_FOREIGN_PID, "Body")],
+                        )
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+
+    # =========================================================================
+    # O4 (variante «solo el guante» que eligio Guillermo, 22-nov): el hallazgo 4 de Sol sobre `ba58eda`. Un guante
+    # acreditado que consta en `pre` puede salir del arbol del director sin baja y seguir vivo: el motor suelta lo que
+    # el director lleva en las manos al quedar inconsciente (`playerbase.c:3771-3774`), junto a el. Regla 1: el
+    # `pers_id` acreditado se busca en todas las ubicaciones de los censos posteriores a la purga (`:582`). Regla 2: su
+    # ausencia solo se acredita con los alrededores del director en t5 cubiertos (arbitraje 4, `:632`). Los
+    # reproductores de Sol son datos: estos tests se escriben desde cero.
+    # =========================================================================
+
+    # Posicion del director en t5 de la partida Diag real `run_20261117T061110Z`: en las 10 partidas archivadas con
+    # filas del director, todas sus filas comparten una posicion, a entre 7,7 y 11,1 km del disco mas cercano.
+    _O4_DIRECTOR_FAR = (8042.12, 3188.60)
+    # Censos posteriores a la purga que leen al director en el constructor (t5 de area_a y area_b, testigo y t6 de area_a)
+    _O4_DIRECTOR_TAGS = frozenset({
+        "t5_post_restart_census:area_a", "t5_post_restart_census:area_b", "t5_witness_pre_census:area_b",
+        "t5_witness_post_census:area_b", "t6_post_cleanup_census:area_a",
+    })
+
+    def _o4_place_director(self, part_dir: Path, builder: "_SyntheticPartBuilder", x: float, z: float) -> None:
+        """Pone en ``(x, z)`` las filas del inventario del director de los censos posteriores a la purga: su
+        `GetPosition()` es la del director (en una partida Diag real, todas sus filas comparten una sola posicion)."""
+        def edit(page: types.SimpleNamespace) -> None:
+            for row in self._e9_director_rows(page, builder):
+                row.update(pos_x_m=float(x), pos_y_m=_surface_y(x, z), pos_z_m=float(z))
+
+        self._e9_edit_pages(part_dir, set(self._O4_DIRECTOR_TAGS), edit)
+
+    def _o4_gloves_leave_the_tree(self, lids: tuple[str, ...]) -> Any:
+        """Gancho de la purga: los guantes ``lids`` constan en `pre` y salen del arbol antes de resolverse, sin baja."""
+        def hook(b: Any, plan: dict[str, Any]) -> None:
+            plan["rows"] = self._o3_rows_gloves_left_after_pre(b, plan, lids)
+        return hook
+
+    def _o4_glove_in_the_world(self, builder: "_SyntheticPartBuilder", part_dir: Path, lid: str, x: float, z: float,
+                               net_id: str = "") -> dict[str, Any]:
+        """Fila de censo del guante acreditado ``lid`` en el suelo en ``(x, z)``, fuera del director, con su `pers_id`
+        y el `net_id` con que consta en `pre` (o ``net_id`` si no consta)."""
+        ent = builder.entities_by_lid[lid]
+        pre = [r for r in self._e9_purge_rows(part_dir) if r["phase"] == "pre" and r["pers_id"] == ent["pers_id"]]
+        return self._t6_row(
+            class_name=ent["class_name"], pers_id=ent["pers_id"], net_id=pre[0]["net_id"] if pre else net_id,
+            ai_agent_b=0.0, max_hp=100.0, health_hp=100.0, yaw_deg=12.0,
+            pos_x_m=float(x), pos_y_m=_surface_y(x, z), pos_z_m=float(z),
+        )
+
+    def _o4_add_world_rows(self, part_dir: Path, tag: str, rows: list[dict[str, Any]]) -> None:
+        """Anade filas que no son del director al censo ``tag`` con sus contadores coherentes (el ayudante de e9 cuenta
+        cada fila tambien en `director_inv_count_n`)."""
+        self._e9_add_rows_to_census(part_dir, tag, rows)
+        self._e9_edit_start_reads(
+            part_dir, {tag}, lambda pg: pg.nums.update(director_inv_count_n=pg.nums["director_inv_count_n"] - len(rows))
+        )
+
+    def test_neg_o4_glove_out_of_the_tree_alive_or_out_of_coverage_never_passes(self) -> None:
+        """Hallazgo 4 de Sol sobre `ba58eda` (H1): que el guante falte en el arbol no acredita que falte en el mundo.
+        - Regla 2, sale del arbol despues de `pre` sin baja y nada lo ve: con el director fuera de todo disco t5 (donde
+          lo ponen las partidas reales), o dentro de un disco pero a menos de 15 m del borde -> PER-08 `missing`
+          (`purge_absent_uncovered`), nunca PASA.
+        - Regla 1, el `pers_id` acreditado aparece en el suelo de un censo posterior (en t5 de area_a, lejos de area_b,
+          que es la unica area donde PER-08 lo juzgaba por clase) -> remanente, PER-08 `fail`; tambien si nunca volvio al
+          arbol (`absent` sin estar en `pre`)."""
+        yellow = ("b_act_1_gloves_dir",)
+        variants = (
+            # el caso de Sol `YELLOW_LEFT_AFTER_PRE_OUTSIDE_COVERAGE` con el director donde lo ponen las partidas reales
+            ("director_outside_every_disc", yellow, None, self._O4_DIRECTOR_FAR, None,
+             {"PER-08": "missing"}, "purge_absent_uncovered:b_act_1_gloves_dir"),
+            ("director_inside_area_a_within_15_m_of_its_edge", yellow, None, (4550.0, 10200.0), None,
+             {"PER-08": "missing"}, "purge_absent_uncovered:b_act_1_gloves_dir"),
+            ("both_gloves_left_director_outside_every_disc", ("ac_act_1_gloves_dir", "b_act_1_gloves_dir"), None,
+             self._O4_DIRECTOR_FAR, None, {"PER-08": "missing"}, "purge_absent_uncovered:ac_act_1_gloves_dir"),
+            # el caso de Sol `AUTHORIZED_GLOVE_ON_GROUND_FAR_FROM_AREA_B_T5`: el guante, visible en el suelo solo en t5
+            ("glove_on_the_ground_of_area_a_only_in_t5", yellow, None, None, (4497.0, 10201.0),
+             {"PER-08": "fail"}, "purge_remnant_out_of_director:b_act_1_gloves_dir"),
+            ("glove_never_back_in_the_tree_on_the_ground_in_t5", (), ("ac_act_1_gloves_dir",), None, (4512.0, 10190.0),
+             {"PER-08": "fail"}, "purge_remnant_out_of_director:b_act_1_gloves_dir"),
+        )
+        for name, lids, returning, director_xz, ground_xz, expected, needle in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    hook = self._o4_gloves_leave_the_tree(lids) if lids else None
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook, purge_returning=returning)
+                    rows = self._e9_purge_rows(part_dir)
+                    pre_pids = {r["pers_id"] for r in rows if r["phase"] == "pre"}
+                    for lid in lids:
+                        pid = builder.entities_by_lid[lid]["pers_id"]
+                        self.assertIn(pid, pre_pids, msg=name)
+                        self.assertNotIn(pid, {r["pers_id"] for r in rows if r["phase"] == "emit"}, msg=name)
+                        self.assertEqual([r["result"] for r in rows if r["phase"] == "result" and r["pers_id"] == pid],
+                                         ["absent"], msg=name)
+                    if director_xz is not None:
+                        self._o4_place_director(part_dir, builder, *director_xz)
+                    if ground_xz is not None:
+                        if returning is not None:
+                            self.assertNotIn(builder.entities_by_lid["b_act_1_gloves_dir"]["pers_id"], pre_pids, msg=name)
+                        glove = self._o4_glove_in_the_world(builder, part_dir, "b_act_1_gloves_dir", *ground_xz,
+                                                            net_id="1:9851")
+                        self._o4_add_world_rows(part_dir, "t5_post_restart_census:area_a", [glove])
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, expected, name, PER_08=needle)
+                    if name.startswith("both_gloves"):
+                        self.assertIn("purge_absent_uncovered:b_act_1_gloves_dir",
+                                      _checks_by_id(verdict)["PER-08"]["detail"], msg=name)
+
+    def test_pos_o4_legit_absent_after_pre_passes_and_the_visible_glove_control_still_fails(self) -> None:
+        """Controles del hallazgo 4. El caso legitimo de H1: el guante consta en `pre`, sale del arbol sin baja, los
+        alrededores del director en t5 estan cubiertos (director dentro de un disco t5 completo con 15 m de margen: en el
+        centro de area_a, como en el constructor y en el fake, en area_b, o justo en el margen) y no esta en ninguna
+        parte -> PASA. El `absent` de algo que no estaba en `pre` no cambia, ni la purga honesta, con el director fuera de
+        todo disco -> PASA. El control de Sol con el guante visible en el suelo de area_a en t5 y en t6 sigue en FALLA,
+        ahora tambien por identidad en PER-08.
+        O5 (hallazgo 1 de Sol sobre `810d8a7`): el `absent` de algo que no estaba en `pre`, con el director fuera de todo
+        disco, ya no da PASA sino PER-08 `missing` (`purge_absent_uncovered`): pudo caer junto al director antes de
+        `pre`. La purga honesta con el director fuera de todo disco sigue en PASA."""
+        both = ("ac_act_1_gloves_dir", "b_act_1_gloves_dir")
+        variants = (
+            ("director_at_the_centre_of_area_a", ("b_act_1_gloves_dir",), None, None, False, {}),
+            ("director_inside_area_b_both_gloves_left", both, None, (4680.0, 10200.0), False, {}),
+            ("director_exactly_15_m_inside_the_edge_of_area_a", ("b_act_1_gloves_dir",), None, (4545.0, 10200.0), False, {}),
+            # O5: de PASA a `missing` (el proposito de la O5)
+            ("absent_never_in_pre_director_outside_every_disc", (), ("ac_act_1_gloves_dir",), self._O4_DIRECTOR_FAR, False,
+             {"PER-08": "missing"}),
+            ("honest_purge_director_outside_every_disc", (), None, self._O4_DIRECTOR_FAR, False, {}),
+            # el control de Sol `SAME_GLOVE_T5_AND_T6_AREA_A`
+            ("control_glove_visible_on_the_ground_in_t5_and_t6", ("b_act_1_gloves_dir",), None, None, True,
+             {"PER-08": "fail", "PER-09": "fail"}),
+        )
+        for name, lids, returning, director_xz, visible, expected in variants:
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    hook = self._o4_gloves_leave_the_tree(lids) if lids else None
+                    builder, part_dir = self._e9_build(tmp, "run", name, purge_hook=hook, purge_returning=returning)
+                    rows = self._e9_purge_rows(part_dir)
+                    results = {r["pers_id"]: r["result"] for r in rows if r["phase"] == "result"}
+                    pre_pids = {r["pers_id"] for r in rows if r["phase"] == "pre"}
+                    for lid in lids:
+                        pid = builder.entities_by_lid[lid]["pers_id"]
+                        self.assertIn(pid, pre_pids, msg=name)
+                        self.assertEqual(results[pid], "absent", msg=name)
+                    if returning is not None:
+                        yellow = builder.entities_by_lid["b_act_1_gloves_dir"]["pers_id"]
+                        self.assertNotIn(yellow, pre_pids, msg=name)
+                        self.assertEqual(results[yellow], "absent", msg=name)
+                    if director_xz is not None:
+                        self._o4_place_director(part_dir, builder, *director_xz)
+                    if visible:
+                        glove = self._o4_glove_in_the_world(builder, part_dir, "b_act_1_gloves_dir", 4503.0, 10196.0)
+                        for tag in ("t5_post_restart_census:area_a", "t6_post_cleanup_census:area_a"):
+                            self._o4_add_world_rows(part_dir, tag, [glove])
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    if expected == {"PER-08": "missing"}:
+                        # O5: `absent_never_in_pre_director_outside_every_disc`
+                        self._e9_expect(verdict, expected, name, PER_08="purge_absent_uncovered:b_act_1_gloves_dir")
+                    elif expected:
+                        self._e9_expect(verdict, expected, name, PER_08="purge_remnant_out_of_director:b_act_1_gloves_dir",
+                                        PER_09="t6_cleanup_survivors:WorkingGloves_Yellow")
+                    else:
+                        self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+                        self.assertEqual(verdict["verdict"], "PASA", msg=name)
+
+    # =========================================================================
+    # O5 (microronda aprobada por Guillermo, literal: «Microronda del oraculo»): la caida antes de `pre`, hallazgo 1 de
+    # Sol sobre `810d8a7` y aclaracion del orquestador del 23-nov al final del brief. Un `pers_id` acreditado con
+    # `absent`, sin baja y SIN `pre` exige lo mismo que la regla 2 de la O4 para el `absent` tras `pre`: cada posicion del
+    # director leida en un censo t5 posterior a la purga, dentro de un disco t5 completo con el margen de N39 (15 m). Sin
+    # cobertura, `missing` (`purge_absent_uncovered`), nunca PASA; con cobertura y sin el guante, PASA; si el guante
+    # aparece, `fail` por la regla 1. Los discos de la P2h (`t5_director_p<n>`, radio 30, `include_director_b = 1`,
+    # centrados en el director) son discos t5 como los demas. El reproductor de Sol es un dato: estos tests se escriben
+    # desde cero.
+    # =========================================================================
+
+    # Posicion Diag de la reproduccion de Sol (dentro de una zona de infectados activa de la mision archivada)
+    _O5_DIRECTOR_DIAG = (10884.61, 2750.33)
+    # Radio del disco de la P2h alrededor del director (aclaracion del 23-nov)
+    _O5_DISC_RADIUS_M = 30.0
+
+    def _o5_build(self, tmp: str, name: str, *, discs: tuple[tuple[str, float, float], ...] = (),
+                  rows_at: tuple[float, float] | None = None, **kw: Any) -> tuple["_SyntheticPartBuilder", Path]:
+        builder = _O5DirectorDiscBuilder("run", director_discs=discs, disc_radius_m=self._O5_DISC_RADIUS_M,
+                                         disc_rows_at=rows_at, **kw)
+        return builder, builder.build_into(Path(tmp) / name)
+
+    def _o5_place_director(self, part_dir: Path, builder: "_SyntheticPartBuilder", where: Any) -> None:
+        """Pone las filas del inventario del director de los censos posteriores a la purga (los de `_O4_DIRECTOR_TAGS`)
+        en ``where``: una posicion ``(x, z)`` para todos, o ``{etiqueta: (x, z)}`` con ``"*"`` para las demas."""
+        if isinstance(where, tuple):
+            self._o4_place_director(part_dir, builder, *where)
+            return
+        groups: dict[tuple[float, float], set[str]] = {}
+        for tag in self._O4_DIRECTOR_TAGS:
+            groups.setdefault(tuple(where.get(tag, where["*"])), set()).add(tag)
+        for (x, z), tags in groups.items():
+            def edit(page: types.SimpleNamespace, x: float = x, z: float = z) -> None:
+                for row in self._e9_director_rows(page, builder):
+                    row.update(pos_x_m=float(x), pos_y_m=_surface_y(x, z), pos_z_m=float(z))
+
+            self._e9_edit_pages(part_dir, tags, edit)
+
+    def _o5_bare_tag(self, part_dir: Path, disc: str) -> None:
+        """Deja desnuda la etiqueta del disco (``t5_director_p<n>``, sin ``t5_post_restart_census:``) en su orden y en sus
+        lecturas, como las pistas ``t5_track_*`` de etiqueta desnuda."""
+        staged = f"t5_post_restart_census:{disc}"
+
+        def walk(x: Any) -> Any:
+            if isinstance(x, dict):
+                return {k: walk(v) for k, v in x.items()}
+            if isinstance(x, list):
+                return [walk(v) for v in x]
+            return disc if x == staged else x
+
+        events = _read_events(part_dir)
+        self.assertTrue(any(json.dumps(staged) in json.dumps(e) for e in events), msg=disc)
+        events = [walk(e) for e in events]
+        self.assertFalse(any(json.dumps(staged) in json.dumps(e) for e in events), msg=disc)
+        _write_events(part_dir, events)
+
+    def test_neg_o5_absent_without_pre_and_the_director_uncovered_never_passes(self) -> None:
+        """Hallazgo 1 de Sol sobre `810d8a7`: el guante cae junto al director ANTES de `pre` (el inconsciente suelta lo
+        que lleva en las manos, `playerbase.c:3771`), la purga solo ve `absent` y ningun censo mira alrededor del director.
+        Sin cobertura de sus alrededores en t5 -> PER-08 `missing` (`purge_absent_uncovered`), nunca PASA:
+        - el director donde lo ponen las partidas reales (7-11 km de todo disco) o en la posicion Diag de Sol;
+        - no vuelve ningun guante (los dos `absent` sin `pre`);
+        - hay disco del director, pero su centro esta a 20 m del director (20 + 15 > 30);
+        - el director se movio 40 m entre censos t5 y solo hay disco para la primera posicion."""
+        far, diag = self._O4_DIRECTOR_FAR, self._O5_DIRECTOR_DIAG
+        moved = (diag[0] + 40.0, diag[1])
+        yellow = ("b_act_1_gloves_dir",)
+        variants = (
+            dict(name="director_outside_every_disc_as_in_the_real_runs", returning=("ac_act_1_gloves_dir",), director=far,
+                 discs=(), rows_at=None, lids=yellow),
+            dict(name="director_at_the_diag_position_of_sol", returning=("ac_act_1_gloves_dir",), director=diag,
+                 discs=(), rows_at=None, lids=yellow),
+            dict(name="no_glove_back_in_the_tree_director_outside_every_disc", returning=(), director=far, discs=(),
+                 rows_at=None, lids=("ac_act_1_gloves_dir", "b_act_1_gloves_dir")),
+            dict(name="director_disc_20_m_off_the_director", returning=("ac_act_1_gloves_dir",), director=diag,
+                 discs=(("t5_director_p0", diag[0] + 20.0, diag[1]),), rows_at=diag, lids=yellow),
+            dict(name="director_moved_40_m_one_disc_only", returning=("ac_act_1_gloves_dir",),
+                 director={"t5_post_restart_census:area_a": diag, "*": moved},
+                 discs=(("t5_director_p0", *diag),), rows_at=None, lids=yellow),
+        )
+        for v in variants:
+            name = v["name"]
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._o5_build(tmp, name, discs=v["discs"], rows_at=v["rows_at"],
+                                                       purge_returning=v["returning"])
+                    rows = self._e9_purge_rows(part_dir)
+                    for lid in v["lids"]:
+                        pid = builder.entities_by_lid[lid]["pers_id"]
+                        self.assertNotIn(pid, {r["pers_id"] for r in rows if r["phase"] in ("pre", "emit")}, msg=name)
+                        self.assertEqual([r["result"] for r in rows if r["phase"] == "result" and r["pers_id"] == pid],
+                                         ["absent"], msg=name)
+                    self._o5_place_director(part_dir, builder, v["director"])
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    self._e9_expect(verdict, {"PER-08": "missing"}, name)
+                    for lid in v["lids"]:
+                        self.assertIn(f"purge_absent_uncovered:{lid}", _checks_by_id(verdict)["PER-08"]["detail"], msg=name)
+
+    def test_pos_o5_absent_without_pre_covered_by_a_director_disc_passes_and_the_glove_in_it_fails(self) -> None:
+        """Controles de la O5:
+        - el mismo `absent` sin `pre`, con un disco `t5_director_p0` completo de radio 30 centrado en el director (la
+          posicion Diag de Sol) y sin el guante -> PASA; con la etiqueta desnuda, igual;
+        - con el guante visible en ese disco -> FALLA por la regla 1 de la O4 (PER-08
+          `purge_remnant_out_of_director`);
+        - el H1 legitimo tras `pre` (director en el centro de area_a) sigue en PASA;
+        - el director en el centro de area_a, como en el constructor y en el fake, con su disco de radio 30 ahi
+          mismo: el disco no ocupa el lugar del censo t5 de area_a -> PASA;
+        - el director se movio 40 m entre censos t5 y hay un disco por posicion -> PASA."""
+        diag = self._O5_DIRECTOR_DIAG
+        moved = (diag[0] + 40.0, diag[1])
+        p0 = "t5_director_p0"
+        variants = (
+            dict(name="director_disc_at_the_diag_position_no_glove", returning=("ac_act_1_gloves_dir",), hook=None,
+                 director=diag, discs=((p0, *diag),), bare=False, glove=False, expected={}),
+            dict(name="director_disc_at_the_diag_position_glove_visible_in_it", returning=("ac_act_1_gloves_dir",),
+                 hook=None, director=diag, discs=((p0, *diag),), bare=False, glove=True, expected={"PER-08": "fail"}),
+            dict(name="h1_legit_glove_left_after_pre_director_at_the_centre_of_area_a", returning=None,
+                 hook=self._o4_gloves_leave_the_tree(("b_act_1_gloves_dir",)), director=None, discs=(), bare=False,
+                 glove=False, expected={}),
+            dict(name="director_disc_with_the_bare_tag", returning=("ac_act_1_gloves_dir",), hook=None, director=diag,
+                 discs=((p0, *diag),), bare=True, glove=False, expected={}),
+            dict(name="director_at_the_centre_of_area_a_with_its_disc_as_in_the_fake", returning=("ac_act_1_gloves_dir",),
+                 hook=None, director=None, discs=((p0, 4500.0, 10200.0),), bare=False, glove=False, expected={}),
+            dict(name="director_moved_40_m_one_disc_per_position", returning=("ac_act_1_gloves_dir",), hook=None,
+                 director={"t5_post_restart_census:area_a": diag, "*": moved},
+                 discs=((p0, *diag), ("t5_director_p1", *moved)), bare=False, glove=False, expected={}),
+        )
+        for v in variants:
+            name = v["name"]
+            with self.subTest(name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    builder, part_dir = self._o5_build(tmp, name, discs=v["discs"], purge_returning=v["returning"],
+                                                       purge_hook=v["hook"])
+                    rows = self._e9_purge_rows(part_dir)
+                    yellow = builder.entities_by_lid["b_act_1_gloves_dir"]["pers_id"]
+                    in_pre = yellow in {r["pers_id"] for r in rows if r["phase"] == "pre"}
+                    self.assertEqual(in_pre, v["hook"] is not None, msg=name)
+                    self.assertEqual([r["result"] for r in rows if r["phase"] == "result" and r["pers_id"] == yellow],
+                                     ["absent"], msg=name)
+                    if v["director"] is not None:
+                        self._o5_place_director(part_dir, builder, v["director"])
+                    if v["bare"]:
+                        self._o5_bare_tag(part_dir, p0)
+                    if v["glove"]:
+                        glove = self._o4_glove_in_the_world(builder, part_dir, "b_act_1_gloves_dir", diag[0] + 1.5,
+                                                            diag[1] - 1.0, net_id="1:9851")
+                        self._o4_add_world_rows(part_dir, f"t5_post_restart_census:{p0}", [glove])
+                    verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                    if v["expected"]:
+                        self._e9_expect(verdict, v["expected"], name,
+                                        PER_08="purge_remnant_out_of_director:b_act_1_gloves_dir")
+                    else:
+                        self.assertEqual(_only_non_pass(verdict), {}, msg=f"{name}:{json.dumps(verdict['checks'])}")
+                        self.assertEqual(verdict["verdict"], "PASA", msg=name)
+
+    def test_neg_o5_director_disc_never_stands_in_for_the_census_of_an_area(self) -> None:
+        """El disco de la P2h es su propio disco t5. Centrado en el director cuando este esta en el centro de un area
+        (area_a en el constructor y en el fake), no se toma por el censo t5 de esa area: si en ese censo el director
+        falta o no se lee, PER-07/08/09 lo siguen viendo igual que sin disco (como en `test_e9_a_*`), nunca lo tapa el
+        disco."""
+        variants = (
+            ("director_absent_in_t5_of_area_a_disc_at_its_centre", "area_a", (4500.0, 10200.0), 0, 0,
+             {"PER-07": "missing", "PER-09": "missing"}),
+            ("director_unreadable_in_t5_of_area_b_disc_at_its_centre", "area_b", (4680.0, 10200.0), 1, 0,
+             {"PER-08": "missing", "PER-09": "missing"}),
+        )
+        for name, area, centre, present, readable, expected in variants:
+            with self.subTest(name):
+                seen = []
+                for discs in ((), (("t5_director_p0", *centre),)):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        builder, part_dir = self._o5_build(tmp, name, discs=discs)
+                        self._o5_place_director(part_dir, builder, centre)
+                        self._e9_director_gone(part_dir, (area,), present=present, readable=readable)
+                        verdict = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+                        self._e9_expect(verdict, expected, f"{name}:discs={len(discs)}",
+                                        PER_09=f"t5_director_unreadable:{area}")
+                        seen.append(_only_non_pass(verdict))
+                self.assertEqual(seen[0], seen[1], msg=name)
+
+    _REAB_MARCAS_QA: tuple[float, ...] = (0.7325, 0.6150, 0.8450)
+    _REAB_NET_FUGA: str = "1:9301"
+    _REAB_NET_CTRL: str = "1:9302"
+    _REAB_NET_CTRL_HIJO: str = "1:9303"
+    _REAB_PARTES: tuple[tuple[str, str, str], ...] = (
+        ("run", "", "1122334455667788"),
+        ("mut-unprotected_leak", "omit_nopersistency_flag", "2233445566778899"),
+        ("mut-foreign_wiped", "reset_wipe_radius_25m", "33445566778899aa"),
+        ("mut-census_resource_bypass", "census_resource_bypass", "445566778899aabb"),
+    )
+
+    @classmethod
+    def _reab_tiene_marca_qa(cls, fila: dict[str, Any], centinelas: set[str]) -> bool:
+        """Predicado sin memoria de la sonda en t6 (DSBX_QA_X_Persist.c:3423-3447 y :3591)."""
+        clase = str(fila.get("class_name") or "")
+        max_hp = float(fila.get("max_hp", 0.0))
+        hp = float(fila.get("health_hp", 0.0))
+        if clase not in centinelas or max_hp <= 0.0:
+            return False
+        return any(abs(hp - max_hp * ratio) <= 1e-2 for ratio in cls._REAB_MARCAS_QA)
+
+    def _reab_reinicio_motor_en_mutante(
+        self,
+        part_dir: Path,
+        builder: "_SyntheticPartBuilder",
+        *,
+        forzar_fuga_en_t6: bool = False,
+    ) -> None:
+        """Transforma ``mut-unprotected_leak`` al reinicio del motor: net_id nuevos, pers_id iguales y t6 sin memoria."""
+        fuga_pre = self._census_row(part_dir, "t3_post_reset_census:area_d", "d_prop_leak")
+        fuga_pers = str(fuga_pre["pers_id"])
+        ctrl_pers = str(builder.entities_by_lid["c_persistent_control"]["pers_id"])
+        hijo_pers = str(builder.entities_by_lid["c_persistent_control_child"]["pers_id"])
+
+        capturadas_d: list[dict[str, Any]] = []
+
+        def _renovar_area_d(page: types.SimpleNamespace) -> None:
+            for fila in page.rows:
+                if str(fila.get("pers_id") or "") == fuga_pers:
+                    fila["net_id"] = self._REAB_NET_FUGA
+                    capturadas_d.append(copy.deepcopy(fila))
+
+        self._e9_edit_pages(part_dir, {"t5_post_restart_census:area_d"}, _renovar_area_d)
+        self.assertEqual(len(capturadas_d), 1, msg="fuga ausente en t5 de area_d")
+        fuga_t5 = capturadas_d[0]
+
+        conteo_c = {"ctrl": 0, "hijo": 0}
+
+        def _renovar_area_c(page: types.SimpleNamespace) -> None:
+            for fila in page.rows:
+                pid = str(fila.get("pers_id") or "")
+                if pid == ctrl_pers:
+                    fila["net_id"] = self._REAB_NET_CTRL
+                    conteo_c["ctrl"] += 1
+                elif pid == hijo_pers:
+                    fila["net_id"] = self._REAB_NET_CTRL_HIJO
+                    fila["parent_net_id"] = self._REAB_NET_CTRL
+                    conteo_c["hijo"] += 1
+
+        self._e9_edit_pages(part_dir, {"t5_post_restart_census:area_c"}, _renovar_area_c)
+        self.assertEqual(conteo_c, {"ctrl": 1, "hijo": 1}, msg="control o hijo ausente en t5 de area_c")
+
+        centinelas = set(builder.fixture["sentinel_classes"])
+        if forzar_fuga_en_t6 or not self._reab_tiene_marca_qa(fuga_t5, centinelas):
+            fila_t6 = copy.deepcopy(fuga_t5)
+            fila_t6["net_id"] = self._REAB_NET_FUGA
+            fila_t6["pers_id"] = fuga_pers
+            fila_t6["own_b"] = 0.0
+            fila_t6["own_logical_id"] = ""
+            fila_t6["alive_b"] = 1.0
+            self._add_t6_rows(part_dir, builder, "area_d", [fila_t6])
+
+    def _reab_evaluar_spike_con_reinicio_motor(
+        self, base: Path, *, forzar_fuga_en_t6: bool
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Construye las cuatro partes en ``base``, aplica el reinicio del motor al mutante y agrega el spike."""
+        veredicto_mut: dict[str, Any] | None = None
+        for nombre, fallo, nonce in self._REAB_PARTES:
+            builder = _SyntheticPartBuilder(nombre, nonce=nonce, fault_code=fallo)
+            part_dir = builder.build_into(base / nombre)
+            if nombre == "mut-unprotected_leak":
+                self._reab_reinicio_motor_en_mutante(
+                    part_dir, builder, forzar_fuga_en_t6=forzar_fuga_en_t6
+                )
+            veredicto = s_persist_eval.evaluate(part_dir, repo_root=REPO_ROOT)
+            gate_core.write_json(part_dir / "verdict.json", veredicto)
+            if nombre == "mut-unprotected_leak":
+                veredicto_mut = veredicto
+        self.assertIsNotNone(veredicto_mut)
+        agregado = f03_common.aggregate_spike(base, "S-persist", repo_root=REPO_ROOT)
+        assert veredicto_mut is not None
+        return veredicto_mut, agregado
+
+    def test_reab_fuga_identificable_sin_memoria_tras_el_reinicio(self) -> None:
+        """Contrato de dato para ``scene_d`` (brief :143, :189, :284, :342).
+
+        Comprueba que toda entidad de ``scene_d`` con ``must_vanish_on_restart_b == 1`` pertenezca a
+        ``sentinel_classes`` y nazca con una de las tres marcas QA de salud de :143 (0.7325, 0.6150 u 0.8450)
+        a 1e-9. En las partidas reales del 24-nov el motor conservo ``pers_id`` y salud pero renovo los
+        ``net_id`` (``Barrel_Yellow``: 0:1056->0:183 en diag, 0:1032->0:195 en retail) y la sonda arranco sin
+        registros (``own_b=0``, ``own_logical_id=''``), limpiando en t6 solo por marca (``cleaned_raw_n=1``);
+        sin marca, ``per_cleanup_qa`` (:189) no puede borrar ``d_prop_leak`` en t6 (:284) y el mutante no cae
+        solo por PER-08 (:342).
+        """
+        fixture = json.loads(
+            (QA_DIR / "fixtures" / "s_persist_fixture.json").read_text(encoding="utf-8")
+        )
+        centinelas = set(fixture["sentinel_classes"])
+        entidades_d = [
+            ent
+            for ent in fixture["scenes"]["scene_d"]["entities"]
+            if int(ent.get("must_vanish_on_restart_b", 0)) == 1
+        ]
+        self.assertTrue(entidades_d, msg="scene_d sin entidades con must_vanish_on_restart_b == 1")
+        for ent in entidades_d:
+            lid = str(ent.get("logical_id") or "")
+            clase = str(ent.get("class_name") or "")
+            ratio = float(ent.get("health_mark_ratio", 0.0))
+            self.assertIn(clase, centinelas, msg=f"{lid}:{clase}")
+            self.assertTrue(
+                any(abs(ratio - marca) <= 1e-9 for marca in self._REAB_MARCAS_QA),
+                msg=f"{lid}:health_mark_ratio={ratio}",
+            )
+
+    def test_reab_mutante_con_reinicio_del_motor_cae_solo_por_per08(self) -> None:
+        """Mutante ``mut-unprotected_leak`` con reinicio de motor (brief :143, :189, :284, :342).
+
+        Comprueba que, tras renovar los ``net_id`` en t5 conservando los ``pers_id`` y aplicar en t6 una
+        limpieza sin memoria que solo borra por clase centinela y marca QA de :143 (:189), la parte mutante
+        da ``exit_code == 1`` con ``_only_non_pass == {"PER-08": "fail"}`` y detalle
+        ``reappeared_in_area_d:Barrel_Red`` (:342), sin falsos fallos en t6 (:284), y que el agregado de las
+        cuatro partes da ``exit_code == 0`` y ``verdict == "PASA"``. Se apoya en las partidas reales del
+        24-nov: el motor renovo ``net_id`` (``Barrel_Yellow``: 0:1056->0:183 en diag, 0:1032->0:195 en retail),
+        conservo ``pers_id`` y salud, arranco sin registros (``own_b=0``, ``own_logical_id=''``) y borro el
+        control en t6 por marca (``cleaned_raw_n=1``, ``area_c`` vacia).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            veredicto_mut, agregado = self._reab_evaluar_spike_con_reinicio_motor(
+                Path(tmp), forzar_fuga_en_t6=False
+            )
+            self.assertEqual(veredicto_mut["exit_code"], 1, msg=json.dumps(veredicto_mut, indent=2))
+            self.assertEqual(
+                _only_non_pass(veredicto_mut),
+                {"PER-08": "fail"},
+                msg=json.dumps(veredicto_mut["checks"], indent=2),
+            )
+            detalle_per08 = _checks_by_id(veredicto_mut)["PER-08"]["detail"]
+            self.assertIn("reappeared_in_area_d:Barrel_Red", detalle_per08)
+            self.assertEqual(agregado["exit_code"], 0, msg=json.dumps(agregado, indent=2))
+            self.assertEqual(agregado["verdict"], "PASA", msg=json.dumps(agregado, indent=2))
+
+    def test_reab_superviviente_marcado_sigue_tumbando_per09(self) -> None:
+        """Guarda de t6: llevar marca QA no excusa a un superviviente (brief :143, :189, :284, :342).
+
+        Aplica el mismo reinicio de motor sobre ``mut-unprotected_leak``, pero deja viva la fuga en el censo
+        t6 de ``area_d`` aunque lleve marca de :143, simulando un fallo de ``per_cleanup_qa`` (:189).
+        Comprueba que la parte da ``_only_non_pass == {"PER-08": "fail", "PER-09": "fail"}`` con detalle de
+        PER-09 que empieza por ``t6_cleanup_survivors:`` y contiene ``Barrel_Red:1:9301`` (:284), y que el
+        agregado de las cuatro partes da ``exit_code == 2`` con
+        ``reasons == ["mutant_wrong_check:unprotected_leak:PER-09"]`` (:342). Se apoya en las partidas reales
+        del 24-nov: tras reiniciar el motor conserva ``pers_id`` y salud con ``net_id`` nuevo y sin memoria en
+        la sonda (``own_b=0``, ``own_logical_id=''``), por lo que el cierre de identidad del evaluador sigue
+        atribuyendo la fuga viva en t6 al test.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            veredicto_mut, agregado = self._reab_evaluar_spike_con_reinicio_motor(
+                Path(tmp), forzar_fuga_en_t6=True
+            )
+            self.assertEqual(veredicto_mut["exit_code"], 1, msg=json.dumps(veredicto_mut, indent=2))
+            self.assertEqual(
+                _only_non_pass(veredicto_mut),
+                {"PER-08": "fail", "PER-09": "fail"},
+                msg=json.dumps(veredicto_mut["checks"], indent=2),
+            )
+            detalle_per09 = _checks_by_id(veredicto_mut)["PER-09"]["detail"]
+            self.assertTrue(
+                detalle_per09.startswith("t6_cleanup_survivors:"),
+                msg=detalle_per09,
+            )
+            self.assertIn(f"Barrel_Red:{self._REAB_NET_FUGA}", detalle_per09)
+            self.assertEqual(agregado["exit_code"], 2, msg=json.dumps(agregado, indent=2))
+            self.assertEqual(
+                agregado["reasons"],
+                ["mutant_wrong_check:unprotected_leak:PER-09"],
+                msg=json.dumps(agregado, indent=2),
+            )
+
+
+class _O5DirectorDiscBuilder(_SyntheticPartBuilder):
+    """O5: el constructor sintetico con los discos de la P2h; el constructor base no cambia.
+
+    Tras el censo t5 de area_c emite, por cada disco ``(etiqueta, x, z)``, un censo completo de la etapa
+    ``t5_post_restart_census`` centrado en ``(x, z)``, de radio ``disc_radius_m`` y con ``include_director_b = 1``. Lleva
+    las filas del inventario del director (las del censo t5 de area_a), en ``disc_rows_at`` o, si no se da, en el centro
+    del disco. La etiqueta sale como la del runner (`_census_tag`): ``t5_post_restart_census:t5_director_p<n>``."""
+
+    def __init__(self, *args: Any, director_discs: tuple[tuple[str, float, float], ...] = (),
+                 disc_radius_m: float = 30.0, disc_rows_at: tuple[float, float] | None = None, **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self.o5_director_discs = tuple(director_discs)
+        self.o5_disc_radius_m = float(disc_radius_m)
+        self.o5_disc_rows_at = disc_rows_at
+        self.o5_director_rows: list[dict[str, Any]] = []
+
+    def _emit_census(self, inst: str, stage: str, area_id: str, center_x: float, center_z: float,
+                     rows: list[dict[str, Any]], **kw: Any) -> str:
+        job = super()._emit_census(inst, stage, area_id, center_x, center_z, rows, **kw)
+        if stage == "t5_post_restart_census" and area_id == "area_a":
+            self.o5_director_rows = [copy.deepcopy(r) for r in rows if r.get("owner_uid") == self.director_uid]
+        if stage == "t5_post_restart_census" and area_id == "area_c":
+            for disc, x, z in self.o5_director_discs:
+                rx, rz = self.o5_disc_rows_at if self.o5_disc_rows_at is not None else (x, z)
+                disc_rows = copy.deepcopy(self.o5_director_rows)
+                for r in disc_rows:
+                    r.update(pos_x_m=float(rx), pos_y_m=_surface_y(rx, rz), pos_z_m=float(rz))
+                saved = self.t5_radius_m
+                self.t5_radius_m = self.o5_disc_radius_m
+                try:
+                    super()._emit_census(inst, stage, disc, float(x), float(z), disc_rows, include_director_b=1)
+                finally:
+                    self.t5_radius_m = saved
+        return job
 
 
 if __name__ == "__main__":

@@ -5745,25 +5745,25 @@ Version 1.30.164289.70
 17:39:14.115 El jugador DSBXQA se está conectando.
 17:39:14.121 [StateMachine]: Player DSBXQA (dpnid 28522757 uid ) Entering WaitPlayerAssignedLoginState
 17:39:14.218 [StateMachine]: Player DSBXQA (dpnid 28522757 uid ) Entering PlayerAssignedLoginState
-17:39:14.218 [StateMachine]: Player DSBXQA (dpnid 28522757 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBGetLoginTimeLoginState
-17:39:14.222 [StateMachine]: Player DSBXQA (dpnid 28522757 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBWaitLoginTimeLoginState
+17:39:14.218 [StateMachine]: Player DSBXQA (dpnid 28522757 uid uid-redactado-1) Entering DBGetLoginTimeLoginState
+17:39:14.222 [StateMachine]: Player DSBXQA (dpnid 28522757 uid uid-redactado-1) Entering DBWaitLoginTimeLoginState
 17:39:15.647 SCRIPT       : [DSBX] clock tick_ms=119114
 17:39:20.656 SCRIPT       : [DSBX] clock tick_ms=124122
 17:39:25.655 SCRIPT       : [DSBX] clock tick_ms=129122
-17:39:29.222 [StateMachine]: Player DSBXQA (dpnid 28522757 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering DBGetCharacterLoginState
-17:39:29.226 [StateMachine]: Player DSBXQA (dpnid 28522757 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering CreateNetObjectsLoginState
+17:39:29.222 [StateMachine]: Player DSBXQA (dpnid 28522757 uid uid-redactado-1) Entering DBGetCharacterLoginState
+17:39:29.226 [StateMachine]: Player DSBXQA (dpnid 28522757 uid uid-redactado-1) Entering CreateNetObjectsLoginState
 17:39:29.227 NETWORK      : Network simulation
 17:39:29.227  NETWORK      : Server: SetClientState dpid=28522757 id=0 name=DSBXQA PLAYER ASSIGNED -> MISSION RECEIVED
 17:39:29.227  NETWORK      : server: Player dpid=28522757 added at playerIndex=1
 17:39:29.232  NETWORK      : server: sending World state to remote player... id=28522757
 17:39:29.234  NETWORK      : Server: SetClientState dpid=28522757 id=0 name=DSBXQA MISSION RECEIVED -> GAME LOADED
-17:39:29.234 [StateMachine]: Player DSBXQA (dpnid 28522757 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering PreloadCamLoginState
+17:39:29.234 [StateMachine]: Player DSBXQA (dpnid 28522757 uid uid-redactado-1) Entering PreloadCamLoginState
 17:39:29.236 NETWORK      : Network simulation
 17:39:29.236  NETWORK      : Login: Player DSBXQA (28522757) preloading at: 9538.868164 5.672999 1998.900269, yaw: -0.000048, new: 0
-17:39:29.236 [StateMachine]: Player DSBXQA (dpnid 28522757 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering WaitPreloadCamLoginState
+17:39:29.236 [StateMachine]: Player DSBXQA (dpnid 28522757 uid uid-redactado-1) Entering WaitPreloadCamLoginState
 17:39:30.655 SCRIPT       : [DSBX] clock tick_ms=134122
 17:39:35.654 SCRIPT       : [DSBX] clock tick_ms=139122
-17:39:38.572 [StateMachine]: Player DSBXQA (dpnid 28522757 uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=) Entering GetLoadedCharLoginState
+17:39:38.572 [StateMachine]: Player DSBXQA (dpnid 28522757 uid uid-redactado-1) Entering GetLoadedCharLoginState
 17:39:41.728 NETWORK      : Network simulation
 17:39:41.728  WORLD        : Create entity type 'SurvivorM_Denis'
 17:39:41.728   AUDIO        : Loading SoundSet 'Gag_Drowning_SoundVoice_Char_SoundSet'
@@ -5786,13 +5786,13 @@ Version 1.30.164289.70
 17:39:41.749 Warning: No components in dz\characters\pants\legs3_m.p3d:geometry
 17:39:41.750  PHYSICS      : Initializing ragdoll DZ/characters/bodies/human.ragdoll
 17:39:41.754 Warning: No components in dz\gear\food\plum.p3d:geometry
-17:39:41.757 El jugador DSBXQA (id=HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= pos=<9538.9, 1998.9, 5.7>) se ha conectado.
-17:39:41.757 Player "DSBXQA" (steamID=76561198141021937 pos=<9538.9, 1998.9, 5.7>) is connected
+17:39:41.757 El jugador DSBXQA (id=uid-redactado-1 pos=<9538.9, 1998.9, 5.7>) se ha conectado.
+17:39:41.757 Player "DSBXQA" (steamID=<redacted> pos=<9538.9, 1998.9, 5.7>) is connected
 17:39:41.759 <LOAD EXISTING CHAR>:
     charID 1
     playerID 1
     dpnid 28522757
-    uid HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=
+    uid uid-redactado-1
 17:39:41.769 SCRIPT       : [DSBX] clock tick_ms=145236
 17:39:41.769 SCRIPT       : [DSBX] lease lost age_ms=3535 tick_ms=145236
 17:39:41.769 SCRIPT       : [DSBX] lease expired: returning to HELLO
@@ -6197,7 +6197,7 @@ Version 1.30.164289.70
 17:43:22.883 [Disconnect]: Client 28522757 early disconnect
 17:43:23.380 [Disconnect]: Start script disconnect 28522757 (dbCharacterId 1 dbPlayerId 1) logoutTime 0
 17:43:23.381 NETWORK      : Network simulation
-17:43:23.381  SCRIPT       : [Logout]: New player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= with logout time 0
+17:43:23.381  SCRIPT       : [Logout]: New player uid-redactado-1 with logout time 0
 17:43:23.381 [Disconnect]: Remove player info 28522757
 17:43:23.395 NetServer::SendMsg: cannot find channel #28522757, users.card=0
 17:43:23.395 NetServer: users.get failed when sending to 28522757
@@ -6210,7 +6210,7 @@ Version 1.30.164289.70
 17:43:23.909  NETWORK      : Server: Player info removed - name DSBXQA, id 28522757 (total 1 identities, 1 players)
 17:43:23.915  NETWORK      : server: Player dpid=28522757 removed from index=1
 17:43:23.915  NETWORK      : Server: Identity removed - name DSBXQA, id 28522757 (total 0 identities, 1 players)
-17:43:23.922 SCRIPT       : [Logout]: Player HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg= finished
+17:43:23.922 SCRIPT       : [Logout]: Player uid-redactado-1 finished
 17:43:23.922 CHAR_DEBUG - SAVE
 17:43:23.922     player  null  (dpnid = -1)
 17:43:23.922     Identity: playerID = -1 , charID = -1
@@ -6218,7 +6218,7 @@ Version 1.30.164289.70
 17:43:23.922 CHAR_DEBUG - EXIT
 17:43:23.922     player  null  (dpnid = -1)
 17:43:23.922     Person  : playerID = 1 , charID = 1
-17:43:23.922 [Disconnect]: Finish script disconnect -1 (HmY1S7eL2O_9JLwh-z8c0b6n30Ngil26ZWZJGYm7QZg=)
+17:43:23.922 [Disconnect]: Finish script disconnect -1 (uid-redactado-1)
 17:43:25.500 ENGINE       : Destroying game
 17:43:25.500  SCRIPT       : [DSBX] shutdown role=server created_n=37 inflight_p=1 inflight_r=0
 17:43:25.527  SCRIPT       : ~DayZGame()

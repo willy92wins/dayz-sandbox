@@ -811,7 +811,7 @@
           "req_x_m": 5040.0,
           "req_z_m": 10200.0,
           "req_yaw_deg": 0.0,
-          "health_mark_ratio": 0.0,
+          "health_mark_ratio": 0.7325,
           "must_vanish_on_restart_b": 1
         }
       ]

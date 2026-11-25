@@ -630,6 +630,9 @@ def _is_allowed_c_file(rel_posix):
         return True
     if re.fullmatch(r"scripts/4_World/DSBX_QA_W_Actor_[A-Za-z0-9_]+\.c", rel_posix):
         return True
+    # Gancho EEInit del testigo de creacion (per_witness_start, PR «sonda: extensiones para F2»).
+    if rel_posix == "scripts/4_World/DSBX_QA_W_Witness.c":
+        return True
     return False
 
 
