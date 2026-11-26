@@ -1,6 +1,6 @@
 # F3 sin juego (parte 1): contrato de actores, jueces de C1-C3, motor de actores falso e interfaz del núcleo
 
-2026-11-26 · tarea **F3-offline-1**, rama `claude/project-thread-ww378c` (sobre `de4a0c7`, con F6-web parte 2 en la PR #30) · spec de implementación (R25) de la parte de F3 del [plan de M1 v2](2026-10-26-m1-cine-v2.md) (§3 F3, decisiones #5 y #12-#15) que no necesita partida · contrato: `product-spec.md` C1-C5 · v0.1, **candidata sin revisar** (§14).
+2026-11-26 · tarea **F3-offline-1**, rama `claude/project-thread-ww378c` (sobre `de4a0c7`, con F6-web parte 2 en la PR #30) · spec de implementación (R25) de la parte de F3 del [plan de M1 v2](2026-10-26-m1-cine-v2.md) (§3 F3, decisiones #5 y #12-#15) que no necesita partida · contrato: `product-spec.md` C1-C5 · v0.2, tras la ronda de Gemini Neon (§14).
 
 **Por qué ahora.** Guillermo eligió el 26-nov a la 01:36 UTC adelantar F3 sin lanzar el juego. S3 no ha certificado nada todavía (su oráculo está en `origin/claude/s3-impl-e9` y no está congelado), así que esta parte construye solo lo que **no depende de lo que mida S3**: el formato de lo que el mod devuelve de un actor, los jueces que deciden C1, C2, C3, HOLD y ROAM a partir de esas lecturas, un motor de actores falso que las produce (con fallos inyectables) y la interfaz del motor de actores en el núcleo del mod. Lo que S3 tiene que fijar (umbrales de ROAM, observador de gestos, orden de carga del adaptador) va marcado `[verify S3]` y entra como **parámetro**, nunca como constante escondida.
 
@@ -36,7 +36,7 @@ No se tocan `scene_plan.py`, `scene_live.py`, `bridge.py`, `server.py`, `store.p
 
 ## 2. Formato de lectura de un actor [EXACT]
 
-Unidades como F2 (`scene_plan.py:112-120`): posiciones en milímetros enteros, rumbo en miligrados enteros, tiempos en milisegundos enteros del reloj del servidor (`tick_ms`, F0.3-0 §1). Solo enteros: un `float` o un `bool` invalidan la fila, como en `valid_obs_now_row`.
+Unidades como F2 (`scene_plan.py:112-120`): posiciones en milímetros enteros, rumbo en miligrados enteros, tiempos en milisegundos enteros del reloj del servidor (`tick_ms`, F0.3-0 §1). Solo enteros: un `float` o un `bool` invalidan la fila, como en `valid_obs_now_row`. `world_size` es un parámetro con el mismo valor por defecto que en `scene_plan.py` (`_MAX_WORLD_SIZE`).
 
 ### 2.1 Fila de actor
 
@@ -45,18 +45,20 @@ Unidades como F2 (`scene_plan.py:112-120`): posiciones en milímetros enteros, r
 | Campo | Tipo y rango |
 |---|---|
 | `lid` | `act-NN` (el patrón del esquema, `^act-(0[1-9]\|[1-9]\d+)$`) |
-| `cls` | cadena no vacía de hasta 64 caracteres ASCII imprimibles |
+| `cls` | cadena no vacía de hasta 64 caracteres ASCII imprimibles. Es **el nombre vanilla del documento** (`SurvivorM_Mirek`), nunca la clase del motor: el adaptador quita el prefijo `eAI_` al leer (#12) |
 | `x_mm`, `z_mm` | como `_valid_xz_mm` |
 | `y_mm` | como `_valid_y_mm` |
 | `yaw_mdeg` | como `_valid_yaw_mdeg` |
 | `items` | lista de hasta 32 cadenas (clases de las prendas y objetos que lleva), cada una como `cls`; el orden no cuenta |
-| `mark_i` | entero en `[-1, 63]`: el índice de la marca a la que va o en la que está; `-1` si no tiene |
+| `mark_i` | entero en `[-1, 63]`: el índice en `marks` del documento de la marca a la que va o en la que está; `-1` si no va a ninguna marca del documento (HOLD, ROAM, o acabado) |
 | `mark_st` | `"idle"`, `"moving"`, `"arrived"` o `"unreachable"` |
 | `t_ms` | entero ≥ 0 |
 
 Un actor que ya no vive: `[lid, null, null, null, null, null, [], -1, "idle", t_ms]`, exactamente así; cualquier otra mezcla de nulos se rechaza.
 
-`mark_st` es lo que **dice el motor**; los jueces no se fían de él para dar un `PASA` (#12: «"en marca" lo decide Sandbox midiendo»). Solo cuenta para dos cosas: `unreachable` da `FALLA` en C2 aunque las posiciones estén cerca, y la coherencia de §2.3.
+Coherencia que también se valida: con `mark_i == -1`, `mark_st` solo puede ser `"idle"` o `"moving"`.
+
+`mark_st` es lo que **dice el motor**, y ningún juez lo usa para dar un `PASA` (#12: «"en marca" lo decide Sandbox midiendo»). Solo cuenta para quitarlo: `unreachable` en la marca juzgada da `FALLA` en C2 aunque las posiciones estén cerca.
 
 ### 2.2 Evento de gesto
 
@@ -68,87 +70,147 @@ Un actor que ya no vive: `[lid, null, null, null, null, null, [], -1, "idle", t_
 | `gi` | entero en `[0, 63]`: el índice del gesto en `gestures` del documento |
 | `st` | `"requested"`, `"playing"`, `"finished"`, `"canceled"`, `"rejected"` o `"expired"` |
 | `t_ms` | entero ≥ 0 |
-| `cause` | `null`, o una cadena `^[a-z_]{1,24}$` (por ejemplo `combat`, `stop`, `timeout`, `interrupted`) |
+| `cause` | con `canceled`, `rejected` y `expired`, **obligatoria**: una cadena `^[a-z_]{1,24}$` (por ejemplo `combat`, `stop`, `timeout`, `interrupted`); con `requested`, `playing` y `finished`, `null` |
 
-Las señales son distintas a propósito (#14): pedido, en curso y el fin con su causa. `cause` solo va con `canceled`, `rejected` y `expired`; con los otros tres es `null`.
+Las señales son distintas a propósito (#14): pedido, en curso y el fin con su causa.
 
 ### 2.3 Validadores
 
-`actor_wire.valid_actor_row(row, world_size)` y `actor_wire.valid_gesture_event(ev)` devuelven `True` o `False`. `actor_wire.valid_actor_read(read, world_size)` valida `{"actors": [fila...], "gestures": [evento...]}`: las dos claves obligatorias, nada más; `lid` sin repetir en `actors`; en `gestures`, `t_ms` no decreciente por `(lid, gi)` y cada `(lid, gi)` con `lid` presente en `actors`. Hasta 16 actores y 512 eventos.
+En `app/backend/actor_wire.py`, con estas firmas:
+
+- `valid_actor_row(row, world_size=_MAX_WORLD_SIZE) -> bool`
+- `valid_gesture_event(ev) -> bool`
+- `valid_actor_read(read, world_size=_MAX_WORLD_SIZE) -> bool`: `{"actors": [fila...], "gestures": [evento...]}`, las dos claves obligatorias y nada más; `lid` sin repetir en `actors`; en `gestures`, `t_ms` no decreciente por `(lid, gi)` y cada `lid` presente en `actors`. Hasta 16 actores y 512 eventos.
+
+Una lectura es **una foto**: una fila por actor. Las muestras que juzga §3 son las filas de un mismo `lid` sacadas de fotos sucesivas.
 
 ## 3. Jueces [EXACT salvo lo marcado]
 
-Módulo `app/backend/actor_judge.py`. Cada juez devuelve `{"verdict": "PASA"|"FALLA"|"INCONCLUSO", "why": <código>, ...medidas}`. Los códigos `why` son los de la tabla; las medidas, las que se nombran. Una entrada que no pasa §2.3 da `INCONCLUSO` con `why = "lectura_invalida"`, nunca `PASA`.
+Módulo `app/backend/actor_judge.py`. Cada juez devuelve un `dict` con `"verdict"` (`"PASA"`, `"FALLA"` o `"INCONCLUSO"`), `"why"` (el código de la tabla, o `None` con `PASA`) y las medidas que se nombran.
 
-Las muestras de un actor son la lista de sus filas en orden de `t_ms`. **Cobertura**: una ventana `[a, b]` está cubierta si hay una muestra en `a` o antes, otra en `b` o después, y ningún hueco entre muestras consecutivas mayor que `max_gap_ms` (parámetro, 1000 por defecto). Sin cobertura no hay `PASA`: `INCONCLUSO` con `why = "sin_cobertura"`.
+**Tipos.** `samples`: lista de filas de §2.1. `expected = {"cls": str, "items": list[str]}`. `mark` y `p0`: `{"x": float, "z": float}` en metros. `faltan` y `sobran`: `list[str]` ordenada, con repeticiones. Distancias horizontales (x, z) en metros; `y` no cuenta.
 
-| Juez | `PASA` | `FALLA` | `INCONCLUSO` |
-|---|---|---|---|
-| `judge_identity(expected, row)` (C1) | `row.cls == expected.cls` y `Counter(row.items) == Counter(expected.items)` | otra clase (`clase`) u otro multiconjunto (`vestuario`, con `faltan` y `sobran`) | actor muerto (`muerto`) |
-| `judge_mark(samples, mark, reach_m=1.5, settle_m=0.5, settle_ms=10000)` (C2) | hay un `t0` con distancia horizontal a la marca `< reach_m` y la ventana `[t0, t0 + settle_ms]` cubierta, con todas sus muestras a `< settle_m` de la posición en `t0`; devuelve `t0` y `drift_m` | ninguna muestra llega (`no_llega`), llega pero se mueve (`no_quieto`), o alguna muestra dice `unreachable` para esa marca (`inalcanzable`), aunque esté cerca | llega pero la ventana no está cubierta (`sin_cobertura`) |
-| `judge_gesture(events, lid, gi)` (C3) | la secuencia de `(lid, gi)` es `requested`, `playing`, `finished`, en ese orden y con `t_ms` creciente estricto entre `requested` y `playing` | **nunca** `finished` sin un `playing` antes (`fin_sin_empezar`); `canceled` después de `playing` (`cancelado`); `rejected` (`rechazado`); `expired` (`agotado`); un evento después del fin (`despues_del_fin`) | sin eventos o solo `requested` (`sin_fin`) |
-| `judge_hold(samples, window_ms, settle_m=0.5)` (C4, HOLD) | ventana `[t_primera, t_primera + window_ms]` cubierta y desplazamiento máximo respecto a la primera muestra `< settle_m` | desplazamiento `≥ settle_m` (`se_mueve`) | `sin_cobertura` |
-| `judge_roam(samples, p0, radius_m, window_ms, min_path_m, min_dest_n)` (C4, ROAM) | ventana cubierta, **todas** las muestras a `≤ radius_m` de `p0`, recorrido acumulado `≥ min_path_m` y llegadas `≥ min_dest_n` (transiciones a `arrived` contadas en las filas) | una muestra fuera del radio (`fuera_radio`, con `max_dist_m`); recorrido o llegadas por debajo (`quieto`) | `sin_cobertura` |
+**Comprobaciones comunes de `samples`**, en este orden y antes de nada:
+1. alguna fila no pasa `valid_actor_row`, hay dos `lid` distintos o `t_ms` no es creciente estricto → `INCONCLUSO`, `lectura_invalida`;
+2. lista vacía → `INCONCLUSO`, `sin_cobertura`;
+3. alguna fila de muerto → `INCONCLUSO`, `muerto`.
 
-- `radius_m` sale del `roam` del documento; `min_path_m = 40` y `min_dest_n = 4` son los de S3 §12 D1 y van como parámetros `[verify S3]`. `window_ms` = 600000 en partida (S3-05); las pruebas usan ventanas cortas.
-- Distancias horizontales (x, z) en metros a partir de los milímetros; `y` no cuenta.
-- `judge_gesture` mira solo los eventos de su `(lid, gi)`. Un `finished` con `cause` no nulo ya lo rechaza §2.3.
-- `LOOP` y `ONCE` encadenado no tienen juez propio aquí: son `judge_mark` sobre cada marca (el de LOOP, dos vueltas). El orquestador de la partida los compone en F3-partida.
+**Cobertura.** Una ventana `[a, b]` está cubierta si hay una muestra con `t_ms ≤ a`, otra con `t_ms ≥ b`, y entre la última `≤ a` y la primera `≥ b` ningún hueco entre muestras consecutivas mayor que `max_gap_ms` (por defecto 1000). Las medidas de la ventana se toman sobre esas muestras (de la última `≤ a` a la primera `≥ b`, ambas incluidas).
+
+### 3.1 `judge_identity(expected, row)` (C1)
+
+| Veredicto | Cuándo |
+|---|---|
+| `INCONCLUSO` | `lectura_invalida` (la fila no pasa §2.1) o `muerto` |
+| `FALLA` | `clase`: `row[1] != expected["cls"]`. Si no, `vestuario`: `Counter(row[6]) != Counter(expected["items"])`, con `faltan` y `sobran` |
+| `PASA` | lo demás |
+
+### 3.2 `judge_mark(samples, mark_i, mark, reach_m=1.5, settle_m=0.5, settle_ms=10000, max_gap_ms=1000)` (C2)
+
+Un `t0` es **candidato** si la muestra en `t0` está a `< reach_m` de `mark`. Precedencia, de arriba abajo:
+
+| Veredicto | Cuándo |
+|---|---|
+| comunes | las tres de arriba |
+| `FALLA`, `inalcanzable` | alguna muestra con `mark_i` igual al juzgado y `mark_st == "unreachable"`, esté cerca o lejos |
+| `PASA` | algún candidato con `[t0, t0 + settle_ms]` cubierta y todas sus muestras a `< settle_m` de la posición en `t0`. Devuelve `t0` y `drift_m`. Con `settle_ms == 0`, basta un candidato (marca de paso) |
+| `FALLA`, `no_quieto` | algún candidato con la ventana cubierta en el que alguna muestra está a `≥ settle_m` |
+| `INCONCLUSO`, `sin_cobertura` | hay candidatos, pero ninguno con la ventana cubierta |
+| `FALLA`, `no_llega` | ningún candidato. Devuelve `min_dist_m` |
+
+Las marcas intermedias de `ONCE` y las de `LOOP` se juzgan como marca de paso (`settle_ms = 0`); la última de `ONCE`, con los 10 s (C2).
+
+### 3.3 `judge_gesture(events, lid, gi)` (C3)
+
+Solo cuentan los eventos de ese `(lid, gi)`, en el orden de la lista. Precedencia, de arriba abajo:
+
+| Veredicto | Cuándo |
+|---|---|
+| `INCONCLUSO`, `lectura_invalida` | algún evento no pasa §2.2 o `t_ms` baja |
+| `INCONCLUSO`, `sin_fin` | ningún evento |
+| `FALLA`, `sin_pedido` | el primero no es `requested` |
+| `FALLA`, `repetido` | algún `st` aparece dos veces |
+| `FALLA`, `despues_del_fin` | hay algún evento después del primer terminal (`finished`, `canceled`, `rejected`, `expired`), por ejemplo un arranque tardío tras un `expired` (CX-nv3) |
+| `FALLA`, `cancelado` | el terminal es `canceled`, antes o después de `playing` |
+| `FALLA`, `rechazado` | el terminal es `rejected` |
+| `FALLA`, `agotado` | el terminal es `expired` |
+| `FALLA`, `fin_sin_empezar` | el terminal es `finished` y no hubo `playing` |
+| `FALLA`, `duracion_cero` | `finished` con el mismo `t_ms` que `playing` |
+| `PASA` | `requested`, `playing`, `finished`, con `t_requested ≤ t_playing < t_finished` (como S3-04) |
+| `INCONCLUSO`, `sin_fin` | sin terminal (`requested`, o `requested` y `playing`) |
+
+### 3.4 `judge_hold(samples, window_ms, settle_m=0.5, max_gap_ms=1000)` (C4, HOLD)
+
+Ventana `[t_primera, t_primera + window_ms]`. Precedencia: comunes; `FALLA`, `se_mueve` si alguna muestra de la ventana está a `≥ settle_m` de la primera (devuelve `max_drift_m`), aunque la ventana no esté cubierta; `INCONCLUSO`, `sin_cobertura`; `PASA`.
+
+### 3.5 `judge_roam(samples, p0, radius_m, window_ms, min_path_m, min_stops_n, stop_ms=1000, stop_speed_mps=0.2, max_gap_ms=1000)` (C4, ROAM)
+
+Ventana `[t_primera, t_primera + window_ms]`. Medidas, **todas de posiciones** (nada de `mark_st`, #12): `max_dist_m` a `p0`; `path_m`, la suma de las distancias entre muestras consecutivas; `stops_n`, cuántos tramos maximales de muestras consecutivas con velocidad `< stop_speed_mps` duran `≥ stop_ms`.
+
+Precedencia: comunes; `FALLA`, `fuera_radio` si alguna muestra está a `> radius_m` (aunque vuelva dentro); `INCONCLUSO`, `sin_cobertura`; `FALLA`, `quieto` si `path_m < min_path_m` o `stops_n < min_stops_n`; `PASA`.
+
+`radius_m` sale del `roam` del documento. `min_path_m = 40` y `min_stops_n = 4` son los de S3 §12 D1 (allí «llegadas»; aquí paradas medidas) y van como parámetros `[verify S3]`. `window_ms` = 600000 en partida (S3-05); las pruebas usan ventanas cortas.
+
+`LOOP` y `ONCE` encadenado no tienen juez propio: son `judge_mark` sobre cada marca (LOOP, dos vueltas, todas de paso). El orquestador de la partida los compone en F3-partida.
 
 ## 4. Presets de vestuario como datos [DESIGN]
 
-`fixtures/catalog-m1.json` gana `wardrobe_items`: para cada nombre de `wardrobes`, la lista de clases vanilla que viste el actor. Cinco prendas por preset (el «5 prendas» de S3-01), de clases vanilla de ropa `[verify S3]`:
+`fixtures/catalog-m1.json` gana `wardrobe_items`: para cada nombre de `wardrobes`, la lista de clases vanilla que viste el actor, una prenda por ranura. Cinco por preset (el «5 prendas» de S3-01), revisadas por Neon contra `types.xml` vanilla de memoria, sin el juego delante, así que siguen `[verify S3]`:
 
-| Preset | Clases |
+| Preset | Clases (ranura) |
 |---|---|
-| `partisano` | `GorkaEJacket_Flat`, `GorkaPants_Flat`, `MilitaryBoots_Black`, `TacticalGloves_Black`, `BalaclavaMask_Black` |
-| `civil` | `Hoodie_Grey`, `Jeans_Blue`, `AthleticShoes_Grey`, `BaseballCap_Blue`, `HikingJacket_Blue` *(esta última no: dos chaquetas no caben; ver §13)* |
-| `medica` | `ParamedicJacket_Green`, `ParamedicPants_Green`, `Sneakers_White`, `SurgicalGloves_White`, `SurgicalMask` |
-| `cazador` | `HuntingJacket_Brown`, `HunterPants_Brown`, `HikingBootsLow_Brown`, `WorkingGloves_Brown`, `BoonieHat_DPM` |
+| `partisano` | `GorkaEJacket_Flat` (Body), `GorkaPants_Flat` (Legs), `MilitaryBoots_Black` (Feet), `TacticalGloves_Black` (Gloves), `BalaclavaMask_Black` (Mask) |
+| `civil` | `Hoodie_Grey` (Body), `Jeans_Blue` (Legs), `AthleticShoes_Grey` (Feet), `BaseballCap_Blue` (Headgear), `TaloonBag_Blue` (Back) |
+| `medica` | `ParamedicJacket_Green` (Body), `ParamedicPants_Green` (Legs), `Sneakers_White` (Feet), `SurgicalGloves_White` (Gloves), `SurgicalMask` (Mask) |
+| `cazador` | `HuntingJacket_Brown` (Body), `HunterPants_Brown` (Legs), `HikingBoots_Brown` (Feet), `WorkingGloves_Brown` (Gloves), `BoonieHat_DPM` (Headgear) |
 
-Para `civil`, la quinta es `Glasses_Black`... **no**: el implementador **no elige** clases. Lo que hace es dejar la tabla tal cual salga de la revisión de §14 (Neon comprueba cada nombre contra `types.xml` vanilla y la compatibilidad de ranuras: una prenda por ranura). Si una clase no se puede comprobar sin el juego, va igual y la marca `[verify S3]` queda en §13.
-
-Regla que sí se prueba: cada preset de `wardrobes` tiene su entrada en `wardrobe_items`, con entre 1 y 32 clases, cada una válida como `cls` de §2.1, y ningún preset de más (T-W1).
+El implementador copia la tabla tal cual. Regla que sí se prueba: cada preset de `wardrobes` tiene su entrada en `wardrobe_items`, con entre 1 y 32 clases, cada una válida como `cls` de §2.1, y ninguna entrada sin preset (T-W1).
 
 ## 5. Motor de actores falso [DESIGN]
 
-`app/tests/fake_actor_engine.py`, sin red ni hilos: `FakeActorEngine(catalog, clock)` con `clock` inyectado (un `FakeClock` que avanza a mano).
+`app/tests/fake_actor_engine.py`, sin red ni hilos: `FakeActorEngine(catalog, clock)` con `clock` inyectado (un `FakeClock` que avanza a mano, con `now_ms()`).
 
 - `spawn(lid, cls, x, z, yaw, wardrobe)`: crea el actor con `items = wardrobe_items[wardrobe]` del catálogo; un `wardrobe` que no esté → `ValueError`.
-- `set_marks(lid, marks, behaviour, roam)`: `ONCE` va a las marcas en orden y se para en la última; `LOOP` las recorre en bucle; `HOLD` no se mueve; `ROAM` elige destinos deterministas (semilla por `lid`) en el anillo `[0.35, 0.75] × roam` alrededor de la posición inicial y va a ellos de uno en uno.
-- `request_gesture(lid, gi, emote)`: emite `requested`; en el siguiente `step` en que el actor está quieto, `playing`; `duration_ms` después (por defecto 2000), `finished`.
-- `step(dt_ms)`: avanza el reloj y mueve a cada actor hacia su destino a 1,4 m/s, en línea recta; al quedar a menos de 0,3 m, `mark_st = "arrived"`.
-- `read()`: el `{"actors": [...], "gestures": [...]}` de §2, que tiene que pasar `valid_actor_read`. `gestures` devuelve todos los eventos desde el principio.
+- `set_marks(lid, marks, behaviour, roam)`: `ONCE` va a las marcas en orden (`mark_i` = la actual) y se para en la última; `LOOP` las recorre en bucle; `HOLD` no se mueve (`mark_i = -1`, `idle`); `ROAM` elige destinos deterministas (semilla por `lid`) en el anillo `[0.35, 0.75] × roam` alrededor de la posición inicial, va a ellos de uno en uno y **se para 1500 ms** en cada uno, siempre con `mark_i = -1` (`moving` o `idle`).
+- `request_gesture(lid, gi, emote)`: emite `requested`; en el primer `step` en que el actor no está `moving`, `playing`; `duration_ms` después (por defecto 2000), `finished`.
+- `step(dt_ms)`: avanza el reloj y mueve a cada actor hacia su destino a 1,4 m/s, en línea recta; al quedar a menos de 0,3 m, `mark_st = "arrived"` (ONCE y LOOP) y, en LOOP, a la siguiente marca en el próximo `step`.
+- `read()`: una foto de §2: una fila por actor y todos los eventos de gesto desde el principio. Siempre pasa `valid_actor_read`.
+- `collect(engine, until_ms, step_ms, drop=None)` (función del módulo, no del motor): llama a `step` y `read` hasta `until_ms` y devuelve `({lid: [filas]}, eventos)`. `drop = (lid, t_from, t_to)` quita del resultado las filas de ese `lid` en ese tramo: es el muestreador el que pierde muestras, no el motor.
 
 **Fallos inyectables** (cada uno es lo que un juez tiene que tumbar):
 
 | Fallo | Efecto | Lo tumba |
 |---|---|---|
-| `unreachable(lid, mark_i)` | se para a 3 m de esa marca con `mark_st = "unreachable"` | `judge_mark` (`no_llega`) |
+| `unreachable(lid, mark_i)` | se para a 3 m de esa marca con `mark_st = "unreachable"` | `judge_mark` (`inalcanzable`) |
 | `unreachable_near(lid, mark_i)` | llega a 1 m pero dice `unreachable` | `judge_mark` (`inalcanzable`) |
-| `jitter(lid, amp_m)` | tras llegar oscila ± `amp_m` | `judge_mark` (`no_quieto`) y `judge_hold` |
-| `drop_samples(t_from, t_to)` | `read` omite las filas con `t_ms` en ese tramo | `sin_cobertura` |
+| `stop_short(lid, mark_i)` | se para a 1,6 m y **dice `arrived`** | `judge_mark` (`no_llega`): no se fía del motor |
+| `jitter(lid, amp_m)` | desde que se pone, en cada `step` en que no va a un destino, oscila ± `amp_m` en x | `judge_mark` (`no_quieto`) y `judge_hold` (`se_mueve`) |
+| `drop` de `collect` | el muestreador pierde un tramo | `sin_cobertura` |
 | `wardrobe_drop(lid, cls)` / `wardrobe_add(lid, cls)` / `cls_swap(lid, cls)` | quita, añade o cambia | `judge_identity` |
 | `combat(lid)` | los gestos de ese actor pasan a `rejected` con `cause = "combat"` sin `playing` | `judge_gesture` (`rechazado`) |
 | `cancel_after_start(lid, gi)` | tras `playing`, `canceled` con `cause = "interrupted"` | `judge_gesture` (`cancelado`) |
 | `finish_without_start(lid, gi)` | `requested` y después `finished`, sin `playing` | `judge_gesture` (`fin_sin_empezar`) |
 | `never_starts(lid, gi, expire_ms)` | `requested` y, pasado `expire_ms`, `expired` con `cause = "timeout"` | `judge_gesture` (`agotado`) |
+| `late_start(lid, gi, expire_ms)` | como `never_starts`, y después `playing` y `finished` | `judge_gesture` (`despues_del_fin`) |
 | `roam_escape(lid, k, dist_m)` | el destino `k` de ROAM a `dist_m` del centro | `judge_roam` (`fuera_radio`) |
 | `roam_stand_still(lid)` | ROAM sin destinos | `judge_roam` (`quieto`) |
+| `roam_no_stops(lid)` | ROAM sin las paradas de 1500 ms | `judge_roam` (`quieto`, por `stops_n`) |
 
 ## 6. Interfaz del motor de actores en el núcleo del mod [EXACT]
 
-Fichero nuevo `DayZSandbox/scripts/3_Game/DSBX_ActorEngine.c`, sin ninguna referencia a Expansion (ni `eAI`, ni `Expansion`, ni `#ifdef EXPANSIONMODAI`):
+Fichero nuevo `DayZSandbox/scripts/3_Game/DSBX_ActorEngine.c`, sin ninguna referencia a Expansion fuera de los literales de código de error (ni `eAI`, ni `Expansion` con mayúscula, ni `EXPANSIONMODAI`):
 
 ```c
-class DSBX_ActorEngine
+class DSBX_ActorEngine : Managed
 {
 	string Name() { return "none"; }
 	bool IsAvailable() { return false; }
-	// Las cinco operaciones de F3 (plan §3): devuelven un código; la base, "expansion_unavailable".
+	// Las operaciones del plan §3 F3 (spawn, marks, behaviour, gesture y state) más parar y retirar;
+	// la base devuelve el código "expansion_unavailable". State devuelve la fila de §2.1 serializada.
 	string Spawn(string lid, string cls, vector pos, float yaw, array<string> items) { return "expansion_unavailable"; }
 	string SetMarks(string lid, array<vector> marks, string behaviour, float roam) { return "expansion_unavailable"; }
 	string RequestGesture(string lid, int gi, string emote) { return "expansion_unavailable"; }
+	string State(string lid) { return "expansion_unavailable"; }
 	string Stop(string lid) { return "expansion_unavailable"; }
 	string Despawn(string lid) { return "expansion_unavailable"; }
 }
@@ -165,7 +227,8 @@ class DSBX_ActorEngineRegistry
 - `DSBX_Wire.c:181` pasa a `body = body + ",\"actor_engine\":" + WireText(DSBX_ActorEngineRegistry.EngineName());`. Sin adaptador, sigue saliendo `"none"`: el backend no ve ningún cambio.
 - `EngineName()` solo puede dar `"none"` o el `Name()` de un motor disponible; el backend ya rechaza cualquier valor que no sea `"expansion"` o `"none"` (`bridge.py:440`), y eso no cambia.
 - El adaptador (F3, con S3) registrará su motor con `DSBX_ActorEngineRegistry.Register` desde su propio PBO; el orden de carga es `[verify S3]`.
-- La sintaxis de Enforce (`ref`, `static`, `array<vector>`) es `[verify]` hasta que compile en el juego; la comprobación estática de §8.3 solo mira la forma.
+- La sintaxis de Enforce es `[verify]` hasta que compile en el juego; la comprobación estática de §8.3 solo mira la forma.
+- **Pruebas estáticas**: M9 (`test_mod_static.py:734`) deja de exigir el literal `"none"` en la presentación (solo que la clave `actor_engine` esté); la comprobación de dónde sale el valor es solo de M18, para que la mutación A13 tumbe una sola regla (`_assert_only_rule_fails`). M18 busca `eAI`, `Expansion` y `EXPANSIONMODAI` **distinguiendo mayúsculas** y sobre el código sin comentarios, así que `"expansion_unavailable"` no cuenta.
 
 ## 7. Lo que no cambia para nadie
 
@@ -177,8 +240,8 @@ Ninguna ruta, ningún verbo, ningún mensaje del bridge y ningún comportamiento
 
 | # | Positivo | Negativo |
 |---|---|---|
-| T-A1 fila | una fila viva válida y la fila exacta de un muerto pasan | `float` en `x_mm`; `bool` en `mark_i`; `mark_st` desconocido; `lid` `obj-01`; `items` con 33; muerto con `cls` no nulo; 9 o 11 campos |
-| T-A2 evento | los seis `st` con su `cause` | `cause` no nulo con `finished`; `cause` con mayúsculas; `gi` 64 |
+| T-A1 fila | una fila viva válida y la fila exacta de un muerto pasan | `float` en `x_mm`; `bool` en `mark_i`; `mark_st` desconocido; `mark_i = -1` con `arrived`; `lid` `obj-01`; `items` con 33; muerto con `cls` no nulo; 9 u 11 campos |
+| T-A2 evento | los seis `st`, con `cause` en los tres que la llevan | `cause` no nula con `finished`; `cause` nula con `canceled`, con `rejected` y con `expired`; `cause` con mayúsculas; `gi` 64 |
 | T-A3 lectura | `{"actors": [...], "gestures": [...]}` con dos actores | `lid` repetido; clave extra; `t_ms` que baja en un `(lid, gi)`; evento de un `lid` sin fila; 17 actores |
 
 ### 8.2 `app/tests/test_actor_judge.py`
@@ -187,26 +250,26 @@ Cada fila, positivo y negativo, con muestras escritas a mano (no con el motor fa
 
 | # | Positivo | Negativo |
 |---|---|---|
-| T-J1 C1 | misma clase y mismas cinco prendas en otro orden → `PASA` | una prenda de menos (`vestuario`, `faltan` la nombra); una de más; la misma prenda dos veces frente a una (multiconjunto, no conjunto); otra clase (`clase`); muerto → `INCONCLUSO` |
-| T-J2 C2 | llega a 1,4 m y se queda 10 s dentro de 0,4 m → `PASA` con su `t0` | se queda a 1,6 m (`no_llega`); llega y se va 0,6 m a los 8 s (`no_quieto`); cerca pero `unreachable` (`inalcanzable`); un hueco de 1,5 s en la ventana (`sin_cobertura`); la ventana acaba antes de 10 s (`sin_cobertura`) |
-| T-J3 C3 | `requested`, `playing`, `finished` → `PASA` | `requested`, `finished` (`fin_sin_empezar`); `playing`, `canceled` (`cancelado`); `rejected`; `expired`; un `playing` después de `finished` (`despues_del_fin`); solo `requested` → `INCONCLUSO`; eventos de otro `gi` no cuentan |
-| T-J4 HOLD | 0,3 m de deriva en la ventana → `PASA` | 0,5 m justos → `FALLA` (el límite es estricto); hueco → `INCONCLUSO` |
-| T-J5 ROAM | radio 15, todo a ≤ 15 m, 45 m recorridos, 5 llegadas → `PASA` | una muestra a 15,01 m (`fuera_radio`, `max_dist_m` 15,01); 30 m recorridos (`quieto`); 3 llegadas (`quieto`); hueco → `INCONCLUSO` |
-| T-J6 nunca PASA con lectura mala | — | cada juez con una fila que no pasa §2.3 → `INCONCLUSO`, `lectura_invalida` |
+| T-J1 C1 | misma clase y mismas cinco prendas en otro orden → `PASA` | una prenda de menos (`vestuario`, `faltan` la nombra); una de más (`sobran`); la misma prenda dos veces frente a una (multiconjunto, no conjunto); otra clase (`clase`); muerto → `INCONCLUSO`, `muerto` |
+| T-J2 C2 | llega a 1,4 m y se queda 10 s dentro de 0,4 m → `PASA` con su `t0`; marca de paso (`settle_ms = 0`) cruzada a 1,0 m → `PASA` | se queda a 1,6 m (`no_llega`); a **1,5 m justos** (`no_llega`: el límite es estricto); llega y se va 0,6 m a los 8 s (`no_quieto`); deriva de **0,5 m justos** (`no_quieto`); cerca pero `unreachable` en esa marca (`inalcanzable`); `unreachable` en **otra** marca no cuenta (`PASA`); un hueco de 1,5 s en la ventana (`sin_cobertura`); la traza acaba antes de los 10 s (`sin_cobertura`) |
+| T-J3 C3 | `requested`, `playing`, `finished` → `PASA`; `requested` y `playing` en el mismo `t_ms` → `PASA` | `requested`, `finished` (`fin_sin_empezar`); `requested`, `playing`, `canceled` (`cancelado`); `requested`, `canceled` (`cancelado`); `requested`, `rejected` (`rechazado`); `requested`, `expired` (`agotado`); `requested`, `expired`, `playing`, `finished` (`despues_del_fin`); `playing`, `finished` (`sin_pedido`); dos `requested` (`repetido`); `finished` en el mismo `t_ms` que `playing` (`duracion_cero`); `t_ms` que baja (`lectura_invalida`); solo `requested` y `requested`, `playing` → `INCONCLUSO`, `sin_fin`; eventos de otro `gi` no cuentan |
+| T-J4 HOLD | 0,3 m de deriva en la ventana → `PASA` | 0,5 m justos → `se_mueve` (estricto); hueco → `sin_cobertura` |
+| T-J5 ROAM | radio 15, todo a ≤ 15 m, 45 m recorridos, 5 paradas → `PASA` | una muestra **intermedia** a 15,01 m que vuelve a 14 m (`fuera_radio`, `max_dist_m` 15,01); 30 m recorridos con 5 paradas (`quieto`); 3 paradas con 45 m (`quieto`); hueco → `sin_cobertura` |
+| T-J6 nunca PASA con lectura mala | — | cada juez con una fila que no pasa §2.1 → `lectura_invalida`; `judge_mark` y `judge_roam` con filas de dos `lid` → `lectura_invalida`; con `t_ms` repetido → `lectura_invalida`; lista vacía → `sin_cobertura` |
 
 ### 8.3 `app/tests/test_fake_actor_engine.py` y el mod
 
 | # | Positivo | Negativo |
 |---|---|---|
-| T-F1 sano | la fixture `escena-basica-cine.json` (act-01 ONCE con dos marcas y un gesto en la 2; act-02 HOLD con un gesto a 1,5 s) en el motor falso → `read()` pasa `valid_actor_read`, y C1, C2 (cada marca de act-01), C3 (los dos gestos) y HOLD (act-02) dan `PASA` | — |
-| T-F2 fallos | — | cada fallo de la tabla de §5 → su juez da el `FALLA` o el `INCONCLUSO` con el `why` de la tabla, y los demás jueces del mismo actor no cambian |
-| T-F3 ROAM | ROAM con radio 15 durante 10 min simulados → `PASA` | `roam_escape(k=2, 22 m)` → `fuera_radio`; `roam_stand_still` → `quieto` |
-| T-W1 catálogo | cada preset con 1-32 clases válidas | un preset sin entrada; una entrada sin preset |
-| T-M18 núcleo (en `test_mod_static.py`) | `DSBX_ActorEngine.c` define las dos clases y los cinco métodos con `"expansion_unavailable"`; `DSBX_Wire.c` toma `actor_engine` de `DSBX_ActorEngineRegistry.EngineName()` | ninguna aparición de `eAI`, `Expansion` ni `EXPANSIONMODAI` en el núcleo; ningún `"actor_engine\":\"none\"` literal en `DSBX_Wire.c` |
+| T-F1 sano | la fixture `escena-basica-cine.json` (act-01 ONCE con dos marcas y un gesto en la 2; act-02 HOLD con un gesto a 1,5 s) en el motor falso con `collect` cada 200 ms → todas las fotos pasan `valid_actor_read`, y dan `PASA` C1 (los dos), C2 (la marca 0 de paso y la 1 con 10 s), C3 (los dos gestos) y HOLD (act-02) | — |
+| T-F2 fallos | — | cada fallo de la tabla de §5 → su juez da el veredicto y el `why` de la tabla, y los demás jueces del mismo actor y del otro actor no cambian |
+| T-F3 ROAM | ROAM con radio 15 durante 10 min simulados → `PASA`, y todas las fotos con `mark_i = -1` | `roam_escape(k=2, 22 m)` → `fuera_radio`; `roam_stand_still` → `quieto`; `roam_no_stops` → `quieto` |
+| T-W1 catálogo | cada preset con 1-32 clases válidas, y la tabla de §4 exacta | un preset sin entrada; una entrada sin preset |
+| T-M18 núcleo (en `test_mod_static.py`) | `DSBX_ActorEngine.c` define `DSBX_ActorEngine : Managed` con los seis métodos que devuelven `"expansion_unavailable"` y el registro con `Register`, `Get` y `EngineName`; `DSBX_Wire.c` toma `actor_engine` de `DSBX_ActorEngineRegistry.EngineName()` | ninguna aparición de `eAI`, `Expansion` ni `EXPANSIONMODAI` (con mayúsculas, sin comentarios) en el núcleo; ningún `"actor_engine\":\"none\"` literal en `DSBX_Wire.c` |
 
 ### 8.4 Regresión
 
-Las 556 pruebas de hoy siguen en verde, con la de M9 ajustada solo para aceptar el `actor_engine` sacado del registro.
+Las 556 pruebas de hoy siguen en verde, con la de M9 ajustada solo como dice §6.
 
 ## 9. Antitautología (R26)
 
@@ -215,21 +278,25 @@ Las 556 pruebas de hoy siguen en verde, con la de M9 ajustada solo para aceptar 
 | A1 | `judge_identity` compara conjuntos (`set`) en vez de multiconjuntos | T-J1 |
 | A2 | `judge_mark` no mira `unreachable` | T-J2 |
 | A3 | `judge_mark` no exige cobertura | T-J2 |
-| A4 | `judge_mark` usa `<=` en `reach_m` | T-J2 (1,5 m justos en una fila nueva: `no_llega`) |
+| A4 | `judge_mark` usa `<=` en `reach_m` | T-J2 (1,5 m justos) |
 | A5 | `judge_gesture` da `PASA` con `finished` aunque falte `playing` | T-J3 |
-| A6 | `judge_gesture` trata `canceled` como fin bueno | T-J3 |
-| A7 | `judge_hold` usa `<=` | T-J4 |
-| A8 | `judge_roam` mira solo la última muestra | T-J5 |
-| A9 | `judge_roam` no exige recorrido mínimo | T-J5, T-F3 |
+| A6 | `judge_gesture` trata `canceled` como `finished` | T-J3 |
+| A7 | `judge_hold` usa `<` en vez de `≥` para `se_mueve` (0,5 m pasa) | T-J4 |
+| A8 | `judge_roam` mira solo la última muestra para el radio | T-J5 |
+| A9 | `judge_roam` no exige recorrido mínimo | T-J5 |
 | A10 | un juez da `PASA` con lectura inválida | T-J6 |
 | A11 | `valid_actor_row` acepta `float` | T-A1 |
 | A12 | el motor falso ignora `combat` | T-F2 |
-| A13 | `DSBX_Wire.c` vuelve a `"none"` fijo | T-M18 |
+| A13 | `DSBX_Wire.c` vuelve a `"none"` fijo | T-M18 (solo M18) |
+| A14 | `judge_gesture` acepta eventos después del fin | T-J3 |
+| A15 | `judge_roam` cuenta llegadas por `mark_st` en vez de paradas | T-F3 (`roam_no_stops`) |
+| A16 | `judge_mark` se fía de `arrived` | T-F2 (`stop_short`) |
+| A17 | `valid_gesture_event` acepta `cause` nula con `canceled` | T-A2 |
 
 ## 10. Aceptación
 
 - `python3 -m unittest discover -s app/tests -t app` en verde (556 + las nuevas).
-- Las 13 mutaciones de §9 mueren, cada una con la prueba que la nombra.
+- Las 17 mutaciones de §9 mueren, cada una con la prueba que la nombra.
 - `git diff --stat` solo toca los ficheros de §1.
 
 ## 11. Ficheros
@@ -238,7 +305,7 @@ Los de §1. Ninguno más.
 
 ## 12. Reparto
 
-- Revisión del brief: **Gemini Neon** (agy), una ronda, sobre este fichero, `catalog-m1.json`, `scene_plan.py:740-830` y el brief de S3; pide en especial los nombres de §4 contra `types.xml` vanilla.
+- Revisión del brief: **Gemini Neon** (agy), una ronda (hecha, v0.2).
 - Implementación: dos lanes en paralelo, cada una en su clon temporal y su rama local:
   - **Grok** (o Muse si Grok no tiene saldo): §2, §3 y sus pruebas (`actor_wire.py`, `actor_judge.py`, T-A, T-J);
   - **Muse** (o Gemini Argon): §4, §5, §6 y sus pruebas (`fake_actor_engine.py`, catálogo, `DSBX_ActorEngine.c`, `DSBX_Wire.c`, T-F, T-W1, T-M18).
@@ -248,8 +315,8 @@ Los de §1. Ninguno más.
 
 ## 13. Fuera de alcance, riesgos y `[verify]`
 
-- `[verify S3]`: los umbrales de ROAM (`min_path_m`, `min_dest_n`), el observador de gestos que produzca de verdad `playing` y la causa del fin (#14), y el orden de carga del adaptador.
-- `[verify]`: las clases de §4, que solo se ven en el juego. La fila `civil` tiene una errata a propósito en v0.1 (dos chaquetas) que la revisión debe resolver; el implementador no la arregla por su cuenta.
+- `[verify S3]`: los umbrales de ROAM (`min_path_m`, `min_stops_n`, y que medir paradas equivalga a las llegadas de S3-05), el observador de gestos que produzca de verdad `playing` y la causa del fin (#14), y el orden de carga del adaptador.
+- `[verify]`: las clases de §4, revisadas de memoria y no contra los ficheros del juego.
 - Riesgo: el formato de §2 lo fija este brief antes de que exista el adaptador. Si S3 no puede dar alguna señal (por ejemplo `playing` separado de `requested`), C3 vuelve al Grill por la cláusula de desafío (plan #14) y el formato se enmienda con su versión.
 - Fuera: `actor.apply`, el cableado en `SceneLive`, el adaptador de Expansion, la web y `m1_gate.py phase F3`. Los aborda F3-offline-2 tras esta revisión.
 
@@ -258,3 +325,4 @@ Los de §1. Ninguno más.
 | Versión | Cambio |
 |---|---|
 | v0.1 | Borrador del 26-nov por la noche, para la ronda de Neon. |
+| v0.2 | Ronda de Gemini Neon (`gemini-4-neon-high`, 26-nov 01:46-01:54 UTC, APTO CON CAMBIOS, 8 BLOQ, 4 MAY, 1 MEN; resumen en la carpeta del proyecto `dayz-sandbox/f3off/`), todo aplicado: marcas de paso frente a la final (H01); `judge_gesture` con partición completa, orden de `t_ms` y duración cero, como S3-04 (H02, H03); `judge_mark` con `mark_i` y una sola precedencia, `unreachable` siempre `inalcanzable` y `stop_short` nuevo (H04); ROAM por paradas medidas, sin `mark_st` (H05); firmas y tipos exactos (H06); pruebas para A4, A8 y A9 y mutaciones A14-A17 (H07); `TaloonBag_Blue` y `HikingBoots_Brown` (H08); precedencias y ventanas (H09); `mark_i = -1` en ROAM, el muestreador pierde muestras y no el motor, `jitter` en HOLD (H10); `cause` obligatoria (H11); `: Managed`, `State`, M9 y M18 sin choque (H12); `cls` vanilla en la lectura (H13). |
