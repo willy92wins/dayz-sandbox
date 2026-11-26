@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import {
   aiLightText,
   approveProposal,
   batchLabel,
   changeCount,
+  disconnectAi,
   dismissProposal,
   formatAgo,
   isInverse,
@@ -20,6 +22,9 @@ export function AiPanel() {
   const now = performance.now();
   const wall = Date.now();
   const paused = co.view?.paused === true;
+  const revoked = co.view?.revoked === true;
+  const [confirming, setConfirming] = useState(false);
+  const busy = st.sinBackend || co.pausing || co.view === null;
   const stateText = aiLightText(st.sinBackend, co, now);
   const undone = undoneBatches(co.batches);
   const aiBatches = co.batches
@@ -38,19 +43,46 @@ export function AiPanel() {
           IA co-editora <em>{stateText}</em>
         </span>
         <span className="desc">
-          {paused
-            ? 'La IA está en pausa: no cambia nada hasta que la reanudes.'
-            : 'La IA edita el mismo borrador que tú. Si tocáis lo mismo, se queda lo tuyo.'}
+          {revoked
+            ? 'La IA está desconectada: su clave no vale hasta que reinicies el backend.'
+            : paused
+              ? 'La IA está en pausa: no cambia nada hasta que la reanudes.'
+              : 'La IA edita el mismo borrador que tú. Si tocáis lo mismo, se queda lo tuyo.'}
         </span>
         <span className="grow" />
-        <button
-          type="button"
-          className="btn sm"
-          disabled={st.sinBackend || co.pausing || co.view === null}
-          onClick={() => void setAiPaused(!paused)}
-        >
-          {paused ? 'Reanudar IA' : 'Pausar IA'}
-        </button>
+        {revoked ? null : confirming ? (
+          <>
+            <span className="desc">¿Desconectar hasta reiniciar el backend?</span>
+            <button
+              type="button"
+              className="btn sm"
+              disabled={busy}
+              onClick={() => {
+                setConfirming(false);
+                void disconnectAi();
+              }}
+            >
+              Sí, desconectar
+            </button>
+            <button type="button" className="btn sm" onClick={() => setConfirming(false)}>
+              Cancelar
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="btn sm"
+              disabled={busy}
+              onClick={() => void setAiPaused(!paused)}
+            >
+              {paused ? 'Reanudar IA' : 'Pausar IA'}
+            </button>
+            <button type="button" className="btn sm" disabled={busy} onClick={() => setConfirming(true)}>
+              Desconectar
+            </button>
+          </>
+        )}
       </div>
 
       {p ? (
