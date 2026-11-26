@@ -38,7 +38,7 @@ import json
 import math
 import re
 
-from app.backend.bridge import WIRE_CAP, valid_world_read
+from app.backend.bridge import STR_CAP, WIRE_CAP, _max_str_bytes, valid_world_read
 
 # Tolerancias de D12 en mm (§3.1 del brief de F2-partida): POS_TOL_M = 500 mm y EPS_Q = 2 mm.
 POS_TOL = 500
@@ -57,6 +57,7 @@ KIND_BY_PREFIX = {
 }
 HTTP_STATUS = {
     "expansion_unavailable": 422,
+    "actor_invalid": 422,
     "catalog_pending": 409,
     "unknown_class": 422,
     "out_of_map": 422,
@@ -70,6 +71,13 @@ PLAN_KEYS = ("f2", "doc_id", "rev", "hash", "plan_sha256", "caps", "classes") + 
 CAPS_KEYS = ("objeto", "infectado", "animal", "total")
 CAPS_TOTAL_NONE = -1  # valor neutro explicito: la biblioteca no fija total (DP-2)
 
+# F3-offline-2 §3: topes del paso 1b. MAX_ACTORS es el `_MAX_ACTORS` de actor_wire
+# (no se importa: actor_wire importa este modulo).
+MAX_ACTORS = 16
+MAX_ACTOR_MARKS = 64
+MAX_ACTOR_GESTURES = 64
+ACTOR_BEHAVIOURS = ("HOLD", "ONCE", "LOOP", "ROAM")
+_ACT_ID_RE = re.compile(r"act-(0[1-9]|[1-9][0-9]+)")
 _DOC_ID_RE = re.compile(r"d-[0-9a-f]{8}")
 _LID_RE = re.compile(r"(obj|zmb|ani)-(0[1-9]|[1-9][0-9]+)")
 _HEX16_RE = re.compile(r"[0-9a-fA-F]{16}")
@@ -268,6 +276,137 @@ def build_plan(doc, rev, hash_, store_catalog):
     }
     plan["plan_sha256"] = plan_sha256_of(plan)
     return plan
+
+
+def build_actor_orders(doc, rev, hash_, store_catalog):
+    """Args de `actor.apply` (F3-offline-2 §2.1), uno por actor, en el orden de `entities`."""
+    items_by_wardrobe = store_catalog["wardrobe_items"]
+    orders = []
+    for ent in doc.get("entities") or ():
+        if not isinstance(ent, dict) or ent.get("kind") != "actor":
+            continue
+        marks = ent.get("marks") or []
+        gestures = ent.get("gestures") or []
+        orders.append({
+            "f2": 1,
+            "doc_id": doc["doc_id"],
+            "rev": int(rev),
+            "hash": hash_,
+            "a_lid": ent["id"],
+            "a_cls": ent["cls"],
+            "a_x_mm": m_to_mm(ent["x"]),
+            "a_z_mm": m_to_mm(ent["z"]),
+            "a_yaw_mdeg": yaw_to_mdeg(ent["yaw"]),
+            "a_items": list(items_by_wardrobe[ent["wardrobe"]]),
+            "a_behaviour": ent["behaviour"],
+            "a_roam_mm": m_to_mm(ent["roam"]),
+            "mk_x_mm": [m_to_mm(mk["x"]) for mk in marks],
+            "mk_z_mm": [m_to_mm(mk["z"]) for mk in marks],
+            "g_emote": [g["emote"] for g in gestures],
+            "g_at": [g["at"] - 1 if "at" in g else -1 for g in gestures],
+            "g_t_ms": [round(float(g["t"]) * 1000) if "t" in g else -1 for g in gestures],
+        })
+    return orders
+
+
+def _actor_poll_len(args):
+    """Largo del sondeo con esta orden de actor, con el `op_id` interno mas largo (§3)."""
+    body = {
+        "ok": True,
+        "now_ms": 999999999999,
+        "ops": [{
+            "op_id": "rd-999999",
+            "session": "0" * 16,
+            "conn": _MAX_COUNT,
+            "epoch": "0" * 32,
+            "inst": "0" * 32,
+            "verb": "actor.apply",
+            "args": args,
+            "issued_ms": 999999999999,
+            "ttl_ms": 99999999,
+        }],
+    }
+    return len(compact_json_bytes(body)), _max_str_bytes(body)
+
+
+def _actor_errors(doc, entities, rev, hash_, store_catalog, world_size):
+    """Paso 1b `actor_invalid` (F3-offline-2 §3): todas las entradas del documento."""
+    cat = store_catalog if isinstance(store_catalog, dict) else {}
+    classes = cat.get("classes") if isinstance(cat.get("classes"), dict) else {}
+    actor_classes = classes.get("actor") if isinstance(classes.get("actor"), list) else []
+    wardrobes = cat.get("wardrobe_items") if isinstance(cat.get("wardrobe_items"), dict) else {}
+    emotes = cat.get("emotes") if isinstance(cat.get("emotes"), list) else []
+    wsize = float(world_size) if _is_num(world_size) else 0.0
+    errors = []
+
+    def err(pointer, msg):
+        errors.append({"code": "actor_invalid", "pointer": pointer, "msg": msg})
+
+    n_actors = 0
+    for i, ent in enumerate(entities):
+        if not isinstance(ent, dict) or ent.get("kind") != "actor":
+            continue
+        n_actors += 1
+        n_before = len(errors)
+        base = f"/entities/{i}"
+        if n_actors == MAX_ACTORS + 1:
+            err(base, f"Mas de {MAX_ACTORS} actores.")
+        aid = ent.get("id")
+        if not isinstance(aid, str) or len(aid) > 10 or _ACT_ID_RE.fullmatch(aid) is None:
+            err(base + "/id", f"Identificador de actor '{aid}' no valido.")
+        if ent.get("cls") not in actor_classes:
+            err(base + "/cls", f"La clase de actor '{ent.get('cls')}' no esta en el catalogo.")
+        if ent.get("wardrobe") not in wardrobes:
+            err(base + "/wardrobe", f"El vestuario '{ent.get('wardrobe')}' no existe.")
+        behaviour = ent.get("behaviour")
+        if behaviour not in ACTOR_BEHAVIOURS:
+            err(base + "/behaviour", f"Comportamiento '{behaviour}' no valido.")
+        roam = ent.get("roam")
+        if not _is_num(roam) or float(roam) <= 0.0:
+            err(base + "/roam", f"Radio de ROAM '{roam}' no valido.")
+        marks = ent.get("marks")
+        marks = marks if isinstance(marks, list) else []
+        gestures = ent.get("gestures")
+        gestures = gestures if isinstance(gestures, list) else []
+        if len(marks) > MAX_ACTOR_MARKS:
+            err(base + "/marks", f"Mas de {MAX_ACTOR_MARKS} marcas.")
+        if len(gestures) > MAX_ACTOR_GESTURES:
+            err(base + "/gestures", f"Mas de {MAX_ACTOR_GESTURES} gestos.")
+        if behaviour in ("ONCE", "LOOP") and not marks:
+            err(base + "/marks", f"{behaviour} sin marcas.")
+        for k, mk in enumerate(marks):
+            ok = isinstance(mk, dict) and all(
+                _is_num(mk.get(a)) and 0.0 <= float(mk.get(a)) <= wsize for a in ("x", "z")
+            )
+            if not ok:
+                err(f"{base}/marks/{k}", f"Marca {k} fuera de [0, {world_size}].")
+        for j, g in enumerate(gestures):
+            gp = f"{base}/gestures/{j}"
+            if not isinstance(g, dict):
+                err(gp, "Gesto no valido.")
+                continue
+            if g.get("emote") not in emotes:
+                err(gp + "/emote", f"El gesto '{g.get('emote')}' no esta en el catalogo.")
+            has_at, has_t = "at" in g, "t" in g
+            if has_at == has_t:
+                err(gp, "Un gesto lleva `at` o `t`, uno de los dos.")
+                continue
+            if has_at:
+                at = g["at"]
+                if (not _is_int(at) or at < 1 or at > len(marks)
+                        or behaviour in ("HOLD", "ROAM")):
+                    err(gp + "/at", f"`at` = {at} no valido para este actor.")
+            else:
+                t = g["t"]
+                if not _is_num(t) or float(t) < 0.0:
+                    err(gp + "/t", f"`t` = {t} no valido.")
+        if len(errors) == n_before and _is_int(rev) and isinstance(doc.get("doc_id"), str):
+            one = dict(doc, entities=[ent])
+            args = build_actor_orders(one, rev, hash_, store_catalog)[0]
+            poll_len, max_str = _actor_poll_len(args)
+            if poll_len > WIRE_CAP or max_str > STR_CAP:
+                err(base, f"La orden del actor ({poll_len} B) no cabe en el cable.")
+    return errors
 
 
 def plan_args_error(plan):
@@ -519,7 +658,7 @@ def _world_catalog_classes(world_catalog):
 
 def validate_for_apply(doc, rev, hash_, store_catalog, world_catalog=None,
                        catalog_valid=False, world_size=15360, wire_cap=WIRE_CAP,
-                       op_id=None, conn=None):
+                       op_id=None, conn=None, actor_engine="none"):
     """Valida el documento congelado antes de mandar nada (§4.1), en el orden exacto de la tabla.
 
     Para en el primer codigo de error y devuelve la lista completa de errores de ese codigo en `errors`.
@@ -533,9 +672,11 @@ def validate_for_apply(doc, rev, hash_, store_catalog, world_catalog=None,
     if not isinstance(entities, list):
         entities = []
 
-    # 1. expansion_unavailable (422): el documento tiene actores (D3)
+    # 1. expansion_unavailable (422): el documento tiene actores (D3) y el servidor no tiene motor
     actor_errors = []
     for i, ent in enumerate(entities):
+        if actor_engine == "expansion":
+            break
         if isinstance(ent, dict) and ent.get("kind") == "actor":
             actor_errors.append({
                 "code": "expansion_unavailable",
@@ -544,6 +685,12 @@ def validate_for_apply(doc, rev, hash_, store_catalog, world_catalog=None,
             })
     if actor_errors:
         return _make_error_response("expansion_unavailable", actor_errors)
+
+    # 1b. actor_invalid (422): con motor, actores que no se pueden mandar (F3-offline-2 §3)
+    if actor_engine == "expansion":
+        invalid = _actor_errors(doc, entities, rev, hash_, store_catalog, world_size)
+        if invalid:
+            return _make_error_response("actor_invalid", invalid)
 
     # 2. catalog_pending (409): no hay catalogo del mundo valido para el servidor de ahora (D4)
     if not catalog_valid or world_catalog is None:
@@ -632,8 +779,8 @@ def validate_for_apply(doc, rev, hash_, store_catalog, world_catalog=None,
             "msg": f"El doc_id supera {MAX_STRING_CHARS} caracteres.",
         })
     for i, ent in enumerate(entities):
-        if not isinstance(ent, dict):
-            continue
+        if not isinstance(ent, dict) or ent.get("kind") == "actor":
+            continue  # el id del actor lo valida el paso 1b
         lid = ent.get("id")
         lids.append(lid if isinstance(lid, str) else "")
         cls = ent.get("cls")
@@ -704,11 +851,15 @@ def validate_for_apply(doc, rev, hash_, store_catalog, world_catalog=None,
         return _make_error_response("plan_too_large", large_errors)
 
     expectation = extract_expectation(doc)
+    actor_orders = []
+    if actor_engine == "expansion":
+        actor_orders = build_actor_orders(doc, rev, hash_, store_catalog)
     return {
         "ok": True,
         "plan": plan,
         "expectation": expectation,
         "envelope": env,
+        "actor_orders": actor_orders,
     }
 
 

@@ -174,6 +174,7 @@ class DSBX_Peer : Managed
 	ref DSBX_World m_World;
 	ref DSBX_Scene m_Scene;
 	ref DSBX_SceneOps m_SceneOps;
+	ref DSBX_ActorOps m_ActorOps;
 	ref DSBX_Cache m_Cache;
 	ref DSBX_Catalog m_Catalog;
 	ref array<ref DSBX_CacheEntry> m_PendingResults;
@@ -258,6 +259,7 @@ class DSBX_Peer : Managed
 		m_World = world;
 		m_Scene = null;
 		m_SceneOps = null;
+		m_ActorOps = null;
 		m_Cache = new DSBX_Cache(m_CacheCap);
 		m_Catalog = null;
 		m_PendingResults = new array<ref DSBX_CacheEntry>();
@@ -290,6 +292,7 @@ class DSBX_Peer : Managed
 			GatherServerEnv();
 			m_Scene = new DSBX_Scene();
 			m_SceneOps = new DSBX_SceneOps(m_World, m_Scene);
+			m_ActorOps = new DSBX_ActorOps();
 			m_Catalog = new DSBX_Catalog();
 			m_Catalog.StartScan(CatalogBuildName(), m_Modset);
 			s_ServerPeer = this;
@@ -365,6 +368,7 @@ class DSBX_Peer : Managed
 			m_SceneOps.ResetActive();
 			m_SceneOps = null;
 		}
+		m_ActorOps = null;
 		m_Scene = null;
 		m_Ctx = null;
 		// created_n and the in-flight requests bound the engine's exit report
@@ -1249,6 +1253,14 @@ class DSBX_Peer : Managed
 				if (m_SceneOps)
 				{
 					m_SceneOps.StartOrder(this, entry);
+					return;
+				}
+			}
+			if (verb == "actor.apply" || verb == "actor.reset" || verb == "actor.observe")
+			{
+				if (m_ActorOps)
+				{
+					m_ActorOps.StartOrder(this, entry);
 					return;
 				}
 			}

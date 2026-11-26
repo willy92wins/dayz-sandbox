@@ -140,6 +140,14 @@ class FakeActorEngine:
         self._roam_stand_still: set[str] = set()
         self._roam_no_stops: set[str] = set()
 
+        # F3-offline-2 §6: cuenta de creaciones, gestos del cable y fallos de la etapa.
+        self.spawn_count = 0
+        self._armed: dict[str, list] = {}
+        self._scheduled: dict[str, list[list]] = {}
+        self.apply_reject: dict[str, str] = {}
+        self.apply_error: dict[str, str] = {}
+        self.despawn_fail: set[str] = set()
+
     def _require_actor(self, lid: str) -> _ActorState:
         actor = self._actors.get(lid)
         if actor is None:
@@ -153,13 +161,59 @@ class FakeActorEngine:
         x: float | int,
         z: float | int,
         yaw: float | int,
-        wardrobe: str,
+        wardrobe: str | None = None,
+        *,
+        items: list[str] | None = None,
     ) -> None:
-        wardrobe_items = self.catalog.get("wardrobe_items")
-        if not isinstance(wardrobe_items, dict) or not isinstance(wardrobe, str) or wardrobe not in wardrobe_items:
-            raise ValueError(f"wardrobe desconocido: {wardrobe!r}")
-        items = list(wardrobe_items[wardrobe])
-        self._actors[lid] = _ActorState(lid, cls, float(x), float(z), float(yaw), items)
+        if items is None:
+            wardrobe_items = self.catalog.get("wardrobe_items")
+            if not isinstance(wardrobe_items, dict) or not isinstance(wardrobe, str) or wardrobe not in wardrobe_items:
+                raise ValueError(f"wardrobe desconocido: {wardrobe!r}")
+            items = wardrobe_items[wardrobe]
+        self._actors[lid] = _ActorState(lid, cls, float(x), float(z), float(yaw), list(items))
+        self.spawn_count += 1
+        for fault in self._armed.pop(lid, []):
+            fault()
+
+    def _arm_or_run(self, lid: str, fault) -> None:
+        """F3-offline-2 §6: con el actor vivo, el fallo se aplica ya; si no, al crearlo."""
+        if lid in self._actors:
+            fault()
+        else:
+            self._armed.setdefault(lid, []).append(fault)
+
+    def despawn(self, lid: str) -> None:
+        """Retira el actor y sus gestos (la foto sigue pasando `valid_actor_read`)."""
+        if self._actors.pop(lid, None) is None:
+            return
+        self._gestures = [ev for ev in self._gestures if ev[0] != lid]
+        self._gesture_tasks = [t for t in self._gesture_tasks if t.lid != lid]
+        self._scheduled.pop(lid, None)
+
+    def schedule_gestures(self, lid: str, emotes: list, at: list, t_ms: list) -> None:
+        """Gestos del cable: por tiempo desde ahora (`t_ms >= 0`) o al llegar a la marca `at`."""
+        self._require_actor(lid)
+        t0 = self.clock.now_ms()
+        self._scheduled[lid] = [
+            [gi, emote, int(a), int(t), t0, False]
+            for gi, (emote, a, t) in enumerate(zip(emotes, at, t_ms))
+        ]
+
+    def _step_scheduled(self, now_ms: int) -> None:
+        for lid, items in self._scheduled.items():
+            actor = self._actors.get(lid)
+            if actor is None:
+                continue
+            for item in items:
+                gi, emote, at, t, t0, done = item
+                if done:
+                    continue
+                due = (t >= 0 and now_ms - t0 >= t) or (
+                    at >= 0 and actor.mark_i == at and actor.mark_st == "arrived"
+                )
+                if due:
+                    item[5] = True
+                    self.request_gesture(lid, gi, emote)
 
     def _compute_roam_dest(self, actor: _ActorState, k: int) -> tuple[float, float]:
         seed_bytes = hashlib.sha256(f"{actor.lid}:{k}".encode("utf-8")).digest()
@@ -244,20 +298,38 @@ class FakeActorEngine:
         self._jitter_amp[lid] = float(amp_m)
 
     def wardrobe_drop(self, lid: str, cls: str | None = None) -> None:
-        actor = self._require_actor(lid)
-        if cls is None:
-            if actor.items:
-                actor.items.pop()
-        elif cls in actor.items:
-            actor.items.remove(cls)
+        def fault() -> None:
+            actor = self._actors[lid]
+            if cls is None:
+                if actor.items:
+                    actor.items.pop()
+            elif cls in actor.items:
+                actor.items.remove(cls)
+        self._arm_or_run(lid, fault)
 
     def wardrobe_add(self, lid: str, cls: str) -> None:
-        actor = self._require_actor(lid)
-        actor.items.append(cls)
+        self._arm_or_run(lid, lambda: self._actors[lid].items.append(cls))
 
     def cls_swap(self, lid: str, cls: str) -> None:
-        actor = self._require_actor(lid)
-        actor.cls = cls
+        self._arm_or_run(lid, lambda: setattr(self._actors[lid], "cls", cls))
+
+    def displace_spawn(self, lid: str, dx_m: float | int, dz_m: float | int) -> None:
+        """F3-offline-2 §6: el actor aparece desplazado (dx_m, dz_m)."""
+        def fault() -> None:
+            actor = self._actors[lid]
+            for attr, d in (("x", dx_m), ("base_x", dx_m), ("spawn_x", dx_m),
+                            ("z", dz_m), ("base_z", dz_m), ("spawn_z", dz_m)):
+                setattr(actor, attr, getattr(actor, attr) + float(d))
+        self._arm_or_run(lid, fault)
+
+    def reject_apply(self, lid: str, reason: str) -> None:
+        self.apply_reject[lid] = reason
+
+    def error_apply(self, lid: str, reason: str) -> None:
+        self.apply_error[lid] = reason
+
+    def despawn_fails(self, lid: str) -> None:
+        self.despawn_fail.add(lid)
 
     def combat(self, lid: str) -> None:
         self._combat.add(lid)
@@ -461,6 +533,7 @@ class FakeActorEngine:
         now_ms = self.clock.advance(dt_ms)
         for actor in self._actors.values():
             self._step_actor(actor, dt_ms)
+        self._step_scheduled(now_ms)
         self._step_gestures(now_ms)
 
     def read(self) -> dict:

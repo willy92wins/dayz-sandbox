@@ -464,6 +464,21 @@ class _SceneState:
         self.retained_rec_ids: set[int] = set()
 
 
+_ACTOR_APPLY_KEYS = (
+    "f2", "doc_id", "rev", "hash", "a_lid", "a_cls", "a_x_mm", "a_z_mm", "a_yaw_mdeg",
+    "a_items", "a_behaviour", "a_roam_mm", "mk_x_mm", "mk_z_mm", "g_emote", "g_at", "g_t_ms",
+)
+
+
+def _new_actor_engine():
+    """Motor falso de F3-offline-1 con el catalogo del repo (`wardrobe_items` incluido)."""
+    from app.tests.fake_actor_engine import FakeActorEngine, FakeClock
+
+    path = Path(__file__).resolve().parents[2] / "fixtures" / "catalog-m1.json"
+    with open(path, encoding="utf-8") as fh:
+        return FakeActorEngine(json.load(fh), FakeClock(0))
+
+
 class FakeWorld:
     """Mundo falso en memoria que cumple §3 y §5 del brief de F2-offline."""
 
@@ -510,12 +525,68 @@ class FakeWorld:
         self._displace_on_create: dict[object, object] = {}
         self._fail_delete: set[object] = set()
 
+        # F3-offline-2 §6: motor de actores falso con el catalogo completo.
+        self.actors = _new_actor_engine()
+        self._actor_owner: dict[str, tuple[str, str]] = {}
+
         # Barrera de prueba (M8): espera en el efecto n, fuera del cerrojo.
         self._barrier_n: int | None = None
         self._barrier_reached: threading.Event | None = None
         self._barrier_release: threading.Event | None = None
 
     # -- catalogo, suelo y storage -------------------------------------------
+
+    # -- actores (F3-offline-2 §6) ----------------------------------------------
+
+    def _actor_read_locked(self, lid: str | None = None) -> dict:
+        read = self.actors.read()
+        if lid is None:
+            return read
+        return {
+            "actors": [row for row in read["actors"] if row[0] == lid],
+            "gestures": [ev for ev in read["gestures"] if ev[0] == lid],
+        }
+
+    def actor_apply(self, order: dict) -> tuple[str, str | None, dict]:
+        args = order.get("args")
+        if not isinstance(args, dict) or any(k not in args for k in _ACTOR_APPLY_KEYS):
+            return "rejected", "bad_args", {}
+        cols = ("mk_x_mm", "mk_z_mm")
+        gcols = ("g_emote", "g_at", "g_t_ms")
+        if len({len(args[c]) for c in cols}) != 1 or len({len(args[c]) for c in gcols}) != 1:
+            return "rejected", "bad_args", {}
+        lid = args["a_lid"]
+        with self._lock:
+            eng = self.actors
+            if lid in eng.apply_reject:
+                return "rejected", eng.apply_reject[lid], {}
+            key = (order.get("session"), order.get("op_id"))
+            if not (self._actor_owner.get(lid) == key and lid in eng._actors):
+                eng.despawn(lid)
+                eng.spawn(lid, args["a_cls"], args["a_x_mm"] / 1000.0, args["a_z_mm"] / 1000.0,
+                          args["a_yaw_mdeg"] / 1000.0, items=args["a_items"])
+                marks = [{"x": x / 1000.0, "z": z / 1000.0}
+                         for x, z in zip(args["mk_x_mm"], args["mk_z_mm"])]
+                eng.set_marks(lid, marks, args["a_behaviour"], args["a_roam_mm"] / 1000.0)
+                eng.schedule_gestures(lid, args["g_emote"], args["g_at"], args["g_t_ms"])
+                self._actor_owner[lid] = key
+            if lid in eng.apply_error:
+                return "error", eng.apply_error[lid], {}
+            return "done", None, self._actor_read_locked(lid)
+
+    def actor_reset(self, order: dict) -> tuple[str, str | None, dict]:
+        with self._lock:
+            eng = self.actors
+            for lid in list(eng._actors):
+                if lid in eng.despawn_fail:
+                    continue
+                eng.despawn(lid)
+                self._actor_owner.pop(lid, None)
+            return "done", None, self._actor_read_locked()
+
+    def actor_observe(self, order: dict) -> tuple[str, str | None, dict]:
+        with self._lock:
+            return "done", None, self._actor_read_locked()
 
     def catalog_classes(self) -> list[list[str]]:
         with self._lock:
@@ -2352,6 +2423,8 @@ class FakeWorld:
             self._registry.clear()
             self._scenes.clear()
             self.clear_faults()
+            self.actors = _new_actor_engine()
+            self._actor_owner.clear()
 
             kept: dict[str, _Entity] = {}
             for eid, ent in self._entities.items():
