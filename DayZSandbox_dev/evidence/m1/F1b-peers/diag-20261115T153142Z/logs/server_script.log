@@ -1,0 +1,187 @@
+---------------------------------------------
+Log C:\tmp\dsbx-f1bpeers-work\partida\profiles_diag\server\script_2026-11-15_16-31-43.log started at 2026-11-15 16:31:47 (2026-11-15 15:31:47 UTC)
+
+16:31:47.240 SCRIPT       : Module: GameLib; loaded 13x files; 13x classes; used 8/2097 kB (0%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT"; CRC32: dd77776f
+16:31:47.254 SCRIPT       : Registered 324 temporary action enum(s), UAN==324
+16:31:47.693 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableCrouchCameraHorizontalRotation'
+16:31:47.693 SCRIPT    (W): @"scripts/3_Game/human.c,241": Method not linked 'HumanInputController.DisableCrouchCameratHorizontalRotation'
+16:31:47.693 SCRIPT    (W): @"scripts/3_Game/human.c,240": Method not linked 'HumanInputController.DisableErectCameratHorizontalRotation'
+16:31:47.693 SCRIPT    (W): @"scripts/3_Game/human.c,17": Missing script declaration for method 'HumanInputController.DisableErectHorizontalRotation'
+16:31:47.693 SCRIPT       : Module: Game; loaded 447x files; 1532x classes; used 5397/33554 kB (16%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT"; CRC32: 5d057844
+16:31:47.697 SCRIPT       : ... Backlit Effects Enabled
+16:31:48.941 SCRIPT    (W): @"scripts/4_World/entities/building/underground/entrance/land_underground_entrance.c,149": 'UpdatePathgraphDoorByAnimationSourceName' is obsolete: 1.30: Use UpdatePathgraphEntityState
+16:31:49.295 SCRIPT       : Module: World; loaded 2322x files; 6323x classes; used 12562/33554 kB (37%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT"; CRC32: 7f1b624f
+16:32:07.749  SCRIPT       : Module: Mission; loaded 220x files; 488x classes; used 3952/33554 kB (11%) of static memory; defines: "DAYZ_1_30,SERVER_FOR_WINDOWS,SERVER,PLATFORM_WINDOWS,DIAG,DIAG_DEVELOPER,NO_GUI,NO_GUI_INGAME,ENABLE_LOGGING,ROBOCLIENT,INPUT_OVERRIDE,DayZSandbox,sakhal,nasdara,DayZ,FEATURE_CURSOR,FEATURE_NETWORK_RECONCILIATION,FEATURE_NETWORK_RECONCILATION,LOG_TO_FILE,LOG_TO_SCRIPT,ENABLE_CAROUSEL,BROADCAST_BUNKER_SP_VIS_ENABLED"; CRC32: ea554c11
+16:32:07.904  SCRIPT       : string s =    'Module PluginConfigDebugProfile is not Registred in PluginManager.c!'
+16:32:07.904  SCRIPT    (E):    -- Stack trace --
+16:32:07.904  SCRIPT    (E):    GetPlugin() scripts/4_World/plugins/pluginmanager.c : 341
+16:32:07.904  SCRIPT    (E):    OnInit() scripts/4_World/plugins/pluginbase/pluginitemdiagnostic.c : 94
+16:32:07.904  SCRIPT    (E):    PluginsInit() scripts/4_World/plugins/pluginmanager.c : 136
+16:32:07.904  SCRIPT    (E):    PluginManagerInit() scripts/4_World/plugins/pluginmanager.c : 304
+16:32:07.904  SCRIPT    (E):    MissionBase() scripts/5_Mission/mission/missionbase.c : 21
+16:32:07.904  SCRIPT    (E):    CreateCustomMission() C:\tmp\dsbx-f1bpeers-work\partida\b1\mpmissions\dayzOffline.chernarusplus\init.c : 97
+16:32:07.904  SCRIPT    (E):    -----------------
+16:32:07.944  SCRIPT       : 11-15 16:32:07 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-Bow
+16:32:08.022  SCRIPT       : 11-15 16:32:08 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-Center
+16:32:08.022  SCRIPT       : 11-15 16:32:08 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-Stern
+16:32:08.027  SCRIPT       : 11-15 16:32:08 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Ship-East
+16:32:08.031  SCRIPT       : 11-15 16:32:08 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-North-Uphill
+16:32:08.035  SCRIPT       : 11-15 16:32:08 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-South-Building1
+16:32:08.039  SCRIPT       : 11-15 16:32:08 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-South-Building2
+16:32:08.047  SCRIPT       : 11-15 16:32:08 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-South-Downhill
+16:32:08.049  SCRIPT       : 11-15 16:32:08 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Pavlovo-West-Uphill
+16:32:26.152 SCRIPT       : [DSBX] clock tick_ms=43046
+16:32:26.153 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:32:26.153 SCRIPT       : [DSBX] config status=ok
+16:32:26.153 SCRIPT       : [DSBX] state HELLO
+16:32:26.870 SCRIPT       : [DSBX] config qa_step_gap_ms=0
+16:32:27.064 SCRIPT       : [DSBX] hello accepted session=900f45ba3d3a92e8 conn=1
+16:32:28.927 SCRIPT       : [DSBX] catalog scan finished pages=35 skipped=0
+16:32:31.154 SCRIPT       : [DSBX] clock tick_ms=48047
+16:32:32.506 SCRIPT       : [DSBX] catalog complete pages=35
+16:32:36.153 SCRIPT       : [DSBX] clock tick_ms=53047
+16:32:41.153 SCRIPT       : [DSBX] clock tick_ms=58047
+16:32:46.153 SCRIPT       : [DSBX] clock tick_ms=63047
+16:32:51.153 SCRIPT       : [DSBX] clock tick_ms=68047
+16:32:56.154 SCRIPT       : [DSBX] clock tick_ms=73047
+16:33:01.153 SCRIPT       : [DSBX] clock tick_ms=78047
+16:33:06.153 SCRIPT       : [DSBX] clock tick_ms=83047
+16:33:11.153 SCRIPT       : [DSBX] clock tick_ms=88047
+16:33:16.154 SCRIPT       : [DSBX] clock tick_ms=93047
+16:33:21.153 SCRIPT       : [DSBX] clock tick_ms=98047
+16:33:26.495  SCRIPT       : 11-15 16:33:26 | Server | Debug | Connect | n/a | n/a | InvokeOnConnect:CustomMission<0x000001CEE56F0040>
+16:33:26.496  SCRIPT       : 11-15 16:33:26 | Server | Debug | Connect | n/a | n/a | Player connected:SurvivorBase<0x000001D1E890EFF0> SurvivorM_Denis:20673
+16:33:26.501 SCRIPT       : [DSBX] clock tick_ms=103394
+16:33:31.500 SCRIPT       : [DSBX] clock tick_ms=108394
+16:33:36.500 SCRIPT       : [DSBX] clock tick_ms=113394
+16:33:41.501 SCRIPT       : [DSBX] clock tick_ms=118394
+16:33:46.501 SCRIPT       : [DSBX] clock tick_ms=123394
+16:33:51.500 SCRIPT       : [DSBX] clock tick_ms=128394
+16:33:56.500 SCRIPT       : [DSBX] clock tick_ms=133394
+16:34:01.500 SCRIPT       : [DSBX] clock tick_ms=138394
+16:34:06.500 SCRIPT       : [DSBX] clock tick_ms=143394
+16:34:11.500 SCRIPT       : [DSBX] clock tick_ms=148394
+16:34:16.500 SCRIPT       : [DSBX] clock tick_ms=153394
+16:34:21.500 SCRIPT       : [DSBX] clock tick_ms=158394
+16:34:26.500 SCRIPT       : [DSBX] clock tick_ms=163394
+16:34:31.500 SCRIPT       : [DSBX] clock tick_ms=168394
+16:34:36.500 SCRIPT       : [DSBX] clock tick_ms=173394
+16:34:41.501 SCRIPT       : [DSBX] clock tick_ms=178394
+16:34:46.500 SCRIPT       : [DSBX] clock tick_ms=183394
+16:34:51.501 SCRIPT       : [DSBX] clock tick_ms=188394
+16:34:52.839 SCRIPT       : 11-15 16:34:52 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Dynamic area (<3450.000000, 192.729996, 13016.000000>)
+16:34:52.841 SCRIPT       : 11-15 16:34:52 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Dynamic area (<11800.000000, 29.542667, 14311.000000>)
+16:34:52.841 SCRIPT       : 11-15 16:34:52 | Server | Debug | n/a | n/a | n/a | >>>> SetupZoneData: Finished: Dynamic area (<11876.000000, 140.000000, 12530.000000>)
+16:34:56.500 SCRIPT       : [DSBX] clock tick_ms=193394
+16:35:01.500 SCRIPT       : [DSBX] clock tick_ms=198394
+16:35:06.500 SCRIPT       : [DSBX] clock tick_ms=203394
+16:35:11.500 SCRIPT       : [DSBX] clock tick_ms=208394
+16:35:16.500 SCRIPT       : [DSBX] clock tick_ms=213394
+16:35:21.500 SCRIPT       : [DSBX] clock tick_ms=218394
+16:35:26.502 SCRIPT       : [DSBX] clock tick_ms=223396
+16:35:31.503 SCRIPT       : [DSBX] clock tick_ms=228396
+16:35:36.502 SCRIPT       : [DSBX] clock tick_ms=233396
+16:35:41.502 SCRIPT       : [DSBX] clock tick_ms=238396
+16:35:46.503 SCRIPT       : [DSBX] clock tick_ms=243396
+16:35:51.502 SCRIPT       : [DSBX] clock tick_ms=248396
+16:35:56.502 SCRIPT       : [DSBX] clock tick_ms=253396
+16:36:01.502 SCRIPT       : [DSBX] clock tick_ms=258396
+16:36:06.503 SCRIPT       : [DSBX] clock tick_ms=263396
+16:36:11.503 SCRIPT       : [DSBX] clock tick_ms=268396
+16:36:16.502 SCRIPT       : [DSBX] clock tick_ms=273396
+16:36:21.503 SCRIPT       : [DSBX] clock tick_ms=278396
+16:36:26.502 SCRIPT       : [DSBX] clock tick_ms=283396
+16:36:31.502 SCRIPT       : [DSBX] clock tick_ms=288396
+16:36:36.502 SCRIPT       : [DSBX] clock tick_ms=293396
+16:36:41.502 SCRIPT       : [DSBX] clock tick_ms=298396
+16:36:46.502 SCRIPT       : [DSBX] clock tick_ms=303396
+16:36:51.502 SCRIPT       : [DSBX] clock tick_ms=308396
+16:36:56.502 SCRIPT       : [DSBX] clock tick_ms=313396
+16:37:01.502 SCRIPT       : [DSBX] clock tick_ms=318396
+16:37:06.502 SCRIPT       : [DSBX] clock tick_ms=323396
+16:37:11.502 SCRIPT       : [DSBX] clock tick_ms=328396
+16:37:16.502 SCRIPT       : [DSBX] clock tick_ms=333396
+16:37:21.502 SCRIPT       : [DSBX] clock tick_ms=338396
+16:37:26.502 SCRIPT       : [DSBX] clock tick_ms=343396
+16:37:31.502 SCRIPT       : [DSBX] clock tick_ms=348396
+16:37:36.503 SCRIPT       : [DSBX] clock tick_ms=353396
+16:37:41.501 SCRIPT       : [DSBX] clock tick_ms=358396
+16:37:46.502 SCRIPT       : [DSBX] clock tick_ms=363396
+16:37:51.503 SCRIPT       : [DSBX] clock tick_ms=368396
+16:37:56.503 SCRIPT       : [DSBX] clock tick_ms=373396
+16:38:01.502 SCRIPT       : [DSBX] clock tick_ms=378396
+16:38:06.502 SCRIPT       : [DSBX] clock tick_ms=383396
+16:38:11.502 SCRIPT       : [DSBX] clock tick_ms=388396
+16:38:16.502 SCRIPT       : [DSBX] clock tick_ms=393396
+16:38:21.502 SCRIPT       : [DSBX] clock tick_ms=398396
+16:38:26.502 SCRIPT       : [DSBX] clock tick_ms=403396
+16:38:31.502 SCRIPT       : [DSBX] clock tick_ms=408396
+16:38:36.502 SCRIPT       : [DSBX] clock tick_ms=413396
+16:38:41.503 SCRIPT       : [DSBX] clock tick_ms=418396
+16:38:46.502 SCRIPT       : [DSBX] clock tick_ms=423396
+16:38:51.502 SCRIPT       : [DSBX] clock tick_ms=428396
+16:38:56.502 SCRIPT       : [DSBX] clock tick_ms=433396
+16:39:01.502 SCRIPT       : [DSBX] clock tick_ms=438396
+16:39:06.502 SCRIPT       : [DSBX] clock tick_ms=443396
+16:39:11.502 SCRIPT       : [DSBX] clock tick_ms=448396
+16:39:16.502 SCRIPT       : [DSBX] clock tick_ms=453396
+16:39:21.502 SCRIPT       : [DSBX] clock tick_ms=458396
+16:39:26.501 SCRIPT       : [DSBX] clock tick_ms=463396
+16:39:31.502 SCRIPT       : [DSBX] clock tick_ms=468396
+16:39:36.502 SCRIPT       : [DSBX] clock tick_ms=473396
+16:39:41.501 SCRIPT       : [DSBX] clock tick_ms=478396
+16:39:46.503 SCRIPT       : [DSBX] clock tick_ms=483396
+16:39:51.502 SCRIPT       : [DSBX] clock tick_ms=488396
+16:39:56.502 SCRIPT       : [DSBX] clock tick_ms=493396
+16:40:01.502 SCRIPT       : [DSBX] clock tick_ms=498396
+16:40:06.503 SCRIPT       : [DSBX] clock tick_ms=503396
+16:40:11.502 SCRIPT       : [DSBX] clock tick_ms=508396
+16:40:16.503 SCRIPT       : [DSBX] clock tick_ms=513397
+16:40:21.503 SCRIPT       : [DSBX] clock tick_ms=518397
+16:40:26.505 SCRIPT       : [DSBX] clock tick_ms=523398
+16:40:31.504 SCRIPT       : [DSBX] clock tick_ms=528398
+16:40:36.505 SCRIPT       : [DSBX] clock tick_ms=533398
+16:40:41.504 SCRIPT       : [DSBX] clock tick_ms=538398
+16:40:46.504 SCRIPT       : [DSBX] clock tick_ms=543398
+16:40:51.503 SCRIPT       : [DSBX] clock tick_ms=548398
+16:40:56.503 SCRIPT       : [DSBX] clock tick_ms=553398
+16:41:01.503 SCRIPT       : [DSBX] clock tick_ms=558398
+16:41:06.505 SCRIPT       : [DSBX] clock tick_ms=563398
+16:41:11.504 SCRIPT       : [DSBX] clock tick_ms=568398
+16:41:16.504 SCRIPT       : [DSBX] clock tick_ms=573398
+16:41:21.507 SCRIPT       : [DSBX] clock tick_ms=578400
+16:41:26.506 SCRIPT       : [DSBX] clock tick_ms=583400
+16:41:31.506 SCRIPT       : [DSBX] clock tick_ms=588400
+16:41:36.507 SCRIPT       : [DSBX] clock tick_ms=593400
+16:41:41.506 SCRIPT       : [DSBX] clock tick_ms=598400
+16:41:46.506 SCRIPT       : [DSBX] clock tick_ms=603400
+16:41:51.506 SCRIPT       : [DSBX] clock tick_ms=608400
+16:41:56.506 SCRIPT       : [DSBX] clock tick_ms=613400
+16:42:01.507 SCRIPT       : [DSBX] clock tick_ms=618400
+16:42:06.506 SCRIPT       : [DSBX] clock tick_ms=623400
+16:42:11.506 SCRIPT       : [DSBX] clock tick_ms=628400
+16:42:16.506 SCRIPT       : [DSBX] clock tick_ms=633400
+16:42:21.506 SCRIPT       : [DSBX] clock tick_ms=638400
+16:42:26.506 SCRIPT       : [DSBX] clock tick_ms=643400
+16:42:31.507 SCRIPT       : [DSBX] clock tick_ms=648400
+16:42:36.506 SCRIPT       : [DSBX] clock tick_ms=653400
+16:42:41.506 SCRIPT       : [DSBX] clock tick_ms=658400
+16:42:46.507 SCRIPT       : [DSBX] clock tick_ms=663400
+16:42:51.507 SCRIPT       : [DSBX] clock tick_ms=668401
+16:42:56.507 SCRIPT       : [DSBX] clock tick_ms=673401
+16:43:01.507 SCRIPT       : [DSBX] clock tick_ms=678401
+16:43:06.507 SCRIPT       : [DSBX] clock tick_ms=683401
+16:43:11.507 SCRIPT       : [DSBX] clock tick_ms=688401
+16:43:16.507 SCRIPT       : [DSBX] clock tick_ms=693401
+16:43:21.507 SCRIPT       : [DSBX] clock tick_ms=698401
+16:43:26.508 SCRIPT       : [DSBX] clock tick_ms=703401
+16:43:26.852 SCRIPT       : [DSBX] effect step=retirar session=900f45ba3d3a92e8 op=op-2 tick_ms=703746
+16:43:26.854 SCRIPT       : [DSBX] effect step=anotar session=900f45ba3d3a92e8 op=op-2 tick_ms=703747
+16:43:29.026  SCRIPT       : [Logout]: New player uid-redactado-1 with logout time 15
+16:43:31.508 SCRIPT       : [DSBX] clock tick_ms=708401
+16:43:34.261  SCRIPT       : [DSBX] shutdown role=server created_n=2 inflight_p=0 inflight_r=0
+16:43:34.268  SCRIPT       : ~DayZGame()
+16:43:36.726  SCRIPT       : Cleaning up script module globals 'Game'
+16:43:36.726   SCRIPT    (E): Leaked 'BunkerBroadcastManager' script instance (1x)!
+16:43:36.726   SCRIPT    (E): Leaked 'DSBX_Callback' script instance (2x)!
+16:43:36.726   SCRIPT    (E): ==== Total Leaks (3x)! ====

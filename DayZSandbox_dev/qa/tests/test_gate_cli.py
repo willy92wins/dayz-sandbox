@@ -1,11 +1,15 @@
 """Reglas del CLI (brief F0.1 §3 y §10.1 punto 3)."""
 
+import contextlib
 import hashlib
+import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import gate_core
@@ -15,6 +19,7 @@ from s_puente_eval import evaluate
 from .synth import write_case
 
 ROOT = Path(__file__).resolve().parents[2]
+UNIMPL_SPIKE = "S-test-unimpl"
 
 PHASE_TABLE = {
     "F1": ["A1", "A5", "A6", "C4", "C5", "D2", "E1", "E2", "E3"],
@@ -52,10 +57,15 @@ def _git():
     return proc.stdout
 
 
-def _run(args):
+def _run(args, extra_env=None):
+    env = None
+    if extra_env:
+        env = dict(os.environ)
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, "qa/m1_gate.py", *args],
         cwd=ROOT,
+        env=env,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -124,7 +134,10 @@ class GateCliTests(unittest.TestCase):
     def test_rule3_unimplemented_and_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
             evidence = Path(tmp) / "ev"
-            proc = _run(["spike", "S-persist", "--build", "offline", "--evidence", str(evidence)])
+            proc = _run(
+                ["spike", UNIMPL_SPIKE, "--build", "offline", "--evidence", str(evidence)],
+                extra_env={"DSBX_QA_TEST_UNIMPL_SPIKE": UNIMPL_SPIKE},
+            )
             self.assertEqual(proc.returncode, 2, proc.stderr)
             verdict = json.loads((evidence / "verdict.json").read_text(encoding="utf-8"))
             self.assertEqual(verdict["exit_code"], 2)
@@ -134,15 +147,58 @@ class GateCliTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 2, proc.stderr)
             self.assertFalse(unknown.exists())
 
+    def test_registered_skeleton_spike_evaluate_only_reaches_its_own_evaluate(self):
+        # Brief F0.3-0 §5.1: --evaluate-only llama al evaluate del spike registrado, no a un not_implemented del nucleo.
+        # Asi cada spike se activa desde su write-set sin tocar gate_core.IMPLEMENTED_SPIKES. El spike es SINTETICO y vive
+        # solo en esta prueba (modulos esqueleto propios), para no depender de que un spike real siga sin implementar: con
+        # S3 ya implementado, la version que usaba S3 se rompia (aviso de la sesion de F0.3).
+        import types
+
+        sid = "S-test-skel"
+        calls = []
+
+        def _evaluate(part_dir):
+            calls.append(Path(part_dir).name)
+            return gate_core.make_verdict(sid, 2, reasons=["not_implemented"])
+
+        eval_mod = types.ModuleType("s_test_skel_eval")
+        eval_mod.evaluate = _evaluate
+        mut_mod = types.ModuleType("s_test_skel_mutants")
+        mut_mod.EXPECTED_MUTANTS = {}
+        mut_mod.EXPECTED_HARNESS_TESTS = {}
+        run_mod = types.ModuleType("s_test_skel_run")
+        run_mod.run = lambda args, evidence, argv: 2
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            sys.modules, {"s_test_skel_eval": eval_mod, "s_test_skel_mutants": mut_mod, "s_test_skel_run": run_mod}
+        ), mock.patch.dict(
+            gate_core.SPIKE_REGISTRY, {sid: ("s_test_skel_run", "s_test_skel_eval", "s_test_skel_mutants")}
+        ), mock.patch.dict(os.environ, {"DSBX_QA_TEST_UNIMPL_SPIKE": sid}):
+            evidence = Path(tmp) / "ev"
+            run_dir = evidence / "run"
+            (run_dir / "samples").mkdir(parents=True)
+            (run_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                code = m1_gate.main(["spike", sid, "--build", "offline", "--evidence", str(evidence), "--evaluate-only"])
+            self.assertEqual(code, 2)
+            self.assertEqual(calls, ["run"], "el evaluate del spike registrado no llego a correr sobre run/")
+            pv = json.loads((run_dir / "verdict.json").read_text(encoding="utf-8"))
+            self.assertEqual((pv["id"], pv["exit_code"], pv["reasons"]), (sid, 2, ["not_implemented"]))
+        self.assertTrue(gate_core.IMPLEMENTED_SPIKES >= set(gate_core.SPIKE_REGISTRY))
+
     def test_rule4_usage_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             evidence = Path(tmp) / "ev"
+            srv_ok = Path(tmp) / "srv-ok"
+            cli_ok = Path(tmp) / "cli-ok"
+            srv_ok.mkdir()
+            cli_ok.mkdir()
             cases = [
                 ["spike", "S-puente", "--build", "retail", "--evidence", str(evidence), "--fault", "slow", "--both"],
                 ["spike", "S-puente", "--build", "offline", "--evidence", str(evidence), "--both", "--hold-ms", "3000", "--lease-ms", "3000"],
                 ["spike", "S-puente", "--build", "retail", "--evidence", str(evidence), "--both"],
                 ["spike", "S-puente", "--build", "diag", "--evidence", str(evidence), "--both", "--server-profile", str(Path(tmp) / "missing-a"), "--client-profile", str(Path(tmp) / "missing-b")],
                 ["phase", "F0", "--build", "offline", "--evidence", str(evidence)],
+                ["spike", "F0.3-0", "--build", "retail", "--evidence", str(evidence), "--server-profile", str(srv_ok), "--client-profile", str(cli_ok)],
             ]
             for args in cases:
                 with self.subTest(args=args):
@@ -153,61 +209,71 @@ class GateCliTests(unittest.TestCase):
                     self.assertFalse(evidence.exists())
 
     def test_rule5_defaults(self):
-        parser = m1_gate.build_parser()
-        offline = parser.parse_args(["spike", "S-persist", "--build", "offline", "--evidence", "x"])
-        m1_gate.validate(parser, offline)
-        self.assertEqual(offline.hold_ms, 2000)
-        self.assertEqual(offline.lease_ms, 3000)
-        self.assertEqual(offline.ttl_ms, 5000)
-        self.assertEqual(offline.retry_ms, 2000)
-        self.assertEqual(offline.seed, 20261026)
-        self.assertEqual(offline.peer_timeout, 20)
-        with tempfile.TemporaryDirectory() as tmp:
-            server = Path(tmp) / "srv"
-            client = Path(tmp) / "cli"
-            server.mkdir()
-            client.mkdir()
-            retail = parser.parse_args(
-                [
-                    "spike",
-                    "S-persist",
-                    "--build",
-                    "retail",
-                    "--evidence",
-                    "x",
-                    "--server-profile",
-                    str(server),
-                    "--client-profile",
-                    str(client),
-                ]
-            )
-            m1_gate.validate(parser, retail)
-            self.assertEqual(retail.peer_timeout, 120)
-            diag = parser.parse_args(
-                [
-                    "spike",
-                    "S-persist",
-                    "--build",
-                    "diag",
-                    "--evidence",
-                    "x",
-                    "--server-profile",
-                    str(server),
-                    "--client-profile",
-                    str(client),
-                ]
-            )
-            m1_gate.validate(parser, diag)
-            self.assertEqual(diag.peer_timeout, 120)
-            evidence = Path(tmp) / "ev"
-            proc = _run(["spike", "S-persist", "--build", "offline", "--evidence", str(evidence)])
-            self.assertEqual(proc.returncode, 2, proc.stderr)
-            manifest = json.loads((evidence / "manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["params"]["hold_ms"], 2000)
-            self.assertEqual(manifest["params"]["lease_ms"], 3000)
-            self.assertEqual(manifest["params"]["ttl_ms"], 5000)
-            self.assertEqual(manifest["params"]["retry_ms"], 2000)
-            self.assertEqual(manifest["params"]["seed"], 20261026)
+        with mock.patch.dict(os.environ, {"DSBX_QA_TEST_UNIMPL_SPIKE": UNIMPL_SPIKE}):
+            parser = m1_gate.build_parser()
+            offline = parser.parse_args(["spike", UNIMPL_SPIKE, "--build", "offline", "--evidence", "x"])
+            m1_gate.validate(parser, offline)
+            self.assertEqual(offline.hold_ms, 2000)
+            self.assertEqual(offline.lease_ms, 3000)
+            self.assertEqual(offline.ttl_ms, 5000)
+            self.assertEqual(offline.retry_ms, 2000)
+            self.assertEqual(offline.seed, 20261026)
+            self.assertEqual(offline.peer_timeout, 20)
+            with tempfile.TemporaryDirectory() as tmp:
+                server = Path(tmp) / "srv"
+                client = Path(tmp) / "cli"
+                pbo = Path(tmp) / "probe.pbo"
+                server.mkdir()
+                client.mkdir()
+                pbo.write_bytes(b"pbo\n")
+                retail = parser.parse_args(
+                    [
+                        "spike",
+                        UNIMPL_SPIKE,
+                        "--build",
+                        "retail",
+                        "--evidence",
+                        "x",
+                        "--server-profile",
+                        str(server),
+                        "--client-profile",
+                        str(client),
+                        "--pbo",
+                        str(pbo),
+                    ]
+                )
+                m1_gate.validate(parser, retail)
+                self.assertEqual(retail.peer_timeout, 120)
+                diag = parser.parse_args(
+                    [
+                        "spike",
+                        UNIMPL_SPIKE,
+                        "--build",
+                        "diag",
+                        "--evidence",
+                        "x",
+                        "--server-profile",
+                        str(server),
+                        "--client-profile",
+                        str(client),
+                        "--pbo",
+                        str(pbo),
+                    ]
+                )
+                m1_gate.validate(parser, diag)
+                self.assertEqual(diag.peer_timeout, 120)
+                evidence = Path(tmp) / "ev"
+                proc = _run(
+                    ["spike", UNIMPL_SPIKE, "--build", "offline", "--evidence", str(evidence)],
+                    extra_env={"DSBX_QA_TEST_UNIMPL_SPIKE": UNIMPL_SPIKE},
+                )
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                manifest = json.loads((evidence / "manifest.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["params"]["hold_ms"], 2000)
+                self.assertEqual(manifest["params"]["lease_ms"], 3000)
+                self.assertEqual(manifest["params"]["ttl_ms"], 5000)
+                self.assertEqual(manifest["params"]["retry_ms"], 2000)
+                self.assertEqual(manifest["params"]["seed"], 20261026)
 
     def test_rule6_requires_both(self):
         with tempfile.TemporaryDirectory() as tmp:

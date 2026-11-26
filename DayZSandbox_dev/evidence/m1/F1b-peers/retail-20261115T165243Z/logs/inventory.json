@@ -1,0 +1,41 @@
+{
+    "client":  {
+                   "dir":  "C:\\tmp\\dsbx-f1bpeers-work\\partida\\profiles_retail\\client",
+                   "files":  [
+                                 "DayZ_x64_2026-11-15_17-54-08.RPT",
+                                 "error_2026-11-15_17-54-08.log",
+                                 "script_2026-11-15_17-54-08.log"
+                             ]
+               },
+    "copies":  [
+                   {
+                       "dest":  "server_script.log",
+                       "peer":  "server",
+                       "src":  "script_2026-11-15_17-52-45.log"
+                   },
+                   {
+                       "dest":  "server.RPT",
+                       "peer":  "server",
+                       "src":  "DayZServer_x64_2026-11-15_17-52-45.RPT"
+                   },
+                   {
+                       "dest":  "client_script.log",
+                       "peer":  "client",
+                       "src":  "script_2026-11-15_17-54-08.log"
+                   },
+                   {
+                       "dest":  "client.RPT",
+                       "peer":  "client",
+                       "src":  "DayZ_x64_2026-11-15_17-54-08.RPT"
+                   }
+               ],
+    "server":  {
+                   "dir":  "C:\\tmp\\dsbx-f1bpeers-work\\partida\\profiles_retail\\server",
+                   "files":  [
+                                 "DayZServer_x64_2026-11-15_17-52-45.ADM",
+                                 "DayZServer_x64_2026-11-15_17-52-45.RPT",
+                                 "error_2026-11-15_17-52-45.log",
+                                 "script_2026-11-15_17-52-45.log"
+                             ]
+               }
+}

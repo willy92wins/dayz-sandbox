@@ -1,6 +1,6 @@
 # Cámara que sigue objetos: armas en manos, accesorios, objetos sueltos y vehículos
 
-2026-11-10 · plan de una lane (Claude) · **v0.4**, tras dos revisiones R22 de Sol (`gpt-6.1-sol`, solo lectura; RECHAZADO sobre la v0.1 y sobre la v0.2; arbitrajes en §7 y §8) y la primera corrida de la sonda, S-track·1 (resultado y cambios en §9) · amplía la ficha **T08** del [backlog post-v1](../../backlog-post-v1.md) («Cámara que sigue al actor», M2) a cualquier objeto · contrato: `DayZSandbox_dev/product-spec.md` · cámara base: decisión #16 y F4 del [plan v2](2026-10-26-m1-cine-v2.md).
+2026-11-10 · plan de una lane (Claude) · **v0.6**, tras dos revisiones R22 de Sol (`gpt-6.1-sol`, solo lectura; RECHAZADO sobre la v0.1 y sobre la v0.2; arbitrajes en §7 y §8) y la primera corrida de la sonda, S-track·1 (resultado y cambios en §9; reparto de la sonda en tres corridas, §10) · amplía la ficha **T08** del [backlog post-v1](../../backlog-post-v1.md) («Cámara que sigue al actor», M2) a cualquier objeto · contrato: `DayZSandbox_dev/product-spec.md` · cámara base: decisión #16 y F4 del [plan v2](2026-10-26-m1-cine-v2.md).
 
 Fuentes verificadas: DayZ-Script-Diff `78be1c4` (build 1.30.164289), con rutas relativas a `scripts/`; dayz-mcp `b47d171`; lecciones del vault LL-535 y LL-551. Lo que no está verificado lleva `[sin verificar]` y lo resuelve la sonda S-track (§4).
 
@@ -293,3 +293,27 @@ Corrida del 2026-11-10/12 en el PC de Guillermo, según el [brief](2026-11-10-s-
 4. Las negativas, que tienen que salir FALLA para que S-track cierre.
 
 Brief de S-track·2: [2026-11-12-s-track-2-brief.md](2026-11-12-s-track-2-brief.md). Deja T-red, el coche, el actor de IA, el borrado del objetivo y los criterios K para S-track·3, que necesita red y servidor.
+
+## 10. Cambios de la v0.5: la sonda en tres corridas
+
+- **El reparto.** La sonda S-track se parte en tres corridas:
+  - **S-track·1**, hecha: calibración, T-lect y T-hook. Con calibración y sin decisión.
+  - **S-track·2**: T-lect y T-hook en los tres modos, más T-ropa y T-suave, con el jugador local.
+  - **S-track·3** ([borrador](2026-11-26-s-track-3-brief.md)): T-red con el actor de IA y el coche, `mount` sobre el coche y las negativas de pérdida y de «cámara lista».
+- **El coche sale de T-hook**, donde lo ponía §4.2, y pasa a S-track·3: necesita un impulso del servidor y física.
+- **Workers.** El 12-nov Grok se quedó sin saldo y Argon sin cuota. Desde S-track·2, por decisión de Guillermo, Muse implementa y Sol revisa cada entrega en bucle, con tope de 4 vueltas por pieza; Claude arbitra lo que queda. Esto sustituye, para la sonda, el «Sol una vez por fase» de §6.
+- **Banco.** Va en el sobremesa de Guillermo, de noche, con el cliente al frente. El portátil está dedicado a M1. Con S-track·1, la ventana del cliente sin foco iba a ~19 fps. Por eso S-track·2 lleva un preflight de FPS y una prueba de foco.
+
+## 11. Decisión de la v0.6: `mount` sobre el arma en manos
+
+Datos de S-track·2 (informe en el PC de Guillermo, `wt-r6/.../evidence/s-track2/_informe/informe.md`):
+- **Lo que se midió.** Con la cámara montada rígida sobre el arma en manos, el arma se mueve en pantalla unos 5 px p95, con 0,65-1,1° de roll a 1080p. Sale con los tres hooks (H-b es el más cercano; H-c no es rígido).
+- **La causa.** Es el balanceo del arma en las manos, que ninguna lectura copia. La medida se validó así: sin girar, el arma ya oscila con p95 de 5,3 px y sin tendencia.
+- **Un dato retirado.** El «1,9 px» de S-track·1 venía de un cultivo que incluía el punto fijo de la HUD en el centro de la pantalla, así que no vale.
+
+**Decisión de Guillermo** (tarjeta, 2026-11-26 15:23Z, «Vale, con suavizado»):
+- `mount` sobre un objeto en manos se acepta con ese temblor.
+- Sale con suavizado por defecto y con un aviso del temblor en la web.
+- No se busca una lectura más precisa.
+
+Para `mount` sobre objetos sueltos y vehículos se mantienen los umbrales de T-hook. El valor por defecto de `smooth_s` en manos sale de la medida de `mount03` en la siguiente tanda.

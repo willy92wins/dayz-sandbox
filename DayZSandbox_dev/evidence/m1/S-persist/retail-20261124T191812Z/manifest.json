@@ -1,0 +1,43 @@
+{
+  "argv": [
+    "spike",
+    "S-persist",
+    "--both",
+    "--build",
+    "retail",
+    "--part",
+    "run",
+    "--evidence",
+    "C:\\dsbx-m1\\resultados\\spersist_retail_20261124T191812Z\\evidence",
+    "--server-profile",
+    "C:\\dsbx-m1\\spersist_retail_2ac1e08_20261124T183150Z\\run_20261124T191812Z\\profiles\\server",
+    "--client-profile",
+    "C:\\dsbx-m1\\spersist_retail_2ac1e08_20261124T183150Z\\run_20261124T191812Z\\profiles\\client",
+    "--pbo",
+    "C:\\dsbx-m1\\spersist_retail_2ac1e08_20261124T183150Z\\mods\\@DayZSandbox_QA\\Addons\\DayZSandbox_QA.pbo",
+    "--peer-timeout",
+    "600"
+  ],
+  "both": true,
+  "build": "retail",
+  "ended_utc": "2026-11-24T19:43:14Z",
+  "faults": [],
+  "harness": {
+    "git_dirty": false,
+    "git_head": "2ac1e08f578ea274ad3d40424809472cd7c414ff",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "python": "3.14.7"
+  },
+  "id": "S-persist",
+  "kind": "spike",
+  "params": {
+    "hold_ms": 2000,
+    "lease_ms": 3000,
+    "port": null,
+    "retry_ms": 2000,
+    "seed": 20261026,
+    "ttl_ms": 5000
+  },
+  "schema": "dsbx-qa-manifest/1",
+  "started_utc": "2026-11-24T19:24:53Z"
+}

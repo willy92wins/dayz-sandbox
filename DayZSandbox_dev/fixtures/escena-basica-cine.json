@@ -1,0 +1,116 @@
+{
+  "schema": "dsbx.scene/1",
+  "doc_id": "d-7c19e2a4",
+  "name": "Amanecer en Stary Sobor",
+  "map": "chernarusplus",
+  "ambiente": {
+    "fecha": "2026-09-14",
+    "hora": "06:10",
+    "nubes": 0.35,
+    "niebla": 0.12,
+    "lluvia": 0,
+    "viento": 3
+  },
+  "entities": [
+    {
+      "id": "act-01",
+      "kind": "actor",
+      "cls": "SurvivorM_Mirek",
+      "name": "Mirek",
+      "x": 6176.0,
+      "z": 7632.0,
+      "yaw": 35,
+      "wardrobe": "partisano",
+      "behaviour": "ONCE",
+      "roam": 15,
+      "marks": [
+        {"x": 6181.0, "z": 7635.0},
+        {"x": 6185.0, "z": 7639.0}
+      ],
+      "gestures": [
+        {"emote": "EmotePoint", "at": 2}
+      ]
+    },
+    {
+      "id": "act-02",
+      "kind": "actor",
+      "cls": "SurvivorF_Linda",
+      "name": "Linda",
+      "x": 6189.0,
+      "z": 7638.0,
+      "yaw": 250,
+      "wardrobe": "civil",
+      "behaviour": "HOLD",
+      "roam": 15,
+      "marks": [],
+      "gestures": [
+        {"emote": "EmoteGreeting", "t": 1.5}
+      ]
+    },
+    {"id": "obj-01", "kind": "objeto", "cls": "Land_Wreck_Ikarus", "name": "Autobús Ikarus", "x": 6188.0, "z": 7626.0, "yaw": 62},
+    {"id": "obj-02", "kind": "objeto", "cls": "Land_Wreck_Volha_Police", "name": "Volga de policía", "x": 6174.0, "z": 7644.0, "yaw": 140},
+    {"id": "obj-03", "kind": "objeto", "cls": "Land_Wreck_V3S", "name": "Camión V3S", "x": 6210.0, "z": 7646.0, "yaw": 250},
+    {"id": "obj-04", "kind": "objeto", "cls": "Land_Wreck_Volha_Blue", "name": "Volga azul", "x": 6152.0, "z": 7618.0, "yaw": 15},
+    {"id": "obj-05", "kind": "objeto", "cls": "Land_Container_1Bo", "name": "Contenedor", "x": 6224.0, "z": 7668.0, "yaw": 90},
+    {"id": "obj-06", "kind": "objeto", "cls": "Land_Container_1Aoh", "name": "Contenedor abierto", "x": 6232.0, "z": 7658.0, "yaw": 92},
+    {"id": "obj-07", "kind": "objeto", "cls": "LargeTent", "name": "Tienda grande", "x": 6144.0, "z": 7670.0, "yaw": 200},
+    {"id": "obj-08", "kind": "objeto", "cls": "MediumTent", "name": "Tienda mediana", "x": 6158.0, "z": 7680.0, "yaw": 170},
+    {"id": "obj-09", "kind": "objeto", "cls": "CarTent", "name": "Toldo de coche", "x": 6134.0, "z": 7654.0, "yaw": 120},
+    {"id": "obj-10", "kind": "objeto", "cls": "CamoNet", "name": "Red de camuflaje", "x": 6150.0, "z": 7660.0, "yaw": 0},
+    {"id": "obj-11", "kind": "objeto", "cls": "Fireplace", "name": "Hoguera", "x": 6156.0, "z": 7667.0, "yaw": 0},
+    {"id": "obj-12", "kind": "objeto", "cls": "Barrel_Red", "name": "Bidón rojo", "x": 6194.0, "z": 7638.0, "yaw": 0},
+    {"id": "obj-13", "kind": "objeto", "cls": "Barrel_Blue", "name": "Bidón azul", "x": 6196.0, "z": 7636.0, "yaw": 0},
+    {"id": "obj-14", "kind": "objeto", "cls": "Barrel_Green", "name": "Bidón verde", "x": 6195.5, "z": 7640.5, "yaw": 0},
+    {"id": "obj-15", "kind": "objeto", "cls": "WoodenCrate", "name": "Caja de madera", "x": 6163.0, "z": 7663.0, "yaw": 30},
+    {"id": "obj-16", "kind": "objeto", "cls": "WoodenCrate", "name": "Caja de madera 2", "x": 6164.0, "z": 7666.0, "yaw": 34},
+    {"id": "obj-17", "kind": "objeto", "cls": "SeaChest", "name": "Baúl", "x": 6140.0, "z": 7676.0, "yaw": 200},
+    {"id": "obj-18", "kind": "objeto", "cls": "Spotlight", "name": "Foco", "x": 6200.0, "z": 7656.0, "yaw": 220},
+    {"id": "obj-19", "kind": "objeto", "cls": "PowerGenerator", "name": "Generador", "x": 6203.0, "z": 7658.0, "yaw": 220},
+    {"id": "obj-20", "kind": "objeto", "cls": "Barrel_Yellow", "name": "Bidón amarillo", "x": 6193.0, "z": 7642.0, "yaw": 0},
+    {"id": "zmb-01", "kind": "infectado", "cls": "ZmbM_FarmerFat_Brown", "name": "Granjero", "x": 6242.0, "z": 7610.0, "yaw": 250},
+    {"id": "zmb-02", "kind": "infectado", "cls": "ZmbM_HermitSkinny_Beige", "name": "Ermitaño", "x": 6250.0, "z": 7628.0, "yaw": 270},
+    {"id": "zmb-03", "kind": "infectado", "cls": "ZmbF_CitizenANormal_Blue", "name": "Ciudadana", "x": 6238.0, "z": 7684.0, "yaw": 220},
+    {"id": "zmb-04", "kind": "infectado", "cls": "ZmbM_CitizenASkinny_Grey", "name": "Ciudadano", "x": 6116.0, "z": 7600.0, "yaw": 60},
+    {"id": "zmb-05", "kind": "infectado", "cls": "ZmbM_PatrolNormal_Autumn", "name": "Patrullero", "x": 6110.0, "z": 7642.0, "yaw": 90},
+    {"id": "zmb-06", "kind": "infectado", "cls": "ZmbF_VillagerOld_Green", "name": "Aldeana", "x": 6200.0, "z": 7582.0, "yaw": 0},
+    {"id": "zmb-07", "kind": "infectado", "cls": "ZmbM_Jacket_brown", "name": "Hombre con chaqueta", "x": 6170.0, "z": 7576.0, "yaw": 10},
+    {"id": "zmb-08", "kind": "infectado", "cls": "ZmbF_JoggerSkinny_Red", "name": "Corredora", "x": 6264.0, "z": 7660.0, "yaw": 260},
+    {"id": "zmb-09", "kind": "infectado", "cls": "ZmbM_HunterOld_Autumn", "name": "Cazador", "x": 6130.0, "z": 7702.0, "yaw": 140},
+    {"id": "zmb-10", "kind": "infectado", "cls": "ZmbM_MotobikerFat_Black", "name": "Motorista", "x": 6220.0, "z": 7594.0, "yaw": 300},
+    {"id": "ani-01", "kind": "animal", "cls": "Animal_CervusElaphus", "name": "Ciervo", "x": 6090.0, "z": 7710.0, "yaw": 120},
+    {"id": "ani-02", "kind": "animal", "cls": "Animal_CapreolusCapreolus", "name": "Corzo", "x": 6076.0, "z": 7698.0, "yaw": 100},
+    {"id": "ani-03", "kind": "animal", "cls": "Animal_GallusGallusDomesticus", "name": "Gallina", "x": 6160.0, "z": 7673.0, "yaw": 0}
+  ],
+  "cameras": [
+    {
+      "id": "cam-01",
+      "name": "Plano general",
+      "keys": [
+        {"t": 0, "x": 6110.0, "y": 12, "z": 7580.0, "yaw": 48, "pitch": -9, "fov": 52, "focus": 70}
+      ]
+    },
+    {
+      "id": "cam-02",
+      "name": "Travelling del autobús",
+      "keys": [
+        {"t": 0, "x": 6154.0, "y": 2.1, "z": 7610.0, "yaw": 28, "pitch": -2, "fov": 42, "focus": 24},
+        {"t": 3, "x": 6168.0, "y": 2.4, "z": 7614.0, "yaw": 8, "pitch": -3, "fov": 36, "focus": 16},
+        {"t": 6, "x": 6182.0, "y": 1.9, "z": 7620.0, "yaw": -12, "pitch": -1, "fov": 30, "focus": 12}
+      ]
+    },
+    {
+      "id": "cam-03",
+      "name": "Primer plano de Linda",
+      "keys": [
+        {"t": 0, "x": 6187.0, "y": 1.7, "z": 7634.5, "yaw": 20, "pitch": 0, "fov": 24, "focus": 3.2}
+      ]
+    }
+  ],
+  "next": {
+    "act": 3,
+    "obj": 21,
+    "zmb": 11,
+    "ani": 4,
+    "cam": 4
+  }
+}

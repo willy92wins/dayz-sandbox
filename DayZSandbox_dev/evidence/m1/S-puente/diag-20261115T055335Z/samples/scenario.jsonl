@@ -1,0 +1,150 @@
+{"ev": "step_start", "step": "S0", "t_ms": 8.702}
+{"ev": "step_end", "step": "S0", "t_ms": 10.308}
+{"ev": "step_start", "step": "S1", "t_ms": 10.348}
+{"ev": "step_end", "step": "S1", "t_ms": 94238.371}
+{"ev": "step_start", "step": "S2", "t_ms": 94238.455}
+{"ev": "step_end", "step": "S2", "t_ms": 100238.847}
+{"ev": "step_start", "step": "S3", "t_ms": 100238.936}
+{"ev": "mix_op", "op_id": "op-273694a8-1", "t_ms": 100323.39, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-2", "t_ms": 100512.957, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-3", "t_ms": 100713.609, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-4", "t_ms": 100792.722, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-5", "t_ms": 100914.398, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-6", "t_ms": 101112.604, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-7", "t_ms": 101155.779, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-8", "t_ms": 101312.901, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-9", "t_ms": 101512.905, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-10", "t_ms": 101712.262, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-11", "t_ms": 101912.557, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-12", "t_ms": 102112.794, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-13", "t_ms": 102313.094, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-14", "t_ms": 102512.98, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-15", "t_ms": 102712.653, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-16", "t_ms": 102823.793, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-17", "t_ms": 102982.418, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-18", "t_ms": 103012.634, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-19", "t_ms": 103213.462, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-20", "t_ms": 103412.938, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-21", "t_ms": 103619.362, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-22", "t_ms": 103813.923, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-23", "t_ms": 104013.045, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-24", "t_ms": 104212.829, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-25", "t_ms": 104412.63, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-26", "t_ms": 104612.865, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-27", "t_ms": 104656.59, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-28", "t_ms": 104813.305, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-29", "t_ms": 105013.028, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-30", "t_ms": 105213.751, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-31", "t_ms": 105249.693, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-32", "t_ms": 105439.396, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-33", "t_ms": 105513.199, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-34", "t_ms": 105712.475, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-35", "t_ms": 105913.398, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-36", "t_ms": 106085.654, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-37", "t_ms": 106113.966, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-38", "t_ms": 106312.761, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-39", "t_ms": 106404.553, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-40", "t_ms": 106512.963, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-41", "t_ms": 106712.818, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-42", "t_ms": 106816.318, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-43", "t_ms": 106912.241, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-44", "t_ms": 107113.075, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-45", "t_ms": 107217.789, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-46", "t_ms": 107311.82, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-47", "t_ms": 107512.994, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-48", "t_ms": 107626.521, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-49", "t_ms": 107713.464, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-50", "t_ms": 107824.55, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-51", "t_ms": 107912.748, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-52", "t_ms": 108113.054, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-53", "t_ms": 108312.79, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-54", "t_ms": 108512.473, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-55", "t_ms": 108712.306, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-56", "t_ms": 108827.086, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-57", "t_ms": 108912.511, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-58", "t_ms": 109112.979, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-59", "t_ms": 109312.907, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-60", "t_ms": 109330.662, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-61", "t_ms": 109528.699, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-62", "t_ms": 109619.614, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-63", "t_ms": 109812.79, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-64", "t_ms": 110012.711, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-65", "t_ms": 110212.904, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-66", "t_ms": 110234.25, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-67", "t_ms": 110432.012, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-68", "t_ms": 110635.048, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-69", "t_ms": 110712.971, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-70", "t_ms": 110912.477, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-71", "t_ms": 110939.784, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-72", "t_ms": 111112.992, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-73", "t_ms": 111312.82, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-74", "t_ms": 111525.659, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-75", "t_ms": 111723.393, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-76", "t_ms": 111923.697, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-77", "t_ms": 112123.457, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-78", "t_ms": 112322.591, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-79", "t_ms": 112522.934, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-80", "t_ms": 112722.534, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-81", "t_ms": 112923.394, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-82", "t_ms": 113028.345, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-83", "t_ms": 113123.158, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-84", "t_ms": 113322.671, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-85", "t_ms": 113523.108, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-86", "t_ms": 113722.645, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-87", "t_ms": 113922.467, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-88", "t_ms": 114122.55, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-89", "t_ms": 114322.443, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-90", "t_ms": 114436.273, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-91", "t_ms": 114523.16, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-92", "t_ms": 114722.575, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-93", "t_ms": 114922.594, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-94", "t_ms": 114938.467, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-95", "t_ms": 115141.115, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-96", "t_ms": 115338.734, "verb": "cam_pose_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-97", "t_ms": 115423.404, "verb": "srv_read"}
+{"ev": "mix_op", "op_id": "op-273694a8-98", "t_ms": 115629.533, "verb": "ambient_set"}
+{"ev": "mix_op", "op_id": "op-273694a8-99", "t_ms": 115822.777, "verb": "ground_query"}
+{"ev": "mix_op", "op_id": "op-273694a8-100", "t_ms": 116022.992, "verb": "srv_read"}
+{"ev": "step_end", "step": "S3", "t_ms": 116023.035}
+{"ev": "step_start", "peer": "server", "step": "N1", "t_ms": 116023.281}
+{"ev": "key_rotated", "peer": "server", "t_ms": 116255.875}
+{"ev": "config_restored", "peer": "server", "t_ms": 121843.788}
+{"ev": "expect", "peer": "server", "roles": {"B": "op-273694a8-101", "S": "op-273694a8-102", "read": "op-273694a8-103"}, "step": "N1", "t_ms": 122748.734}
+{"ev": "step_end", "peer": "server", "step": "N1", "t_ms": 122748.821}
+{"ev": "step_start", "peer": "server", "step": "N2", "t_ms": 122748.906}
+{"ev": "expect", "peer": "server", "roles": {"B": "op-273694a8-104", "S": "op-273694a8-105", "read": "op-273694a8-106"}, "step": "N2", "t_ms": 123347.566}
+{"ev": "step_end", "peer": "server", "step": "N2", "t_ms": 123347.626}
+{"ev": "step_start", "peer": "server", "step": "N3", "t_ms": 123347.688}
+{"ev": "expect", "peer": "server", "roles": {"B": "op-273694a8-107", "S": "op-273694a8-108", "read": "op-273694a8-109"}, "step": "N3", "t_ms": 123947.911}
+{"ev": "step_end", "peer": "server", "step": "N3", "t_ms": 123947.974}
+{"ev": "step_start", "peer": "server", "step": "N4", "t_ms": 123947.992}
+{"ev": "expect", "peer": "server", "roles": {"a": "op-273694a8-110", "b": "op-273694a8-111", "read": "op-273694a8-112", "repeat": "op-273694a8-110"}, "step": "N4", "t_ms": 128759.44}
+{"ev": "step_end", "peer": "server", "step": "N4", "t_ms": 128759.508}
+{"ev": "step_start", "peer": "server", "step": "N5", "t_ms": 128759.542}
+{"ev": "expect", "peer": "server", "roles": {"c": "n5-273694a8-server-c", "d": "op-273694a8-113", "read": "op-273694a8-114", "repeat": "n5-273694a8-server-c"}, "step": "N5", "t_ms": 135216.481}
+{"ev": "step_end", "peer": "server", "step": "N5", "t_ms": 135216.516}
+{"ev": "step_start", "peer": "client", "step": "N1", "t_ms": 135216.563}
+{"ev": "key_rotated", "peer": "client", "t_ms": 135296.321}
+{"ev": "config_restored", "peer": "client", "t_ms": 140890.381}
+{"ev": "expect", "peer": "client", "roles": {"B": "op-273694a8-115", "S": "op-273694a8-116", "read": "op-273694a8-117"}, "step": "N1", "t_ms": 141549.164}
+{"ev": "step_end", "peer": "client", "step": "N1", "t_ms": 141549.203}
+{"ev": "step_start", "peer": "client", "step": "N2", "t_ms": 141549.248}
+{"ev": "expect", "peer": "client", "roles": {"B": "op-273694a8-118", "S": "op-273694a8-119", "read": "op-273694a8-120"}, "step": "N2", "t_ms": 142153.457}
+{"ev": "step_end", "peer": "client", "step": "N2", "t_ms": 142153.502}
+{"ev": "step_start", "peer": "client", "step": "N3", "t_ms": 142153.558}
+{"ev": "expect", "peer": "client", "roles": {"B": "op-273694a8-121", "S": "op-273694a8-122", "read": "op-273694a8-123"}, "step": "N3", "t_ms": 142762.04}
+{"ev": "step_end", "peer": "client", "step": "N3", "t_ms": 142762.129}
+{"ev": "step_start", "peer": "client", "step": "N4", "t_ms": 142762.183}
+{"ev": "expect", "peer": "client", "roles": {"a": "op-273694a8-124", "b": "op-273694a8-125", "read": "op-273694a8-126", "repeat": "op-273694a8-124"}, "step": "N4", "t_ms": 147603.43}
+{"ev": "step_end", "peer": "client", "step": "N4", "t_ms": 147603.5}
+{"ev": "step_start", "peer": "client", "step": "N5", "t_ms": 147603.562}
+{"ev": "expect", "peer": "client", "roles": {"c": "n5-273694a8-client-c", "d": "op-273694a8-127", "read": "op-273694a8-128", "repeat": "n5-273694a8-client-c"}, "step": "N5", "t_ms": 154065.159}
+{"ev": "step_end", "peer": "client", "step": "N5", "t_ms": 154065.223}
+{"ev": "step_start", "peer": "client", "step": "N6", "t_ms": 154065.273}
+{"ev": "expect", "peer": "client", "roles": {"burst": "op-273694a8-131", "log": "op-273694a8-132", "pre_log": "op-273694a8-130", "read": "op-273694a8-133"}, "step": "N6", "t_ms": 173034.825}
+{"ev": "step_end", "peer": "client", "step": "N6", "t_ms": 173034.906}
+{"ev": "step_start", "peer": "server", "step": "N6", "t_ms": 173034.964}
+{"ev": "expect", "peer": "server", "roles": {"burst": "op-273694a8-134", "emit_pages": ["op-273694a8-135", "op-273694a8-136"]}, "step": "N6", "t_ms": 179733.909}
+{"ev": "step_end", "peer": "server", "step": "N6", "t_ms": 179733.978}
+{"ev": "step_start", "step": "S10", "t_ms": 179734.057}
+{"ev": "step_end", "step": "S10", "t_ms": 179734.111}

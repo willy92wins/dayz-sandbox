@@ -1,0 +1,17 @@
+{
+  "mode": "diag",
+  "build": "diag",
+  "notes": [
+    "per_status sin players_n (sonda sin UID del director): censo sin director_uid",
+    "P2n sin apply: stimulus_not_observed (Q3)"
+  ],
+  "inconcluso": "",
+  "director_uid_presente": false,
+  "current_epoch": "39105fff83954bd1b985a94273daf856",
+  "mdmp": [],
+  "reconciliation": "ver tap: state.read tras reinicios",
+  "a3_hijos_propios": "N/A en M1",
+  "metrics": {
+    "delete_confirm_max_ms": null
+  }
+}

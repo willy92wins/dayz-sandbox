@@ -195,6 +195,39 @@ class BridgeQaTests(unittest.TestCase):
         self.assertEqual(box["result"][0], 409)
         self.assertFalse(any(row.get("ev") == "deliver" and row.get("op_id") == oid for row in self.rows))
 
+    def test_bad_body_emits_event_without_body(self):
+        import http.client
+
+        raw = b'{"op_id":"BADBODYSECRET",}'
+        conn = http.client.HTTPConnection("127.0.0.1", self.bridge.port, timeout=8)
+        try:
+            conn.request(
+                "POST",
+                "/result?key=k-client&peer=client&inst=cc",
+                body=raw,
+                headers={"Content-Type": "application/json"},
+            )
+            resp = conn.getresponse()
+            payload = json.loads(resp.read().decode("utf-8"))
+            status = resp.status
+        finally:
+            conn.close()
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "bad_json")
+        events = [row for row in self.rows if row.get("ev") == "bad_body"]
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["http"], 400)
+        self.assertEqual(event["peer"], "client")
+        self.assertEqual(event["path"], "/result")
+        self.assertEqual(event["len"], len(raw))
+        self.assertIn(" at ", event["err"])
+        msg, _, pos = event["err"].rpartition(" at ")
+        self.assertTrue(msg)
+        self.assertTrue(pos.isdigit())
+        self.assertNotIn("BADBODYSECRET", json.dumps(self.rows))
+        self.assertNotIn(raw.decode("utf-8"), json.dumps(self.rows))
+
     def test_key_absent_from_events(self):
         _call(
             self.bridge,

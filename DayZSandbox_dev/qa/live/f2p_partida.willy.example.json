@@ -1,0 +1,15 @@
+{
+  "Maquina": "willy",
+  "DayZDir": "C:/Program Files (x86)/Steam/steamapps/common/DayZ",
+  "DayZServerDir": "C:/Program Files (x86)/Steam/steamapps/common/DayZServer",
+  "Python": "C:/Python314/python.exe",
+  "WorkRoot": "C:/tmp/dsbx-f2p-work",
+  "ResultsDir": "C:/tmp/dsbx-f2p-work/resultados",
+  "ProbeLib": "probe-lib.ps1 junto al paquete",
+  "LibReinicio": "lib_reinicio_caja.ps1 junto al paquete",
+  "BuildPbo": "build_pbo.py junto al paquete",
+  "MissionB1": "mision b1 desechable",
+  "GpuLease": "gpu_lease.py de la caja",
+  "FlagPath": "C:/tmp/caja-dayz/m1.espera",
+  "MinVramLibre": 4000
+}

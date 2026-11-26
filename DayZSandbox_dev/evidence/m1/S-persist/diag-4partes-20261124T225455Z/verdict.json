@@ -1,0 +1,227 @@
+{
+  "checks": [
+    {
+      "detail": "ok",
+      "id": "PER-01",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-02",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-03",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-04",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-05",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-06",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-07",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-08",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-09",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "id": "PER-10",
+      "status": "pass"
+    }
+  ],
+  "error": null,
+  "exit_code": 0,
+  "id": "S-persist",
+  "members": [
+    {
+      "exit_code": 0,
+      "id": "run",
+      "reasons": [],
+      "verdict": "PASA"
+    },
+    {
+      "exit_code": 1,
+      "id": "mut-unprotected_leak",
+      "reasons": [
+        "PER-08"
+      ],
+      "verdict": "FALLA"
+    },
+    {
+      "exit_code": 1,
+      "id": "mut-foreign_wiped",
+      "reasons": [
+        "PER-04",
+        "PER-05"
+      ],
+      "verdict": "FALLA"
+    },
+    {
+      "exit_code": 1,
+      "id": "mut-census_resource_bypass",
+      "reasons": [
+        "PER-09",
+        "unprotected_census_resource_overlap"
+      ],
+      "verdict": "FALLA"
+    }
+  ],
+  "metrics": {
+    "execution_identities": {
+      "mut-census_resource_bypass": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "61365d87be18de6e",
+          "server": "44aae5c1ada12934"
+        },
+        "peer_insts": {
+          "client": [
+            "3bccbf7f01c9408fafb60491fdca4cd5",
+            "ae0702b93b684a4f8eac8b7a9a4e201f"
+          ],
+          "server": [
+            "0577dbc679474c448a03a74db9b1af08",
+            "72cd7c928f84422885acf713688a5db8"
+          ]
+        },
+        "port": 61022
+      },
+      "mut-foreign_wiped": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "0b5e58fa6c7e1435",
+          "server": "c55c717ce70a7611"
+        },
+        "peer_insts": {
+          "client": [
+            "8a57961d868f4cb8a35328c37e23e931",
+            "7dbb1a3d8e96448695cb2ba7d17b9ad7"
+          ],
+          "server": [
+            "b2659bfa7a8849ae9f08d3905b49a339",
+            "1bf14b07963c42349b183f1d02a84880"
+          ]
+        },
+        "port": 58573
+      },
+      "mut-unprotected_leak": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "ccfa6d4a1f1fed72",
+          "server": "f4ad9081a08ebedc"
+        },
+        "peer_insts": {
+          "client": [
+            "75563e8b3ce04c6fb93eb72a322e553d",
+            "055de95f05bb41b8aaa282838ebd7dad"
+          ],
+          "server": [
+            "a19697e1678e48de871cfda07bd25286",
+            "e987c818540544a7b048095e4a602392"
+          ]
+        },
+        "port": 55896
+      },
+      "run": {
+        "fake_peer_pids": {
+          "client": null,
+          "server": null
+        },
+        "key_sha256": {
+          "client": "5ccb304e930bc3bb",
+          "server": "4c0f3301d4d00fbc"
+        },
+        "peer_insts": {
+          "client": [
+            "cdb86ad9a04a4709ad0f6916f1589ef2",
+            "0dc587d9947340e297465f9ce8c46b34"
+          ],
+          "server": [
+            "76a5c523af1d4c16af388b9f6d1f5c22",
+            "5bb832e547324aa2ac23935eb2dc89f8"
+          ]
+        },
+        "port": 63428
+      }
+    },
+    "grill_foreign_in_unreset_own_container": {
+      "post": null,
+      "pre": {
+        "class_name": "OrienteeringCompass",
+        "health_hp": 43.04999923706055,
+        "inv_children_n": 0,
+        "loc_kind": "cargo",
+        "max_hp": 70.0,
+        "net_id": "0:991",
+        "ori_deg": [
+          0.0,
+          0.0,
+          -0.0
+        ],
+        "parent_class": "SeaChest",
+        "parent_net_id": "0:981",
+        "pers_id": "979274187:-565894648:275221150:-1734825822",
+        "pos_m": [
+          4686.0,
+          339.0,
+          10206.0
+        ],
+        "slot_name": "Cargo:0:0:0"
+      },
+      "readings_available_b": 1
+    },
+    "q9_selected_pathway": "a",
+    "runner_purge": {
+      "accredited": [
+        "ac_act_1_gloves_dir",
+        "b_act_1_gloves_dir"
+      ],
+      "accredited_n": 2,
+      "bajas_n": 1,
+      "done_b": 1,
+      "order_n": 2,
+      "pre_n": 7,
+      "state": "done"
+    },
+    "storage_auxiliary_fingerprint": {
+      "restore_ok_b": 1,
+      "t0_files_n": 32,
+      "t1_present_b": 1,
+      "t2_present_b": 1
+    }
+  },
+  "reasons": [],
+  "schema": "dsbx-qa-verdict/1",
+  "verdict": "PASA"
+}

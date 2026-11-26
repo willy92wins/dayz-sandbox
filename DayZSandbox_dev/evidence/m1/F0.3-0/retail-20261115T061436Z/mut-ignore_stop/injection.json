@@ -1,0 +1,12 @@
+{
+  "applied": true,
+  "kind": "scenario",
+  "mutant": "ignore_stop",
+  "observable_effect": {
+    "client_terminal_state": "done",
+    "omitted_mid_run_stop": true,
+    "server_terminal_state": "done"
+  },
+  "target": "BASE-03:job_stop",
+  "when_h_ms": 5348.013
+}
