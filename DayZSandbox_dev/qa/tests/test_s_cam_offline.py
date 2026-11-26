@@ -4575,15 +4575,9 @@ class SCamOfflineTests(unittest.TestCase):
         """Punto 2: los 17 casos YawPitchRollMatrix de la v5 (fichero
         de referencia del encargo, sin teclear ningun numero) salen de
         ypr_matrix a 1e-6 en las 9 celdas."""
-        candidatos = [
-            base / "_encargo" / "r5" / "ref" / "ypr_v5_lineas.txt"
-            for base in Path(__file__).resolve().parents
-        ]
-        candidatos += [
-            base / "_encargo" / "r5" / "ref" / "ypr_v5_lineas.txt"
-            for base in Path.cwd().resolve().parents
-        ]
-        ref = next((c for c in candidatos if c.is_file()), candidatos[0])
+        # Enmienda del orquestador (27-nov): el fichero de referencia va versionado en qa/fixtures (copia byte a byte de
+        # _encargo/r5/ref/ypr_v5_lineas.txt), para que el oraculo congelado se pueda correr desde un checkout limpio.
+        ref = Path(__file__).resolve().parents[1] / "fixtures" / "s_cam_ypr_v5_lineas.txt"
         angs, mats = {}, {}
         for line in ref.read_text(encoding="utf-8").splitlines():
             if " YPR k=" in line:
