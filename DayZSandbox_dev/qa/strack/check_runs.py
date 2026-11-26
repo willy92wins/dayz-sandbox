@@ -51,6 +51,8 @@ GIRO_TOL_S = 0.3
 # sobre el eje Σdt del evaluador. `t_ms` solo alimenta las medidas de
 # reloj de pared citadas arriba, y solo para ellas vale este límite.
 DERIVA_MAX_MS = 50.0
+CALIB_RITMO_TOL = 0.05  # arbitro (c)
+DT_TOPE_S = 0.3  # tope de dt del motor en un tiron (medido: calib_Hb, 26-nov)
 GIROS_POR_CASO = {"mount0": 3, "mount03": 3, "lookat": 3, "follow": 3, "ropa": 3,
                   "suave30": 2, "suave60": 2, "suave144": 2}
 NEGATIVAS = {"delay1", "roll", "smooth03", "quatlerp", "longarc"}
@@ -196,7 +198,18 @@ def check_run(run_dir):
     rows = [por_frame[f] for f in sorted(por_frame)]
 
     # 4. reloj coherente sobre las filas canónicas
+    # Arbitro (orquestador, 26-nov, tras la tanda de la noche del 25-26):
+    # (a) los intervalos con `dt` en el tope del motor (DT_TOPE_S = 0,3 s) quedan exentos de deriva, como el de carga:
+    #     en un tiron (escritura de BMP) el motor topa `dt` y `t_ms` sigue al reloj de pared (calib_Hb: frame 329 con
+    #     1291 ms de pared y dt = 300); `dt` no dice nada de ese intervalo y no hay nada que comparar;
+    # (c) `calib` queda exenta del limite: graba todos sus frames, tiene tirones seguidos con `dt` ruidoso, y su medida
+    #     empareja por numero de frame y por imagen, no por reloj de pared, que es lo unico que protege este limite;
+    # (b) solo cuenta la deriva que persiste dos frames seguidos: un desfase de un frame que se compensa en el
+    #     siguiente (H-b estampa `t_ms` en EOnPostFrame; mount0_Hb_roll frames 801/802: +61/-61 ms) no desplaza ninguna
+    #     medida de reloj de pared.
     no_crece, deriva, max_deriva = 0, 0.0, 0.0
+    prev_abs = None
+    suma_dt_ms, suma_t_ms = 0.0, 0.0
     for prev, cur in zip(rows, rows[1:]):
         if _frame_de(cur) != _frame_de(prev) + 1:
             continue
@@ -207,14 +220,23 @@ def check_run(run_dir):
         if delta_ms <= 0.0:
             no_crece += 1
             continue
-        if _es_carga(prev, cur):  # único exento de deriva
+        if _es_carga(prev, cur):  # exento de deriva
             continue
+        if abs(float(dt) - DT_TOPE_S) <= 1e-3:  # arbitro (a): dt exactamente en el tope del motor
+            continue
+        suma_dt_ms += 1000.0 * float(dt)
+        suma_t_ms += delta_ms
         deriva += delta_ms - 1000.0 * float(dt)
-        max_deriva = max(max_deriva, abs(deriva))
+        if prev_abs is not None:
+            max_deriva = max(max_deriva, min(prev_abs, abs(deriva)))
+        prev_abs = abs(deriva)
     if no_crece:
         why.append(f"{no_crece} pares con t_ms que no crece")
-    if max_deriva > DERIVA_MAX_MS:
+    if max_deriva > DERIVA_MAX_MS and caso != "calib":
         why.append(f"t_ms incoherente con dt: deriva acumulada de {max_deriva:.1f} ms (> {DERIVA_MAX_MS:.0f} ms)")
+    # (c) calib, exenta de la deriva acumulada, sigue obligada a un reloj con el mismo ritmo que dt: |Σdt/Σt − 1| ≤ 5 %
+    if caso == "calib" and suma_t_ms > 0 and abs(suma_dt_ms / suma_t_ms - 1.0) > CALIB_RITMO_TOL:
+        why.append(f"t_ms con otro ritmo que dt en calib: Σdt/Σt = {suma_dt_ms / suma_t_ms:.3f}")
 
     # 2. giros completos
     need = GIROS_POR_CASO.get(caso, 0)

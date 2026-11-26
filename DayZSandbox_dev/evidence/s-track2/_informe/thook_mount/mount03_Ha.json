@@ -1,0 +1,40 @@
+{
+ "run": "mount03_Ha",
+ "measure": "T-hook-mount",
+ "k": -1,
+ "f_px": 682.01,
+ "ref_shot": "f000030.bmp",
+ "recamara": [
+  1392.47,
+  184.6
+ ],
+ "segundo": [
+  1589.59,
+  218.44
+ ],
+ "separacion_px": 200.0,
+ "windows": {
+  "giro1": {
+   "n_shots": 122,
+   "n_validas": 0,
+   "n_no_rigidas": 1,
+   "verdict": "INCONCLUSO",
+   "cause": "correlacion_debil"
+  },
+  "giro2": {
+   "n_shots": 121,
+   "n_validas": 0,
+   "n_no_rigidas": 1,
+   "verdict": "INCONCLUSO",
+   "cause": "correlacion_debil"
+  },
+  "giro3": {
+   "n_shots": 115,
+   "n_validas": 0,
+   "n_no_rigidas": 0,
+   "verdict": "INCONCLUSO",
+   "cause": "correlacion_debil"
+  }
+ },
+ "verdict": "INCONCLUSO"
+}

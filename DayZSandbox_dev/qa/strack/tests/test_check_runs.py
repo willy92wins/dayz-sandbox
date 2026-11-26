@@ -43,6 +43,19 @@ def rows_with_giros(n_giros, giro_s=4.0, suave=False, dt=DT):
     return rows
 
 
+def rows_giros_deriva(pico_ms):
+    """3 giros de 4 s (como lookat) con una deriva que sube 1 ms por par hasta pico_ms y se mantiene (persistente)."""
+    rows = rows_with_giros(3)
+    subida = 0.0
+    for r in rows[1:]:
+        if subida + 1.0 <= pico_ms:
+            subida += 1.0
+        elif subida < pico_ms:
+            subida = pico_ms
+        r["t_ms"] = round(r["t_ms"] + subida, 6)
+    return rows
+
+
 def rows_deriva(pico_ms):
     """Calib de 200 frames con deriva acumulada que sube 1 ms por par hasta pico_ms y luego se mantiene.
 
@@ -178,15 +191,67 @@ class CheckRunsTests(unittest.TestCase):
         self.assertTrue(any("done.ok=False" in m for m in res["mount0_Ha"]["motivos"]))
 
     def test_deriva_exactamente_en_el_limite_es_valida(self):  # vuelta 5, respuesta 6 de Sol
-        write_run(self.tmp, "calib_Hb", rows_deriva(check_runs.DERIVA_MAX_MS))
+        # Arbitro 26-nov: calib queda exenta de deriva, asi que el limite se prueba en una corrida con giros.
+        write_run(self.tmp, "lookat_Hb", rows_giros_deriva(check_runs.DERIVA_MAX_MS))
         code, res = self.run_check()
         self.assertEqual(code, 0, res)
 
     def test_deriva_justo_por_encima_del_limite_invalida(self):
-        write_run(self.tmp, "calib_Hb", rows_deriva(check_runs.DERIVA_MAX_MS + 0.5))
+        write_run(self.tmp, "lookat_Hb", rows_giros_deriva(check_runs.DERIVA_MAX_MS + 0.5))
         code, res = self.run_check()
         self.assertEqual(code, 1)
-        self.assertIn("deriva acumulada", "; ".join(res["calib_Hb"]["motivos"]))
+        self.assertIn("deriva acumulada", "; ".join(res["lookat_Hb"]["motivos"]))
+
+    # --- Arbitro del orquestador (26-nov), tras la tanda real: positivo y negativo por regla ---
+    def test_calib_exenta_de_deriva(self):  # (c)
+        write_run(self.tmp, "calib_Hb", rows_deriva(check_runs.DERIVA_MAX_MS + 50.0))  # 100 ms en 3,1 s: ritmo dentro del 5 %
+        code, res = self.run_check()
+        self.assertEqual(code, 0, res)
+
+    def test_desfase_de_un_frame_compensado_es_valido(self):  # (b) H-b: +61 / -61 ms
+        # Como mount0_Hb_roll frames 801/802: Δt 174 ms con dt 113, y Δt 15 ms con dt 76 (t_ms siempre crece).
+        rows = rows_with_giros(3)
+        rows[300]["dt"], rows[301]["dt"] = 0.113, 0.076
+        base = rows[299]["t_ms"]
+        rows[300]["t_ms"] = base + 174.0
+        rows[301]["t_ms"] = base + 174.0 + 15.0
+        shift = rows[301]["t_ms"] - (base + 2 * 1000.0 * DT)
+        for r in rows[302:]:
+            r["t_ms"] += shift + (0.113 + 0.076 - 2 * DT) * 0.0
+        # el resto conserva su dt nominal: la deriva vuelve a 0 tras el par
+        shift_dt = (0.113 + 0.076) * 1000.0 - 2 * 1000.0 * DT
+        for r in rows[302:]:
+            r["t_ms"] += shift_dt - shift
+        write_run(self.tmp, "mount0_Hb", rows)
+        code, res = self.run_check()
+        self.assertEqual(code, 0, res)
+
+    def test_desfase_que_persiste_dos_frames_invalida(self):  # (b) negativo
+        rows = rows_with_giros(3)
+        rows[300]["t_ms"] += 61.0
+        rows[301]["t_ms"] += 61.0
+        write_run(self.tmp, "mount0_Hb", rows)
+        code, res = self.run_check()
+        self.assertEqual(code, 1)
+        self.assertIn("deriva acumulada", "; ".join(res["mount0_Hb"]["motivos"]))
+
+    def test_dt_en_el_tope_del_motor_exento(self):  # (a)
+        rows = rows_with_giros(3)
+        rows[300]["dt"] = check_runs.DT_TOPE_S
+        for r in rows[300:]:
+            r["t_ms"] += 1000.0  # tiron de ~1,3 s de pared con dt topado en 0,3 s
+        write_run(self.tmp, "mount0_Hb", rows)
+        code, res = self.run_check()
+        self.assertEqual(code, 0, res)
+
+    def test_dt_por_debajo_del_tope_no_exento(self):  # (a) negativo
+        rows = rows_with_giros(3)
+        rows[300]["dt"] = check_runs.DT_TOPE_S - 0.05
+        for r in rows[300:]:
+            r["t_ms"] += 1000.0
+        write_run(self.tmp, "mount0_Hb", rows)
+        code, res = self.run_check()
+        self.assertEqual(code, 1)
 
     def test_intervalo_coherente_de_101_ms_es_valido(self):  # vuelta 5b, M2: sin techo INTERVALO_MAX_MS
         # Un frame coherente de 101 ms (dt y Δt_ms coinciden, deriva ~0)

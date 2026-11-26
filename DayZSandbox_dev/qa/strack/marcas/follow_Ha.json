@@ -1,0 +1,61 @@
+{
+ "schema": 1,
+ "run": "follow_Ha",
+ "convencion": "px de la PNG 1920x1080, origen arriba-izquierda, centro del pixel (0,0) en (0.0,0.0); mismo marco que la proyeccion de §2",
+ "marcadores": {
+  "A": "subagente Opus a ciegas (marcador A)",
+  "B": "subagente Opus a ciegas (marcador B)"
+ },
+ "marcas": [
+  {
+   "shot": "f000030.bmp",
+   "png": "f000030.png",
+   "sha256": "039955459f6e5920e254f387628bcd53a995bc721f4ddfd7d27a5118ffdf65c6",
+   "momento": "estable",
+   "A": {},
+   "B": {},
+   "puntos": {},
+   "diff_max_px": 999.0
+  },
+  {
+   "shot": "f000302.bmp",
+   "png": "f000302.png",
+   "sha256": "86f84907b748585c72c7ac4be3f0d25b7f46b613ee528896bfe2a16634b08774",
+   "momento": "giro1",
+   "A": {},
+   "B": {},
+   "puntos": {},
+   "diff_max_px": 999.0
+  },
+  {
+   "shot": "f000912.bmp",
+   "png": "f000912.png",
+   "sha256": "737833e5b5b49a8d39e35d5f562fbe305e6a2657b04509fb78c691ba5c506922",
+   "momento": "giro2",
+   "A": {},
+   "B": {},
+   "puntos": {},
+   "diff_max_px": 999.0
+  },
+  {
+   "shot": "f001520.bmp",
+   "png": "f001520.png",
+   "sha256": "c2bf99e9106cad45c09eabdc0399fc6c3a41d88ba649ab3fb32bc54ee414bb54",
+   "momento": "giro3",
+   "A": {},
+   "B": {},
+   "puntos": {},
+   "diff_max_px": 999.0
+  },
+  {
+   "shot": "f001040.bmp",
+   "png": "f001040.png",
+   "sha256": "01768f81c4f8b4fe0c14b6803967674716bf1f97d62591143978c91eb108bb94",
+   "momento": "resto",
+   "A": {},
+   "B": {},
+   "puntos": {},
+   "diff_max_px": 999.0
+  }
+ ]
+}

@@ -107,7 +107,7 @@ class STrackEvalTests(unittest.TestCase):
             ):
                 self.assertIn(rk, r)
             self.assertEqual(r["inject"], "none")
-            self.assertIn(r["measure"], ("T-lect", "T-hook", "T-marca", "T-ropa", "T-suave"))
+            self.assertIn(r["measure"], ("T-lect", "T-hook", "T-marca", "T-ropa", "T-suave", "T-sesgo"))
             self.assertIn(r["verdict"], ("PASA", "FALLA", "INCONCLUSO"))
 
         dec = report["decisions"]
@@ -147,8 +147,10 @@ class STrackEvalTests(unittest.TestCase):
             "QUAT_NORM_TOL",
             "SUAVE_FPS_AGREE_DEG",
             "FPS_REGIME_TOL",
+            "SESGO_MIN_MARCAS",
         ):
             self.assertTrue(hasattr(mod, name), f"Missing constant {name}")
+        self.assertEqual(mod.SESGO_MIN_MARCAS, 10)
         self.assertEqual(mod.TEMPLATE_PX, 48)
         self.assertEqual(mod.TEMPLATE_SOURCE, "marca")
         self.assertTrue(mod.USE_MASK)

@@ -1,0 +1,236 @@
+{
+ "schema": 1,
+ "run": "mount03_Ha",
+ "convencion": "px de la PNG 1920x1080, origen arriba-izquierda, centro del pixel (0,0) en (0.0,0.0); mismo marco que la proyeccion de §2",
+ "marcadores": {
+  "A": "subagente Opus a ciegas (marcador A)",
+  "B": "subagente Opus a ciegas (marcador B)"
+ },
+ "marcas": [
+  {
+   "shot": "f000030.bmp",
+   "png": "f000030.png",
+   "sha256": "53855da79f10a4186502e559883585566927a5f5809d5de1ee3cee83172b2542",
+   "momento": "estable",
+   "A": {
+    "punto_mira_orejas": [
+     [
+      1235.0,
+      8.0
+     ],
+     [
+      1250.5,
+      8.0
+     ]
+    ],
+    "punto_mira": [
+     1242.75,
+     8.0
+    ]
+   },
+   "B": {
+    "punto_mira_orejas": [
+     [
+      1235.2,
+      7.2
+     ],
+     [
+      1249.3,
+      7.8
+     ]
+    ],
+    "punto_mira": [
+     1242.25,
+     7.5
+    ]
+   },
+   "puntos": {
+    "punto_mira": [
+     1242.5,
+     7.75
+    ]
+   },
+   "diff_max_px": 0.707
+  },
+  {
+   "shot": "f000302.bmp",
+   "png": "f000302.png",
+   "sha256": "97e4758c197719865124f692fa372f2cd03642762e8d3f120e9cb1dbbab904dc",
+   "momento": "giro1",
+   "A": {
+    "punto_mira_orejas": [
+     [
+      1327.5,
+      445.0
+     ],
+     [
+      1345.0,
+      453.0
+     ]
+    ],
+    "punto_mira": [
+     1336.25,
+     449.0
+    ]
+   },
+   "B": {
+    "punto_mira_orejas": [
+     [
+      1328.0,
+      444.8
+     ],
+     [
+      1346.0,
+      452.8
+     ]
+    ],
+    "punto_mira": [
+     1337.0,
+     448.8
+    ]
+   },
+   "puntos": {
+    "punto_mira": [
+     1336.625,
+     448.9
+    ]
+   },
+   "diff_max_px": 0.776
+  },
+  {
+   "shot": "f000908.bmp",
+   "png": "f000908.png",
+   "sha256": "b46506ef7e5a883f2b91e34c79e187d376cc147da0d526edbe03208e9d3a68e8",
+   "momento": "giro2",
+   "A": {
+    "punto_mira_orejas": [
+     [
+      1327.5,
+      451.0
+     ],
+     [
+      1346.5,
+      458.0
+     ]
+    ],
+    "punto_mira": [
+     1337.0,
+     454.5
+    ]
+   },
+   "B": {
+    "punto_mira_orejas": [
+     [
+      1326.5,
+      450.6
+     ],
+     [
+      1345.5,
+      458.6
+     ]
+    ],
+    "punto_mira": [
+     1336.0,
+     454.6
+    ]
+   },
+   "puntos": {
+    "punto_mira": [
+     1336.5,
+     454.55
+    ]
+   },
+   "diff_max_px": 1.005
+  },
+  {
+   "shot": "f001500.bmp",
+   "png": "f001500.png",
+   "sha256": "41be35e91c63b1c016e3b03d22ae4d3da216321d9534e5673c300f6dd34d7962",
+   "momento": "giro3",
+   "A": {
+    "punto_mira_orejas": [
+     [
+      1328.5,
+      450.0
+     ],
+     [
+      1346.0,
+      457.5
+     ]
+    ],
+    "punto_mira": [
+     1337.25,
+     453.75
+    ]
+   },
+   "B": {
+    "punto_mira_orejas": [
+     [
+      1328.5,
+      449.8
+     ],
+     [
+      1346.5,
+      456.7
+     ]
+    ],
+    "punto_mira": [
+     1337.5,
+     453.25
+    ]
+   },
+   "puntos": {
+    "punto_mira": [
+     1337.375,
+     453.5
+    ]
+   },
+   "diff_max_px": 0.559
+  },
+  {
+   "shot": "f001030.bmp",
+   "png": "f001030.png",
+   "sha256": "56f48e0bdd4953be2fb3b1d9961634f50fcd30365e52702ada6836b6a71cfe8a",
+   "momento": "resto",
+   "A": {
+    "punto_mira_orejas": [
+     [
+      973.5,
+      239.0
+     ],
+     [
+      991.5,
+      240.0
+     ]
+    ],
+    "punto_mira": [
+     982.5,
+     239.5
+    ]
+   },
+   "B": {
+    "punto_mira_orejas": [
+     [
+      973.0,
+      239.3
+     ],
+     [
+      991.0,
+      239.5
+     ]
+    ],
+    "punto_mira": [
+     982.0,
+     239.4
+    ]
+   },
+   "puntos": {
+    "punto_mira": [
+     982.25,
+     239.45
+    ]
+   },
+   "diff_max_px": 0.51
+  }
+ ]
+}

@@ -264,3 +264,107 @@ S-track·1) y `USE_MASK = False` tienen que seguir siendo caminos de código eje
 - **T-suave, entrada.** La «entrada leída» es `lata.a`. `cam_raw` es la pose deseada que el mod construye con esa
   entrada en el mismo frame; el evaluador debe comprobar que `cam_raw.pos` sigue a `lata.a` (con el desplazamiento
   constante de `follow`) en el mismo frame, y si no, la ventana es FALLA (`entrada_desfasada`).
+
+## 17. Comprobación del sesgo con rasgos visibles del modelo (2026-11-25, árbitro: coordinador; sustituye a «marcar boca y recámara» del §12)
+
+Motivo: `usti hlavne` (centro del ánima) y `konec hlavne` (dentro del cajón) no son rasgos visibles, así que no se pueden
+marcar a mano a < 2 px. Se marcan rasgos visibles cuya posición en el espacio del modelo sale del p3d vanilla
+`P:\DZ\weapons\firearms\m4\m4a1.p3d` (ODOL v54; puerta: la distancia usti↔konec del p3d, 0,407969 m, coincide con la
+de las lecturas (a) en partida, mediana 0,407952 m sobre 1967 frames, diferencia 0,017 mm).
+
+- **Espacio del modelo del M4A1:** el eje del cañón es el eje x del modelo (`usti hlavne` x = −0,41976, `konec hlavne`
+  x = −0,01179, los dos en y = 0,06566, z = 0,00006).
+- **Rasgo `boca_anillo`:** centro del anillo exterior de la cara frontal del apagallamas (LOD 0, polígono de 16 lados,
+  radio ~11,3 mm, x = −0,43565). Su centro está a 0,22 mm del eje de usti/konec (+0,205 mm en y, −0,085 mm en z): se
+  acepta por escrito, porque el giro del arma sobre su eje desconocido mueve su proyección ≤ 0,25 px a la distancia
+  de mount0. Se proyecta con cualquier lectura como el punto del eje
+  `usti + t · (konec − usti)`, con `t = (x_anillo − x_usti) / (x_konec − x_usti)`.
+  Marca: cada marcador pone **5 puntos del borde** de la boca; la herramienta ajusta una elipse y guarda su centro.
+  Los centros de los dos marcadores tienen que coincidir a ≤ `MARK_AGREE_PX`.
+- **Rasgo `punto_mira`:** vértice de la punta del punto de mira delantero (LOD 0), fuera del eje. Solo en `mount0`,
+  `mount03` y `ropa`, donde se conoce la pose completa del arma:
+  - `mount0`/`mount03`: de la cámara escrita, porque `BuildMount` (`STRACK_Session.c`) pone la cámara en
+    `usti + ax0 · 0,6 + ax1 · 0,1` (con `ax0`, `ax1` los ejes x, y del arma), así que `ax1 = (cam_raw.pos − usti − 0,6 · ax0) / 0,1`
+    con `ax0 = (konec − usti)/|konec − usti|`; en `mount03` se usa `cam_raw` (antes del filtro) si existe y, si no, la
+    corrida no da `punto_mira`;
+  - `ropa`: de la pose `ropa.arma` (a) del mismo frame.
+  Se marca como **las dos puntas de las orejas** (`punto_mira_orejas`) y se usa su media, que es lo que da
+  `m4a1_rasgos.json` (marcar una sola oreja metería ~11 px de sesgo artificial).
+- **Formato de marcas (§12):** cada captura puede llevar, por marcador, `"boca_anillo_borde": [[u,v] × 5]` y
+  `"punto_mira": [u,v]`; `puntos` lleva `"boca_anillo"` (media de los centros ajustados) y `"punto_mira"`.
+- **Medida T-sesgo:** por **caso** (`mount0`, `mount03`, `lookat`, `follow`, `ropa`; se juntan las corridas sin inyección
+  de ese caso, de todos sus hooks) y lectura, distancia entre la proyección del rasgo y la marca, p95 sobre las
+  capturas marcadas (5 por corrida, §12). Aclaración del orquestador (25-nov) tras la revisión de Argon: con 5 marcas
+  por corrida y `SESGO_MIN_MARCAS = 10`, «caso» es el caso, no la corrida. `mount03` no da `punto_mira` porque el mod
+  solo escribe `cam_raw` en `suave*`. Es una **comprobación**, no la medida principal: T-lect decide con la plantilla enmascarada.
+  T-sesgo da FALLA si p95 > `THRESH_PX` en un caso con ≥ `SESGO_MIN_MARCAS` capturas marcables; con menos, INCONCLUSO
+  con causa `sesgo_no_observable`.
+- Constante nueva (misma regla de §4): `SESGO_MIN_MARCAS = 10`.
+
+## 18. Árbitro del sesgo tras 4 vueltas (coordinador, 2026-11-26 00:23Z; manda sobre §17 donde choquen)
+
+- T-lect y T-hook siguen la plantilla enmascarada sobre `usti hlavne` y `konec hlavne`, con roll (comportamiento de la
+  vuelta 3). Motivo de deshacer la vuelta 4 (ancla en un rasgo §17): con un solo punto ancla el roll deja de medirse y la
+  negativa `mount0_Hb_roll` podría pasar.
+- `usti hlavne` y `konec hlavne` no se marcan (no son visibles). Sin marcas de §12, la plantilla se ancla en la
+  **proyección de la lectura (a)** en la primera captura con textura, y el informe lo dice así (`ancla: "proyeccion_a"`).
+- **T-sesgo es informativo:** se calcula y se informa por caso, lectura y rasgo, pero no cambia `decisions` ni
+  `exit_code`. El criterio del brief que pedía cerrar el sesgo constante pasa a «observado e informado».
+- En `ropa` (un solo hook) se marcan 10 capturas para que T-sesgo sea observable.
+
+## 34. T-hook de `mount` por medida directa (árbitro: coordinador, 2026-11-26 14:21Z; parámetros congelados el 2026-11-26)
+
+`qa/strack/thook_mount.py`. Por cada captura de giro y en la ventana `sin_giro` (capturas sin giro tras la referencia), se mide el desplazamiento de dos cultivos fijos sobre el arma frente a la primera captura estable (frame ≥ 30). Cultivo 1: proyección de `konec hlavne` (lectura a), apartado a lo largo del eje, en sentido contrario a la boca, hasta no contener el punto fijo de la HUD (centro exacto). Cultivo 2: a 200 px del 1 en ese mismo sentido. Cada cultivo se normaliza (media 0, varianza 1). NCC por FFT en ±BUSQUEDA_PX y en ESCALAS; correlación de fase para el subpíxel cuando gana la escala 1. Deriva = p95 del mayor desplazamiento; roll = p95 del ángulo entre los segmentos.
+
+Parámetros congelados (no se tocan para que un resultado pase):
+```
+THRESH_PX = 2.0
+THRESH_ROLL_DEG = 0.5
+MIN_SHOTS_WINDOW = 20
+CROP_PX = 48
+SEPARACION_PX = 200.0
+CALIDAD_MIN = 0.5
+BUSQUEDA_PX = 120
+ESCALAS = (1.0, 0.8, 0.85, 0.9, 0.95, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3)
+ESCALA_MEJORA_MIN = 0.05
+RIGIDEZ_ESCALA_TOL = 0.05
+HUD_MARGEN_PX = 4.0
+ESTABLE_FRAME = 30
+```
+Una lectura vale si tiene calidad ≥ CALIDAD_MIN y es rígida: los dos cultivos eligen la misma escala (± RIGIDEZ_ESCALA_TOL) y la longitud del segmento desplazado casa con ella. Veredicto por ventana: < 20 válidas → INCONCLUSO (`insufficient_sampling`, `cultivos_no_rigidos` o `correlacion_debil`); p95 > 2 px o roll > 0,5° → FALLA; cobertura < 0,95 → INCONCLUSO; si no, PASA. Decisión de producto (Guillermo, 2026-11-26 15:23Z, «Vale, con suavizado»): en `mount` con el arma en manos, un FALLA de esta medida es temblor medido y no un FALLA del producto. El `smooth_s` por defecto en manos es el menor τ con `sin_giro` p95 ≤ 2 px. El retraso en giros se informa aparte, por τ, en grados y en ms (coordinador, 15:39Z).
+
+## 35. T-lect de lookat/follow por medida directa (árbitro: coordinador, 2026-11-26 15:39Z; parámetros congelados el 2026-11-26 16:25Z)
+
+`qa/strack/tlect_direct.py`. La lectura (a) solo fija el ángulo 2D (boca→recámara proyectadas) y la escala (f/z de la boca) de la plantilla. La posición se busca por NCC enmascarada en ±BUSQUEDA_PX, sin preferencia por el centro. Deriva de cada lectura = posición detectada − proyección de esa lectura. Plantillas: la primera captura estable más un banco con una de cada BANCO_PASO capturas de giro, cada una recortada en la proyección de (a) de su propia captura (el hueco del sesgo declarado en §17/§18). Cada captura usa la plantilla de OTRO giro con la vista 3D del cañón más parecida, dentro de VISTA_MAX_DEG. El punto fijo de la HUD se borra de cada imagen. El ángulo se afina en ANG_BUSQUEDA_DEG. Una detección se descarta si la calidad es < CALIDAD_MIN o el margen frente al segundo máximo local (a más de AMBIG_RADIO_PX) es < AMBIG_MIN.
+
+Parámetros congelados. La máscara es una cápsula: radio RADIO_BOCA_M (radio exterior del apagallamas más margen), LARGO_FRANJA_M de cañón y FRENTE_M = RADIO_BOCA_M por delante de la punta. FRENTE_M se fija igual al radio por geometría (casquete simétrico, sin una longitud elegida a mano), no por resultado. Era también el valor anterior al barrido de sensibilidad (1,2 / 3 / 5 cm), que solo se informa como sensibilidad.
+```
+THRESH_PX = 2.0
+COVERAGE_MIN = 0.95
+MIN_SHOTS_WINDOW = 20
+ESTABLE_FRAME = 30
+TPL_PX = 64
+BUSQUEDA_PX = 40
+CALIDAD_MIN = 0.5
+RADIO_BOCA_M = 0.012
+LARGO_FRANJA_M = 0.12
+FRENTE_M = 0.012
+HUD_RADIO = 4
+ANG_BUSQUEDA_DEG = (0, -1, 1, -2, 2, -3, 3, -4, 4)
+VISTA_MAX_DEG = 10.0
+BANCO_PASO = 3
+AMBIG_RADIO_PX = 4
+AMBIG_MIN = 0.03
+```
+Veredicto por ventana y lectura: < 20 capturas → INCONCLUSO `insufficient_sampling`; < 20 válidas → INCONCLUSO `correlacion_debil`; p95 > 2 px → FALLA; cobertura < 0,95 → INCONCLUSO `low_coverage`; si no, PASA. Se informan también p50 y la fracción > 2 px.
+
+## 36. Mod r6 / r6b (orquestador, 2026-11-26; para la tanda corta)
+
+Argumentos nuevos de la línea de comandos. Sin ellos, el mod se comporta igual que r5.
+- `-strack_noshots=1` (solo en suave): sin capturas; la línea lleva `"noshots":true`.
+- `-strack_smooth_s=<s>` (mount0/mount03): filtro de la cámara con τ = s (mount03 usa 0,3 si no se da). La línea lleva `"mount_tau_s"` y `"smooth_pos"`.
+- `-strack_smooth_pos=0`: el filtro solo suaviza la orientación; la posición queda rígida sobre el arma.
+- `-strack_tag=<t>`: sufijo del nombre de la corrida (`<caso>_<hook>[_<inject>]_<t>`).
+- `-strack_giro_lento=<f>` (r6b): velocidad del giro × f; el tope del giro pasa de 6 s a 6/f s.
+- `-strack_giro_alterno=1` (r6b): el segundo giro vuelve en sentido contrario, así que los tres giros recorren los mismos rumbos.
+PBO r6b: `bench\@DZS_STrack_r6\Addons\DZS_STrack.pbo`, 74 266 B, sha256 `eaf22bb916b684a12268f14698acaac0cbe19cfbd8db202038ded241b7b8c251`. Linter PASS 0/0. No probado en partida.

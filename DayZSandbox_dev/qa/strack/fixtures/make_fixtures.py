@@ -120,6 +120,21 @@ def _project(pt, cam, fov_rad=FOV_RAD):
     return (0.5 * IMAGE_W + f * (xc / zc), 0.5 * IMAGE_H - f * (yc / zc))
 
 
+def _look_cam(pos, target, up):
+    """Camara como STRACK_Math.Look + DirectionAndUpMatrix(dir, up).
+
+    z = dir normalizada; x = normalize(up x z); y = z x x. Con up = ax1 y
+    dir hacia konec desde la camara de BuildMount, x sale ax0 x ax1 (= ax2
+    del modelo) e y sale el up ortogonalizado (ax1.cam.y = 0,887 en los
+    datos reales de mount0_Ha, no 1). Replica esa convencion, no una
+    camara alineada a ejes (x=ax2, y=ax1, z=-ax0).
+    """
+    z = _normalize(np.asarray(target, dtype=np.float64) - np.asarray(pos, dtype=np.float64))
+    x = _normalize(np.cross(np.asarray(up, dtype=np.float64), z))
+    y = np.cross(z, x)
+    return {"pos": np.asarray(pos, dtype=np.float64).tolist(), "x": x.tolist(), "y": y.tolist(), "z": z.tolist()}
+
+
 def _apply_roll(cam, roll_deg):
     theta = math.radians(float(roll_deg))
     c = math.cos(theta)
@@ -800,6 +815,106 @@ def _write_ropa_run(base_dir, defect=False):
     return run_dir
 
 
+def _write_sesgo_run(base_dir, n_marks=12, bias_reading=None, bias_px=5.0, hook="Ha"):
+    """Fixture §17: pose mount0 conocida y rasgos proyectados desde esa pose.
+
+    Arma estática con ax0=(1,0,0), ax1=(0,1,0), ax2=(0,0,1); cámara de
+    BuildMount en usti + 0,6 ax0 + 0,1 ax1 mirando a konec con la
+    convención de STRACK_Math.Look (_look_cam: cam.x = ax0 x ax1 = ax2,
+    cam.y = up ortogonalizado). Las marcas son la proyección exacta del
+    rasgo sin sesgo; `bias_reading` desplaza esa lectura `bias_px` en la
+    dirección de la x de cámara (= ax2 en esta pose).
+    """
+    run_name = f"mount0_{hook}"
+    run_dir = Path(base_dir) / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    rasgos_path = Path(__file__).resolve().parents[1] / "m4a1_rasgos.json"
+    rasgos = json.loads(rasgos_path.read_text(encoding="utf-8"))
+    t_eje = float(rasgos["boca_anillo"]["t_eje"])
+    usti_m = np.array(rasgos["usti_hlavne"], dtype=np.float64)
+    pm_m = np.array(rasgos["punto_mira"]["pos_modelo"], dtype=np.float64)
+    ax0 = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    ax1 = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    ax2 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    usti = np.array([0.0, 1.5, 0.0], dtype=np.float64)
+    konec = usti + 0.407969 * ax0
+    cam_pos = usti + 0.6 * ax0 + 0.1 * ax1
+    cam = _look_cam(cam_pos, konec, ax1)
+    boca = usti + t_eje * (konec - usti)
+    pm = usti + float(pm_m[0] - usti_m[0]) * ax0 + float(pm_m[1] - usti_m[1]) * ax1 + float(pm_m[2] - usti_m[2]) * ax2
+    zc_boca = float(np.dot(boca - cam_pos, np.array(cam["z"], dtype=np.float64)))
+    delta_bias = float(bias_px) * max(zc_boca, 0.1) / FOCAL_V if bias_reading else 0.0
+    # En partida BuildMount construye la camara desde la lectura (a): si el
+    # sesgo esta en «a», la camara se recalcula desde la usti sesgada (misma
+    # orientacion, posicion desplazada con ella). Las marcas siguen en la
+    # verdad: son los rasgos verdaderos proyectados con la camara escrita,
+    # que es lo que se ve en la captura.
+    cam_written = cam
+    if bias_reading == "a" and delta_bias:
+        off_a = np.array([0.0, 0.0, delta_bias], dtype=np.float64)
+        cam_written = _look_cam(cam_pos + off_a, konec + off_a, ax1)
+    p_boca = _project(boca, cam_written, FOV_RAD)
+    p_pm = _project(pm, cam_written, FOV_RAD)
+    rows = []
+    marks = []
+    for m in range(int(n_marks)):
+        lect_u, lect_k = {}, {}
+        for r in ("a", "b", "c", "d", "e", "f"):
+            off = np.array([0.0, 0.0, delta_bias], dtype=np.float64) if r == bias_reading else np.zeros(3)
+            lect_u[r] = (usti + off).tolist()
+            lect_k[r] = (konec + off).tolist()
+        shot = f"f{m:06d}.bmp"
+        rows.append({
+            "frame": m, "t_ms": round(m * (1000.0 / 60.0), 3), "dt": round(1.0 / 60.0, 6),
+            "hook": hook, "caso": "mount0", "inject": "none", "run": run_name,
+            "lecturas": {"usti hlavne": lect_u, "konec hlavne": lect_k},
+            "cam": cam_written, "fov_rad": FOV_RAD, "calib_yaw_deg": 0.0, "shot": shot, "giro": 0, "seg": 0,
+        })
+        img = _slice_background(float(m) * 2.0)
+        _save_bmp(run_dir / shot, img)
+        marks.append((shot, {"boca_anillo": p_boca, "punto_mira": p_pm}, "estable"))
+    (run_dir / "samples.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    _write_marcas_file(base_dir, run_dir, run_name, marks)
+    return run_dir
+
+
+def _write_sesgo_decision_run(base_dir, n_sesgo_marks=12, bias_reading=None):
+    """Corrida mount0 completa con solo marcas §17 (`boca_anillo`).
+
+    Sin marcas §12: sirve a los tests de la vuelta 4b (ancla en la
+    proyeccion de (a) y T-sesgo solo informativo).
+
+    Reusa la trayectoria mount0 (camara montada, rasgos fijos en imagen),
+    estampa el motivo de la boca en cada captura y escribe `n_sesgo_marks`
+    marcas §17 en la verdad; `bias_reading` sesga esa lectura 5 px.
+    """
+    _write_calib_run(base_dir, "Ha", true_k=0, jitter_pm1=False)
+    _write_tracking_run(base_dir, "mount0", "Ha", inject="none", true_k=0,
+                        giro_field=True, bias_reading=bias_reading,
+                        bias_px=5.0 if bias_reading else 0.0)
+    run_dir = Path(base_dir) / "mount0_Ha"
+    rasgos = json.loads((Path(__file__).resolve().parents[1] / "m4a1_rasgos.json").read_text(encoding="utf-8"))
+    t_eje = float(rasgos["boca_anillo"]["t_eje"])
+    states = _build_trajectory()
+    rows = [json.loads(line) for line in (run_dir / "samples.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    marks = []
+    for row in rows:
+        shot = row.get("shot") or ""
+        if not shot:
+            continue
+        st = states[int(row["frame"])]
+        boca = st["usti"] + t_eje * (st["konec"] - st["usti"])
+        pb = _project(boca, row["cam"], FOV_RAD)
+        bmp = run_dir / shot
+        img = np.asarray(Image.open(bmp).convert("L")).astype(np.float32)
+        _stamp_motif(img, pb[0], pb[1], kind="konec")
+        _save_bmp(bmp, img)
+        if len(marks) < int(n_sesgo_marks):
+            marks.append((shot, {"boca_anillo": pb}, "estable"))
+    _write_marcas_file(base_dir, run_dir, "mount0_Ha", marks)
+    return run_dir
+
+
 def _write_fondo_run(base_dir):
     out_dir = Path(base_dir) / "fondo_cambiante"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -899,6 +1014,32 @@ def generate_fixture(target_dir, kind="pasa"):
         _write_calib_run(target_dir, "Ha", true_k=1, jitter_pm1=False)
         _write_calib_run(target_dir, "Hb", true_k=1, jitter_pm1=False)
         _write_tracking_run(target_dir, "mount0", "Ha", inject="none", true_k=1, bias_reading="a", bias_px=5.0)
+    elif kind == "sesgo_ok":
+        _write_calib_run(target_dir, "Ha", true_k=0, jitter_pm1=False)
+        _write_sesgo_run(target_dir, n_marks=12)
+    elif kind == "sesgo_bias5":
+        _write_calib_run(target_dir, "Ha", true_k=0, jitter_pm1=False)
+        _write_sesgo_run(target_dir, n_marks=12, bias_reading="b", bias_px=5.0)
+    elif kind == "sesgo_bias_a":
+        _write_calib_run(target_dir, "Ha", true_k=0, jitter_pm1=False)
+        _write_sesgo_run(target_dir, n_marks=12, bias_reading="a", bias_px=5.0)
+    elif kind == "sesgo_pocas":
+        _write_calib_run(target_dir, "Ha", true_k=0, jitter_pm1=False)
+        _write_sesgo_run(target_dir, n_marks=9)
+    elif kind == "sesgo_caso_doble":
+        _write_calib_run(target_dir, "Ha", true_k=0, jitter_pm1=False)
+        _write_calib_run(target_dir, "Hb", true_k=0, jitter_pm1=False)
+        _write_sesgo_run(target_dir, n_marks=5, hook="Ha")
+        _write_sesgo_run(target_dir, n_marks=5, hook="Hb")
+    elif kind == "sesgo_caso_simple":
+        _write_calib_run(target_dir, "Ha", true_k=0, jitter_pm1=False)
+        _write_sesgo_run(target_dir, n_marks=5, hook="Ha")
+    elif kind == "sesgo_decision":
+        _write_sesgo_decision_run(target_dir, n_sesgo_marks=12)
+    elif kind == "sesgo_decision_bias_a":
+        _write_sesgo_decision_run(target_dir, n_sesgo_marks=12, bias_reading="a")
+    elif kind == "sesgo_decision_pocas":
+        _write_sesgo_decision_run(target_dir, n_sesgo_marks=9)
     elif kind == "fondo_cambiante":
         _write_fondo_run(target_dir)
     elif kind == "suave_ok":
@@ -950,7 +1091,7 @@ def main(argv=None):
     parser.add_argument(
         "--kind",
         default="all",
-        choices=("all", "pasa", "delay1", "calib_pm1", "low_coverage", "roll_defect", "weak_stimulus", "sesgo5", "fondo_cambiante", "suave_ok", "suave_smooth", "suave_quatlerp", "suave_longarc", "suave_frac35", "suave_entrada_desfasada", "suave_reset_tramo", "ropa_ok", "ropa_falla", "pocas_capturas", "s2_completo", "s2_pocas15"),
+        choices=("all", "pasa", "delay1", "calib_pm1", "low_coverage", "roll_defect", "weak_stimulus", "sesgo5", "fondo_cambiante", "suave_ok", "suave_smooth", "suave_quatlerp", "suave_longarc", "suave_frac35", "suave_entrada_desfasada", "suave_reset_tramo", "ropa_ok", "ropa_falla", "pocas_capturas", "s2_completo", "s2_pocas15", "sesgo_ok", "sesgo_bias5", "sesgo_bias_a", "sesgo_pocas", "sesgo_caso_doble", "sesgo_caso_simple", "sesgo_decision", "sesgo_decision_bias_a", "sesgo_decision_pocas"),
         help="Tipo de fixture a generar (por defecto 'all' genera las 4 carpetas)",
     )
     args = parser.parse_args(argv)

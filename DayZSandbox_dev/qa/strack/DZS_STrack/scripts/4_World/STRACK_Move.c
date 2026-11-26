@@ -29,6 +29,23 @@ class STRACK_Move
 	// proportional tail) runs at half the rate: expected ~4.0 s, to be confirmed by the log on the bench.
 	static float s_AimGain = 0.0004375;
 	static float s_AimMax = 0.0175;
+	// r6b (orquestador, 26-nov): -strack_giro_lento=<f> escala la velocidad del giro (y el tope de 6 s pasa a 6/f);
+	// -strack_giro_alterno=1 hace que el segundo giro vuelva en sentido contrario, para que los tres giros recorran
+	// los mismos rumbos (con giros siempre en el mismo sentido, giro2 recorre la otra media vuelta y sus vistas no se
+	// repiten en giro1/giro3). Sin estos argumentos, igual que r6.
+	static float s_AimScale = 1.0;
+	static bool s_Alterno;
+	static float s_TurnDir;
+
+	static void Config(float aimScale, bool alterno)
+	{
+		if (aimScale > 0.0)
+		{
+			s_AimScale = aimScale;
+		}
+		s_Alterno = alterno;
+		Print("[STRACK] move config giro_lento=" + s_AimScale.ToString() + " giro_alterno=" + s_Alterno.ToString());
+	}
 	static float s_ServerUntil;
 	static float s_Dt = 0.0167;
 	static int s_LocalCase;
@@ -441,14 +458,24 @@ class STRACK_Move
 				}
 				s_TurnInited = true;
 				s_SegT0 = now;
-				Print("[STRACK] move giro hacia " + s_Target.ToString());
+				s_TurnDir = 0.0;
+				if (s_Alterno && ((s_Seg / 3) % 2) == 1)
+				{
+					s_TurnDir = -1.0;
+				}
+				Print("[STRACK] move giro hacia " + s_Target.ToString() + " sentido=" + s_TurnDir.ToString());
 			}
 			// Turn in place: no walk, aim change toward the target heading
 			// (OverrideAimChangeX, human.c:259), closed loop on the heading.
 			speed = 0.0;
 			err = Wrap180(s_Target - compass);
-			aim = Math.Clamp(err * s_AimGain * (s_Dt * 60.0), -s_AimMax * (s_Dt * 60.0), s_AimMax * (s_Dt * 60.0));
-			if (Math.AbsFloat(err) < 3.0 || (now - s_SegT0) >= 6.0)
+			// sentido forzado solo lejos del objetivo: cerca, un pequeño rebase se corrige por el camino corto
+			if (s_TurnDir < 0.0 && err > 90.0)
+			{
+				err = err - 360.0;
+			}
+			aim = Math.Clamp(err * s_AimGain * s_AimScale * (s_Dt * 60.0), -s_AimMax * s_AimScale * (s_Dt * 60.0), s_AimMax * s_AimScale * (s_Dt * 60.0));
+			if (Math.AbsFloat(err) < 3.0 || (now - s_SegT0) >= 6.0 / s_AimScale)
 			{
 				Print("[STRACK] move giro fin rumbo=" + compass.ToString() + " objetivo=" + s_Target.ToString() + " t=" + (now - s_SegT0).ToString());
 				aim = 0.0;

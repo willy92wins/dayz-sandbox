@@ -1,8 +1,28 @@
 # Evidencia de S-track·2
 
-Estado a 2026-11-14: **las tres piezas están cerradas, y el evaluador además pasó una quinta vuelta tras la primera
-corrida real.** La tanda del banco no ha terminado: hay 2 corridas válidas, `calib_Ha` y `calib_Hb`. Todavía no hay
-veredicto de S-track·2.
+Estado a 2026-11-27: **tanda real de 24 corridas hecha (25/26-nov) e informe escrito: [`_informe/informe.md`](_informe/informe.md).**
+Estado global INCONCLUSO:
+- `mount` con el arma en manos queda aceptado por decisión de Guillermo, con un temblor medido de ≈5 px en H-b.
+- look_at y follow quedan FALLA en H-a y sin confirmar en H-b.
+- Hay una tanda corta r6b en curso (contrato §36).
+
+Lo que sigue es la historia de las piezas; el detalle de cada vuelta está en `_vueltas/vueltas.md`.
+
+## Evidencia en E: (no va a git)
+
+Las corridas de la tanda del 25/26-nov se movieron a E: durante la noche, porque se llenó el disco C:. Cada fichero se
+copió con SHA-256 verificado:
+- `E:\dsbx-strack2\evidence\runs\<corrida>\`: PNG, `samples.jsonl`, `done.json` y `SHA256SUMS` por corrida.
+- `E:\dsbx-strack2\evidence\runs24\`: uniones a las 24 corridas que evalúa el informe (sin `.prev` ni `.diag`).
+- [`SHA256SUMS.index`](SHA256SUMS.index): una copia, en esta carpeta, del índice de los `SHA256SUMS` de cada corrida
+  (el original está en `E:\dsbx-strack2\evidence\runs\SHA256SUMS.index`, sha256
+  `d7fcecfc87f4e7f4755bf6a734f9b6f56407151ca71a1bf854b144ef69172b52`).
+- La tanda corta r6b escribe en `E:\dsbx-strack2\runs_r6\` y su log en `C:\tmp\dsbx-strack2\bench\runlog_r6\`.
+
+Medidas del informe:
+- `_informe/informe.json` y `_informe/evaluador.md`: salida del evaluador.
+- `_informe/thook_mount/`: T-hook de mount, medida directa (§34).
+- `_informe/tlect_directa/`: T-lect de look_at/follow, medida directa (§35).
 
 ## Las piezas (brief `plans/2026-11-12-s-track-2-brief.md`)
 
@@ -60,18 +80,16 @@ Antes de aceptar un veredicto del evaluador, cada corrida tiene que pasar estas 
 Una corrida que no lo pasa es INVÁLIDA: se repite o queda INCONCLUSA. Tests: `qa/strack/tests/test_check_runs.py` (24).
 Las dos calibraciones reales son VÁLIDAS.
 
-## Pendiente
+## Pendiente (27-nov)
 
-- **La tanda del banco**: 24 corridas. Son las `calib` Ha y Hb, ya válidas; los positivos; `ropa_Hb`;
-  `suave30/60/144_Hb`; y las negativas del brief §3. Se lanzan con `C:\tmp\dsbx-strack2\bench\run_all2.ps1`, que
-  necesita el PC 15 min sin teclado ni ratón antes de cada corrida y espera mientras haya otro DayZ abierto o un lease
-  de GPU ajeno. Al acabar saca `SHA256SUMS` de cada corrida y pasa `check_runs.py`.
-- **Las marcas a mano** del orquestador (contrato §12) y, con ellas, el evaluador.
-- **Los mutantes contra el evaluador de la vuelta 5** (`run_mutants.py`). Corre la suite entera por cada mutante, unos 25
-  min cada uno. La corrida del 13-nov sobre el evaluador anterior se paró sin resultado.
-- Backlog de la vuelta 4 del evaluador (solo da INCONCLUSO de más): la búsqueda de textura sigue a la lectura «a», y
-  una detección débil corta la búsqueda de centros alternativos.
-- PREMISA de Sol, que solo se contrasta en el banco con fondos distintos: que la baja varianza temporal identifique
-  los píxeles del arma, y que el detalle marcado a mano coincida con el punto de memoria.
+- **Tanda corta r6b** (`C:\tmp\dsbx-strack2\bench\night_corta.ps1`, 12 corridas):
+  - suave sin capturas a 30, 60 y 144 fps, y quatlerp a 30 y 144;
+  - mount03_Hb con la posición rígida;
+  - barrido de `smooth_s` en mount0_Hb, para elegir el valor por defecto en manos;
+  - lookat_Hb y follow_Hb con giros lentos y alternos.
+- **Mutantes contra el evaluador integrado:** relanzados el 27-nov; la corrida del 26-nov se cortó al cerrarse la sesión.
+- **Revisión de Neon**, una vuelta, de los arbitrajes que no se pueden probar (regla del 26-nov: «si se puede probar no se revisa»).
+- **PREMISA de Sol, contrastada en el banco: no se cumple en look_at/follow.** El arma gira en la imagen y la máscara por
+  varianza temporal sale vacía. Se sustituyó por medidas directas (contrato §34/§35).
 
 La evidencia binaria (PNG, `samples.jsonl` y logs) no irá a git: se queda en el PC, como en S-track·1.

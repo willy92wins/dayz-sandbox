@@ -40,6 +40,7 @@ THRESH_SUAVE_FRAC = 0.02
 QUAT_NORM_TOL = 1e-4
 SUAVE_FPS_AGREE_DEG = 0.5
 FPS_REGIME_TOL = 0.10
+SESGO_MIN_MARCAS = 10
 # Vuelta 4 (hallazgo 4): tolerancia del estimulo de giro. El objetivo se
 # escribe como una rotacion exacta de 170 deg; extraerlo con atan2/acos en
 # doble precision introduce errores muy por debajo de 0.01 deg, asi que
@@ -63,6 +64,8 @@ READINGS_ORDER = ("a", "b", "c", "d", "e", "f")
 HOOKS_ORDER = ("Ha", "Hb", "Hc")
 MODES_ORDER = ("mount0", "mount03", "lookat", "follow")
 POINTS = ("usti hlavne", "konec hlavne")
+POINTS_12 = ("usti hlavne", "konec hlavne", "mira")
+SESGO_FEATURES = ("boca_anillo", "punto_mira")
 
 
 def _vec3(v):
@@ -328,7 +331,8 @@ def _masks_by_point(template_mask):
     return {"usti hlavne": template_mask}
 
 
-MASK_DETAIL_FILES = {"usti hlavne": "boca", "konec hlavne": "recamara", "mira": "mira"}
+MASK_DETAIL_FILES = {"usti hlavne": "boca", "konec hlavne": "recamara", "mira": "mira",
+                     "boca_anillo": "boca_anillo", "punto_mira": "punto_mira"}
 
 
 def _bilinear_sample_points(img, xs, ys):
@@ -378,8 +382,7 @@ def build_masks_from_run(run, marcas, k, fov_conv):
     >= MASK_MIN_SHOTS capturas y componente conexa al centro.
     """
     masks = {}
-    if not marcas:
-        return masks
+    marcas = marcas or []
     by_frame = run["by_frame"]
     giro_frames = set()
     for row in run["samples"]:
@@ -393,11 +396,10 @@ def build_masks_from_run(run, marcas, k, fov_conv):
         for name, frames in wins.items():
             if name.startswith("giro"):
                 giro_frames.update(frames)
-    point_names = []
-    for mark in marcas:
-        for name in mark["puntos"]:
-            if name not in point_names:
-                point_names.append(name)
+    # Solo nombres §12 (hallazgo A4, vuelta 4b): las mascaras ya no se
+    # construyen para rasgos §17; nunca todas las claves de `puntos`.
+    _has = {name for mark in marcas for name in mark.get("puntos", {})}
+    point_names = [p for p in POINTS_12 if p in _has]
     half = TEMPLATE_PX // 2
     # Ancla por detalle: marca y desplazamiento marca-proyeccion en su captura.
     anchors = {}
@@ -411,6 +413,36 @@ def build_masks_from_run(run, marcas, k, fov_conv):
             continue
         cu, cv = first["puntos"][point]
         anchors[point] = (cu, cv, (0.0, 0.0))
+    # Arbitro (§18, 26-nov): usti/konec no se marcan en partida. Sin marca, la
+    # mascara se ancla en un punto FIJO: la proyeccion de la lectura (a) en la
+    # primera captura de giro con textura (la misma ancla "proyeccion_a" que la
+    # plantilla). Es un punto fijo, no la proyeccion de cada captura: en mount0 el
+    # arma esta quieta en imagen y la mascara sale de la varianza temporal.
+    missing = [p for p in ("usti hlavne", "konec hlavne") if p not in anchors]
+    if missing and USE_MASK:
+        for row in run["samples"]:
+            if int(row["frame"]) not in giro_frames or not row.get("shot"):
+                continue
+            path = _shot_path(run["dir"], row["shot"])
+            target = by_frame.get(int(row["frame"]) + int(k or 0))
+            if not path.is_file() or target is None:
+                continue
+            lect = target.get("lecturas") or {}
+            cam = target.get("cam") or {}
+            fov = float(target.get("fov_rad", 1.0471976))
+            pts = {}
+            for p in ("usti hlavne", "konec hlavne"):
+                w = (lect.get(p) or {}).get("a")
+                pts[p] = project_point(w, cam, fov, fov_conv) if w is not None else None
+            if any(v is None for v in pts.values()):
+                continue
+            if not _textured(_load_gray(path), (pts["usti hlavne"], pts["konec hlavne"])):
+                continue
+            for p in missing:
+                anchors[p] = (float(pts[p][0]), float(pts[p][1]), (0.0, 0.0))
+                if p not in point_names:
+                    point_names.append(p)
+            break
     # Una sola carga por captura para todos los detalles.
     # Vuelta 3 (hallazgo 12): en mount0 el montaje es rigido y el arma queda
     # quieta en imagen; los cultivos se anclan a la marca, nunca a la
@@ -1183,7 +1215,13 @@ def _calibrate_detector_once(runs, k_by_hook, fov_by_hook, template_mask=None, b
 
     p95_px = round(_p95(px_errors), 4) if all(math.isfinite(x) for x in px_errors) else float("inf")
     p95_deg = round(_p95(deg_errors), 4) if all(math.isfinite(x) for x in deg_errors) else float("inf")
-    # Hallazgo 3: con USE_MASK, sin calibracion de fondo cambiante no hay PASA con la calibracion vieja.
+    # Hallazgo 3: con USE_MASK y mascaras validas, sin calibracion de fondo
+    # cambiante no hay PASA con la calibracion vieja. Vuelta 4b: sin marcas
+    # §12 no hay mascara que calibrar (ancla proyeccion_a) y la calibracion
+    # sin mascara es la que vale, como con USE_MASK=False.
+    # Arbitro (§18): la mascara se construye tambien sin marcas §12 (ancla en
+    # la proyeccion de (a)), asi que se vuelve a la regla de la vuelta 3: con
+    # USE_MASK, sin calibracion de fondo cambiante no hay PASA.
     bg_missing = USE_MASK and not bg_px_errors
     ok = (
         math.isfinite(p95_px)
@@ -1228,7 +1266,7 @@ def calibrate_detector(runs, k_by_hook, fov_by_hook, template_mask=None, backgro
     for hook in ordered:
         masks = mask_by_hook[hook]
         by_point = _masks_by_point(masks)
-        if USE_MASK and (_mask_empty(by_point.get("usti hlavne")) or _mask_empty(by_point.get("konec hlavne"))):
+        if USE_MASK and not any(_mask_valid(m) for m in by_point.values()):
             continue
         any_valid = True
         scoped = [r for r in runs if r.get("hook") == hook]
@@ -1564,6 +1602,23 @@ def check_turn_stimulus(run, window_frames, reading, fov_conv):
     return _p95(steps_px) > (STIMULUS_FACTOR * THRESH_PX)
 
 
+def _ancla_plantilla(marcas):
+    """Ancla de la plantilla (vuelta 4b): "marca" si hay marcas §12 de los
+    dos puntos (usti/konec), "proyeccion_a" si no las hay.
+
+    Sin marcas §12 (lo normal en partida: usti/konec no son visibles) la
+    plantilla se ancla en la proyeccion de la lectura (a) en la primera
+    captura con textura, como en S-track·1; no se informa como "marca".
+    """
+    if TEMPLATE_SOURCE != "marca":
+        return "proyeccion_a"
+    for mark in marcas or []:
+        puntos = mark.get("puntos") or {}
+        if "usti hlavne" in puntos and "konec hlavne" in puntos:
+            return "marca"
+    return "proyeccion_a"
+
+
 def _detect_run_shots(run, k, fov_conv, ref_reading="a", marcas=None, mask=None):
     """Extrae la plantilla (en la marca si TEMPLATE_SOURCE='marca') y detecta los dos puntos."""
     by_frame = run["by_frame"]
@@ -1572,13 +1627,15 @@ def _detect_run_shots(run, k, fov_conv, ref_reading="a", marcas=None, mask=None)
     if not shot_rows:
         return {}
 
+    # Vuelta 4b: la plantilla enmascarada sigue los dos puntos §12 con
+    # roll, como en la vuelta 3. Con marcas §12 se ancla en la marca; sin
+    # ellas, en la proyeccion de la lectura (a) (ancla="proyeccion_a").
     chosen_r = ref_reading
     pu0 = pk0 = None
     img0 = None
-    if TEMPLATE_SOURCE == "marca":
-        if not marcas:
-            return {}
-        for mark in marcas:
+    ancla = _ancla_plantilla(marcas)
+    if ancla == "marca":
+        for mark in marcas or []:
             if "usti hlavne" not in mark["puntos"] or "konec hlavne" not in mark["puntos"]:
                 continue
             cand_path = _shot_path(run_dir, mark["shot"])
@@ -1684,7 +1741,7 @@ def _detect_run_shots(run, k, fov_conv, ref_reading="a", marcas=None, mask=None)
         if _crop_std(img, du[0], du[1]) < TEXTURE_MIN_STD or _crop_std(img, dk[0], dk[1]) < TEXTURE_MIN_STD:
             detections[f_num] = None
             continue
-        detections[f_num] = {"usti hlavne": (du[0], du[1]), "konec hlavne": (dk[0], dk[1]), "corr": min(float(du[2]), float(dk[2]))}
+        detections[f_num] = {"usti hlavne": (du[0], du[1]), "konec hlavne": (dk[0], dk[1]), "corr": min(float(du[2]), float(dk[2])), "ancla": ancla}
         prev_det = ((du[0], du[1]), (dk[0], dk[1]))
     return detections
 
@@ -1704,17 +1761,13 @@ def _eval_window_metrics(run, window_frames, detections, k, fov_conv, reading, c
     roll_errs = []
     missing_reading = False
 
+    # Vuelta 4b: comparacion con los dos puntos §12 y roll, como en la
+    # vuelta 3 (nada de proyeccion de un solo rasgo §17).
     for f_num in shot_frames:
         det = detections.get(f_num)
         target_f = f_num + int(k)
         target = by_frame.get(target_f)
         if target is None:
-            continue
-        lect = target.get("lecturas") or {}
-        uw = (lect.get("usti hlavne") or {}).get(reading)
-        kw = (lect.get("konec hlavne") or {}).get(reading)
-        if uw is None or kw is None:
-            missing_reading = True
             continue
         if det is None or float(det.get("corr", 1.0)) < CORR_MIN:
             continue
@@ -1722,6 +1775,12 @@ def _eval_window_metrics(run, window_frames, detections, k, fov_conv, reading, c
         if cam is None:
             continue
         fov = float(target.get("fov_rad", 1.0471976))
+        lect = target.get("lecturas") or {}
+        uw = (lect.get("usti hlavne") or {}).get(reading)
+        kw = (lect.get("konec hlavne") or {}).get(reading)
+        if uw is None or kw is None:
+            missing_reading = True
+            continue
         pu = project_point(uw, cam, fov, fov_conv)
         pk = project_point(kw, cam, fov, fov_conv)
         if pu is None or pk is None:
@@ -1763,12 +1822,13 @@ def _eval_tmarca_rows(run, marcas, k, fov_conv):
     """Distancia proyección↔marca por lectura (medida T-marca, umbral THRESH_PX)."""
     rows = []
     by_frame = run["by_frame"]
-    # Puntos habituales del arma y, en ropa, el punto mira.
-    point_names = []
-    for mark in marcas or []:
-        for name in mark["puntos"]:
-            if name not in point_names:
-                point_names.append(name)
+    # T-marca solo existe con marcas §12 (vuelta 4, A4): sin ellas no se emiten filas.
+    point_names = [p for p in POINTS_12
+                   if any(p in (mark.get("puntos") or {}) for mark in (marcas or []))]
+    if not point_names:
+        return rows
+    marks_with = [mark for mark in (marcas or [])
+                  if any(p in (mark.get("puntos") or {}) for p in point_names)]
     readings = list(READINGS_ORDER)
     # Vuelta 3 (hallazgo 14): las marcas deben cubrir las fases del brief §4
     # (estable, mitad de cada giro y del resto); sin esa evidencia no hay PASA.
@@ -1814,16 +1874,14 @@ def _eval_tmarca_rows(run, marcas, k, fov_conv):
                 proj_seg = _segment_angle_deg(per_mark[0][2], per_mark[1][2])
                 mark_seg = _segment_angle_deg(per_mark[0][3], per_mark[1][3])
                 roll_dists.append(_angle_diff_deg(proj_seg, mark_seg))
-        if not marcas:
-            verdict, cause = "INCONCLUSO", "sin_marcas"
-            p95_px, roll_deg, cov = 999.0, 999.0, 0.0
-        elif used == 0:
+        if used == 0:
             verdict, cause = "INCONCLUSO", "sin_marcas"
             p95_px, roll_deg, cov = 999.0, 999.0, 0.0
         else:
             p95_px = round(_p95(dists), 4) if dists else 999.0
             roll_deg = round(_p95(roll_dists), 4) if roll_dists else 0.0
-            cov = round(float(used) / float(len(marcas)), 4)
+            # Cobertura sobre las entradas que tienen nombres §12 (A4).
+            cov = round(float(used) / float(len(marks_with)), 4) if marks_with else 0.0
             if not required_momentos.issubset(momentos_used):
                 verdict, cause = "INCONCLUSO", "marcas_fases_ausentes"
             elif p95_px > THRESH_PX:
@@ -1839,6 +1897,259 @@ def _eval_tmarca_rows(run, marcas, k, fov_conv):
             "verdict": verdict, "cause": cause, "n_shots": used,
         })
     return rows
+
+
+_RASGOS_CACHE = None
+_RASGOS_FALLBACK = {
+    "t_eje": -0.038941493834646776,
+    "usti_modelo": (-0.41976308822631836, 0.06566162407398224, 5.9551908634603024e-05),
+    "punto_mira_modelo": (-0.2655336260795593, 0.13834163546562195, -4.359055310487747e-05),
+}
+
+
+def _load_rasgos():
+    """Rasgos visibles del M4A1 (contrato §17) desde m4a1_rasgos.json junto al evaluador."""
+    global _RASGOS_CACHE
+    if _RASGOS_CACHE is not None:
+        return _RASGOS_CACHE
+    rasgos = dict(_RASGOS_FALLBACK)
+    try:
+        data = json.loads((Path(__file__).resolve().parent / "m4a1_rasgos.json").read_text(encoding="utf-8"))
+        t_eje = float((data.get("boca_anillo") or {}).get("t_eje"))
+        usti = tuple(float(v) for v in data["usti_hlavne"])
+        pm = tuple(float(v) for v in (data.get("punto_mira") or {})["pos_modelo"])
+        rasgos = {"t_eje": t_eje, "usti_modelo": usti, "punto_mira_modelo": pm}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    _RASGOS_CACHE = rasgos
+    return rasgos
+
+
+def _as_vec3(v):
+    """Como _vec3 pero acepta tambien un ndarray de forma (3,).
+
+    _vec3 solo admite list/tuple (asi lo usan project_point y las lecturas
+    JSON); los ejes ya calculados dentro del evaluador son ndarray y hay
+    que aceptarlos aqui o toda comprobacion con ellos devuelve None.
+    """
+    if isinstance(v, np.ndarray):
+        arr = np.asarray(v, dtype=np.float64)
+        if arr.shape != (3,) or not np.all(np.isfinite(arr)):
+            return None
+        return arr
+    return _vec3(v)
+
+
+def _chirality_ok(ax0, ax1, ax2_candidate):
+    """True si (ax0, ax1, ax2_candidate) conserva la quiralidad del modelo.
+
+    El modelo es dextrógiro: ax0 x ax1 debe apuntar como ax2. Un ax2
+    invertido da producto escalar <= 0 y se detecta aquí. Los ejes pueden
+    venir como list/tuple (tests, JSON) o como ndarray (calculados).
+    """
+    a0, a1, a2 = _as_vec3(ax0), _as_vec3(ax1), _as_vec3(ax2_candidate)
+    if a0 is None or a1 is None or a2 is None:
+        return False
+    return float(np.dot(np.cross(a0, a1), a2)) > 0.0
+
+
+def _boca_anillo_world(lectura_map, reading, rasgos):
+    usti = _vec3((lectura_map.get("usti hlavne") or {}).get(reading))
+    konec = _vec3((lectura_map.get("konec hlavne") or {}).get(reading))
+    if usti is None or konec is None:
+        return None
+    return usti + float(rasgos["t_eje"]) * (konec - usti)
+
+
+def _clean_ax1(ax1_raw, ax0):
+    """Gram-Schmidt de ax1 contra ax0: ortogonaliza y normaliza, o None.
+
+    Las posiciones del motor son float32 con coordenadas de mundo ~8400 m:
+    el ax1 crudo de (cam.pos - usti - 0,6 ax0)/0,1 sale con |ax1| entre
+    0,987 y 1,012 y ax0.ax1 hasta 0,0075 (medido en mount0_Ha real). Sin
+    limpiar, ese ruido mueve el punto de mira ~1 mm (~2 px a 0,45 m).
+    """
+    ax1 = ax1_raw - float(np.dot(ax1_raw, ax0)) * ax0
+    if float(np.linalg.norm(ax1)) <= 1e-9:
+        return None
+    return _normalize(ax1)
+
+
+def _punto_mira_world_mount(target, reading):
+    """Punto de mira en mount0/mount03: pose del arma desde la cámara de BuildMount.
+
+    Por lectura (DISPUTA 1 resuelta, vuelta 2): ax0 y usti son de la
+    lectura pedida; el giro sobre el eje (ax1) sale de la lectura (a) y de
+    cam/cam_raw (BuildMount: cam = usti + 0,6 ax0 + 0,1 ax1), limpio contra
+    ax0 de (a) y reortogonalizado contra ax0 de la lectura pedida. Asi el
+    sesgo de cada lectura es observable por separado. ax2 = ax0 x ax1 y su
+    quiralidad se comprueba contra la x de camara: con STRACK_Math.Look
+    (DirectionAndUpMatrix(dir, up=ax1)), cam.x = ax0 x ax1 en los datos
+    reales ((ax0 x ax1).cam.x = +0,99999 de mediana en mount0_Ha), asi que
+    el signo > 0 es el correcto y una x invertida omite el rasgo.
+    En mount03 se exige cam_raw; sin ella el rasgo se omite en la corrida.
+    """
+    caso = str(target.get("caso") or "")
+    lect = target.get("lecturas") or {}
+    usti_a = _vec3((lect.get("usti hlavne") or {}).get("a"))
+    konec_a = _vec3((lect.get("konec hlavne") or {}).get("a"))
+    usti_r = _vec3((lect.get("usti hlavne") or {}).get(reading))
+    konec_r = _vec3((lect.get("konec hlavne") or {}).get(reading))
+    if usti_a is None or konec_a is None or usti_r is None or konec_r is None:
+        return None
+    if caso == "mount03":
+        cam_pose = target.get("cam_raw")
+        if not isinstance(cam_pose, dict) or cam_pose.get("pos") is None:
+            return None
+    else:
+        cam_pose = target.get("cam") or {}
+    cam_pos = _vec3(cam_pose.get("pos"))
+    cam_x = _vec3(cam_pose.get("x"))
+    if cam_pos is None or cam_x is None:
+        return None
+    ax0_a = konec_a - usti_a
+    if float(np.linalg.norm(ax0_a)) <= 1e-12:
+        return None
+    ax0_a = _normalize(ax0_a)
+    ax1_raw = (cam_pos - usti_a - 0.6 * ax0_a) / 0.1
+    # Limpiar el giro de (a) contra su propio eje antes de usarlo.
+    ax1_a = _clean_ax1(ax1_raw, ax0_a)
+    if ax1_a is None:
+        return None
+    ax0_r = konec_r - usti_r
+    if float(np.linalg.norm(ax0_r)) <= 1e-12:
+        return None
+    ax0_r = _normalize(ax0_r)
+    # Reortogonalizar el giro ya limpio contra el eje de la lectura pedida.
+    ax1_r = _clean_ax1(ax1_a, ax0_r)
+    if ax1_r is None:
+        return None
+    ax2_r = np.cross(ax0_r, ax1_r)
+    if not _chirality_ok(ax0_r, ax1_r, cam_x):
+        return None
+    rasgos = _load_rasgos()
+    usti_m = np.array(rasgos["usti_modelo"], dtype=np.float64)
+    pm_m = np.array(rasgos["punto_mira_modelo"], dtype=np.float64)
+    delta = pm_m - usti_m
+    return usti_r + float(delta[0]) * ax0_r + float(delta[1]) * ax1_r + float(delta[2]) * ax2_r
+
+
+def _punto_mira_world_ropa(target, reading):
+    """Punto de mira en ropa: pose completa ropa.arma de la lectura (a)/(f)."""
+    if reading not in ("a", "f"):
+        return None
+    pose = ((target.get("ropa") or {}).get("arma") or {}).get(reading)
+    arrays = _pose_arrays(pose)
+    if arrays is None:
+        return None
+    pos, basis = arrays
+    ax0, ax1, ax2 = basis[:, 0], basis[:, 1], basis[:, 2]
+    if not _chirality_ok(ax0, ax1, ax2):
+        return None
+    rasgos = _load_rasgos()
+    pm_m = np.array(rasgos["punto_mira_modelo"], dtype=np.float64)
+    return pos + float(pm_m[0]) * ax0 + float(pm_m[1]) * ax1 + float(pm_m[2]) * ax2
+
+
+def _tsesgo_dists(run, marcas, k, fov_conv, feature, reading):
+    """Distancias proyeccion-marca de un rasgo/lectura en una sola corrida."""
+    caso = str(run.get("caso") or "")
+    by_frame = run["by_frame"]
+    rasgos = _load_rasgos()
+    dists = []
+    for mark in marcas or []:
+        if feature not in mark.get("puntos", {}):
+            continue
+        shot_frame = None
+        for row in run["samples"]:
+            if row.get("shot") == mark["shot"]:
+                shot_frame = int(row["frame"])
+                break
+        if shot_frame is None:
+            continue
+        target = by_frame.get(shot_frame + int(k))
+        if target is None:
+            continue
+        if feature == "boca_anillo":
+            world = _boca_anillo_world(target.get("lecturas") or {}, reading, rasgos)
+        elif caso == "ropa":
+            world = _punto_mira_world_ropa(target, reading)
+        else:
+            world = _punto_mira_world_mount(target, reading)
+        if world is None:
+            continue
+        proj = project_point(world, target.get("cam") or {}, float(target.get("fov_rad", 1.0471976)), fov_conv)
+        if proj is None:
+            continue
+        dists.append(math.hypot(proj[0] - mark["puntos"][feature][0], proj[1] - mark["puntos"][feature][1]))
+    return dists
+
+
+def _eval_tsesgo_case_rows(case_runs):
+    """T-sesgo (§17, vuelta 3): p95 por caso, lectura y rasgo.
+
+    Se juntan las corridas sin inyeccion de un mismo caso (todos sus hooks):
+    las distancias de todas ellas forman una sola muestra por lectura y
+    rasgo. Comprobacion unicamente: no alimenta la decision de T-lect.
+    FALLA si p95 > THRESH_PX con >= SESGO_MIN_MARCAS capturas; con menos,
+    INCONCLUSO sesgo_no_observable. Sin calibracion valida en alguna
+    corrida del caso, INCONCLUSO calib_inconcluso (como en ropa).
+    `case_runs`: lista de {"run", "marcas", "k", "fov_conv", "calib_ok"}.
+    """
+    if not case_runs:
+        return []
+    caso = str(case_runs[0]["run"].get("caso") or "")
+    features = ["boca_anillo"]
+    if caso in ("mount0", "mount03", "ropa"):
+        features.append("punto_mira")
+    readings_by_feature = {
+        "boca_anillo": list(READINGS_ORDER),
+        "punto_mira": ("a", "f") if caso == "ropa" else list(READINGS_ORDER),
+    }
+    # A3: solo las corridas con calibracion valida aportan distancias; una
+    # sin calibrar (k=0, f teorica) ya no contamina ni invalida el caso.
+    valid_runs = [cr for cr in case_runs if cr.get("calib_ok", True)]
+    any_invalid = len(valid_runs) != len(case_runs)
+    total_marcas = sum(len(cr.get("marcas") or []) for cr in valid_runs)
+    run_names = [cr["run"]["run"] for cr in case_runs]
+    hooks = sorted({cr["run"]["hook"] for cr in case_runs})
+    rows = []
+    for feature in features:
+        for reading in readings_by_feature[feature]:
+            dists = []
+            for cr in valid_runs:
+                dists.extend(_tsesgo_dists(cr["run"], cr.get("marcas") or [], cr.get("k", 0),
+                                           cr.get("fov_conv", "vertical"), feature, reading))
+            n_shots = len(dists)
+            if any_invalid and n_shots < SESGO_MIN_MARCAS:
+                # Sin las validas no se llega al minimo: no se calcula p95
+                # con datos sin calibrar.
+                verdict, cause = "INCONCLUSO", "calib_inconcluso"
+                p95_px = 999.0
+            elif n_shots < SESGO_MIN_MARCAS:
+                verdict, cause = "INCONCLUSO", "sesgo_no_observable"
+                p95_px = round(_p95(dists), 4) if dists else 999.0
+            else:
+                p95_px = round(_p95(dists), 4) if dists else 999.0
+                if p95_px > THRESH_PX:
+                    verdict, cause = "FALLA", "p95_px_exceeded"
+                else:
+                    verdict, cause = "PASA", ""
+            rows.append({
+                "run": caso, "runs": run_names, "caso": caso, "hook": ",".join(hooks), "inject": "none",
+                "measure": "T-sesgo", "reading": reading, "window": f"marcas:{feature}",
+                "feature": feature, "p95_px": p95_px, "roll_deg": 0.0,
+                "coverage": round(float(n_shots) / float(total_marcas), 4) if total_marcas else 0.0,
+                "verdict": verdict, "cause": cause, "n_shots": n_shots,
+            })
+    return rows
+
+
+def _eval_tsesgo_rows(run, marcas, k, fov_conv, calib_ok=True):
+    """Compatibilidad: T-sesgo de una sola corrida (un caso con una corrida)."""
+    return _eval_tsesgo_case_rows(
+        [{"run": run, "marcas": marcas, "k": k, "fov_conv": fov_conv, "calib_ok": calib_ok}]
+    )
 
 
 def _pose_arrays(pose):
@@ -2469,12 +2780,16 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
             c_res = evaluate_calib_run(run)
             calib_block[run["hook"]] = c_res
             k_by_hook[run["hook"]] = c_res["k"]
-            fov_by_hook[run["hook"]] = c_res.get("f_px") or "vertical"
+            fov_by_hook[run["hook"]] = c_res.get("f_px") if (c_res.get("verdict") == "PASA" and c_res.get("f_px")) else "vertical"
 
     # Hc usa la jerarquia del motor y comparte el pipeline de captura de Ha
     if "Hc" not in k_by_hook and "Ha" in k_by_hook:
         k_by_hook["Hc"] = k_by_hook["Ha"]
         fov_by_hook["Hc"] = fov_by_hook.get("Ha", "vertical")
+
+    def _sesgo_calib_ok(hook):
+        calib_r = calib_block.get(hook) or (calib_block.get("Ha") if hook == "Hc" else None)
+        return bool(calib_r and calib_r.get("verdict") == "PASA" and calib_r.get("k") is not None and calib_r.get("f_px"))
 
     marcas_path = _resolve_marcas_dir(runs_dir, marcas_dir)
     marcas_by_run = {}
@@ -2510,7 +2825,7 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
     # Vuelta 3 (hallazgo 8): la calibracion usa la primera pareja valida de
     # mascaras; un hook descartado (mascaras vacias) no bloquea a los demas.
     first_mask = next(
-        (m for m in mask_by_hook.values() if not _mask_empty(m.get("usti hlavne")) and not _mask_empty(m.get("konec hlavne"))),
+        (m for m in mask_by_hook.values() if any(_mask_valid(v) for v in m.values())),
         next(iter(mask_by_hook.values()), None),
     )
 
@@ -2519,6 +2834,11 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
             return ""
         masks = mask_by_hook.get(run["hook"])
         if not masks:
+            # Vuelta 4b: sin marcas §12 la plantilla se ancla en la
+            # proyeccion de (a) y no hay mascara que exigir; con marcas
+            # §12, la ausencia de mascara sigue bloqueando.
+            if _ancla_plantilla(marcas_by_run.get(run["run"], [])) == "proyeccion_a":
+                return ""
             return "mascara_ausente"
         if _mask_empty(masks.get("usti hlavne")) or _mask_empty(masks.get("konec hlavne")):
             return "mascara_vacia"
@@ -2535,6 +2855,7 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
 
     results = []
     detections_cache = {}
+    tsesgo_by_case = {}
 
     # 1. Evaluar T-lect/T-marca sobre TODAS las corridas positivas de imagen (hallazgo 5).
     tlect_runs = image_positive
@@ -2552,10 +2873,9 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
         fov_conv = fov_by_hook.get(hook, "vertical")
         run_marcas = marcas_by_run.get(run["run"], [])
         mask_cause = _mask_cause(run)
+        ancla = _ancla_plantilla(run_marcas)
         pre_cause = ""
-        if TEMPLATE_SOURCE == "marca" and not run_marcas:
-            pre_cause = "sin_marcas"
-        elif mask_cause:
+        if mask_cause:
             pre_cause = mask_cause
         elif not calib_ok:
             pre_cause = "calib_inconcluso"
@@ -2571,11 +2891,21 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
 
         for trow in _eval_tmarca_rows(run, run_marcas, k_use, fov_conv):
             # T-marca solo gatea si hay calibración/detector; sin ellos queda como medida informativa INCONCLUSA por esa causa.
-            if pre_cause and pre_cause != "sin_marcas" and trow["verdict"] == "PASA":
+            if pre_cause and trow["verdict"] == "PASA":
                 trow = dict(trow, verdict="INCONCLUSO", cause=pre_cause)
             results.append(trow)
             tmarca_verdicts[trow["reading"]].append(trow["verdict"])
             tmarca_by_run.setdefault(run["run"], []).append(trow)
+
+        # T-sesgo (§17, vuelta 3): se acumula por caso y se emite tras el
+        # bucle juntando todas las corridas sin inyeccion del caso; sin
+        # calibracion valida queda INCONCLUSO calib_inconcluso. Es solo
+        # informativo (vuelta 4b): no alimenta T-lect, ni decisions, ni
+        # exit_code.
+        tsesgo_by_case.setdefault(run["caso"], []).append(
+            {"run": run, "marcas": run_marcas, "k": k_use, "fov_conv": fov_conv,
+             "calib_ok": _sesgo_calib_ok(hook)}
+        )
 
         for r in READINGS_ORDER:
             for w_name, w_frames in windows.items():
@@ -2606,20 +2936,27 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
                         "verdict": verdict,
                         "cause": cause,
                         "n_shots": n_shots,
+                        "ancla": ancla,
                     }
                 )
                 reading_verdicts[r].append((hook, verdict))
+
+    tsesgo_rows_by_case = {}
+    for _caso in tsesgo_by_case:
+        _rows_s = _eval_tsesgo_case_rows(tsesgo_by_case[_caso])
+        tsesgo_rows_by_case[_caso] = _rows_s
+        results.extend(_rows_s)
 
     winning_reading = None
     for r in READINGS_ORDER:
         by_h = {}
         for h, v in reading_verdicts[r]:
             by_h.setdefault(h, []).append(v)
-        # Vuelta 4 (hallazgo 8): la lectura certificada exige T-marca PASA
-        # (no basta con que no sea FALLA); un INCONCLUSO la bloquea y llega
-        # al codigo de salida via winning_reading=None.
+        # Con marcas §12, T-marca PASA sigue exigido; sin filas T-marca
+        # no bloquea. T-sesgo es solo informativo (vuelta 4b): ningun
+        # veredicto suyo cambia esta decision ni exit_code.
         _tm = tmarca_verdicts.get(r, [])
-        marca_ok = bool(_tm) and all(v == "PASA" for v in _tm)
+        marca_ok = all(v == "PASA" for v in _tm) if _tm else True
         if marca_ok and any(vs and all(v == "PASA" for v in vs) for vs in by_h.values()):
             winning_reading = r
             break
@@ -2638,10 +2975,9 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
         fov_conv = fov_by_hook.get(hook, "vertical")
         run_marcas = marcas_by_run.get(run["run"], [])
         mask_cause = _mask_cause(run)
+        ancla = _ancla_plantilla(run_marcas)
         pre_cause = ""
-        if TEMPLATE_SOURCE == "marca" and not run_marcas:
-            pre_cause = "sin_marcas"
-        elif mask_cause:
+        if mask_cause:
             pre_cause = mask_cause
         elif not calib_ok:
             pre_cause = "calib_inconcluso"
@@ -2689,6 +3025,7 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
                     "verdict": verdict,
                     "cause": cause,
                     "n_shots": n_shots,
+                    "ancla": ancla,
                 }
             )
             w_verdicts.append(verdict)
@@ -2713,6 +3050,7 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
 
     # 2b. T-ropa
     ropa_decisions = {"mochila": None, "mira": None, "silenciador": None}
+    tsesgo_ropa_by_case = {}
     for run in ropa_positive:
         hook_r = run["hook"]
         # Hallazgo 10: sin calibracion valida no se sustituye por k=0 ni focal vertical.
@@ -2729,6 +3067,13 @@ def evaluate(runs_dir, out_dir=None, marcas_dir=None):
         if not calib_ok_r:
             tmarca_ropa = [dict(t, verdict="INCONCLUSO", cause="calib_inconcluso") for t in tmarca_ropa]
         results.extend(tmarca_ropa)
+        # T-sesgo (§17) también en ropa: se acumula por caso como en imagen.
+        tsesgo_ropa_by_case.setdefault(run["caso"], []).append(
+            {"run": run, "marcas": marcas_by_run.get(run["run"], []), "k": k_use,
+             "fov_conv": fov_conv, "calib_ok": calib_ok_r}
+        )
+    for _caso in tsesgo_ropa_by_case:
+        results.extend(_eval_tsesgo_case_rows(tsesgo_ropa_by_case[_caso]))
 
     # 2c. T-suave positiva y acuerdo entre regímenes en t=1/6 s.
     # Hallazgo 15: regimen ausente -> "INCONCLUSO" con causa, nunca null fuera del enum.

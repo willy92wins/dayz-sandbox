@@ -1,0 +1,281 @@
+{
+ "schema": 1,
+ "run": "mount03_Hb",
+ "convencion": "px de la PNG 1920x1080, origen arriba-izquierda, centro del pixel (0,0) en (0.0,0.0); mismo marco que la proyeccion de §2",
+ "marcadores": {
+  "A": "subagente Opus a ciegas (marcador A)",
+  "B": "subagente Opus a ciegas (marcador B)"
+ },
+ "marcas": [
+  {
+   "shot": "f000030.bmp",
+   "png": "f000030.png",
+   "sha256": "f71defa9ba1894ed9a9a3459b9002653118ccd316dc4e039770c1598c371310c",
+   "momento": "estable",
+   "A": {
+    "punto_mira_orejas": [
+     [
+      1232.5,
+      12.0
+     ],
+     [
+      1247.5,
+      13.0
+     ]
+    ],
+    "punto_mira": [
+     1240.0,
+     12.5
+    ]
+   },
+   "B": {
+    "punto_mira_orejas": [
+     [
+      1232.5,
+      11.6
+     ],
+     [
+      1247.0,
+      12.7
+     ]
+    ],
+    "punto_mira": [
+     1239.75,
+     12.15
+    ]
+   },
+   "puntos": {
+    "punto_mira": [
+     1239.875,
+     12.325
+    ]
+   },
+   "diff_max_px": 0.43
+  },
+  {
+   "shot": "f000304.bmp",
+   "png": "f000304.png",
+   "sha256": "c60dffb0381fcb9e3a98ed6d7f2ea514e88b826c075b439b308670067f4b099c",
+   "momento": "giro1",
+   "A": {
+    "punto_mira_orejas": [
+     [
+      1300.5,
+      426.0
+     ],
+     [
+      1318.5,
+      433.0
+     ]
+    ],
+    "punto_mira": [
+     1309.5,
+     429.5
+    ]
+   },
+   "B": {
+    "punto_mira_orejas": [
+     [
+      1302.3,
+      425.8
+     ],
+     [
+      1321.0,
+      433.0
+     ]
+    ],
+    "punto_mira": [
+     1311.65,
+     429.4
+    ]
+   },
+   "puntos": {
+    "punto_mira": [
+     1310.575,
+     429.45
+    ]
+   },
+   "diff_max_px": 2.152
+  },
+  {
+   "shot": "f000904.bmp",
+   "png": "f000904.png",
+   "sha256": "ca3d31c54c4b689ab666aa231c6649b3cc4603fe5e8de6f6ff9cc6aee04cfbef",
+   "momento": "giro2",
+   "A": {
+    "punto_mira_orejas": [
+     [
+      1298.0,
+      421.0
+     ],
+     [
+      1315.0,
+      429.0
+     ]
+    ],
+    "punto_mira": [
+     1306.5,
+     425.0
+    ]
+   },
+   "B": {
+    "punto_mira_orejas": [
+     [
+      1297.5,
+      420.8
+     ],
+     [
+      1316.0,
+      428.5
+     ]
+    ],
+    "punto_mira": [
+     1306.75,
+     424.65
+    ]
+   },
+   "puntos": {
+    "punto_mira": [
+     1306.625,
+     424.825
+    ]
+   },
+   "diff_max_px": 0.43
+  },
+  {
+   "shot": "f001510.bmp",
+   "png": "f001510.png",
+   "sha256": "f638a282d643f4f8dc58a46a0c0161559740999ddc2fb5a3df6f37dc6ff25d26",
+   "momento": "giro3",
+   "A": {
+    "punto_mira_orejas": [
+     [
+      1298.0,
+      420.0
+     ],
+     [
+      1315.5,
+      427.0
+     ]
+    ],
+    "punto_mira": [
+     1306.75,
+     423.5
+    ]
+   },
+   "B": {
+    "punto_mira_orejas": [
+     [
+      1299.0,
+      419.7
+     ],
+     [
+      1316.5,
+      427.0
+     ]
+    ],
+    "punto_mira": [
+     1307.75,
+     423.35
+    ]
+   },
+   "puntos": {
+    "punto_mira": [
+     1307.25,
+     423.425
+    ]
+   },
+   "diff_max_px": 1.011
+  },
+  {
+   "shot": "f001030.bmp",
+   "png": "f001030.png",
+   "sha256": "d4aec894c5f5ed4e902b885fdbb312fd69b3171381c20688f16645cf68f846f5",
+   "momento": "resto",
+   "A": {
+    "punto_mira_orejas": [
+     [
+      969.5,
+      236.0
+     ],
+     [
+      987.5,
+      236.0
+     ]
+    ],
+    "punto_mira": [
+     978.5,
+     236.0
+    ]
+   },
+   "B": {
+    "punto_mira_orejas": [
+     [
+      968.8,
+      235.5
+     ],
+     [
+      987.0,
+      235.5
+     ]
+    ],
+    "punto_mira": [
+     977.9,
+     235.5
+    ]
+   },
+   "puntos": {
+    "punto_mira": [
+     978.2,
+     235.75
+    ]
+   },
+   "diff_max_px": 0.781
+  },
+  {
+   "shot": "f000310.bmp",
+   "png": "f000310.png",
+   "sha256": "b70720626a4c4c86b8890ea7ea8e653dbbf41f95d53545b964dd377f78f2c0bd",
+   "momento": "extra",
+   "A": {
+    "punto_mira_orejas": [
+     [
+      1270.5,
+      408.0
+     ],
+     [
+      1289.0,
+      415.0
+     ]
+    ],
+    "punto_mira": [
+     1279.75,
+     411.5
+    ]
+   },
+   "B": {
+    "punto_mira_orejas": [
+     [
+      1269.8,
+      408.2
+     ],
+     [
+      1288.5,
+      415.0
+     ]
+    ],
+    "punto_mira": [
+     1279.15,
+     411.6
+    ]
+   },
+   "puntos": {
+    "punto_mira": [
+     1279.45,
+     411.55
+    ]
+   },
+   "diff_max_px": 0.608
+  }
+ ]
+}

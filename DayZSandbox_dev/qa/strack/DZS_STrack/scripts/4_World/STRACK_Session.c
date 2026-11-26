@@ -121,6 +121,16 @@ class STRACK_Session
 	protected int m_CaseTick;
 	protected int m_Tramo;
 	protected float m_SmoothS;
+	// r6 (orquestador, 26-nov; tanda corta tras la decision «Vale, con suavizado»). Sin estos argumentos, igual que r5.
+	// -strack_noshots=1: suave sin capturas (las BMP bajaban el fps real: 47 y 116 en vez de 60 y 144).
+	// -strack_smooth_s=<s>: filtro de mount0/mount03 con esa constante (mount03 usa 0,3 si no se da).
+	// -strack_smooth_pos=0: el filtro solo suaviza la orientacion; la posicion queda rigida sobre el arma (en mount03
+	//   r5 la posicion se retrasaba ~0,23 m al andar y la camara se metia detras, en el cuerpo).
+	// -strack_tag=<t>: sufijo del nombre de la corrida.
+	protected bool m_NoShots;
+	protected float m_MountSmoothS;
+	protected bool m_SmoothPos;
+	protected string m_Tag;
 	protected int m_GiroSuave;
 	protected int m_PrevGiroSuave;
 	protected bool m_LataOk;
@@ -220,6 +230,10 @@ class STRACK_Session
 		m_Tramo = 1;
 		m_SpineBone = -1;
 		m_MiraPoint = "";
+		m_NoShots = false;
+		m_MountSmoothS = -1.0;
+		m_SmoothPos = true;
+		m_Tag = "";
 	}
 
 	static bool Running()
@@ -362,6 +376,8 @@ class STRACK_Session
 	{
 		string v;
 		bool fromCli;
+		float giroLento;
+		bool giroAlterno;
 		v = "";
 		fromCli = GetCLIParam("strack", v);
 		if (fromCli)
@@ -392,6 +408,43 @@ class STRACK_Session
 			{
 				m_FpsCap = v.ToInt();
 			}
+			if (GetCLIParam("strack_noshots", v))
+			{
+				if (v == "1")
+				{
+					m_NoShots = true;
+				}
+			}
+			if (GetCLIParam("strack_smooth_s", v))
+			{
+				m_MountSmoothS = v.ToFloat();
+			}
+			if (GetCLIParam("strack_smooth_pos", v))
+			{
+				if (v == "0")
+				{
+					m_SmoothPos = false;
+				}
+			}
+			if (GetCLIParam("strack_tag", v))
+			{
+				m_Tag = v;
+			}
+			giroLento = 1.0;
+			giroAlterno = false;
+			if (GetCLIParam("strack_giro_lento", v))
+			{
+				giroLento = v.ToFloat();
+			}
+			if (GetCLIParam("strack_giro_alterno", v))
+			{
+				if (v == "1")
+				{
+					giroAlterno = true;
+				}
+			}
+			STRACK_Move.Config(giroLento, giroAlterno);
+			Print("[STRACK] r6 noshots=" + m_NoShots.ToString() + " smooth_s=" + m_MountSmoothS.ToString() + " smooth_pos=" + m_SmoothPos.ToString() + " tag=" + m_Tag);
 			Print("[STRACK] args CLI caso=" + m_Caso + " hook=" + m_Hook + " inject=" + m_Inject);
 		}
 		else
@@ -407,6 +460,10 @@ class STRACK_Session
 		if (m_Inject != "none")
 		{
 			m_Run = m_Run + "_" + m_Inject;
+		}
+		if (m_Tag != "")
+		{
+			m_Run = m_Run + "_" + m_Tag;
 		}
 		m_RunOn = true;
 		if (m_Self)
@@ -510,6 +567,16 @@ class STRACK_Session
 			return false;
 		}
 		suave = IsSuave();
+		if (m_NoShots && !suave)
+		{
+			Print("[STRACK] -strack_noshots solo vale en suave");
+			return false;
+		}
+		if (m_MountSmoothS >= 0.0 && m_Caso != "mount0" && m_Caso != "mount03")
+		{
+			Print("[STRACK] -strack_smooth_s solo vale en mount0 y mount03");
+			return false;
+		}
 		if (suave)
 		{
 			if (m_Hook != "Hb")
@@ -1339,12 +1406,12 @@ class STRACK_Session
 		{
 			STRACK_Math.Copy4(raw, used);
 		}
-		if (m_Caso == "mount03")
+		if (MountFiltered())
 		{
 			alpha = 1.0;
 			if (m_FiltOn && m_Dt > 0.0)
 			{
-				alpha = 1.0 - STRACK_Math.Exp(-m_Dt / 0.3);
+				alpha = 1.0 - STRACK_Math.Exp(-m_Dt / MountTau());
 			}
 			if (!m_FiltOn)
 			{
@@ -1354,7 +1421,14 @@ class STRACK_Session
 			else
 			{
 				STRACK_Math.Slerp(m_Filt, used, alpha, filtered);
-				filtered[3] = m_Filt[3] + (used[3] - m_Filt[3]) * alpha;
+				if (m_SmoothPos)
+				{
+					filtered[3] = m_Filt[3] + (used[3] - m_Filt[3]) * alpha;
+				}
+				else
+				{
+					filtered[3] = used[3];
+				}
 				STRACK_Math.Copy4(filtered, m_Filt);
 			}
 			STRACK_Math.Copy4(m_Filt, used);
@@ -1614,6 +1688,24 @@ class STRACK_Session
 		return true;
 	}
 
+	protected bool MountFiltered()
+	{
+		if (m_Caso == "mount03")
+		{
+			return true;
+		}
+		return m_Caso == "mount0" && m_MountSmoothS > 0.0;
+	}
+
+	protected float MountTau()
+	{
+		if (m_MountSmoothS > 0.0)
+		{
+			return m_MountSmoothS;
+		}
+		return 0.3;
+	}
+
 	protected void BuildMount(vector usti, vector konec, vector axes[4], out vector raw[4])
 	{
 		vector camPos;
@@ -1689,6 +1781,10 @@ class STRACK_Session
 		string path;
 		want = false;
 		m_Shot = "";
+		if (m_NoShots)
+		{
+			return;
+		}
 		if (CurrentGiro() > 0)
 		{
 			if ((m_Frame % 2) == 0)
@@ -1870,6 +1966,22 @@ class STRACK_Session
 		if (m_Caso == "ropa")
 		{
 			line = line + ",\"ropa\":" + m_FrozenRopa;
+		}
+		if (MountFiltered())
+		{
+			line = line + ",\"mount_tau_s\":" + STRACK_Math.N(MountTau());
+			if (m_SmoothPos)
+			{
+				line = line + ",\"smooth_pos\":true";
+			}
+			else
+			{
+				line = line + ",\"smooth_pos\":false";
+			}
+		}
+		if (m_NoShots)
+		{
+			line = line + ",\"noshots\":true";
 		}
 		if (IsSuave())
 		{
