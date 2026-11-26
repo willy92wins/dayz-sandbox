@@ -688,8 +688,8 @@ export default function App() {
   const aiText = aiLightText(st.sinBackend, co, now);
   const aiAge = aiAgeNow(co.view, now);
   const aiDot = aiText === "IA en pausa" || aiText === "IA editando" || aiText === "IA conectada";
-  const canUndo = co.view ? co.view.canUndo : true;
-  const canRedo = co.view ? co.view.canRedo : true;
+  const canUndo = co.view ? co.view.canUndo : false;
+  const canRedo = co.view ? co.view.canRedo : false;
   const docName = st.doc?.name ?? (st.docInfo ? "Escena" : "Sin escena");
   const lastObservedRevs = st.rows
     .filter((r) => r.state === "observado" && typeof r.rev === "number")

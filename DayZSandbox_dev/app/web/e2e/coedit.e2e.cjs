@@ -12,7 +12,7 @@ if (!BASE || !HUMAN_KEY) {
 }
 
 // C7 va primero: necesita las pilas de la persona vacías, y el almacén dura toda la corrida.
-const ROW_ORDER = ["C7", "C1", "C2", "C3", "C4", "C5", "C6", "C8"];
+const ROW_ORDER = ["C7", "C1", "C2", "C3", "C4", "C5", "C6", "C8", "C9"];
 function resolveSelectedRows() {
   const raw = process.env.DSBX_ONLY;
   if (!raw || !raw.trim()) return ROW_ORDER.slice();
@@ -81,12 +81,19 @@ async function freshBackend() {
   }
 }
 
-async function openStudio(browser) {
+async function openStudio(browser, before, noSse = false) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, colorScheme: "dark" });
+  if (before) await before(context);
   const page = await context.newPage();
   track(page);
   await page.goto(BASE + "/");
-  await login(context, page);
+  if (noSse) {
+    // Sin SSE nunca dice «Conectado»: basta con el estudio a la vista, como en C6.
+    await login(context, page).catch(() => {});
+    await page.locator('[data-testid="barra-superior"]').waitFor({ state: "visible", timeout: 10000 });
+  } else {
+    await login(context, page);
+  }
   return { context, page };
 }
 
@@ -104,6 +111,49 @@ async function login(context, page) {
   await page.getByText("Conectado", { exact: true }).waitFor({ state: "visible", timeout: 15000 });
   await page.locator('[data-testid="luz-ia"]').waitFor({ state: "visible", timeout: 5000 });
   await rememberSecrets(context, page);
+}
+
+// C8 (W2-09): el almacenamiento se audita en cada contexto, tras sus acciones y antes de cerrarlo.
+const storageLeaks = [];
+async function closeAudited(context) {
+  for (const page of context.pages()) {
+    await rememberSecrets(context, page);
+    const store = await page
+      .evaluate(() => ({
+        local: Object.keys(localStorage).filter((k) => k !== "csrf").map((k) => localStorage.getItem(k)),
+        session: Object.keys(sessionStorage).map((k) => sessionStorage.getItem(k)),
+      }))
+      .catch(() => ({ local: [], session: [] }));
+    const secrets = [HUMAN_KEY, ...seenCookies, ...seenCsrf];
+    if ([...store.local, ...store.session].some((v) => secrets.some((x) => x && v && v.includes(x)))) {
+      storageLeaks.push(page.url());
+    }
+  }
+  await context.close();
+}
+
+// Retiene las respuestas de una ruta: la petición llega al backend en su momento, la respuesta
+// se entrega al soltar. Con first, solo la primera petición tras armarlo.
+async function hold(target, pattern, first = false) {
+  const h = { held: [], seen: 0, open: false };
+  const fn = async (route) => {
+    if (h.open || (first && h.seen > 0)) return route.continue();
+    h.seen += 1;
+    const resp = await route.fetch();
+    h.held.push(() => route.fulfill({ response: resp }));
+  };
+  await target.route(pattern, fn);
+  h.waitHeld = async (desc, timeoutMs = 7000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (h.held.length === 0 && Date.now() < deadline) await sleep(50);
+    assert(h.held.length > 0, "timeout (" + desc + "): no llegó la petición retenida");
+  };
+  h.release = async () => {
+    h.open = true;
+    for (const f of h.held.splice(0)) await f();
+    await target.unroute(pattern, fn);
+  };
+  return h;
 }
 
 async function activatePanel(page, panelId) {
@@ -193,7 +243,7 @@ async function C1(browser) {
     await waitText(light(page), /^IA · sin datos$/, "C1(-): sin backend", 12000);
     assert((await cmd({ cmd: "start_backend" })).ok, "C1: start_backend");
   } finally {
-    await context.close();
+    await closeAudited(context);
   }
 }
 
@@ -207,10 +257,16 @@ async function C2(browser) {
     // Negativo primero: sin optimismo
     const fake = async (route) => route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true,"paused":true}' });
     await page.route("**/api/ai/pause", fake);
+    // La lectura autoritativa queda retenida: si la web copiara la respuesta del POST, se vería ya (W2-08).
+    const reads = await hold(page, "**/api/coedit");
     await iaPanel(page).getByRole("button", { name: "Pausar IA" }).click();
-    await sleep(3000);
+    await reads.waitHeld("C2(-): lectura tras el POST");
+    await sleep(500);
     assert(!/en pausa/.test(await light(page).innerText()), "C2(-): la luz dice «en pausa» con la respuesta falsa (Yf)");
     assert(!/en pausa/.test(await iaPanel(page).innerText()), "C2(-): la pestaña dice «en pausa» con la respuesta falsa");
+    await reads.release();
+    await sleep(1000);
+    assert(!/en pausa/.test(await light(page).innerText()), "C2(-): «en pausa» tras la lectura autoritativa");
     await page.unroute("**/api/ai/pause", fake);
 
     const btn = iaPanel(page).getByRole("button", { name: "Pausar IA" });
@@ -238,7 +294,7 @@ async function C2(browser) {
     assert(await iaPanel(page).getByRole("button", { name: /IA$/ }).isDisabled(), "C2(-): el botón sigue activo sin backend");
     assert((await cmd({ cmd: "start_backend" })).ok, "C2: start");
   } finally {
-    await context.close();
+    await closeAudited(context);
   }
 }
 
@@ -266,11 +322,16 @@ async function C3(browser) {
 
     // Positivo: propuesta de la IA y aprobar
     s = await cmd({ cmd: "snapshot" });
+    // Se cuenta desde antes de proponer: cero envíos y cero filas hasta el clic (W2-07).
+    const posts = countPosts(page, "/api/apply");
+    const opsBefore = await cmd({ cmd: "count_ops" });
     assert((await cmd({ cmd: "ai_apply_request", rev: s.rev, hash: s.hash })).status === 200, "C3: ai_apply_request");
     await card.waitFor({ state: "visible", timeout: 5000 });
     assert((await card.innerText()).includes("revisión " + s.rev), "C3(+): la tarjeta no dice la revisión");
     assert((await applyButtons(page)) === 1, "C3(-): más de un botón empieza por «Aplicar» (Yi)");
-    const posts = countPosts(page, "/api/apply");
+    await sleep(1000);
+    assert(posts.n === 0, "C3(-): POST /api/apply sin aprobar: " + posts.n);
+    assert((await cmd({ cmd: "count_ops" })).n === opsBefore.n, "C3(-): una fila nueva sin aprobar");
     await card.getByRole("button", { name: "Aprobar y aplicar rev " + s.rev }).click();
     const deadline = Date.now() + 5000;
     while (posts.n === 0 && Date.now() < deadline) await sleep(50);
@@ -322,7 +383,7 @@ async function C3(browser) {
     page.off("request", onReq);
     assert((await card.count()) === 0 && any.n === 0, "C3(-): Descartar dejó la tarjeta o mandó peticiones");
   } finally {
-    await context.close();
+    await closeAudited(context);
   }
 }
 
@@ -395,7 +456,7 @@ async function C4(browser) {
     const safe = await domSafe(page);
     assert(safe.imgs === 0 && safe.x === "undefined", "C4(-): HTML de la etiqueta insertado: " + JSON.stringify(safe));
   } finally {
-    await context.close();
+    await closeAudited(context);
   }
 }
 
@@ -429,7 +490,7 @@ async function C5(browser) {
     await sleep(10500);
     assert((await page.locator("[data-ia-reciente]").count()) === 0, "C5(+): la marca no caduca a los 10 s (Ym)");
   } finally {
-    await context.close();
+    await closeAudited(context);
   }
 }
 
@@ -491,7 +552,7 @@ async function C6(browser) {
     await hist().locator('[data-batch="' + late.batch + '"]').waitFor({ state: "visible", timeout: 5000 });
     await page.unroute("**/api/events", cut);
   } finally {
-    await context.close();
+    await closeAudited(context);
   }
 }
 
@@ -539,7 +600,7 @@ async function C7(browser) {
     await waitForSnap((s) => !s.doc.entities.some((e) => e.name === "Barril c7"), "C7(-): deshacer la de antes");
     await waitDisabled(undoBtn, true, "C7(-): Deshacer activo sin nada que deshacer");
   } finally {
-    await context.close();
+    await closeAudited(context);
   }
 }
 
@@ -552,21 +613,140 @@ async function C8(browser) {
     await activatePanel(page, "ia");
     await activatePanel(page, "historial");
     await rememberSecrets(context, page);
-    const store = await page.evaluate(() => ({
-      local: Object.keys(localStorage).filter((k) => k !== "csrf").map((k) => localStorage.getItem(k)),
-      session: Object.keys(sessionStorage).map((k) => sessionStorage.getItem(k)),
-    }));
-    const secrets = [HUMAN_KEY, ...seenCookies, ...seenCsrf];
-    assert(
-      ![...store.local, ...store.session].some((v) => secrets.some((s) => s && v && v.includes(s))),
-      "C8(-): un secreto en el almacenamiento"
-    );
   } finally {
-    await context.close();
+    await closeAudited(context);
   }
 }
 
-const RUNNERS = { C1, C2, C3, C4, C5, C6, C7, C8 };
+// --- C9 carreras y huecos del Historial (Sol R21: W2-01 a W2-06) -----------------------------------
+async function C9(browser) {
+  await freshBackend();
+  const eid = await addEntity("Barril c9", 6900, 6900, "human_ops");
+  const first = await cmd({ cmd: "ai_ops", label: "IA c9 antes", ops: [{ name: "entity.move", target: eid, args: { x: 6901, z: 6901 } }] });
+  assert(first.ok, "C9: ai_ops antes");
+  const hist = (page) => page.locator('[data-panel="historial"]');
+  const bar = (page) => page.locator('[data-testid="barra-superior"]');
+
+  // W2-05 y W2-01: /api/coedit retenido al entrar; llega una tanda antes de cargar el Historial.
+  let reads = null;
+  let ctx = await openStudio(browser, async (context) => {
+    reads = await hold(context, "**/api/coedit");
+  });
+  try {
+    const { page } = ctx;
+    await reads.waitHeld("C9: primera lectura de coedición");
+    const undoBtn = bar(page).locator("button", { hasText: /^Deshacer\b/ }).first();
+    const redoBtn = bar(page).locator("button", { hasText: /^Rehacer\b/ }).first();
+    assert(await undoBtn.isDisabled(), "C9(-): Deshacer activo sin conocer las pilas (W2-05)");
+    assert(await redoBtn.isDisabled(), "C9(-): Rehacer activo sin conocer las pilas (W2-05)");
+    const mid = await cmd({ cmd: "ai_ops", label: "IA c9 durante", ops: [{ name: "entity.move", target: eid, args: { x: 6902, z: 6902 } }] });
+    assert(mid.ok, "C9: ai_ops durante");
+    await activatePanel(page, "historial");
+    await hist(page).locator('[data-batch="' + mid.batch + '"]').waitFor({ state: "visible", timeout: 5000 });
+    await reads.release();
+    await hist(page).locator('[data-batch="' + first.batch + '"]').waitFor({ state: "visible", timeout: 5000 }).catch(() => {
+      throw new Error("C9(-): falta la tanda de antes tras un evento aislado (W2-01)");
+    });
+  } finally {
+    await closeAudited(ctx.context);
+  }
+
+  // W2-04: una lectura vieja que llega tarde no pisa la nueva.
+  ctx = await openStudio(browser);
+  try {
+    const { page } = ctx;
+    await waitText(light(page), /^(MCP apagado|IA conectada|IA inactiva)$/, "C9: luz inicial");
+    const old = await hold(page, "**/api/coedit", true);
+    await old.waitHeld("C9: lectura periódica", 8000);
+    const pr = await page.evaluate(async () => {
+      const r = await fetch("/api/ai/pause", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": localStorage.getItem("csrf") || "" },
+        body: JSON.stringify({ paused: true }),
+      });
+      return r.status;
+    });
+    assert(pr === 200, "C9: pausa " + pr);
+    await waitText(light(page), /^IA en pausa$/, "C9(+): pausa leída");
+    await old.release();
+    await sleep(1000);
+    assert(/^IA en pausa$/.test((await light(page).innerText()).trim()), "C9(-): una lectura vieja pisó la pausa (W2-04)");
+  } finally {
+    await closeAudited(ctx.context);
+  }
+  assert((await cmd({ cmd: "stop_backend" })).ok && (await cmd({ cmd: "start_backend" })).ok, "C9: reinicio sin pausa");
+
+  // W2-06: el éxito de aprobar N no borra la propuesta N+1 que llegó mientras.
+  ctx = await openStudio(browser);
+  try {
+    const { page } = ctx;
+    const card = page.locator('[data-testid="propuesta-ia"]');
+    await activatePanel(page, "ia");
+    const s = await cmd({ cmd: "snapshot" });
+    assert((await cmd({ cmd: "ai_apply_request", rev: s.rev, hash: s.hash })).status === 200, "C9: propuesta N");
+    await card.waitFor({ state: "visible", timeout: 5000 });
+    const ap = await hold(page, "**/api/apply", true);
+    await card.getByRole("button", { name: "Aprobar y aplicar rev " + s.rev }).click();
+    await ap.waitHeld("C9: aprobar N");
+    assert((await cmd({ cmd: "ai_apply_request", rev: s.rev, hash: s.hash })).status === 200, "C9: propuesta N+1");
+    await sleep(800);
+    await ap.release();
+    await sleep(1000);
+    assert((await card.count()) === 1, "C9(-): el éxito de N borró la propuesta N+1 (W2-06)");
+  } finally {
+    await closeAudited(ctx.context);
+  }
+
+  // W2-02: ante stale_base se recupera lo que el backend todavía guarda.
+  ctx = await openStudio(browser, async (context) => {
+    await context.route("**/api/events", (route) => route.abort());
+  }, true);
+  try {
+    const { page } = ctx;
+    await activatePanel(page, "historial");
+    await hist(page).locator('[data-batch="' + first.batch + '"]').waitFor({ state: "visible", timeout: 8000 });
+    let faked = 0;
+    const stale = async (route) => {
+      if (faked > 0) return route.continue();
+      faked += 1;
+      return route.fulfill({ status: 409, contentType: "application/json", body: '{"ok":false,"code":"stale_base","pointer":"/since_rev","msg":"fuera"}' });
+    };
+    await page.route("**/api/scene/changes*", stale);
+    const late = await cmd({ cmd: "ai_ops", label: "IA c9 tras hueco", ops: [{ name: "entity.move", target: eid, args: { x: 6903, z: 6903 } }] });
+    assert(late.ok, "C9: ai_ops tras hueco");
+    const deadline = Date.now() + 5000;
+    while (faked === 0 && Date.now() < deadline) await sleep(50);
+    assert(faked === 1, "C9: no llegó la lectura con stale_base");
+    await hist(page).locator('[data-batch="' + late.batch + '"]').waitFor({ state: "visible", timeout: 8000 }).catch(() => {
+      throw new Error("C9(-): tras stale_base no se recuperó la tanda disponible (W2-02)");
+    });
+  } finally {
+    await closeAudited(ctx.context);
+  }
+
+  // W2-03: más de 200 tandas guardadas: el Historial las trae todas.
+  await freshBackend();
+  const big = await cmd({ cmd: "ai_ops", label: "IA c9 primera", ops: [addOp("Barril c9 primero", 6950, 6950)] });
+  assert(big.ok, "C9: primera tanda");
+  for (let i = 0; i < 205; i += 1) {
+    const r = await cmd({ cmd: "ai_ops", label: "IA c9 n" + i, ops: [{ name: "entity.move", target: big.created[0], args: { x: 6951 + i, z: 6950 } }] });
+    assert(r.ok, "C9: tanda " + i + ": " + JSON.stringify(r));
+  }
+  ctx = await openStudio(browser);
+  try {
+    const { page } = ctx;
+    await activatePanel(page, "historial");
+    const snap = await cmd({ cmd: "snapshot" });
+    await hist(page).locator('[data-batch="b-' + snap.rev + '"]').waitFor({ state: "visible", timeout: 8000 });
+    const n = await hist(page).locator("[data-batch]").count();
+    assert((await hist(page).locator('[data-batch="' + big.batch + '"]').count()) === 1, "C9(-): Historial recortado: " + n + " filas, falta la primera de 206 (W2-03)");
+  } finally {
+    await closeAudited(ctx.context);
+  }
+}
+
+const RUNNERS = { C1, C2, C3, C4, C5, C6, C7, C8, C9 };
 
 async function main() {
   const rows = resolveSelectedRows();
@@ -576,6 +756,7 @@ async function main() {
       await RUNNERS[id](browser);
       console.log(id + " OK");
     }
+    assert(storageLeaks.length === 0, "C8(-): un secreto en el almacenamiento de " + storageLeaks.join(", "));
     assert(externalRequests.length === 0, "C8(-): peticiones externas: " + externalRequests.join(", "));
     assert(pageErrors.length === 0, "C8(-): errores de JS: " + pageErrors.join(" | "));
     assert(

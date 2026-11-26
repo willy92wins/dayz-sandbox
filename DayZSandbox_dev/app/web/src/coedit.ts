@@ -49,7 +49,6 @@ export interface CoeditState {
 export const AI_FRESH_MS = 10000;
 export const AI_EDITING_MS = 3000;
 export const AI_ACTIVE_MS = 35000;
-const HISTORY_WINDOW = 200;
 
 function initial(): CoeditState {
   return {
@@ -69,7 +68,9 @@ function initial(): CoeditState {
 
 let cs: CoeditState = initial();
 const listeners = new Set<() => void>();
-let knownRev = -1; // la mayor rev ya cubierta por el historial
+// Historial completo hasta esta rev. Un scene.commit suelto no lo mueve salvo que sea la siguiente
+// (Sol R21 W2-01): si no, queda un tramo sin pedir.
+let coveredRev = -1;
 
 function set(patch: Partial<CoeditState> | ((prev: CoeditState) => Partial<CoeditState>)) {
   const p = typeof patch === 'function' ? patch(cs) : patch;
@@ -91,8 +92,14 @@ export function useCoedit(): CoeditState {
   );
 }
 
+// Cada lectura de /api/coedit lleva su número; una respuesta más vieja que la ya pintada no cuenta
+// (Sol R21 W2-04). Al reiniciar, las que estén en vuelo quedan viejas.
+let coeditSeq = 0;
+let coeditApplied = 0;
+
 export function resetCoedit(): void {
-  knownRev = -1;
+  coveredRev = -1;
+  coeditApplied = coeditSeq;
   cs = initial();
   for (const l of listeners) l();
 }
@@ -111,6 +118,7 @@ function isAuthFailure(status: number, data: { code?: string } | null): boolean 
 // --- lecturas -------------------------------------------------------------
 
 export async function refreshCoedit(): Promise<void> {
+  const seq = ++coeditSeq;
   try {
     const res = await fetch('/api/coedit', { credentials: 'same-origin' });
     if (res.status === 401) {
@@ -126,7 +134,8 @@ export async function refreshCoedit(): Promise<void> {
       can_redo?: boolean;
       history_since?: number;
     } | null;
-    if (!d) return;
+    if (!d || seq <= coeditApplied) return;
+    coeditApplied = seq;
     set({
       view: {
         paused: d.paused === true,
@@ -152,24 +161,43 @@ function mergeBatches(recs: BatchRecord[]): void {
     const batches = [...byId.values()].sort((a, b) => a.rev - b.rev);
     return { batches };
   });
-  for (const r of recs) if (typeof r.rev === 'number' && r.rev > knownRev) knownRev = r.rev;
 }
 
 let historyInFlight = false;
+let historyAgain = false;
+let wantRev = -1;
 
-export async function loadHistory(): Promise<void> {
-  if (historyInFlight) return;
+// Una sola lectura a la vez; lo que se pida mientras tanto se lee al acabar.
+export async function loadHistory(minRev = -1): Promise<void> {
+  if (minRev > wantRev) wantRev = minRev;
+  if (historyInFlight) {
+    historyAgain = true;
+    return;
+  }
   historyInFlight = true;
   try {
+    do {
+      historyAgain = false;
+      await loadHistoryOnce();
+    } while (historyAgain);
+  } finally {
+    historyInFlight = false;
+  }
+}
+
+async function loadHistoryOnce(): Promise<void> {
+  try {
     // La primera vez hace falta saber desde dónde guarda tandas el backend (history_since).
-    if (knownRev < 0) await refreshCoedit();
+    if (coveredRev < 0) await refreshCoedit();
     const info = getState().docInfo;
-    if (!info || knownRev >= info.rev) return;
+    if (!info) return;
+    if (coveredRev >= 0 && coveredRev >= Math.max(info.rev, wantRev)) return;
+    const knownRev = coveredRev;
     const floor = cs.view ? cs.view.historySince : 0;
     // La rev 1 es el documento de partida, sin tanda: solo falta algo si el suelo es mayor.
     if (knownRev < 0 && floor > 1) set({ historyGap: true });
-    const since =
-      knownRev >= 0 ? knownRev : Math.max(floor, info.rev - HISTORY_WINDOW, 0);
+    // Desde el suelo: todas las tandas que el backend guarda, sin ventana (Sol R21 W2-03).
+    const since = knownRev >= 0 ? knownRev : Math.max(floor, 0);
     const res = await fetch(`/api/scene/changes?since_rev=${since}&timeout_s=0`, {
       credentials: 'same-origin',
     });
@@ -187,16 +215,20 @@ export async function loadHistory(): Promise<void> {
     if (!d) return;
     if (d.ok && Array.isArray(d.batches)) {
       mergeBatches(d.batches);
-      if (typeof d.rev === 'number' && d.rev > knownRev) knownRev = d.rev;
+      if (typeof d.rev === 'number' && d.rev > coveredRev) coveredRev = d.rev;
     } else if (d.code === 'stale_base') {
-      // Lo de antes ya no está: se sigue desde la revisión actual con la nota de §4.4.
-      if (info.rev > knownRev) knownRev = info.rev;
+      // Lo de antes ya no está (nota de §4.4), pero lo que el backend aún guarda se pide desde su
+      // suelo (Sol R21 W2-02). Si ya se pidió desde el suelo, se sigue desde la revisión actual.
       set({ historyGap: true });
+      if (knownRev >= 0) {
+        coveredRev = -1;
+        historyAgain = true;
+      } else if (info.rev > coveredRev) {
+        coveredRev = info.rev;
+      }
     }
   } catch {
     markBackendDown();
-  } finally {
-    historyInFlight = false;
   }
 }
 
@@ -205,6 +237,10 @@ export async function loadHistory(): Promise<void> {
 export function onCommitEvent(rec: BatchRecord): void {
   if (!rec || typeof rec.batch !== 'string') return;
   mergeBatches([rec]);
+  if (typeof rec.rev === 'number') {
+    if (coveredRev >= 0 && rec.rev === coveredRev + 1) coveredRev = rec.rev;
+    else if (rec.rev > coveredRev) void loadHistory(rec.rev);
+  }
   if (rec.author?.role === 'ai') {
     const now = performance.now();
     const touched: Record<string, number> = {};
@@ -384,6 +420,8 @@ export async function approveProposal(): Promise<void> {
       handleSessionExpired();
       return;
     }
+    // Si mientras tanto llegó otra propuesta, esta respuesta no la toca (Sol R21 W2-06).
+    if (cs.proposal !== p) return;
     if (res.ok) {
       set({ proposal: null });
     } else {

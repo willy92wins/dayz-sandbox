@@ -23,10 +23,10 @@ sys.path.insert(0, str(ROOT))
 from app.backend.server import AI, HUMAN, Backend, now_ms  # noqa: E402
 from app.backend.store import Store  # noqa: E402
 
-# F6-web parte 2 §8.2: DSBX_GUION=coedit corre coedit.e2e.cjs con sus filas C1-C8.
+# F6-web parte 2 §8.2: DSBX_GUION=coedit corre coedit.e2e.cjs con sus filas C1-C9.
 GUION = os.environ.get("DSBX_GUION") or "studio"
 if GUION == "coedit":
-    ALL_ROWS = ["C%d" % i for i in range(1, 9)]
+    ALL_ROWS = ["C%d" % i for i in range(1, 10)]
     SCRIPT = "coedit.e2e.cjs"
 else:
     ALL_ROWS = ["S%d" % i for i in range(1, 13)]
