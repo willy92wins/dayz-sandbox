@@ -86,8 +86,11 @@ Decisiones de hilo (documentadas por el hallazgo 13 de RONDA2):
   deja la orden del bridge en `terminal` (C-02).
 """
 import copy
+import math
 import time
 
+from app.backend.actor_judge import judge_identity
+from app.backend.actor_wire import valid_actor_read
 from app.backend.scene_plan import (
     check_apply_predicate,
     evaluate_compensation_predicate,
@@ -101,6 +104,13 @@ from app.backend.scene_plan import (
 # Contrato v1.3 (brief de F2-partida §3.5, P-01): la marca `args.f2 == 1` solo cuenta en
 # estos verbos. `state.read` nunca es una orden F2 en el backend, lleve o no `f2`.
 F2_VERBS = ("scene.apply", "scene.reset", "scene.observe")
+# F3-offline-2 §4: los verbos de actor van siempre como ordenes internas con la marca F2.
+ACTOR_VERBS = ("actor.apply", "actor.reset", "actor.observe")
+F2_VERBS = F2_VERBS + ACTOR_VERBS
+# §4.2: motivo de la operacion segun el primer actor que no da `ok`.
+_ACTOR_STAGE_REASON = {"no_cumple": "actor_no_cumple", "rechazado": "actor_rechazado",
+                       "error": "actor_error"}
+_ACTOR_POS_TOL_MM = 500
 # §3.3 v1.3: `if_pending` va siempre (DP-2); vacio es un reset normal.
 EMPTY_IF_PENDING = {"session": "", "op_id": ""}
 
@@ -245,6 +255,13 @@ class SceneLive:
         self._observe_now_op_id = None
         self._observation = None
         self._observation_mono = None
+        # F3-offline-2 §4-§5: etapa de actores por operacion, veredicto de la escena en
+        # el reset y la ultima lectura de actores.
+        self._stage = {}
+        self._reset_verdict = {}
+        self._actor_observe_op_id = None
+        self._actor_observation = None
+        self._actor_observation_mono = None
 
     # --- D1 y D4: capacidades del peer servidor y catalogo ----------------
 
@@ -354,6 +371,7 @@ class SceneLive:
             world_size=self._world_size_locked(),
             op_id="op-%d" % (self.backend._op_n + 1),
             conn=conn,
+            actor_engine=self._actor_engine_locked(),
         )
 
     def _new_api_op(self, op_id, rev, hash_, verb=None):
@@ -378,12 +396,23 @@ class SceneLive:
         self.backend._emit("op.state", dict(op))
         return op_id, op, True
 
-    def enqueue_apply_locked(self, op_id, plan, expectation=None):
-        """Encola una orden F2 `scene.apply` con `plan` y `expectation` (D11)."""
+    def enqueue_apply_locked(self, op_id, plan, expectation=None, actor_orders=None):
+        """Encola una orden F2 `scene.apply` con `plan` y `expectation` (D11).
+
+        F3-offline-2 §4.1: `actor_orders` (o la clave de la respuesta de validacion)
+        se guarda en la orden para la etapa de actores.
+        """
         if isinstance(plan, dict) and "plan" in plan and "ok" in plan:
             if expectation is None:
                 expectation = plan.get("expectation")
+            if actor_orders is None:
+                actor_orders = plan.get("actor_orders")
             plan = plan["plan"]
+        actor_orders = list(actor_orders or [])
+        if actor_orders and self._actor_engine_locked() != "expansion":
+            # C5 (§3): la capacidad se perdio entre validar y encolar.
+            return False, self._error("expansion_unavailable", 422,
+                                      "El servidor ya no tiene motor de actores")
         if not self.server_has_scene_locked():
             return False, self._error("scene_unsupported", 409, "El servidor presentado no soporta escena F2")
         if not isinstance(plan, dict) or not isinstance(expectation, dict):
@@ -401,6 +430,7 @@ class SceneLive:
             return False, self._error("wire_cap_exceeded", 500, "La orden no cabe en el cable")
         order["f2"] = True
         order["expectation"] = copy.deepcopy(expectation)
+        order["actor_orders"] = copy.deepcopy(actor_orders)
         return True, order
 
     def _scene_queue_len_locked(self):
@@ -458,6 +488,35 @@ class SceneLive:
         self._observe_now_op_id = order["op_id"]
         return {"ok": True, "read_id": order["op_id"]}
 
+    def request_actor_observe_locked(self, doc_id):
+        """F3-offline-2 §5: lectura interna `actor.observe`, una sola en vuelo."""
+        snap = self.backend.store.snapshot()
+        if doc_id != snap["doc_id"]:
+            return self._error("doc_changed", 409, "documento distinto", "/doc_id")
+        if self._actor_engine_locked() != "expansion":
+            return self._error("expansion_unavailable", 409, "El servidor no tiene motor de actores")
+        if self._actor_observe_op_id is not None:
+            active = self.bridge.orders.get((self.bridge.session, self._actor_observe_op_id))
+            if active is not None and active.get("bstate") in ("pendiente", "ejecutando"):
+                return {"ok": True, "read_id": active["op_id"]}
+            self._actor_observe_op_id = None
+        ok, order = self.bridge.enqueue_order(
+            "actor.observe", {"f2": 1, "doc_id": doc_id}, internal=True)
+        if not ok:
+            return self._error("wire_cap_exceeded", 500, "La orden no cabe en el cable")
+        order["f2"] = True
+        order["purpose"] = "actor_observe"
+        self._actor_observe_op_id = order["op_id"]
+        return {"ok": True, "read_id": order["op_id"]}
+
+    def actor_observation_locked(self):
+        """F3-offline-2 §5: ultima foto de actores valida y su `age_ms` (o null)."""
+        if self._actor_observation is None or self._actor_observation_mono is None:
+            return {"ok": True, "observation": None, "age_ms": None}
+        age_ms = int((self.bridge._now() - self._actor_observation_mono) * 1000)
+        return {"ok": True, "observation": copy.deepcopy(self._actor_observation),
+                "age_ms": age_ms}
+
     def observation_locked(self):
         """Devuelve la ultima observacion `now` y su `age_ms` medido con el reloj del bridge (§4.2)."""
         if self._observation is None or self._observation_mono is None:
@@ -498,6 +557,9 @@ class SceneLive:
         if not self.is_f2_order(order):
             return False
         verb = order.get("verb")
+        if verb in ACTOR_VERBS:
+            # §4: la foto de actor la juzga SceneLive; el bridge no la corta.
+            return isinstance(read, dict)
         args = order.get("args") or {}
         require_obs = None
         if verb == "scene.apply":
@@ -565,12 +627,12 @@ class SceneLive:
             self.backend.set_op_state(op_id, "aplicado", "servidor", None)
             if verb == "scene.apply":
                 if _apply_predicate(order, read, wsize):
-                    self.backend.set_op_state(op_id, "observado", "servidor", None)
+                    self._close_apply_ok_locked(order, None)
                 else:
                     self.backend.set_op_state(op_id, "fallido", "servidor", "lectura_no_cumple")
             elif verb == "scene.reset":
                 st, rsn = _reset_predicate(order, read, wsize)
-                self.backend.set_op_state(op_id, st, "servidor", rsn)
+                self._close_reset_locked(order, st, rsn)
         elif status == "rejected":
             order["bstate"] = "terminal"
             # A14: un rechazo no toca last, pending, generation ni retained.
@@ -592,6 +654,21 @@ class SceneLive:
         verb = order.get("verb")
         args = order.get("args") or {}
         wsize = self._world_size_locked()
+
+        purpose = order.get("purpose")
+        if purpose == "actor_stage":
+            self._on_actor_stage_result_locked(order, status, read, wsize)
+            return
+        if purpose == "actor_reset":
+            self._on_actor_reset_result_locked(order, status, read, wsize)
+            return
+        if purpose == "actor_observe":
+            if self._actor_observe_op_id == order.get("op_id"):
+                self._actor_observe_op_id = None
+            if status == "done" and valid_actor_read(read, world_size=wsize):
+                self._actor_observation = copy.deepcopy(read)
+                self._actor_observation_mono = self.bridge._now()
+            return
 
         if verb == "scene.observe" and args.get("at") == "now":
             if self._observe_now_op_id == order.get("op_id"):
@@ -633,7 +710,7 @@ class SceneLive:
             if gen.get("session") != target.get("session") or gen.get("op_id") != target.get("op_id"):
                 return
             if _apply_predicate(target, read, wsize):
-                self.backend.set_op_state(target["op_id"], "observado", "servidor", "reconciliada")
+                self._close_apply_ok_locked(target, "reconciliada")
             else:
                 self.backend.set_op_state(target["op_id"], "fallido", "servidor", "lectura_no_cumple")
             target["bstate"] = "terminal"
@@ -662,6 +739,152 @@ class SceneLive:
             if st in ("parcial", "fallido"):
                 self.backend.set_op_state(target["op_id"], st, "servidor", rsn)
                 target["bstate"] = "terminal"
+
+    # --- Etapa de actores (F3-offline-2 §4) ----------------------------------
+
+    def _actor_engine_locked(self):
+        srv = self.bridge.peers.get("server")
+        return srv.get("actor_engine") if isinstance(srv, dict) else None
+
+    def _actor_guard_locked(self, epoch):
+        """Guarda comun (§4): None si se puede encolar una orden de actor; si no, el motivo."""
+        srv = self.bridge.peers.get("server")
+        if not isinstance(srv, dict) or srv.get("lost"):
+            return "conexion_perdida"
+        if srv.get("epoch") != epoch:
+            return "mundo_reiniciado"
+        if srv.get("actor_engine") != "expansion":
+            return "expansion_unavailable"
+        return None
+
+    def _close_apply_ok_locked(self, order, reason):
+        """Cierre unico del apply con el predicado cumplido (§4.1): directo o reconciliado."""
+        op_id = order["op_id"]
+        actor_orders = order.get("actor_orders") or []
+        if not actor_orders:
+            self.backend.set_op_state(op_id, "observado", "servidor", reason)
+            return
+        if self.backend.ops[op_id]["state"] != "aplicado":
+            self.backend.set_op_state(op_id, "aplicado", "servidor", None)
+        guard = self._actor_guard_locked(order.get("epoch"))
+        if guard is not None:
+            self.backend.set_op_state(op_id, "parcial", "backend", guard)
+            return
+        stage = {"reason": reason, "lids": {a["a_lid"]: None for a in actor_orders}, "closed": False}
+        self._stage[op_id] = stage
+        for args in actor_orders:
+            ok, internal = self.bridge.enqueue_order("actor.apply", copy.deepcopy(args), internal=True)
+            if not ok:
+                stage["closed"] = True
+                self.backend.set_op_state(op_id, "parcial", "servidor", "actor_error")
+                return
+            internal["f2"] = True
+            internal["purpose"] = "actor_stage"
+            internal["parent_op"] = op_id
+
+    def _actor_verdict(self, args, status, read, wsize):
+        """§4.2: `ok`, `no_cumple`, `rechazado` o `error` de un `actor.apply`."""
+        if status == "rejected":
+            return "rechazado"
+        if status != "done":
+            return "error"
+        if not valid_actor_read(read, world_size=wsize) or len(read["actors"]) != 1:
+            return "no_cumple"
+        row = read["actors"][0]
+        if row[0] != args.get("a_lid"):
+            return "no_cumple"
+        expected = {"cls": args.get("a_cls"), "items": args.get("a_items")}
+        if judge_identity(expected, row)["verdict"] != "PASA":
+            return "no_cumple"
+        dist = math.hypot(row[2] - args.get("a_x_mm"), row[4] - args.get("a_z_mm"))
+        if not dist < _ACTOR_POS_TOL_MM:
+            return "no_cumple"
+        return "ok"
+
+    def _on_actor_stage_result_locked(self, order, status, read, wsize):
+        op_id = order.get("parent_op")
+        stage = self._stage.get(op_id)
+        op = self.backend.ops.get(op_id)
+        if stage is None or stage["closed"] or op is None or op["state"] != "aplicado":
+            return  # resultado tardio: se acusa y no cambia nada
+        args = order.get("args") or {}
+        verdict = self._actor_verdict(args, status, read, wsize)
+        if verdict != "ok":
+            stage["closed"] = True
+            self.backend.set_op_state(op_id, "parcial", "servidor", _ACTOR_STAGE_REASON[verdict])
+            return
+        stage["lids"][args.get("a_lid")] = "ok"
+        if all(v == "ok" for v in stage["lids"].values()):
+            stage["closed"] = True
+            self.backend.set_op_state(op_id, "observado", "servidor", stage["reason"])
+
+    def _close_reset_locked(self, order, st, rsn):
+        """Cierre unico del reset de API (§4.3): con motor, `actor.reset` antes del veredicto."""
+        op_id = order["op_id"]
+        if self._actor_engine_locked() != "expansion":
+            self.backend.set_op_state(op_id, st, "servidor", rsn)
+            return
+        verdict = (st, rsn)
+        if self.backend.ops[op_id]["state"] != "aplicado":
+            self.backend.set_op_state(op_id, "aplicado", "servidor", None)
+        guard = self._actor_guard_locked(order.get("epoch"))
+        if guard is not None:
+            self._reset_fail_locked(op_id, verdict, guard, "backend")
+            return
+        args = order.get("args") or {}
+        ok, internal = self.bridge.enqueue_order(
+            "actor.reset", {"f2": 1, "doc_id": args.get("doc_id")}, internal=True)
+        if not ok:
+            self._reset_fail_locked(op_id, verdict, "actores_vivos", "servidor")
+            return
+        internal["f2"] = True
+        internal["purpose"] = "actor_reset"
+        internal["parent_op"] = op_id
+        self._reset_verdict[op_id] = verdict
+
+    def _reset_fail_locked(self, op_id, verdict, reason, origin):
+        """§4.3: el motivo de la escena manda; si la escena cumplio, `parcial/<reason>`."""
+        st, rsn = verdict
+        if st == "observado":
+            self.backend.set_op_state(op_id, "parcial", origin, reason)
+        else:
+            self.backend.set_op_state(op_id, st, "servidor", rsn)
+
+    def _on_actor_reset_result_locked(self, order, status, read, wsize):
+        op_id = order.get("parent_op")
+        op = self.backend.ops.get(op_id)
+        verdict = self._reset_verdict.get(op_id)
+        if verdict is None or op is None or op["state"] != "aplicado":
+            return
+        del self._reset_verdict[op_id]
+        if status == "done" and valid_actor_read(read, world_size=wsize) and read["actors"] == []:
+            self.backend.set_op_state(op_id, verdict[0], "servidor", verdict[1])
+        else:
+            self._reset_fail_locked(op_id, verdict, "actores_vivos", "servidor")
+
+    def on_internal_dropped_locked(self, order, reason):
+        """§4.4: el bridge descarto una orden interna (conexion, epoch o TTL)."""
+        purpose = order.get("purpose")
+        if purpose == "actor_observe":
+            if self._actor_observe_op_id == order.get("op_id"):
+                self._actor_observe_op_id = None
+            return
+        if purpose not in ("actor_stage", "actor_reset"):
+            return
+        op_id = order.get("parent_op")
+        op = self.backend.ops.get(op_id)
+        if op is None or op["state"] != "aplicado":
+            return
+        if purpose == "actor_stage":
+            stage = self._stage.get(op_id)
+            if stage is None or stage["closed"]:
+                return
+            stage["closed"] = True
+            self.backend.set_op_state(op_id, "parcial", "backend", reason)
+            return
+        verdict = self._reset_verdict.pop(op_id, None)
+        if verdict is not None:
+            self._reset_fail_locked(op_id, verdict, reason, "backend")
 
     # --- Reconciliacion y compensacion (§4.5) -----------------------------
 
@@ -866,10 +1089,8 @@ class SceneLive:
                         self._mark(order, "fallido", "lectura_no_cumple")  # A4
                         continue
                     st, rsn = _reset_predicate(order, read, wsize)
-                    if st == "observado":
-                        self._mark(order, "observado", "reconciliada")
-                    else:
-                        self._mark(order, st, rsn)
+                    order["bstate"] = "terminal"
+                    self._close_reset_locked(order, st, "reconciliada" if st == "observado" else rsn)
                     continue
 
             # 4. A12: orden superada por otra orden de escena posterior de esta sesion

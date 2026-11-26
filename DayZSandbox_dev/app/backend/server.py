@@ -43,7 +43,7 @@ STATUS = {
     "unauthorized": 401, "forbidden": 403, "author_mismatch": 403, "csrf_failed": 403,
     "bad_request": 400, "not_found": 404, "internal": 500,
     "queue_full": 409, "wire_cap_exceeded": 500,
-    "expansion_unavailable": 422, "catalog_pending": 409,
+    "expansion_unavailable": 422, "actor_invalid": 422, "catalog_pending": 409,
     "unknown_class": 422, "out_of_map": 422, "budget_exceeded": 422,
     "plan_too_large": 422, "scene_unsupported": 409,
 }
@@ -287,7 +287,8 @@ class Backend:
                 if self.scene_live._scene_queue_len_locked() >= self.bridge.queue_max:
                     return fail("queue_full", "Cola del bridge llena")
                 ok, order = self.scene_live.enqueue_apply_locked(
-                    None, res["plan"], res["expectation"])
+                    None, res["plan"], res["expectation"],
+                    actor_orders=res.get("actor_orders"))
                 if not ok:
                     return order
                 return {"ok": True, "op_id": order["op_id"]}
@@ -324,6 +325,20 @@ class Backend:
             if self.bridge is None or self.scene_live is None:
                 return fail("scene_unsupported", "El servidor no soporta escena F2")
             return self.scene_live.request_observe_locked(doc_id)
+
+    def request_actor_observe(self, doc_id):
+        """POST /api/actors/observe (F3-offline-2 §5)."""
+        with self.store.lock:
+            if self.bridge is None or self.scene_live is None:
+                return fail("scene_unsupported", "El servidor no soporta escena F2")
+            return self.scene_live.request_actor_observe_locked(doc_id)
+
+    def get_actor_observation(self):
+        """GET /api/actors/observation (F3-offline-2 §5): siempre 200, con null sin lectura."""
+        if self.scene_live is None:
+            return {"ok": True, "observation": None, "age_ms": None}
+        with self.store.lock:
+            return self.scene_live.actor_observation_locked()
 
     def get_observation(self):
         """GET /api/observation (§4.2): ultima lectura `now` y su antiguedad.
@@ -609,6 +624,8 @@ class Handler(BaseHTTPRequestHandler):
             self.stream_events()
         elif url.path == "/api/observation":
             self.send_json(200, self.backend.get_observation())
+        elif url.path == "/api/actors/observation":
+            self.send_json(200, self.backend.get_actor_observation())
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 
@@ -744,6 +761,13 @@ class Handler(BaseHTTPRequestHandler):
             v = self.fields(body, [("doc_id", (str,))])
             if v is not None:
                 self.send_result(self.backend.request_observe(v[0]))
+        elif path == "/api/actors/observe":
+            v = self.fields(body, [("doc_id", (str,))])
+            if v is not None:
+                res = self.backend.request_actor_observe(v[0])
+                # §5: `expansion_unavailable` va con el 409 de la respuesta, sin tocar el 422 de F2.
+                status = 200 if res.get("ok") else res.get("http") or STATUS.get(res.get("code"), 409)
+                self.send_json(status, res)
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 
