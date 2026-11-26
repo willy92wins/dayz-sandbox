@@ -121,6 +121,23 @@ class Store:
                 author, request_id, canon, info, label, revert_of=batch_id, direction=-1
             )
 
+    def coedit_view(self, author) -> dict:
+        """Solo lectura (F6-web parte 2 §2.2): pilas con la misma regla que _undo_redo_locked, sin
+        podar, y la menor since_rev que records_since acepta."""
+        with self.lock:
+            key = _author_key(author)
+
+            def top_reverted(stack):
+                pile = stack.get(key) or []
+                if not pile:
+                    return None
+                info = self._inv.get(pile[-1])
+                return None if info is None else bool(info.get("reverted"))
+
+            return {"can_undo": top_reverted(self._undo) is False,
+                    "can_redo": top_reverted(self._redo) is True,
+                    "history_since": self._rev - len(self._hist)}
+
     def freeze(self, doc_id, rev, hash) -> dict:
         with self.lock:
             if doc_id != self._doc.get("doc_id"):

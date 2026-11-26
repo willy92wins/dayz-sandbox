@@ -271,7 +271,7 @@ let profileInFlight = false;
 let profileQueued = false;
 let reqCounter = 0;
 
-function nextRequestId(prefix = 'req'): string {
+export function nextRequestId(prefix = 'req'): string {
   reqCounter += 1;
   return `${prefix}-${Date.now()}-${reqCounter}`;
 }
@@ -430,7 +430,7 @@ async function flushProfileSave(): Promise<void> {
   }
 }
 
-function handleSessionExpired() {
+export function handleSessionExpired() {
   // Nada de lo que quede en la fila sale ya: era de esta sesión (revisión de Sol, SEG-01).
   resetCommitQueue();
   releaseActiveLeaseOnUnmount();
@@ -1260,7 +1260,7 @@ export function setFieldDraft(targetId: string, field: string, value: string) {
   }));
 }
 
-const FIELD_SPANISH_NAMES: Record<string, string> = {
+export const FIELD_SPANISH_NAMES: Record<string, string> = {
   cls: 'clase',
   name: 'nombre',
   x: 'X',

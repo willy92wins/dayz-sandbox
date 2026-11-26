@@ -7,6 +7,7 @@ import {
   useStudioStore,
 } from '../store';
 import { openOrFocusPanel } from '../layout';
+import { AI_FRESH_MS, formatAgo, useCoedit } from '../coedit';
 
 const KIND_ORDER: readonly { kind: EntityKind; label: string }[] = [
   { kind: 'objeto', label: 'Objetos' },
@@ -17,6 +18,8 @@ const KIND_ORDER: readonly { kind: EntityKind; label: string }[] = [
 
 export function HierarchyPanel() {
   const { doc, catalog, selectedIds, hierarchyQuery, mode } = useStudioStore();
+  const { aiTouched } = useCoedit();
+  const now = performance.now();
   const lastClickedIdRef = useRef<string | null>(null);
   const treeRef = useRef<HTMLDivElement | null>(null);
 
@@ -204,6 +207,15 @@ export function HierarchyPanel() {
                     >
                       <KindGlyph kind={ent.kind} cls={ent.cls} />
                       <span className="name">{ent.name}</span>
+                      {aiTouched[ent.id] !== undefined && now - aiTouched[ent.id] < AI_FRESH_MS ? (
+                        <span
+                          className="ai-b"
+                          data-ia-reciente
+                          title="Cambiado por la IA hace un momento"
+                        >
+                          IA · {formatAgo(now - aiTouched[ent.id])}
+                        </span>
+                      ) : null}
                     </div>
                   );
                 })}

@@ -13,6 +13,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]  # DayZSandbox_dev/
@@ -21,7 +23,14 @@ sys.path.insert(0, str(ROOT))
 from app.backend.server import AI, HUMAN, Backend, now_ms  # noqa: E402
 from app.backend.store import Store  # noqa: E402
 
-ALL_ROWS = ["S%d" % i for i in range(1, 13)]
+# F6-web parte 2 §8.2: DSBX_GUION=coedit corre coedit.e2e.cjs con sus filas C1-C9.
+GUION = os.environ.get("DSBX_GUION") or "studio"
+if GUION == "coedit":
+    ALL_ROWS = ["C%d" % i for i in range(1, 10)]
+    SCRIPT = "coedit.e2e.cjs"
+else:
+    ALL_ROWS = ["S%d" % i for i in range(1, 13)]
+    SCRIPT = "studio.e2e.cjs"
 
 
 def _playwright_resolvable(node):
@@ -168,6 +177,33 @@ def main():
                 ops = obj.get("ops", [])
                 return store.commit(author, req_id, snap["doc_id"], base_rev, label, ops)
 
+            if cmd in ("ai_call", "ai_apply_request", "human_apply_request"):
+                if b is None:
+                    return {"ok": False, "code": "no_backend"}
+                key = human_key if cmd == "human_apply_request" else ai_key
+                if cmd == "ai_call":
+                    method, path, body = "GET", "/api/scene", None
+                else:
+                    method, path = "POST", "/api/apply/request"
+                    snap = store.snapshot()
+                    body = {"doc_id": snap["doc_id"], "rev": obj.get("rev", snap["rev"]),
+                            "hash": obj.get("hash", snap["hash"])}
+                data = json.dumps(body).encode("utf-8") if body is not None else None
+                req = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), data=data, method=method)
+                req.add_header("Authorization", "Bearer " + key)
+                if data is not None:
+                    req.add_header("Content-Type", "application/json")
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        return {"ok": True, "status": resp.status, "body": json.loads(resp.read().decode("utf-8"))}
+                except urllib.error.HTTPError as e:
+                    return {"ok": True, "status": e.code, "body": json.loads(e.read().decode("utf-8") or "null")}
+
+            if cmd == "human_revert":
+                snap = store.snapshot()
+                req_id = "cmd-%d-%s" % (cmd_seq, secrets.token_hex(6))
+                return store.revert_batch(HUMAN, req_id, snap["doc_id"], obj.get("batch"))
+
             if cmd == "last_commit":
                 with store.lock:
                     if store._hist:
@@ -286,7 +322,7 @@ def main():
         env["DSBX_HUMAN_KEY"] = human_key
 
         script_proc = subprocess.Popen(
-            [node, str(ROOT / "app" / "web" / "e2e" / "studio.e2e.cjs")],
+            [node, str(ROOT / "app" / "web" / "e2e" / SCRIPT)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

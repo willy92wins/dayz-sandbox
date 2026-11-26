@@ -453,11 +453,7 @@ async function runS1(browser) {
         "El mapa llega con S-mapa.",
         "Mientras tanto, coloca con Intro desde Añadir y escribe X y Z en Propiedades.",
       ],
-      historial: [
-        "El historial llega en la parte 2.",
-        "Deshacer y Rehacer ya funcionan desde la barra de arriba.",
-      ],
-      ia: ["La pestaña de la IA llega en la parte 2."],
+      // historial e ia dejaron de ser huecos con F6-web parte 2 (brief §8.3).
       camaras: [
         "Llega con F4 y F5.",
         "Aquí irán las cámaras, las tomas, la preparación y la vista previa del mapa.",
@@ -4549,9 +4545,9 @@ async function runS11(browser) {
       await activatePanel(page, "validacion");
       await checkView("validacion");
       await activatePanel(page, "historial");
-      await checkView("historial-hueco");
+      await checkView("historial");
       await activatePanel(page, "ia");
-      await checkView("ia-hueco");
+      await checkView("ia");
       await activatePanel(page, "actividad");
       await checkView("actividad-chips");
 
@@ -4824,7 +4820,10 @@ async function runS11(browser) {
 
       // Comprobacion DOM y ejecucion tras mostrar todo sin disparar peticiones nuevas en reposo
       const reqsAfterRender = [];
-      const onIdleHostile = (req) => reqsAfterRender.push(req.url());
+      // La lectura periódica de /api/coedit (F6-web parte 2 §3) no la dispara el texto hostil.
+      const onIdleHostile = (req) => {
+        if (new URL(req.url()).pathname !== "/api/coedit") reqsAfterRender.push(req.url());
+      };
       page.on("request", onIdleHostile);
       await sleep(400);
       page.off("request", onIdleHostile);

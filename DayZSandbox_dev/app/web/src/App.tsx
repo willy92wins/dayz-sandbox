@@ -12,6 +12,23 @@ import { HierarchyPanel } from "./panels/HierarchyPanel";
 import { PlaceholderPanel } from "./panels/Placeholders";
 import { PropertiesPanel, confirmActiveFieldBeforeApply } from "./panels/PropertiesPanel";
 import { ValidationPanel } from "./panels/ValidationPanel";
+import { AiPanel } from "./panels/AiPanel";
+import { HistoryPanel } from "./panels/HistoryPanel";
+import {
+  aiAgeNow,
+  aiLightText,
+  dismissCoeditNotice,
+  formatAgo,
+  loadHistory,
+  onAiStateEvent,
+  onApplyRequestEvent,
+  onCommitEvent,
+  pruneAiTouched,
+  refreshCoedit,
+  resetCoedit,
+  useCoedit,
+  type BatchRecord,
+} from "./coedit";
 import {
   ACTIONS,
   BROWSER_RESERVED_COMBOS,
@@ -73,8 +90,8 @@ const PANEL_COMPONENTS: Record<string, PanelComponent> = {
   anadir: AddPanel,
   actividad: ActivityPanel,
   validacion: ValidationPanel,
-  historial: placeholderFor("historial"),
-  ia: placeholderFor("ia"),
+  historial: HistoryPanel,
+  ia: AiPanel,
   camaras: placeholderFor("camaras"),
   tomas: placeholderFor("tomas"),
   preparacion: placeholderFor("preparacion"),
@@ -139,6 +156,7 @@ function isTextField(el: EventTarget | null): boolean {
 
 export default function App() {
   const st = useStudioStore();
+  const co = useCoedit();
   const [password, setPassword] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
   const [popoverOpen, setPopoverOpen] = useState(false);
@@ -240,6 +258,8 @@ export default function App() {
         } catch {
           // evento malformado: se ignora
         }
+        void loadHistory();
+        void refreshCoedit();
       });
       src.addEventListener("op.state", (ev) => {
         try {
@@ -252,8 +272,23 @@ export default function App() {
           // evento malformado: se ignora
         }
       });
-      src.addEventListener("scene.commit", () => {
+      src.addEventListener("scene.commit", (ev) => {
         void fetchAuthoritativeScene(true);
+        try {
+          onCommitEvent(JSON.parse((ev as MessageEvent).data) as BatchRecord);
+        } catch {
+          // evento malformado: se ignora
+        }
+      });
+      src.addEventListener("ai.state", () => {
+        onAiStateEvent();
+      });
+      src.addEventListener("apply.request", (ev) => {
+        try {
+          onApplyRequestEvent(JSON.parse((ev as MessageEvent).data));
+        } catch {
+          // evento malformado: se ignora
+        }
       });
       src.onopen = () => {
         if (cancelled) return;
@@ -290,7 +325,10 @@ export default function App() {
             return;
           }
           markBackendAlive();
-          void fetchAuthoritativeScene(false);
+          void fetchAuthoritativeScene(false).then(() => {
+            void loadHistory();
+            void refreshCoedit();
+          });
         })
         .catch(() => {
           if (!cancelled) markBackendDown();
@@ -309,7 +347,17 @@ export default function App() {
     if (st.view !== "studio") return;
     const id = window.setInterval(() => {
       setState((prev) => ({ tick: prev.tick + 1 }));
+      pruneAiTouched(performance.now());
     }, 1000);
+    return () => window.clearInterval(id);
+  }, [st.view]);
+
+  // Vista de coedición (parte 2 §3): al entrar y cada 5 s mientras el estudio está abierto.
+  useEffect(() => {
+    if (st.view !== "studio") return;
+    resetCoedit();
+    void refreshCoedit();
+    const id = window.setInterval(() => void refreshCoedit(), 5000);
     return () => window.clearInterval(id);
   }, [st.view]);
 
@@ -637,6 +685,11 @@ export default function App() {
   }
 
   const now = performance.now();
+  const aiText = aiLightText(st.sinBackend, co, now);
+  const aiAge = aiAgeNow(co.view, now);
+  const aiDot = aiText === "IA en pausa" || aiText === "IA editando" || aiText === "IA conectada";
+  const canUndo = co.view ? co.view.canUndo : false;
+  const canRedo = co.view ? co.view.canRedo : false;
   const docName = st.doc?.name ?? (st.docInfo ? "Escena" : "Sin escena");
   const lastObservedRevs = st.rows
     .filter((r) => r.state === "observado" && typeof r.rev === "number")
@@ -696,8 +749,8 @@ export default function App() {
           <button
             type="button"
             className="btn sm"
-            title="Deshacer"
-            disabled={st.sinBackend || !st.docInfo}
+            title={canUndo ? "Deshacer" : "Nada que deshacer"}
+            disabled={st.sinBackend || !st.docInfo || !canUndo}
             onClick={() => void triggerUndoRedo(false)}
           >
             Deshacer <kbd>{keyLabel(st.keymap["deshacer"])}</kbd>
@@ -705,8 +758,8 @@ export default function App() {
           <button
             type="button"
             className="btn sm"
-            title="Rehacer"
-            disabled={st.sinBackend || !st.docInfo}
+            title={canRedo ? "Rehacer" : "Nada que rehacer"}
+            disabled={st.sinBackend || !st.docInfo || !canRedo}
             onClick={() => void triggerUndoRedo(true)}
           >
             Rehacer <kbd>{keyLabel(st.keymap["rehacer"])}</kbd>
@@ -869,6 +922,14 @@ export default function App() {
             </button>
           </div>
         ) : null}
+        {co.notice ? (
+          <div className="notice-strip" role="alert" data-aviso={co.notice.kind}>
+            <span>{co.notice.message}</span>
+            <button type="button" className="btn sm" onClick={() => dismissCoeditNotice()}>
+              Cerrar
+            </button>
+          </div>
+        ) : null}
         {st.flash ? (
           <div className="notice-strip" role="status" data-aviso="info">
             <span>{st.flash}</span>
@@ -916,6 +977,18 @@ export default function App() {
         <span className="peer stale" title="Llega con el bridge">
           <span className="dot" />
           Tu juego · Sin datos
+        </span>
+        <span
+          className={aiDot ? "peer ai" : "peer stale"}
+          data-testid="luz-ia"
+          title={
+            aiAge === null
+              ? "La IA no ha llamado desde que arrancó el backend"
+              : `Última llamada de la IA ${formatAgo(aiAge)}`
+          }
+        >
+          {aiDot ? <span className="dot" /> : null}
+          <span>{aiText}</span>
         </span>
         <span>Catálogo: {st.catalog?.source ?? "fixture"}</span>
         <span>{validationText}</span>

@@ -10,19 +10,6 @@ export function PlaceholderPanel({ id }: { id: StudioPanelId }) {
         escribe X y Z en Propiedades.
       </p>
     );
-  } else if (id === 'historial') {
-    content = (
-      <p>
-        <strong>El historial llega en la parte 2.</strong> Deshacer y Rehacer ya funcionan desde la
-        barra de arriba.
-      </p>
-    );
-  } else if (id === 'ia') {
-    content = (
-      <p>
-        <strong>La pestaña de la IA llega en la parte 2.</strong>
-      </p>
-    );
   } else {
     content = (
       <p>

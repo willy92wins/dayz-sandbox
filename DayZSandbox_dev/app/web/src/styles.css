@@ -1362,3 +1362,186 @@ details.tech summary {
   white-space: nowrap;
 }
 
+
+/* F6-web parte 2: la IA, su presencia y el historial (brief §4, §6). Violeta del prototipo
+   (ui/prototipo/estudio.html:590-593), con 4,5:1 sobre las superficies de los dos temas. */
+:root {
+  --ai: #b9a2ff;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --ai: #5a35c8;
+  }
+}
+
+:root[data-theme="light"] {
+  --ai: #5a35c8;
+}
+
+:root[data-theme="dark"] {
+  --ai: #b9a2ff;
+}
+
+.peer.ai {
+  color: var(--fg-2);
+}
+
+.peer.ai .dot,
+.ai-dot {
+  background: var(--ai);
+}
+
+.ai-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+}
+
+.ai-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  font-size: 13px;
+  flex: none;
+}
+
+.ai-head .who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ai-head .who em {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--ai);
+}
+
+.ai-head .desc {
+  color: var(--muted);
+  min-width: 0;
+}
+
+.ai-head .grow,
+.ai-prop-actions {
+  margin-left: auto;
+}
+
+.ai-prop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 8px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--ai);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--fg);
+  font-size: 13px;
+  flex: none;
+}
+
+.ai-prop-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.ai-stale,
+.ai-err {
+  flex-basis: 100%;
+  color: var(--st-fail);
+  font-size: 12px;
+}
+
+.ai-list,
+.hist-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.ai-row,
+.hrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.ai-row .op {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-row .op b,
+.hrow .lbl {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-row .op small,
+.ai-row .age,
+.hrow .age,
+.hrow .rv {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ai-row.off,
+.hrow.off {
+  color: var(--muted);
+}
+
+.hrow .rv {
+  font-family: var(--font-mono);
+  width: 40px;
+  flex: none;
+}
+
+.hrow .lbl {
+  flex: 1;
+  min-width: 0;
+}
+
+.hrow .who {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: 44px;
+  flex: none;
+}
+
+.hist-note {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pills {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.ai-b {
+  flex: none;
+  color: var(--ai);
+  font-size: 12px;
+}
