@@ -63,6 +63,36 @@
     "medica",
     "cazador"
   ],
+  "wardrobe_items": {
+    "partisano": [
+      "GorkaEJacket_Flat",
+      "GorkaPants_Flat",
+      "MilitaryBoots_Black",
+      "TacticalGloves_Black",
+      "BalaclavaMask_Black"
+    ],
+    "civil": [
+      "Hoodie_Grey",
+      "Jeans_Blue",
+      "AthleticShoes_Grey",
+      "BaseballCap_Blue",
+      "TaloonBag_Blue"
+    ],
+    "medica": [
+      "ParamedicJacket_Green",
+      "ParamedicPants_Green",
+      "Sneakers_White",
+      "SurgicalGloves_White",
+      "SurgicalMask"
+    ],
+    "cazador": [
+      "HuntingJacket_Brown",
+      "HunterPants_Brown",
+      "HikingBoots_Brown",
+      "WorkingGloves_Brown",
+      "BoonieHat_DPM"
+    ]
+  },
   "emotes": [
     "EmoteGreeting",
     "EmotePoint",
