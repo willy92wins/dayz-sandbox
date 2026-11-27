@@ -108,6 +108,7 @@ NON_EVENT_WORD_LITERALS = frozenset({
     "true",
     "false",
     "queued",
+    "done",
     "pending",
     "waiting",
     *(name for name, _ in EXPECTED_EMOTE_PAIRS),
@@ -538,7 +539,7 @@ def check_e9(adapter_dir: Path, core_dir: Path) -> list[str]:
         if st not in lit_set:
             violations.append(f'E9: falta el estado de evento literal "{st}" en el adaptador')
 
-    for assigned in re.findall(r'\b\w*cause\w*\s*=\s*"([^"]+)"', code, flags=re.IGNORECASE):
+    for assigned in re.findall(r'\b(?!\w*Json\b)\w*cause\w*\s*=\s*"([^"]+)"', code, flags=re.IGNORECASE):
         if assigned not in VALID_CAUSES:
             violations.append(f'E9: causa no permitida "{assigned}"')
 

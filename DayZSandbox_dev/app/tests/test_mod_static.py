@@ -1333,7 +1333,7 @@ class TestModStatic(unittest.TestCase):
         for m_sig in (
             'string Spawn(string lid, string cls, vector pos, float yaw, array<string> items) { return "expansion_unavailable"; }',
             'string SetMarks(string lid, array<vector> marks, string behaviour, float roam) { return "expansion_unavailable"; }',
-            'string RequestGesture(string lid, int gi, string emote) { return "expansion_unavailable"; }',
+            'string RequestGesture(string lid, int gi, string emote, int atMark, int tMs) { return "expansion_unavailable"; }',
             'string State(string lid) { return "expansion_unavailable"; }',
             'string Stop(string lid) { return "expansion_unavailable"; }',
             'string Despawn(string lid) { return "expansion_unavailable"; }',
