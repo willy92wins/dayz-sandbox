@@ -47,6 +47,19 @@ class DSBX_Args
 	ref array<int> yaw_mdeg;
 	ref DSBX_IfPending if_pending;
 	string at;
+	string a_lid;
+	string a_cls;
+	string a_behaviour;
+	int a_x_mm;
+	int a_z_mm;
+	int a_yaw_mdeg;
+	int a_roam_mm;
+	ref array<string> a_items;
+	ref array<string> g_emote;
+	ref array<int> mk_x_mm;
+	ref array<int> mk_z_mm;
+	ref array<int> g_at;
+	ref array<int> g_t_ms;
 }
 
 class DSBX_Order

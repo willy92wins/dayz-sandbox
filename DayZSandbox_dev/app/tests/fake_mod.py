@@ -50,6 +50,9 @@ def _truncate_strings(obj, limit=MAX_STRING_CHARS):
     return obj
 
 
+_ACTOR_VERBS = ("actor.apply", "actor.reset", "actor.observe")
+
+
 def _is_f2_marked(args):
     """DP-5 (contrato v1.3): el mod trata una orden como F2 solo con el entero `args.f2 == 1`.
 
@@ -289,7 +292,8 @@ class _Peer:
                 world_size = self.fake.world.world_size
                 scene = 1
             body.update({"map": "chernarus", "world_size": world_size,
-                         "modset": ["DayZSandbox"], "actor_engine": "none"})
+                         "modset": ["DayZSandbox"],
+                         "actor_engine": self.fake.actor_engine})
             if scene is not None:
                 body["scene"] = scene
         try:
@@ -484,6 +488,14 @@ class _Peer:
             # T-02 (DP-5, §3.5): el camino F2 lo elige la marca de la orden, no tener mundo.
             self._execute_world(entry, verb)
             return
+        if self.fake.world is not None and verb in _ACTOR_VERBS \
+                and _is_f2_marked(order.get("args")):
+            # F3-offline-2 §6: sin motor, el mod rechaza los verbos de actor.
+            if self.fake.actor_engine != "expansion":
+                self._finish(entry, "rejected", "expansion_unavailable", {})
+                return
+            self._execute_world(entry, verb)
+            return
         if verb == "state.read":
             if self.state_read_mode == "error":
                 self._finish(entry, "error", "state_read_error", {})
@@ -558,6 +570,12 @@ class _Peer:
             status, reason, read = self.fake.world.apply(order2, check=check, tick=tick)
         elif verb == "scene.reset":
             status, reason, read = self.fake.world.reset(order2, check=check, tick=tick)
+        elif verb == "actor.apply":
+            status, reason, read = self.fake.world.actor_apply(order2)
+        elif verb == "actor.reset":
+            status, reason, read = self.fake.world.actor_reset(order2)
+        elif verb == "actor.observe":
+            status, reason, read = self.fake.world.actor_observe(order2)
         else:
             status, reason, read = self.fake.world.observe(order2)
         self._finish(entry, status, reason, read)
@@ -722,7 +740,8 @@ class FakeMod:
                  deadline_margin_ms=100, retention_extra_ms=1000,
                  work_before_ms=0, work_between_ms=0,
                  catalog_classes=None, catalog_page_size=1,
-                 mod_ver="fake-1", epoch=None, world=None, r_retry_unknown=False):
+                 mod_ver="fake-1", epoch=None, world=None, r_retry_unknown=False,
+                 actor_engine="none"):
         self.bridge_url = bridge_url
         self.peer_key = peer_key
         self.cache_capacity = int(cache_capacity)
@@ -736,6 +755,7 @@ class FakeMod:
         # reintenta como cualquier fallo, hasta el cuarto.
         self.r_retry_unknown = bool(r_retry_unknown)
         self.mod_ver = mod_ver
+        self.actor_engine = actor_engine
         self.world = world
         if catalog_classes is None and world is not None:
             catalog_classes = world.catalog_classes()

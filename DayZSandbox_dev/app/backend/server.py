@@ -43,7 +43,7 @@ STATUS = {
     "unauthorized": 401, "forbidden": 403, "author_mismatch": 403, "csrf_failed": 403,
     "bad_request": 400, "not_found": 404, "internal": 500,
     "queue_full": 409, "wire_cap_exceeded": 500,
-    "expansion_unavailable": 422, "catalog_pending": 409,
+    "expansion_unavailable": 422, "actor_invalid": 422, "catalog_pending": 409,
     "unknown_class": 422, "out_of_map": 422, "budget_exceeded": 422,
     "plan_too_large": 422, "scene_unsupported": 409,
 }
@@ -82,6 +82,8 @@ class Backend:
         self.log = log if log is not None else sys.stderr
         self.paused = False
         self.ai_last_call = None  # clock() de la última petición de la IA (F6-web parte 2 §2.1)
+        self.ai_revoked = False  # «Desconectar» (plan de coedición §2.3): hasta reiniciar el backend
+        self.ai_clients = set()  # colas SSE abiertas con la clave de la IA
         self.take_state = "libre"
         self.seq = 0
         self.ring = deque(maxlen=horizon)  # (seq, tipo, data_json)
@@ -242,6 +244,7 @@ class Backend:
     def unsubscribe(self, q):
         with self.store.lock:
             self.clients.discard(q)
+            self.ai_clients.discard(q)
 
     def coedit_view(self):
         """GET /api/coedit (F6-web parte 2 §2.1): pausa, última llamada de la IA, pilas e historial."""
@@ -249,7 +252,7 @@ class Backend:
             paused = self.paused
             last = self.ai_last_call
         age = None if last is None else max(0, int((self.clock() - last) * 1000))
-        view = {"ok": True, "paused": paused, "ai_last_call_age_ms": age}
+        view = {"ok": True, "paused": paused, "ai_last_call_age_ms": age, "ai_revoked": self.ai_revoked}
         view.update(self.store.coedit_view(HUMAN))
         return view
 
@@ -258,6 +261,16 @@ class Backend:
             self.paused = paused
             self._emit("ai.state", {"paused": paused})
         return {"ok": True, "paused": paused}
+
+    def disconnect_ai(self):
+        """POST /api/ai/disconnect: la clave de la IA deja de valer hasta reiniciar el backend."""
+        with self.store.lock:
+            self.ai_revoked = True
+            for q in list(self.ai_clients):
+                self.ai_clients.discard(q)
+                self._close_client(q)
+            self._emit("ai.state", {"paused": self.paused, "revoked": True})
+        return {"ok": True, "revoked": True}
 
     def set_op_state(self, op_id, state, origin, reason=None):
         with self.store.lock:
@@ -287,7 +300,8 @@ class Backend:
                 if self.scene_live._scene_queue_len_locked() >= self.bridge.queue_max:
                     return fail("queue_full", "Cola del bridge llena")
                 ok, order = self.scene_live.enqueue_apply_locked(
-                    None, res["plan"], res["expectation"])
+                    None, res["plan"], res["expectation"],
+                    actor_orders=res.get("actor_orders"))
                 if not ok:
                     return order
                 return {"ok": True, "op_id": order["op_id"]}
@@ -325,6 +339,20 @@ class Backend:
                 return fail("scene_unsupported", "El servidor no soporta escena F2")
             return self.scene_live.request_observe_locked(doc_id)
 
+    def request_actor_observe(self, doc_id):
+        """POST /api/actors/observe (F3-offline-2 §5)."""
+        with self.store.lock:
+            if self.bridge is None or self.scene_live is None:
+                return fail("scene_unsupported", "El servidor no soporta escena F2")
+            return self.scene_live.request_actor_observe_locked(doc_id)
+
+    def get_actor_observation(self):
+        """GET /api/actors/observation (F3-offline-2 §5): siempre 200, con null sin lectura."""
+        if self.scene_live is None:
+            return {"ok": True, "observation": None, "age_ms": None}
+        with self.store.lock:
+            return self.scene_live.actor_observation_locked()
+
     def get_observation(self):
         """GET /api/observation (§4.2): ultima lectura `now` y su antiguedad.
 
@@ -342,6 +370,8 @@ class Backend:
         for key, author in self._keys:
             if token is not None and hmac.compare_digest(token.encode(), key.encode()):
                 found = author
+        if found is AI and self.ai_revoked:
+            return None
         return found
 
     def create_session(self):
@@ -606,9 +636,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_result(self.backend.changes(since, wait))
         elif self.path == "/api/events":
-            self.stream_events()
+            self.stream_events(author)
         elif url.path == "/api/observation":
             self.send_json(200, self.backend.get_observation())
+        elif url.path == "/api/actors/observation":
+            self.send_json(200, self.backend.get_actor_observation())
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 
@@ -695,6 +727,11 @@ class Handler(BaseHTTPRequestHandler):
             v = self.fields(body, [("paused", (bool,))])
             if v is not None:
                 self.send_json(200, self.backend.set_paused(v[0]))
+        elif path == "/api/ai/disconnect":
+            if not human:
+                self.send_json(403, fail("forbidden", "Solo la persona desconecta a la IA"))
+                return
+            self.send_json(200, self.backend.disconnect_ai())
         elif path == "/api/scene/validate":
             v = self.fields(body, [("doc_id", (str,)), ("base_rev", (int,)), ("ops", (list,))])
             if v is not None:
@@ -744,16 +781,29 @@ class Handler(BaseHTTPRequestHandler):
             v = self.fields(body, [("doc_id", (str,))])
             if v is not None:
                 self.send_result(self.backend.request_observe(v[0]))
+        elif path == "/api/actors/observe":
+            v = self.fields(body, [("doc_id", (str,))])
+            if v is not None:
+                res = self.backend.request_actor_observe(v[0])
+                # §5: `expansion_unavailable` va con el 409 de la respuesta, sin tocar el 422 de F2.
+                status = 200 if res.get("ok") else res.get("http") or STATUS.get(res.get("code"), 409)
+                self.send_json(status, res)
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 
-    def stream_events(self):
+    def stream_events(self, author):
         raw = self.headers.get("Last-Event-ID")
         try:
             last = int(raw) if raw is not None else None
         except ValueError:
             last = None
         q = self.backend.subscribe(last)
+        if author["role"] == "ai":
+            with self.backend.store.lock:
+                if self.backend.ai_revoked:
+                    self.backend._close_client(q)
+                else:
+                    self.backend.ai_clients.add(q)
         try:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")

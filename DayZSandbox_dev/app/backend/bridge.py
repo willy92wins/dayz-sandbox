@@ -291,6 +291,12 @@ class Bridge:
         self._read_next_at = self._now() + self.read_retry_ms[idx] / 1000.0
         self._read_backoff = min(self._read_backoff + 1, len(self.read_retry_ms) - 1)
 
+    def _internal_dropped_locked(self, order, reason):
+        """F3-offline-2 §4.4: avisa a SceneLive de una orden interna descartada."""
+        sl = getattr(self.backend, "scene_live", None)
+        if sl is not None:
+            sl.on_internal_dropped_locked(order, reason)
+
     def _transition_conn_orders_locked(self, new_conn, new_epoch):
         for order in list(self.orders.values()):
             if order["conn"] == new_conn:
@@ -298,6 +304,10 @@ class Bridge:
             if order["internal"]:
                 if order["bstate"] in ("pendiente", "ejecutando"):
                     order["bstate"] = "descartada"
+                    self._internal_dropped_locked(
+                        order, "mundo_reiniciado" if (order["epoch"] and new_epoch
+                                                      and order["epoch"] != new_epoch)
+                        else "conexion_perdida")
                 continue
             if order["bstate"] not in ("pendiente", "ejecutando", "parcial"):
                 continue
@@ -344,6 +354,7 @@ class Bridge:
                 if order["internal"]:
                     if order["bstate"] in ("pendiente", "ejecutando"):
                         order["bstate"] = "descartada"
+                        self._internal_dropped_locked(order, "conexion_perdida")
                     continue
                 if order["bstate"] == "pendiente":
                     order["bstate"] = "terminal"
@@ -372,6 +383,7 @@ class Bridge:
                     continue
                 if order["internal"]:
                     order["bstate"] = "descartada"
+                    self._internal_dropped_locked(order, "sin_resultado")
                     if not self.reconciled or self._has_live_parcial_locked():
                         self._schedule_read_retry_locked()
                     continue

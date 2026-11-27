@@ -4,7 +4,7 @@ import unittest
 from .test_server import AK, HK, Base, move
 from .test_server_web import FakeClock, cookie_header, login, raw
 
-KEYS = {"ok", "paused", "ai_last_call_age_ms", "can_undo", "can_redo", "history_since"}
+KEYS = {"ok", "paused", "ai_last_call_age_ms", "ai_revoked", "can_undo", "can_redo", "history_since"}
 
 
 class CoeditBase(Base):

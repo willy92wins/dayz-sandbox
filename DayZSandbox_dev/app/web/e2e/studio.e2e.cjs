@@ -3086,10 +3086,12 @@ async function runS7(browser) {
     await page.keyboard.type("7734");
     await page.keyboard.press("Enter");
 
-    await waitForSnap(
+    const snapMoved = await waitForSnap(
       (s) => s.doc.entities[0] && s.doc.entities[0].x === 7712 && s.doc.entities[0].z === 7734,
       "mover X=7712, Z=7734 con teclado"
     );
+    // Ctrl+Intro aplica la rev que la web ya enseña: esperar a que la web la tenga, no solo el backend.
+    await page.getByRole("button", { name: "Aplicar rev " + snapMoved.rev }).waitFor({ state: "visible", timeout: 5000 });
 
     // Ctrl+Intro -> op-N Pendiente con origen backend en Actividad
     const opsBeforeApply = await cmd({ cmd: "count_ops" });

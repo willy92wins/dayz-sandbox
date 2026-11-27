@@ -178,7 +178,7 @@ class DSBX_Wire
 			body = body + ",\"map\":" + WireText(mapName);
 			body = body + ",\"world_size\":" + worldSize;
 			body = body + ",\"modset\":[" + modsetItems + "]";
-			body = body + ",\"actor_engine\":\"none\"";
+			body = body + ",\"actor_engine\":" + WireText(DSBX_ActorEngineRegistry.EngineName());
 			body = body + ",\"scene\":1";
 		}
 		body = body + "}";

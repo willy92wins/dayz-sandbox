@@ -12,7 +12,8 @@ if (!BASE || !HUMAN_KEY) {
 }
 
 // C7 va primero: necesita las pilas de la persona vacías, y el almacén dura toda la corrida.
-const ROW_ORDER = ["C7", "C1", "C2", "C3", "C4", "C5", "C6", "C8", "C9"];
+// C10 deja la clave de la IA revocada hasta reiniciar el backend; las demás filas empiezan con uno nuevo.
+const ROW_ORDER = ["C7", "C1", "C2", "C3", "C4", "C5", "C6", "C8", "C9", "C10"];
 function resolveSelectedRows() {
   const raw = process.env.DSBX_ONLY;
   if (!raw || !raw.trim()) return ROW_ORDER.slice();
@@ -746,7 +747,35 @@ async function C9(browser) {
   }
 }
 
-const RUNNERS = { C1, C2, C3, C4, C5, C6, C7, C8, C9 };
+// --- C10 desconectar (plan de coedición §2.3) -----------------------------------
+async function C10(browser) {
+  await freshBackend();
+  const { context, page } = await openStudio(browser);
+  try {
+    await activatePanel(page, "ia");
+    const posts = countPosts(page, "/api/ai/disconnect");
+    await iaPanel(page).getByRole("button", { name: "Desconectar" }).click();
+    await iaPanel(page).getByRole("button", { name: "Cancelar" }).click();
+    await sleep(500);
+    assert(posts.n === 0, "C10(-): Cancelar mandó el POST: " + posts.n);
+    assert((await cmd({ cmd: "ai_call" })).status === 200, "C10(-): la IA no vale tras cancelar");
+    await iaPanel(page).getByRole("button", { name: "Desconectar" }).click();
+    await iaPanel(page).getByRole("button", { name: "Sí, desconectar" }).click();
+    await waitText(light(page), /^IA desconectada$/, "C10(+): luz desconectada");
+    posts.stop();
+    assert(posts.n === 1, "C10(+): POST de desconectar: " + posts.n);
+    assert((await cmd({ cmd: "ai_call" })).status === 401, "C10(+): la clave de la IA sigue valiendo");
+    assert((await iaPanel(page).getByRole("button", { name: /IA$|Desconectar/ }).count()) === 0,
+      "C10(+): quedan Pausar o Desconectar con la IA desconectada");
+    await page.reload();
+    await login(context, page);
+    await waitText(light(page), /^IA desconectada$/, "C10(+): tras recargar");
+  } finally {
+    await closeAudited(context);
+  }
+}
+
+const RUNNERS = { C1, C2, C3, C4, C5, C6, C7, C8, C9, C10 };
 
 async function main() {
   const rows = resolveSelectedRows();

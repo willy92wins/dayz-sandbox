@@ -90,3 +90,9 @@ Lo que aparece fuera del alcance de una tanda, o lo que un arbitraje aplaza, se 
   - **el registro que anota el peer:** valores exactos, una sola muestra de reloj en la frontera del lease (reloj que avanza en cada lectura) y lecturas que no cambian después.
 - **Mitigaciones que se mantienen:** `_write_cfg` reintenta hasta 40 veces con 50 ms si `Path.replace` da `PermissionError` (`test_write_cfg_retries_a_busy_file`, `test_write_cfg_retry_is_bounded`); los burners de la prueba de carga se crean dentro del bloque protegido (`test_cpu_load_kills_partially_created_burners`).
 - **Residual (M2):** con carga extrema (2 x núcleos de procesos girando, a veces con otras suites a la vez) puede fallar M2 (`p95 >= 1000 ms`) y arrastrar N5/N4/N6. Es un residual del entorno, no del código: los plazos son contrato y no se tocan. La prueba de carga corre solo con `DSBX_STRESS=1`, fuera del gate determinista; su docstring lo deja dicho.
+
+## 2026-11-26 · F3-offline-2 · `test_apply_33_censo_checkpoint_y_deriva` lee `sent_results` sin esperar
+
+- **Qué pasa:** la prueba (test_f2_live, F2A2Apply) lee `fake.server.sent_results` en cuanto el op llega a `observado`, pero el mod falso añade el resultado a esa lista al volver el POST (`fake_mod.py:618`), en su hilo; el mismo aviso está en `test_fake_mod.py:115`, que ya espera con `wait_until`. Con la máquina cargada (dos suites a la vez) falló 2 de 10; sola, 0 de 12 con y sin los cambios de F3-offline-2, y 0 de 30 en `39c972e`.
+- **Por qué no se arregla aquí:** R20; la prueba es de F2 y no la toca esta tarea.
+- **Arreglo propuesto:** esperar con un plazo a que `sent_results` tenga la entrada antes de leerla.

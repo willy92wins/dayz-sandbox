@@ -25,6 +25,7 @@ export interface BatchRecord {
 
 export interface CoeditView {
   paused: boolean;
+  revoked: boolean;
   aiAgeMs: number | null;
   readAtPerf: number;
   canUndo: boolean;
@@ -129,6 +130,7 @@ export async function refreshCoedit(): Promise<void> {
     if (!res.ok) return;
     const d = (await res.json().catch(() => null)) as {
       paused?: boolean;
+      ai_revoked?: boolean;
       ai_last_call_age_ms?: number | null;
       can_undo?: boolean;
       can_redo?: boolean;
@@ -139,6 +141,7 @@ export async function refreshCoedit(): Promise<void> {
     set({
       view: {
         paused: d.paused === true,
+        revoked: d.ai_revoked === true,
         aiAgeMs: typeof d.ai_last_call_age_ms === 'number' ? d.ai_last_call_age_ms : null,
         readAtPerf: performance.now(),
         canUndo: d.can_undo === true,
@@ -308,6 +311,7 @@ export function aiAgeNow(view: CoeditView | null, now: number): number | null {
 
 export function aiLightText(sinBackend: boolean, c: CoeditState, now: number): string {
   if (sinBackend || !c.view) return 'IA · sin datos';
+  if (c.view.revoked) return 'IA desconectada';
   if (c.view.paused) return 'IA en pausa';
   if (c.lastAiCommitPerf !== null && now - c.lastAiCommitPerf < AI_EDITING_MS) return 'IA editando';
   const age = aiAgeNow(c.view, now);
@@ -325,15 +329,24 @@ export function formatAgo(ms: number): string {
 
 // --- acciones -----------------------------------------------------------------
 
-export async function setAiPaused(paused: boolean): Promise<void> {
+export function setAiPaused(paused: boolean): Promise<void> {
+  return postAiState('/api/ai/pause', { paused });
+}
+
+// «Desconectar» (plan de coedición §2.3): la clave de la IA deja de valer hasta reiniciar el backend.
+export function disconnectAi(): Promise<void> {
+  return postAiState('/api/ai/disconnect', {});
+}
+
+async function postAiState(path: string, body: object): Promise<void> {
   if (cs.pausing || getState().sinBackend) return;
   set({ pausing: true });
   try {
-    const res = await fetch('/api/ai/pause', {
+    const res = await fetch(path, {
       method: 'POST',
       credentials: 'same-origin',
       headers: csrfHeaders(),
-      body: JSON.stringify({ paused }),
+      body: JSON.stringify(body),
     });
     markBackendAlive();
     const data = (await res.json().catch(() => null)) as { code?: string } | null;

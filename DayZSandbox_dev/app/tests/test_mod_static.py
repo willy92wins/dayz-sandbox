@@ -22,6 +22,9 @@ EXPECTED_C_FILES = (
     "scripts/3_Game/DSBX_Scene.c",
     "scripts/3_Game/DSBX_SceneOps.c",
     "scripts/3_Game/DSBX_SceneWire.c",
+    # F3-offline-1 (§6): interfaz del motor de actores en el nucleo.
+    "scripts/3_Game/DSBX_ActorEngine.c",
+    "scripts/3_Game/DSBX_ActorOps.c",
     "scripts/5_Mission/DSBX_Mission.c",
 )
 
@@ -731,7 +734,7 @@ def check_m9_contrato_cable(mod_dir: Path) -> list[str]:
     res_body = _find_method_body(wire_code, "ResultBody")
     cat_body = _find_method_body(wire_code, "CatalogPageBody")
 
-    for key in ('"proto"', '"dsbx1"', '"peer"', '"inst"', '"epoch"', '"mod_ver"', '"build"', '"map"', '"world_size"', '"modset"', '"actor_engine"', '"none"'):
+    for key in ('"proto"', '"dsbx1"', '"peer"', '"inst"', '"epoch"', '"mod_ver"', '"build"', '"map"', '"world_size"', '"modset"', '"actor_engine"'):
         if not _has_wire_key(hello_body, key):
             violations.append(f"M9: falta {key} en HelloBody")
     m_loop = re.search(r"while\s*\(\s*i\s*<\s*modset\.Count\(\)\s*\)\s*\{", hello_body)
@@ -1102,6 +1105,126 @@ def check_m17_una_llamada_string_por_expresion(mod_dir: Path) -> list[str]:
     return violations
 
 
+def check_m18(mod_dir: Path) -> list[str]:
+    """F3-offline-1 (§6, T-M18): interfaz DSBX_ActorEngine en el nucleo sin referencias a Expansion."""
+    violations = []
+    c_files = _read_stripped_c_files(mod_dir)
+    ae_code = c_files.get("scripts/3_Game/DSBX_ActorEngine.c", "")
+    wire_code = c_files.get("scripts/3_Game/DSBX_Wire.c", "")
+
+    if not ae_code:
+        return ["M18: falta DSBX_ActorEngine.c"]
+
+    if not re.search(r"\bclass\s+DSBX_ActorEngine\s*:\s*Managed\s*\{", ae_code):
+        violations.append("M18: DSBX_ActorEngine debe heredar de Managed (class DSBX_ActorEngine : Managed)")
+
+    ae_body = _find_class_body(ae_code, "DSBX_ActorEngine")
+    if not ae_body:
+        violations.append("M18: falta cuerpo de DSBX_ActorEngine")
+    else:
+        if _find_method_body(ae_body, "Name").strip() != 'return "none";':
+            violations.append('M18: DSBX_ActorEngine.Name() debe devolver "none"')
+        if _find_method_body(ae_body, "IsAvailable").strip() != "return false;":
+            violations.append("M18: DSBX_ActorEngine.IsAvailable() debe devolver false")
+        for method_name in ("Spawn", "SetMarks", "RequestGesture", "State", "Stop", "Despawn"):
+            mbody = _find_method_body(ae_body, method_name).strip()
+            if mbody != 'return "expansion_unavailable";':
+                violations.append(f'M18: DSBX_ActorEngine.{method_name} debe devolver "expansion_unavailable"')
+
+    reg_body = _find_class_body(ae_code, "DSBX_ActorEngineRegistry")
+    if not reg_body:
+        violations.append("M18: falta class DSBX_ActorEngineRegistry")
+    else:
+        if not re.search(r"\bprotected\s+static\s+ref\s+DSBX_ActorEngine\s+s_Engine\s*;", reg_body):
+            violations.append("M18: falta protected static ref DSBX_ActorEngine s_Engine en DSBX_ActorEngineRegistry")
+        reg_m = re.sub(r"\s+", " ", _find_method_body(reg_body, "Register")).strip()
+        get_m = re.sub(r"\s+", " ", _find_method_body(reg_body, "Get")).strip()
+        name_m = re.sub(r"\s+", " ", _find_method_body(reg_body, "EngineName")).strip()
+        if reg_m != "if (engine) s_Engine = engine;":
+            violations.append("M18: DSBX_ActorEngineRegistry.Register no coincide con §6")
+        if get_m != "if (!s_Engine) s_Engine = new DSBX_ActorEngine(); return s_Engine;":
+            violations.append("M18: DSBX_ActorEngineRegistry.Get no coincide con §6")
+        if name_m != 'if (Get().IsAvailable()) return Get().Name(); return "none";':
+            violations.append("M18: DSBX_ActorEngineRegistry.EngineName no coincide con §6")
+
+    hello_body = _find_method_body(wire_code, "HelloBody")
+    if '\\"actor_engine\\":\\"none\\"' in wire_code or '"actor_engine":"none"' in wire_code:
+        violations.append('M18: DSBX_Wire.c no debe tener "actor_engine":"none" literal')
+    if ',\\"actor_engine\\":" + WireText(DSBX_ActorEngineRegistry.EngineName())' not in hello_body:
+        violations.append("M18: HelloBody debe tomar actor_engine de WireText(DSBX_ActorEngineRegistry.EngineName())")
+
+    for rel, code in c_files.items():
+        for forbidden in ("eAI", "Expansion", "EXPANSIONMODAI"):
+            if forbidden in code:
+                violations.append(f"M18: {rel} contiene '{forbidden}' fuera de comentarios")
+
+    return violations
+
+
+check_m18_actor_engine = check_m18
+
+
+_M19_ARGS_FIELDS = (
+    ("string", "a_lid"), ("string", "a_cls"), ("string", "a_behaviour"),
+    ("int", "a_x_mm"), ("int", "a_z_mm"), ("int", "a_yaw_mdeg"), ("int", "a_roam_mm"),
+    ("ref array<string>", "a_items"), ("ref array<string>", "g_emote"),
+    ("ref array<int>", "mk_x_mm"), ("ref array<int>", "mk_z_mm"),
+    ("ref array<int>", "g_at"), ("ref array<int>", "g_t_ms"),
+)
+
+
+def _brace_block_after(code: str, anchor: str) -> str:
+    """Cuerpo entre llaves del primer bloque que sigue a `anchor` ("" si no esta)."""
+    pos = code.find(anchor)
+    if pos < 0:
+        return ""
+    start = code.find("{", pos)
+    if start < 0:
+        return ""
+    depth = 0
+    for i in range(start, len(code)):
+        if code[i] == "{":
+            depth += 1
+        elif code[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return code[start + 1:i]
+    return ""
+
+
+def check_m19(mod_dir: Path) -> list[str]:
+    """F3-offline-2 (§7, T-M19): despacho de los verbos actor.* al motor registrado.
+
+    Los simbolos de Expansion no se buscan aqui (ya lo hace M18 en todos los ficheros)."""
+    violations = []
+    c_files = _read_stripped_c_files(mod_dir)
+    ops_code = c_files.get("scripts/3_Game/DSBX_ActorOps.c", "")
+    peer_code = c_files.get("scripts/3_Game/DSBX_Peer.c", "")
+    msg_code = c_files.get("scripts/3_Game/DSBX_Messages.c", "")
+    if not ops_code:
+        return ["M19: falta DSBX_ActorOps.c"]
+    if not re.search(r"\bclass\s+DSBX_ActorOps\s*:\s*Managed\s*\{", ops_code):
+        violations.append("M19: DSBX_ActorOps debe heredar de Managed")
+    start = _find_method_body(_find_class_body(ops_code, "DSBX_ActorOps"), "StartOrder")
+    avail = _brace_block_after(start, "if (!engine.IsAvailable())")
+    if "DSBX_ActorEngineRegistry.Get()" not in start or '"expansion_unavailable"' not in avail:
+        violations.append("M19: StartOrder debe rechazar con expansion_unavailable si el motor no esta disponible")
+    if not re.search(r"\bref\s+DSBX_ActorOps\s+m_ActorOps\s*;", peer_code) \
+            or "m_ActorOps = new DSBX_ActorOps();" not in peer_code:
+        violations.append("M19: DSBX_Peer debe declarar e instanciar m_ActorOps")
+    f2_block = _brace_block_after(peer_code, "if (entry.m_Order.args && entry.m_Order.args.f2 == 1)")
+    if peer_code.count("m_ActorOps.StartOrder(this, entry);") != 1 \
+            or "m_ActorOps.StartOrder(this, entry);" not in f2_block \
+            or not all(f'"{v}"' in f2_block for v in ("actor.apply", "actor.reset", "actor.observe")):
+        violations.append("M19: los verbos actor.* solo se despachan bajo args.f2 == 1")
+    args_body = _find_class_body(msg_code, "DSBX_Args")
+    for typ, name in _M19_ARGS_FIELDS:
+        pat = r"(?m)^\s*" + r"\s+".join(map(re.escape, typ.split())) + r"\s+" + name + r"\s*;"
+        if not re.search(pat, args_body):
+            violations.append(f"M19: DSBX_Args debe tener `{typ} {name};`")
+    return violations
+
+
 ALL_CHECKS = {
     "M1": check_m1_forma,
     "M2": check_m2_tokens_prohibidos,
@@ -1120,6 +1243,8 @@ ALL_CHECKS = {
     "M15": check_m15_cuarentena,
     "M16": check_m16_catalogo_por_presentacion,
     "M17": check_m17_una_llamada_string_por_expresion,
+    "M18": check_m18,
+    "M19": check_m19,
 }
 
 
@@ -1176,6 +1301,79 @@ class TestModStatic(unittest.TestCase):
 
     def test_m17_una_llamada_string_por_expresion(self):
         self.assertEqual(check_m17_una_llamada_string_por_expresion(REAL_MOD_DIR), [])
+
+    def test_m18_actor_engine(self):
+        self.assertEqual(check_m18(REAL_MOD_DIR), [])
+
+    def test_t_m18_nucleo(self):
+        # T-M18 (§8.3) y mutacion A13 (§9): positivo, tokens prohibidos y "none" fijo en DSBX_Wire.c.
+        self.assertEqual(check_m18(REAL_MOD_DIR), [])
+        # A13: DSBX_Wire.c vuelve a "none" fijo -> tumba solo M18.
+        self._assert_only_rule_fails(
+            "scripts/3_Game/DSBX_Wire.c",
+            'body = body + ",\\"actor_engine\\":" + WireText(DSBX_ActorEngineRegistry.EngineName());',
+            'body = body + ",\\"actor_engine\\":\\"none\\"";',
+            "M18",
+        )
+        # Referencias prohibidas a Expansion (distinguiendo mayusculas, sin comentarios).
+        for bad_tok in ("eAI", "Expansion", "EXPANSIONMODAI"):
+            self._assert_only_rule_fails(
+                "scripts/3_Game/DSBX_ActorEngine.c",
+                'string Name() { return "none"; }',
+                f'string Name() {{ return "{bad_tok}"; }}',
+                "M18",
+            )
+        # DSBX_ActorEngine sin Managed o metodo sin expansion_unavailable.
+        self._assert_only_rule_fails(
+            "scripts/3_Game/DSBX_ActorEngine.c",
+            "class DSBX_ActorEngine : Managed",
+            "class DSBX_ActorEngine",
+            "M18",
+        )
+        for m_sig in (
+            'string Spawn(string lid, string cls, vector pos, float yaw, array<string> items) { return "expansion_unavailable"; }',
+            'string SetMarks(string lid, array<vector> marks, string behaviour, float roam) { return "expansion_unavailable"; }',
+            'string RequestGesture(string lid, int gi, string emote) { return "expansion_unavailable"; }',
+            'string State(string lid) { return "expansion_unavailable"; }',
+            'string Stop(string lid) { return "expansion_unavailable"; }',
+            'string Despawn(string lid) { return "expansion_unavailable"; }',
+        ):
+            self._assert_only_rule_fails(
+                "scripts/3_Game/DSBX_ActorEngine.c",
+                m_sig,
+                m_sig.replace('"expansion_unavailable"', '"ok"'),
+                "M18",
+            )
+
+    def test_m19_despacho_de_actores(self):
+        self.assertEqual(check_m19(REAL_MOD_DIR), [])
+
+    def test_x4_m19_cada_mutacion_tumba_solo_m19(self):
+        # B15: sin mirar IsAvailable() el rechazo desaparece.
+        self._assert_only_rule_fails(
+            "scripts/3_Game/DSBX_ActorOps.c",
+            "if (!engine.IsAvailable())",
+            "if (false)",
+            "M19",
+        )
+        self._assert_only_rule_fails(
+            "scripts/3_Game/DSBX_Peer.c",
+            "\t\t\tm_ActorOps = new DSBX_ActorOps();\n",
+            "",
+            "M19",
+        )
+        self._assert_only_rule_fails(
+            "scripts/3_Game/DSBX_Peer.c",
+            'if (verb == "actor.apply" || verb == "actor.reset" || verb == "actor.observe")',
+            'if (verb == "actor.apply" || verb == "actor.observe")',
+            "M19",
+        )
+        self._assert_only_rule_fails(
+            "scripts/3_Game/DSBX_Messages.c",
+            "\tref array<int> g_t_ms;",
+            "\tref array<float> g_t_ms;",
+            "M19",
+        )
 
     def test_x4_m16_reinicio_solo_por_sesion(self):
         # T4 917bc73: volver a reiniciar el catalogo solo con sesion nueva tumba M16 y nada mas.
