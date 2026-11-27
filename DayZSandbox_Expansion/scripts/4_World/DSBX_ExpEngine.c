@@ -576,6 +576,7 @@ class DSBX_ExpansionEngine : DSBX_ActorEngine
 		HaltGroup(rec.m_Ai);
 		rec.m_MarkI = -1;
 		rec.m_MarkSt = "idle";
+		rec.m_Behaviour = "HOLD";
 		CancelActive(rec, "stop");
 		return "";
 	}

@@ -17,7 +17,7 @@ RECENT = 20
 NOT_APPLY = " La IA no aplica nada al juego: aplicar lo aprueba la persona en la web."
 TOOLS = [
     {"name": "scene_get",
-     "description": "Lee la escena actual con su revisión, su hash y las últimas tandas con su autor." + NOT_APPLY,
+     "description": "Lee el documento de la escena (no el estado del juego) con su revisión, su hash y las últimas tandas con su autor. La observación de los actores en partida está en GET /api/actors/observation." + NOT_APPLY,
      "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "scene_ops",
      "description": "Manda una tanda atómica de operaciones sobre la escena (todo o nada); puede volver conflict, busy_human, take_locked, ai_paused, stale_base o doc_changed." + NOT_APPLY,
@@ -25,7 +25,7 @@ TOOLS = [
                      "properties": {"base_rev": {"type": "integer"}, "label": {"type": ["string", "null"]},
                                     "ops": {"type": "array", "items": {"type": "object"}}}}},
     {"name": "scene_validate",
-     "description": "Valida una tanda sin aplicarla y dice qué rechazo daría." + NOT_APPLY,
+     "description": "Valida una tanda contra el documento (esquema y reglas de edición) sin aplicarla y dice qué rechazo daría. No es la validación para aplicar al juego: esa la hace el backend al aprobar (actores, motor, cable)." + NOT_APPLY,
      "inputSchema": {"type": "object", "required": ["base_rev", "ops"], "additionalProperties": False,
                      "properties": {"base_rev": {"type": "integer"},
                                     "ops": {"type": "array", "items": {"type": "object"}}}}},

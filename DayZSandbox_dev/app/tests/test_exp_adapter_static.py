@@ -1,11 +1,11 @@
-"""Comprobacion estatica del adaptador DayZSandbox_Expansion/ (F3-adaptador §6, reglas E1-E9)."""
+"""Comprobacion estatica del adaptador DayZSandbox_Expansion/ (F3-adaptador §6 y §13.2, reglas E1-E12)."""
 
 import json
 import re
 import unittest
 from pathlib import Path
 
-from app.tests.test_mod_static import _find_class_body, _find_method_body, _strip_comments
+from app.tests.test_mod_static import _extract_block, _find_class_body, _find_method_body, _strip_comments
 
 REPO = Path(__file__).resolve().parents[3]
 ADAPTER_DIR = REPO / "DayZSandbox_Expansion"
@@ -37,15 +37,15 @@ EXPECTED_DEPENDENCIES = [
 ]
 
 EXPECTED_OVERRIDE_METHODS = (
-    ("Name", "string"),
-    ("IsAvailable", "bool"),
-    ("Spawn", "string"),
-    ("SetMarks", "string"),
-    ("RequestGesture", "string"),
-    ("State", "string"),
-    ("Stop", "string"),
-    ("Despawn", "string"),
-    ("Gestures", "string"),
+    ("Name", "string", ()),
+    ("IsAvailable", "bool", ()),
+    ("Spawn", "string", ("string", "string", "vector", "float", "array<string>")),
+    ("SetMarks", "string", ("string", "array<vector>", "string", "float")),
+    ("RequestGesture", "string", ("string", "int", "string", "int", "int")),
+    ("State", "string", ("string",)),
+    ("Stop", "string", ("string",)),
+    ("Despawn", "string", ("string",)),
+    ("Gestures", "string", ("string",)),
 )
 
 FORBIDDEN_ADAPTER_TOKENS = (
@@ -66,53 +66,18 @@ EXPECTED_EMOTE_PAIRS = [
     ("EmoteHeart", "EmoteConstants.ID_EMOTE_HEART"),
 ]
 
-VALID_CAUSES = frozenset({"timeout", "interrupted", "stop"})
-VALID_EVENT_STATES = frozenset({
-    "requested",
-    "playing",
-    "finished",
-    "canceled",
-    "rejected",
-    "expired",
-})
-REQUIRED_EMITTED_STATES = frozenset({
-    "requested",
-    "playing",
-    "finished",
-    "canceled",
-    "expired",
-})
-NON_EVENT_WORD_LITERALS = frozenset({
-    "expansion",
-    "none",
-    "eAI_",
-    "CfgVehicles",
-    "unknown_class",
-    "spawn_failed",
-    "wardrobe_failed",
-    "unknown_actor",
-    "bad_behaviour",
-    "bad_marks",
-    "bad_position",
-    "unknown_emote",
-    "expansion_unavailable",
-    "HOLD",
-    "ONCE",
-    "LOOP",
-    "ROAM",
-    "idle",
-    "moving",
-    "arrived",
-    "unreachable",
-    "null",
-    "true",
-    "false",
-    "queued",
-    "done",
-    "pending",
-    "waiting",
-    *(name for name, _ in EXPECTED_EMOTE_PAIRS),
-})
+STATE_ROW_VARS = [
+    "lidJson",
+    "clsJson",
+    "xJson",
+    "yJson",
+    "zJson",
+    "yawJson",
+    "itemsJson",
+    "miJson",
+    "stJson",
+    "tJson",
+]
 
 
 def _read_stripped(path: Path) -> str:
@@ -121,9 +86,12 @@ def _read_stripped(path: Path) -> str:
 
 
 def _extract_call_args(code: str, func_name: str) -> list[list[str]]:
-    """Extrae la lista de argumentos de cada llamada a func_name(...)."""
+    """Extrae la lista de argumentos de cada llamada a func_name(...) (excluyendo su declaracion)."""
     calls = []
     for m in re.finditer(rf"\b{re.escape(func_name)}\s*\(", code):
+        prefix = code[max(0, m.start() - 16) : m.start()]
+        if re.search(r"\b(?:void|int|bool|float|string|override)\s+$", prefix):
+            continue
         open_idx = code.find("(", m.start())
         depth = 0
         in_str = False
@@ -158,8 +126,25 @@ def _extract_call_args(code: str, func_name: str) -> list[list[str]]:
     return calls
 
 
+def _param_types(params_str: str) -> tuple[str, ...]:
+    """Devuelve la tupla de tipos de una lista de parametros Enforce."""
+    s = params_str.strip()
+    if not s:
+        return ()
+    out = []
+    for part in s.split(","):
+        tokens = part.strip().split()
+        if len(tokens) < 2:
+            out.append(part.strip())
+        else:
+            typ = " ".join(tokens[:-1])
+            typ = re.sub(r"\s*([<>])\s*", r"\1", typ)
+            out.append(typ)
+    return tuple(out)
+
+
 def check_e1(adapter_dir: Path, core_dir: Path) -> list[str]:
-    """E1 forma: arbol exacto de DayZSandbox_Expansion, $PBOPREFIX$, include.lst y config.cpp."""
+    """E1 forma: arbol exacto de DayZSandbox_Expansion, $PBOPREFIX$, include.lst y config.cpp (N1)."""
     adapter_dir = Path(adapter_dir)
     violations = []
     if not adapter_dir.is_dir():
@@ -192,57 +177,67 @@ def check_e1(adapter_dir: Path, core_dir: Path) -> list[str]:
         return violations
 
     cfg = _read_stripped(cfg_path)
-    m_req = re.search(r"\brequiredAddons\s*\[\s*\]\s*=\s*\{([^}]*)\}\s*;", cfg)
-    if not m_req:
-        violations.append("E1: falta requiredAddons[] en config.cpp")
+    patches_body = _find_class_body(cfg, "CfgPatches")
+    patches_exp = _find_class_body(patches_body, "DayZSandbox_Expansion") if patches_body else ""
+    if not patches_exp:
+        violations.append("E1: falta class CfgPatches -> class DayZSandbox_Expansion en config.cpp")
     else:
-        items = [s.strip() for s in m_req.group(1).split(",") if s.strip()]
-        if items != EXPECTED_REQUIRED_ADDONS:
-            violations.append(
-                f"E1: requiredAddons distinto: actual={items} esperado={EXPECTED_REQUIRED_ADDONS}"
-            )
+        m_req = re.search(r"\brequiredAddons\s*\[\s*\]\s*=\s*\{([^}]*)\}\s*;", patches_exp)
+        if not m_req:
+            violations.append("E1: falta requiredAddons[] en CfgPatches -> DayZSandbox_Expansion")
+        else:
+            items = [s.strip() for s in m_req.group(1).split(",") if s.strip()]
+            if items != EXPECTED_REQUIRED_ADDONS:
+                violations.append(
+                    f"E1: requiredAddons distinto: actual={items} esperado={EXPECTED_REQUIRED_ADDONS}"
+                )
 
-    m_dep = re.search(r"\bdependencies\s*\[\s*\]\s*=\s*\{([^}]*)\}\s*;", cfg)
-    if not m_dep:
-        violations.append("E1: falta dependencies[] en config.cpp")
+    mods_body = _find_class_body(cfg, "CfgMods")
+    mods_exp = _find_class_body(mods_body, "DayZSandbox_Expansion") if mods_body else ""
+    if not mods_exp:
+        violations.append("E1: falta class CfgMods -> class DayZSandbox_Expansion en config.cpp")
     else:
-        deps = [s.strip() for s in m_dep.group(1).split(",") if s.strip()]
-        if deps != EXPECTED_DEPENDENCIES:
-            violations.append(
-                f"E1: dependencies distinto: actual={deps} esperado={EXPECTED_DEPENDENCIES}"
-            )
+        m_dep = re.search(r"\bdependencies\s*\[\s*\]\s*=\s*\{([^}]*)\}\s*;", mods_exp)
+        if not m_dep:
+            violations.append("E1: falta dependencies[] en CfgMods -> DayZSandbox_Expansion")
+        else:
+            deps = [s.strip() for s in m_dep.group(1).split(",") if s.strip()]
+            if deps != EXPECTED_DEPENDENCIES:
+                violations.append(
+                    f"E1: dependencies distinto: actual={deps} esperado={EXPECTED_DEPENDENCIES}"
+                )
 
-    defs_body = _find_class_body(cfg, "defs")
-    if not defs_body:
-        violations.append("E1: config.cpp no tiene class defs")
-    else:
-        subclasses = re.findall(r"\bclass\s+(\w+)\b", defs_body)
-        if sorted(subclasses) != ["missionScriptModule", "worldScriptModule"]:
-            violations.append(
-                f"E1: defs debe tener solo worldScriptModule y missionScriptModule, tiene {subclasses}"
-            )
-        world_body = _find_class_body(defs_body, "worldScriptModule")
-        if not re.search(
-            r'\bfiles\s*\[\s*\]\s*=\s*\{\s*"DayZSandbox_Expansion/scripts/4_World"\s*\}\s*;',
-            world_body,
-        ):
-            violations.append(
-                'E1: worldScriptModule debe tener files[] = {"DayZSandbox_Expansion/scripts/4_World"};'
-            )
-        mission_body = _find_class_body(defs_body, "missionScriptModule")
-        if not re.search(
-            r'\bfiles\s*\[\s*\]\s*=\s*\{\s*"DayZSandbox_Expansion/scripts/5_Mission"\s*\}\s*;',
-            mission_body,
-        ):
-            violations.append(
-                'E1: missionScriptModule debe tener files[] = {"DayZSandbox_Expansion/scripts/5_Mission"};'
-            )
+        defs_body = _find_class_body(mods_exp, "defs")
+        if not defs_body:
+            violations.append("E1: CfgMods -> DayZSandbox_Expansion no tiene class defs")
+        else:
+            subclasses = re.findall(r"\bclass\s+(\w+)\b", defs_body)
+            if sorted(subclasses) != ["missionScriptModule", "worldScriptModule"]:
+                violations.append(
+                    f"E1: defs debe tener solo worldScriptModule y missionScriptModule, tiene {subclasses}"
+                )
+            world_body = _find_class_body(defs_body, "worldScriptModule")
+            if not re.search(
+                r'\bfiles\s*\[\s*\]\s*=\s*\{\s*"DayZSandbox_Expansion/scripts/4_World"\s*\}\s*;',
+                world_body,
+            ):
+                violations.append(
+                    'E1: worldScriptModule debe tener files[] = {"DayZSandbox_Expansion/scripts/4_World"};'
+                )
+            mission_body = _find_class_body(defs_body, "missionScriptModule")
+            if not re.search(
+                r'\bfiles\s*\[\s*\]\s*=\s*\{\s*"DayZSandbox_Expansion/scripts/5_Mission"\s*\}\s*;',
+                mission_body,
+            ):
+                violations.append(
+                    'E1: missionScriptModule debe tener files[] = {"DayZSandbox_Expansion/scripts/5_Mission"};'
+                )
 
     return violations
 
 
 def check_e2(adapter_dir: Path, core_dir: Path) -> list[str]:
-    """E2 guarda: cada .c del adaptador empieza por #ifdef EXPANSIONMODAI y acaba en #endif."""
+    """E2 guarda: cada .c empieza por #ifdef EXPANSIONMODAI, acaba en #endif y sin #else/#elif exterior (N2)."""
     adapter_dir = Path(adapter_dir)
     if not adapter_dir.is_dir():
         return [f"E2: no existe el directorio {adapter_dir}"]
@@ -269,9 +264,13 @@ def check_e2(adapter_dir: Path, core_dir: Path) -> list[str]:
             )
         depth = 0
         closed_early = False
+        outer_branch = False
         for idx, ln in enumerate(lines):
             if re.match(r"#\s*(?:ifdef|ifndef|if)\b", ln):
                 depth += 1
+            elif re.match(r"#\s*(?:else|elif)\b", ln):
+                if depth == 1:
+                    outer_branch = True
             elif re.match(r"#\s*endif\b", ln):
                 depth -= 1
             if depth <= 0 and idx < len(lines) - 1:
@@ -279,12 +278,14 @@ def check_e2(adapter_dir: Path, core_dir: Path) -> list[str]:
                 break
         if closed_early or depth != 0:
             violations.append(f"E2: {rel}: hay codigo fuera de la guarda #ifdef EXPANSIONMODAI")
+        if outer_branch:
+            violations.append(f"E2: {rel}: #else o #elif al nivel exterior de la guarda")
 
     return violations
 
 
 def check_e3(adapter_dir: Path, core_dir: Path) -> list[str]:
-    """E3 motor: class DSBX_ExpansionEngine : DSBX_ActorEngine, Name, IsAvailable y overrides."""
+    """E3 motor: class DSBX_ExpansionEngine : DSBX_ActorEngine, Name, IsAvailable y firmas de override (N3)."""
     adapter_dir = Path(adapter_dir)
     eng_path = adapter_dir / "scripts/4_World/DSBX_ExpEngine.c"
     if not eng_path.is_file():
@@ -308,20 +309,35 @@ def check_e3(adapter_dir: Path, core_dir: Path) -> list[str]:
     if avail_body != "return true;":
         violations.append(f"E3: IsAvailable() debe devolver true, tiene: {avail_body!r}")
 
-    for method_name, ret_type in EXPECTED_OVERRIDE_METHODS:
-        if not re.search(
-            rf"\boverride\s+{re.escape(ret_type)}\s+{re.escape(method_name)}\s*\(",
+    expected_map = {name: (ret, params) for name, ret, params in EXPECTED_OVERRIDE_METHODS}
+    for method_name, ret_type, expected_params in EXPECTED_OVERRIDE_METHODS:
+        m = re.search(
+            rf"\boverride\s+([A-Za-z_][\w<>]*)\s+{re.escape(method_name)}\s*\(([^)]*)\)",
             engine_body,
-        ):
+        )
+        if not m:
             violations.append(f"E3: falta override {ret_type} {method_name}(...) en DSBX_ExpansionEngine")
-        elif not _find_method_body(engine_body, method_name).strip():
+            continue
+        actual_ret = m.group(1)
+        actual_params = _param_types(m.group(2))
+        if actual_ret != ret_type or actual_params != expected_params:
+            violations.append(
+                f"E3: firma de override {method_name} distinta a DSBX_ActorEngine: "
+                f"actual=({actual_ret}, {actual_params}) esperado=({ret_type}, {expected_params})"
+            )
+        if not _find_method_body(engine_body, method_name).strip():
             violations.append(f"E3: cuerpo vacio en DSBX_ExpansionEngine.{method_name}")
+
+    for m in re.finditer(r"\boverride\s+([A-Za-z_][\w<>]*)\s+(\w+)\s*\(([^)]*)\)", engine_body):
+        mname = m.group(2)
+        if mname not in expected_map:
+            violations.append(f"E3: override {mname} no existe en DSBX_ActorEngine")
 
     return violations
 
 
 def check_e4(adapter_dir: Path, core_dir: Path) -> list[str]:
-    """E4 registro: MissionServer registra el motor tras super.OnMissionStart() y llama a Tick."""
+    """E4 registro: MissionServer instancia y registra m_DsbxExpEngine tras super y llama a Tick bajo if (N3)."""
     adapter_dir = Path(adapter_dir)
     mis_path = adapter_dir / "scripts/5_Mission/DSBX_ExpMission.c"
     if not mis_path.is_file():
@@ -342,30 +358,53 @@ def check_e4(adapter_dir: Path, core_dir: Path) -> list[str]:
         violations.append("E4: falta OnMissionStart en MissionServer")
     else:
         super_pos = start_body.find("super.OnMissionStart();")
-        reg_pos = start_body.find("DSBX_ActorEngineRegistry.Register(")
+        new_m = re.search(
+            r"\bm_DsbxExpEngine\s*=\s*new\s+DSBX_ExpansionEngine\s*\(\s*\)\s*;",
+            start_body,
+        )
+        reg_m = re.search(
+            r"\bDSBX_ActorEngineRegistry\.Register\s*\(\s*m_DsbxExpEngine\s*\)\s*;",
+            start_body,
+        )
         if super_pos < 0:
             violations.append("E4: OnMissionStart no llama a super.OnMissionStart();")
-        if reg_pos < 0:
-            violations.append("E4: OnMissionStart no llama a DSBX_ActorEngineRegistry.Register(")
-        if super_pos >= 0 and reg_pos >= 0 and reg_pos < super_pos:
+        if not new_m:
+            violations.append("E4: OnMissionStart debe hacer m_DsbxExpEngine = new DSBX_ExpansionEngine();")
+        if not reg_m:
             violations.append(
-                "E4: DSBX_ActorEngineRegistry.Register( va antes de super.OnMissionStart();"
+                "E4: OnMissionStart debe llamar a DSBX_ActorEngineRegistry.Register(m_DsbxExpEngine);"
             )
+        if super_pos >= 0 and new_m and reg_m:
+            if not (super_pos < new_m.start() < reg_m.start()):
+                violations.append(
+                    "E4: OnMissionStart debe ejecutar super.OnMissionStart(), new DSBX_ExpansionEngine() y Register(m_DsbxExpEngine) en ese orden"
+                )
 
     update_body = _find_method_body(ms_body, "OnUpdate")
     if not update_body:
         violations.append("E4: falta OnUpdate en MissionServer")
     else:
-        if "super.OnUpdate(timeslice);" not in update_body:
+        super_up = update_body.find("super.OnUpdate(timeslice);")
+        if super_up < 0:
             violations.append("E4: OnUpdate no llama a super.OnUpdate(timeslice);")
-        if ".Tick(timeslice)" not in update_body:
-            violations.append("E4: OnUpdate no llama a .Tick(timeslice)")
+        if_m = re.search(r"\bif\s*\(\s*m_DsbxExpEngine\s*\)", update_body)
+        if not if_m:
+            violations.append("E4: OnUpdate debe comprobar if (m_DsbxExpEngine)")
+        else:
+            if super_up >= 0 and if_m.start() < super_up:
+                violations.append("E4: if (m_DsbxExpEngine) debe ir despues de super.OnUpdate(timeslice);")
+            brace_pos = update_body.find("{", if_m.end())
+            if_block = _extract_block(update_body, brace_pos) if brace_pos >= 0 else update_body[if_m.end() :]
+            if not re.search(r"\bm_DsbxExpEngine\.Tick\s*\(\s*timeslice\s*\)\s*;", if_block):
+                violations.append(
+                    "E4: OnUpdate debe llamar a m_DsbxExpEngine.Tick(timeslice) dentro de if (m_DsbxExpEngine)"
+                )
 
     return violations
 
 
 def check_e5(adapter_dir: Path, core_dir: Path) -> list[str]:
-    """E5 alta: requisitos de Spawn en DSBX_ExpansionEngine (§4.1)."""
+    """E5 alta: requisitos de Spawn en DSBX_ExpansionEngine (§4.1 y N4)."""
     adapter_dir = Path(adapter_dir)
     eng_path = adapter_dir / "scripts/4_World/DSBX_ExpEngine.c"
     if not eng_path.is_file():
@@ -382,19 +421,37 @@ def check_e5(adapter_dir: Path, core_dir: Path) -> list[str]:
         violations.append('E5: Spawn debe prefijar la clase con `"eAI_" +`')
     if "ConfigIsExisting" not in spawn_body:
         violations.append("E5: Spawn debe comprobar ConfigIsExisting")
-    if "CreateObjectEx" not in spawn_body:
+    flags_m = re.search(
+        r"\bint\s+flags\s*=\s*ECE_PLACE_ON_SURFACE\s*\|\s*ECE_INITAI\s*\|\s*ECE_NOLIFETIME\s*\|\s*ECE_NOPERSISTENCY_WORLD\s*;",
+        spawn_body,
+    )
+    if not flags_m:
+        violations.append(
+            "E5: Spawn debe declarar int flags = ECE_PLACE_ON_SURFACE | ECE_INITAI | ECE_NOLIFETIME | ECE_NOPERSISTENCY_WORLD;"
+        )
+    create_calls = _extract_call_args(spawn_body, "CreateObjectEx")
+    if not create_calls:
         violations.append("E5: Spawn debe crear el actor con CreateObjectEx")
-    for flag in ("ECE_INITAI", "ECE_NOLIFETIME", "ECE_NOPERSISTENCY_WORLD"):
-        if not re.search(rf"\b{flag}\b", spawn_body):
-            violations.append(f"E5: falta el flag {flag} en Spawn")
+    else:
+        for args in create_calls:
+            if len(args) != 3 or args[2] != "flags":
+                violations.append(
+                    f"E5: el tercer argumento de CreateObjectEx debe ser flags, es {args}"
+                )
     if not re.search(r"\beAIFactionPassive\b", spawn_body):
         violations.append("E5: falta eAIFactionPassive en Spawn")
     if "eAIGroup.CreateGroup(" not in spawn_body:
         violations.append("E5: falta eAIGroup.CreateGroup( en Spawn")
     if "SetGroup(" not in spawn_body:
         violations.append("E5: falta SetGroup( en Spawn")
-    if "CreateAttachment(" not in spawn_body:
+    sweep_m = re.search(r"\bSweepAttachments\s*\(\s*ai\s*\)\s*;", spawn_body)
+    attach_pos = spawn_body.find("CreateAttachment(")
+    if not sweep_m:
+        violations.append("E5: falta SweepAttachments(ai); en Spawn")
+    if attach_pos < 0:
         violations.append("E5: falta CreateAttachment( en Spawn")
+    if sweep_m and attach_pos >= 0 and sweep_m.start() >= attach_pos:
+        violations.append("E5: SweepAttachments(ai); debe ir antes del primer CreateAttachment(")
 
     return violations
 
@@ -431,7 +488,7 @@ def check_e6(adapter_dir: Path, core_dir: Path) -> list[str]:
 
 
 def check_e7(adapter_dir: Path, core_dir: Path) -> list[str]:
-    """E7 gestos: pares exactos en EmoteId contra §5.1 y catalog-m1.json, return -1 y unknown_emote."""
+    """E7 gestos: cuerpo exacto de EmoteId contra §5.1 y catalog-m1.json, return -1 y unknown_emote (N7)."""
     adapter_dir = Path(adapter_dir)
     eng_path = adapter_dir / "scripts/4_World/DSBX_ExpEngine.c"
     if not eng_path.is_file():
@@ -453,8 +510,6 @@ def check_e7(adapter_dir: Path, core_dir: Path) -> list[str]:
         r'if\s*\(\s*emote\s*==\s*"([^"]*)"\s*\)\s*(?:\{\s*)?return\s+([\w.]+)\s*;(?:\s*\})?',
         emote_body,
     )
-    if len(re.findall(r"\bif\s*\(", emote_body)) != len(pairs):
-        violations.append("E7: EmoteId contiene ramas if con formato inesperado")
     if pairs != EXPECTED_EMOTE_PAIRS:
         violations.append(
             f"E7: los pares de EmoteId no coinciden con §5.1: actual={pairs}"
@@ -463,8 +518,17 @@ def check_e7(adapter_dir: Path, core_dir: Path) -> list[str]:
         violations.append(
             f"E7: los nombres de EmoteId no coinciden con catalog-m1.json emotes: {[n for n, _ in pairs]}"
         )
-    if not re.search(r"\breturn\s+-1\s*;\s*$", emote_body.strip()):
-        violations.append("E7: EmoteId debe terminar en 'return -1;'")
+
+    def _norm_emote_body(s: str) -> str:
+        collapsed = re.sub(r"\s+", " ", s).strip()
+        return re.sub(r"\s*([();]|==)\s*", r"\1", collapsed)
+
+    expected_norm = (
+        "".join(f'if(emote=="{name}")return {const};' for name, const in EXPECTED_EMOTE_PAIRS)
+        + "return -1;"
+    )
+    if _norm_emote_body(emote_body) != expected_norm:
+        violations.append("E7: el cuerpo de EmoteId debe ser exactamente el de §5.1 salvo espacios")
 
     req_body = _find_method_body(engine_body, "RequestGesture")
     if '"unknown_emote"' not in req_body:
@@ -474,7 +538,7 @@ def check_e7(adapter_dir: Path, core_dir: Path) -> list[str]:
 
 
 def check_e8(adapter_dir: Path, core_dir: Path) -> list[str]:
-    """E8 nucleo: firmas de RequestGesture y Gestures en DSBX_ActorEngine, y uso en DSBX_ActorOps."""
+    """E8 nucleo: firmas en DSBX_ActorEngine y llamadas exactas en DSBX_ActorOps (N8)."""
     core_dir = Path(core_dir)
     ae_path = core_dir / "scripts/3_Game/DSBX_ActorEngine.c"
     ops_path = core_dir / "scripts/3_Game/DSBX_ActorOps.c"
@@ -504,15 +568,24 @@ def check_e8(adapter_dir: Path, core_dir: Path) -> list[str]:
         ops_body = _find_class_body(ops_code, "DSBX_ActorOps")
         apply_body = _find_method_body(ops_body, "Apply")
         if not re.search(
-            r"\bRequestGesture\s*\([^;]*\bargs\.g_at\s*\[\s*gi\s*\][^;]*\bargs\.g_t_ms\s*\[\s*gi\s*\]",
+            r"\bengine\.RequestGesture\s*\(\s*args\.a_lid\s*,\s*gi\s*,\s*args\.g_emote\s*\[\s*gi\s*\]\s*,\s*args\.g_at\s*\[\s*gi\s*\]\s*,\s*args\.g_t_ms\s*\[\s*gi\s*\]\s*\)",
             apply_body,
         ):
             violations.append(
-                "E8: DSBX_ActorOps.Apply debe pasar args.g_at[gi] y args.g_t_ms[gi] a RequestGesture"
+                "E8: DSBX_ActorOps.Apply debe llamar exactamente a engine.RequestGesture(args.a_lid, gi, args.g_emote[gi], args.g_at[gi], args.g_t_ms[gi])"
             )
         read_body = _find_method_body(ops_body, "ReadJson")
-        if "engine.Gestures(" not in read_body:
-            violations.append("E8: DSBX_ActorOps.ReadJson debe llamar a engine.Gestures(")
+        m_loop = re.search(r"\bforeach\s*\(\s*string\s+lid\s*:\s*m_Lids\s*\)\s*\{", read_body)
+        if not m_loop:
+            violations.append("E8: DSBX_ActorOps.ReadJson debe recorrer m_Lids con foreach (string lid : m_Lids)")
+        else:
+            loop_body = _extract_block(read_body, read_body.find("{", m_loop.start()))
+            row_add = re.search(r"\brows\s*=\s*rows\s*\+\s*row\s*;", loop_body)
+            gest_call = re.search(r"\bengine\.Gestures\s*\(\s*lid\s*\)", loop_body)
+            if not row_add or not gest_call or gest_call.start() <= row_add.start():
+                violations.append(
+                    "E8: DSBX_ActorOps.ReadJson debe llamar a engine.Gestures(lid) dentro del bucle, despues de anadir la fila"
+                )
         if '\\"gestures\\":[]' in read_body or '"gestures":[]' in read_body:
             violations.append("E8: DSBX_ActorOps.ReadJson no debe devolver gestures vacio fijo")
 
@@ -520,44 +593,186 @@ def check_e8(adapter_dir: Path, core_dir: Path) -> list[str]:
 
 
 def check_e9(adapter_dir: Path, core_dir: Path) -> list[str]:
-    """E9 eventos: causas en {timeout, interrupted, stop} y estados en los seis de F3-offline-1 §2.2."""
+    """E9 eventos: pares (estado, causa) en Emit/FinishGesture y reenvio en EmoteCB tras super (N9)."""
     adapter_dir = Path(adapter_dir)
     eng_path = adapter_dir / "scripts/4_World/DSBX_ExpEngine.c"
     if not eng_path.is_file():
         return ["E9: falta scripts/4_World/DSBX_ExpEngine.c"]
 
     code = _read_stripped(eng_path)
-    literals = re.findall(r'"((?:\\.|[^"\\])*)"', code)
-    lit_set = set(literals)
     violations = []
 
-    for cause in sorted(VALID_CAUSES):
-        if cause not in lit_set:
-            violations.append(f'E9: falta la causa literal "{cause}" en el adaptador')
+    no_cause_states = {"requested", "playing", "finished"}
+    with_cause_states = {"canceled", "expired"}
+    allowed_cause_args = {'"interrupted"', '"timeout"', '"stop"', "cause"}
 
-    for st in sorted(REQUIRED_EMITTED_STATES):
-        if st not in lit_set:
-            violations.append(f'E9: falta el estado de evento literal "{st}" en el adaptador')
+    literal_calls = 0
+    for fn_name in ("Emit", "FinishGesture"):
+        for args in _extract_call_args(code, fn_name):
+            if len(args) != 4:
+                violations.append(f"E9: llamada a {fn_name} con {len(args)} argumentos: {args}")
+                continue
+            st_arg = args[2].strip()
+            cause_arg = args[3].strip()
+            if st_arg.startswith('"') and st_arg.endswith('"'):
+                literal_calls += 1
+                st_val = st_arg[1:-1]
+                if st_val in no_cause_states:
+                    if cause_arg != '""':
+                        violations.append(
+                            f'E9: {fn_name} con estado "{st_val}" debe llevar causa "", lleva {cause_arg}'
+                        )
+                elif st_val in with_cause_states:
+                    if cause_arg not in allowed_cause_args:
+                        violations.append(
+                            f'E9: {fn_name} con estado "{st_val}" lleva causa no valida {cause_arg}'
+                        )
+                else:
+                    violations.append(f'E9: {fn_name} con estado literal no valido "{st_val}"')
 
-    for assigned in re.findall(r'\b(?!\w*Json\b)\w*cause\w*\s*=\s*"([^"]+)"', code, flags=re.IGNORECASE):
-        if assigned not in VALID_CAUSES:
-            violations.append(f'E9: causa no permitida "{assigned}"')
+    if literal_calls == 0:
+        violations.append("E9: no se encontraron llamadas a Emit o FinishGesture con estado literal")
 
-    for pair_cause in re.findall(
-        r'"(?:requested|playing|finished|canceled|rejected|expired)"\s*,\s*"([^"]+)"',
-        code,
+    if not re.search(r"\bmodded\s+class\s+EmoteCB\b", code):
+        violations.append("E9: falta modded class EmoteCB")
+    else:
+        cb_body = _find_class_body(code, "EmoteCB")
+        osc_body = _find_method_body(cb_body, "OnStateChange")
+        if not osc_body:
+            violations.append("E9: falta OnStateChange en modded class EmoteCB")
+        else:
+            super_pos = osc_body.find("super.OnStateChange(")
+            fwd_pos = osc_body.find(".OnState(")
+            if super_pos < 0 or fwd_pos < 0 or super_pos >= fwd_pos:
+                violations.append("E9: EmoteCB.OnStateChange debe reenviar a .OnState( tras super")
+
+        of_body = _find_method_body(cb_body, "OnFinish")
+        if not of_body:
+            violations.append("E9: falta OnFinish en modded class EmoteCB")
+        else:
+            super_pos = of_body.find("super.OnFinish(")
+            fwd_pos = of_body.find(".OnFinish(")
+            if super_pos < 0 or fwd_pos < 0 or super_pos >= fwd_pos:
+                violations.append("E9: EmoteCB.OnFinish debe reenviar a .OnFinish( tras super")
+
+    return violations
+
+
+def check_e10(adapter_dir: Path, core_dir: Path) -> list[str]:
+    """E10 movimiento: Tick llama a TickMarks, TickRoam y TickGestures; SetMarks y SendRoamDest (N5)."""
+    adapter_dir = Path(adapter_dir)
+    eng_path = adapter_dir / "scripts/4_World/DSBX_ExpEngine.c"
+    if not eng_path.is_file():
+        return ["E10: falta scripts/4_World/DSBX_ExpEngine.c"]
+
+    code = _read_stripped(eng_path)
+    engine_body = _find_class_body(code, "DSBX_ExpansionEngine")
+    if not engine_body:
+        return ["E10: falta DSBX_ExpansionEngine"]
+
+    violations = []
+    tick_body = _find_method_body(engine_body, "Tick")
+    for call_pat, label in (
+        (r"\bTickMarks\s*\(\s*rec\s*,\s*pos\s*\)\s*;", "TickMarks(rec, pos);"),
+        (r"\bTickRoam\s*\(\s*rec\s*,\s*pos\s*\)\s*;", "TickRoam(rec, pos);"),
+        (r"\bTickGestures\s*\(\s*rec\s*\)\s*;", "TickGestures(rec);"),
     ):
-        if pair_cause not in VALID_CAUSES:
-            violations.append(f'E9: causa no permitida "{pair_cause}"')
+        if not re.search(call_pat, tick_body):
+            violations.append(f"E10: Tick debe llamar a {label}")
 
-    for lit in literals:
-        if not re.fullmatch(r"[A-Za-z_]+", lit):
-            continue
-        if lit in NON_EVENT_WORD_LITERALS:
-            continue
-        if lit in VALID_CAUSES or lit in VALID_EVENT_STATES:
-            continue
-        violations.append(f'E9: literal de estado o causa no permitido "{lit}"')
+    set_marks_body = _find_method_body(engine_body, "SetMarks")
+    if not re.search(
+        r'if\s*\(\s*behaviour\s*==\s*"ONCE"\s*\)\s*\{\s*group\.SetWaypointBehaviour\s*\(\s*eAIWaypointBehavior\.ONCE\s*\)\s*;\s*\}\s*else\s*\{\s*group\.SetWaypointBehaviour\s*\(\s*eAIWaypointBehavior\.LOOP\s*\)\s*;\s*\}',
+        set_marks_body,
+    ):
+        violations.append(
+            "E10: SetMarks debe usar eAIWaypointBehavior.ONCE en la rama ONCE y eAIWaypointBehavior.LOOP en la otra"
+        )
+
+    roam_body = _find_method_body(engine_body, "SendRoamDest")
+    if not re.search(r"\b0\.35\s*\+\s*0\.4\s*\*", roam_body):
+        violations.append("E10: SendRoamDest debe usar 0.35 + 0.4 *")
+    if not re.search(r"\brec\.m_Roam\s*\*\s*frac\b", roam_body):
+        violations.append("E10: SendRoamDest debe usar rec.m_Roam * frac")
+
+    return violations
+
+
+def check_e11(adapter_dir: Path, core_dir: Path) -> list[str]:
+    """E11 fila: orden exacto de las 10 columnas y fila de muerto en State (N10)."""
+    adapter_dir = Path(adapter_dir)
+    eng_path = adapter_dir / "scripts/4_World/DSBX_ExpEngine.c"
+    if not eng_path.is_file():
+        return ["E11: falta scripts/4_World/DSBX_ExpEngine.c"]
+
+    code = _read_stripped(eng_path)
+    engine_body = _find_class_body(code, "DSBX_ExpansionEngine")
+    state_body = _find_method_body(engine_body, "State")
+    if not state_body:
+        return ["E11: falta State en DSBX_ExpansionEngine"]
+
+    violations = []
+    if not re.search(
+        r'"\["\s*\+\s*lidJson\s*\+\s*",null,null,null,null,null,\[\],-1,\\"idle\\","\s*\+\s*tJson\s*\+\s*"\]"',
+        state_body,
+    ):
+        violations.append(
+            'E11: la fila de muerto en State debe ser "[" + lidJson + ",null,null,null,null,null,[],-1,\\"idle\\"," + tJson + "]"'
+        )
+
+    row_start = state_body.find("string row")
+    if row_start < 0:
+        violations.append("E11: falta el armado de la fila en State")
+    else:
+        row_section = state_body[row_start:]
+        found_vars = re.findall(
+            r"\b(?:lidJson|clsJson|xJson|yJson|zJson|yawJson|itemsJson|miJson|stJson|tJson)\b",
+            row_section,
+        )
+        if found_vars != STATE_ROW_VARS:
+            violations.append(
+                f"E11: orden de columnas en State distinto: actual={found_vars} esperado={STATE_ROW_VARS}"
+            )
+
+    return violations
+
+
+def check_e12(adapter_dir: Path, core_dir: Path) -> list[str]:
+    """E12 parada: Stop fija HOLD antes de CancelActive; Despawn cancela, borra entidad y quita del mapa (N11)."""
+    adapter_dir = Path(adapter_dir)
+    eng_path = adapter_dir / "scripts/4_World/DSBX_ExpEngine.c"
+    if not eng_path.is_file():
+        return ["E12: falta scripts/4_World/DSBX_ExpEngine.c"]
+
+    code = _read_stripped(eng_path)
+    engine_body = _find_class_body(code, "DSBX_ExpansionEngine")
+    if not engine_body:
+        return ["E12: falta DSBX_ExpansionEngine"]
+
+    violations = []
+    stop_body = _find_method_body(engine_body, "Stop")
+    if not stop_body:
+        violations.append("E12: falta Stop en DSBX_ExpansionEngine")
+    else:
+        m_hold = re.search(r'\brec\.m_Behaviour\s*=\s*"HOLD"\s*;', stop_body)
+        m_cancel = re.search(r'\bCancelActive\s*\(\s*rec\s*,\s*"stop"\s*\)\s*;', stop_body)
+        if not m_hold:
+            violations.append('E12: Stop debe contener rec.m_Behaviour = "HOLD";')
+        if not m_cancel:
+            violations.append('E12: Stop debe contener CancelActive(rec, "stop");')
+        if m_hold and m_cancel and m_hold.start() >= m_cancel.start():
+            violations.append('E12: en Stop, rec.m_Behaviour = "HOLD"; debe ir antes de CancelActive(rec, "stop");')
+
+    despawn_body = _find_method_body(engine_body, "Despawn")
+    if not despawn_body:
+        violations.append("E12: falta Despawn en DSBX_ExpansionEngine")
+    else:
+        if not re.search(r'\bCancelActive\s*\(\s*rec\s*,\s*"stop"\s*\)\s*;', despawn_body):
+            violations.append('E12: Despawn debe contener CancelActive(rec, "stop");')
+        if not re.search(r"\bg_Game\.ObjectDelete\s*\(\s*rec\.m_Ai\s*\)\s*;", despawn_body):
+            violations.append("E12: Despawn debe contener g_Game.ObjectDelete(rec.m_Ai);")
+        if not re.search(r"\bm_Actors\.Remove\s*\(\s*lid\s*\)\s*;", despawn_body):
+            violations.append("E12: Despawn debe contener m_Actors.Remove(lid);")
 
     return violations
 
@@ -572,11 +787,14 @@ ALL_CHECKS = {
     "E7": check_e7,
     "E8": check_e8,
     "E9": check_e9,
+    "E10": check_e10,
+    "E11": check_e11,
+    "E12": check_e12,
 }
 
 
 class TestExpAdapterStatic(unittest.TestCase):
-    """Reglas estaticas E1-E9 sobre DayZSandbox_Expansion/ y DayZSandbox/."""
+    """Reglas estaticas E1-E12 sobre DayZSandbox_Expansion/ y DayZSandbox/."""
 
     def test_e1_forma(self):
         self.assertEqual(check_e1(ADAPTER_DIR, CORE_DIR), [])
@@ -604,6 +822,15 @@ class TestExpAdapterStatic(unittest.TestCase):
 
     def test_e9_eventos(self):
         self.assertEqual(check_e9(ADAPTER_DIR, CORE_DIR), [])
+
+    def test_e10_movimiento(self):
+        self.assertEqual(check_e10(ADAPTER_DIR, CORE_DIR), [])
+
+    def test_e11_fila(self):
+        self.assertEqual(check_e11(ADAPTER_DIR, CORE_DIR), [])
+
+    def test_e12_parada(self):
+        self.assertEqual(check_e12(ADAPTER_DIR, CORE_DIR), [])
 
 
 if __name__ == "__main__":

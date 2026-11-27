@@ -279,7 +279,7 @@ Antes de lanzar: el linter de Enforce (DP-14) sobre los dos PBO, con Expansion 1
 - el `hello` del servidor sale con `actor_engine = "expansion"` (orden de carga, §3);
 - C1: las dos filas del `actor.apply` pasan `judge_identity` (sin equipo extra de Expansion tras el barrido);
 - C2: ONCE llega y se queda; la marca imposible de S3 da `unreachable`, nunca un PASA; un ONCE normal nunca da `unreachable`;
-- C3: los ocho gestos del catálogo, uno a uno, dan `requested`, `playing`, `finished`; un `actor.reset` en mitad de uno da `canceled/stop` y el gesto no arranca más tarde;
+- C3: los ocho gestos del catálogo, uno a uno, dan `requested`, `playing`, `finished`; un `actor.reset` en mitad de uno: el gesto no arranca más tarde (ningún `EmoteCB` nuevo de ese actor tras el reset); el reset retira el actor y su foto es vacía por contrato;
 - C4: HOLD quieto 10 s; ROAM 10 min dentro del radio;
 - C5: sin el PBO del adaptador, el `hello` sale con `"none"` y la escena con actores se rechaza con `expansion_unavailable`.
 
