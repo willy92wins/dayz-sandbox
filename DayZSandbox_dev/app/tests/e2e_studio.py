@@ -28,6 +28,10 @@ GUION = os.environ.get("DSBX_GUION") or "studio"
 if GUION == "coedit":
     ALL_ROWS = ["C%d" % i for i in range(1, 11)]
     SCRIPT = "coedit.e2e.cjs"
+elif GUION == "actores":
+    # F3-web §5.2: DSBX_GUION=actores corre actores.e2e.cjs con sus filas AC1-AC8.
+    ALL_ROWS = ["AC%d" % i for i in range(1, 9)]
+    SCRIPT = "actores.e2e.cjs"
 else:
     ALL_ROWS = ["S%d" % i for i in range(1, 13)]
     SCRIPT = "studio.e2e.cjs"
