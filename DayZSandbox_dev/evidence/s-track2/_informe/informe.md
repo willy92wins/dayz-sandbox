@@ -1,5 +1,7 @@
 # Informe S-track·2 — cámara que sigue objetos (DayZ 1.30, banco DayZDiag)
 
+**Actualización del 27-nov (§8):** con el evaluador r6c, T-suave 30 y 60 PASAN y 144 queda INCONCLUSO. La negativa quatlerp no inyectaba nada; se corrige en el mod r6c, pendiente de partida. Sale τ = 1,0 s por el criterio de temblor angular, a decidir. T-lect de Hb con giros lentos: lookat PASA en giro2 y giro3, y follow FALLA con 2,1–2,2 px.
+
 **Estado global: INCONCLUSO.** Calibración PASA en Ha y Hb. T-suave PASA a 30 fps. Las negativas `smooth03` y `longarc` FALLAN, como se espera. T-hook de `mount` sobre el arma en manos (medida directa, §34): **aceptado por decisión, con el temblor medido**. Guillermo, 26-nov 15:23Z: «Vale, con suavizado»; plan v0.6, e977533. La medida no da ningún hook rígido con el arma (Hb es el único medible y el más cercano, con 5,1–5,7 px y 0,6–0,9°; Ha y Hc se mueven y giran mucho más en la imagen), y eso se acepta como temblor del arma en manos, con suavizado por defecto y aviso en la web. No es un FALLA del producto. mount03 INCONCLUSO. Negativas de mount: roll y Hb_delay1 FALLA; Ha_delay1 y Hc_delay1 INCONCLUSO. T-lect de lookat/follow por medida directa (§4b): Ha FALLA (la boca se separa de px a decenas de px); Hb INCONCLUSO (mediana 0,15–0,4 px, pero cobertura < 95 % y una cola espuria sensible a la máscara); la negativa lookat_Hb_delay1 FALLA. T-lect de mount y T-ropa quedan INCONCLUSO, cada uno con su causa en §5.
 
 Fecha: 26-nov-2026. Corridas: 24 de la tanda nocturna del 25/26-nov en Willy, en `E:\dsbx-strack2\evidence\runs24\` (uniones a `runs\<corrida>`, con `SHA256SUMS` por corrida y `SHA256SUMS.index`). Evaluador: `qa/strack/s_track_eval.py`; su salida íntegra está en [evaluador.md](evaluador.md) e [informe.json](informe.json) (exit 2). Si se vuelve a correr el evaluador, reescribe `informe.md`: este informe se regenera a mano a partir de `evaluador.md`.
@@ -130,6 +132,54 @@ Tanda corta para otra noche, **preparada y no lanzada** (la caja es de M1; neces
 **Premisa a confirmar antes de usar el barrido:** con suavizado, la deriva durante los giros incluye también el retraso del filtro, que crece con τ. Puede no haber ningún τ que deje p95 ≤ 2 px en los giros aunque quite el temblor. Por eso la medida da además una ventana `sin_giro` (quieto y andando), donde solo hay temblor. Propuesta: elegir τ por `sin_giro` ≤ 2 px e informar del retraso en giros aparte.
 
 Sin partida: la f del hook Ha. La máscara de lookat/follow, ver §5.
+
+## 8. Tanda corta r6b (27-nov, madrugada) y parches r6c (27-nov, tarde)
+
+La tanda corta de §7 corrió el 27-nov, entre las 02:35 y las 04:10 (hora de Madrid), con el mod r6b. Los datos están en `E:\dsbx-strack2\runs_r6`, y la evidencia de este informe en [tanda_r6b/](tanda_r6b/). A las 04:35Z se llenó C:, por un proceso ajeno a S-track (el pagefile llegó a 123 GB). La suite y los mutantes murieron por ese motivo, no por un test, y Windows se reinició a las 06:16. Las decisiones de esta sección son del coordinador (árbitro el orquestador, 27-nov 04:45Z).
+
+**T-suave.** La primera evaluación de r6b ([tanda_r6b/suave/](tanda_r6b/suave/)) daba FALLA del acuerdo entre fps en 30 y 60 (`suave_fps_agree_exceeded`). Era un artefacto del evaluador: comparaba la orientación **absoluta** a t = 1/6 s, y cada corrida empieza con otro rumbo (entre 74 y 98° de diferencia). r6c compara la rotación **relativa** al inicio de cada giro, q·conj(q_origen) en ejes del mundo (`_quat_rel_mundo` en `qa/strack/s_track_eval.py`), con el test `qa/strack/tests/test_suave_relativo.py`: con rumbos distintos y el mismo filtro da PASA, y con otro τ en el tramo 4 da FALLA por el acuerdo. Reevaluadas las corridas r6b con el evaluador r6c ([tanda_r6b/suave_r6c_eval/](tanda_r6b/suave_r6c_eval/)): **T-suave 30 PASA, 60 PASA y 144 INCONCLUSO** (`fps_regime`).
+
+**suave144 a 59 fps.** `-limitFPS=144` llegó al cliente: consta en la línea de comandos de los RPT de las 02:39 y las 02:47. El perfil del banco (`E:\dsbx-strack2\runs_r6\client\profiles\Users\guill\DayZ.cfg`, que el cliente reescribió a las 03:51) tiene `VSync=1`; el DayZ.cfg de Guillermo, en Documentos, tiene `VSync=0`. **Hipótesis, sin probar:** VSync lo limita al refresco del monitor. La prueba que la confirma o la tumba es repetir suave144 con VSync=0 en el perfil del banco.
+
+**Negativa quatlerp.** En r6b no inyectaba nada. `Math3D.QuatLerp` (con normalización posterior) daba el mismo camino que el slerp: el primer paso de un salto de 170° a 30 fps sale 18,21° con quatlerp frente a 18,22° sin él, y lo mismo a 144 fps (9,37 frente a 8,83, dentro de la variación entre corridas). Era un fallo del mod. r6c lo cambia por un nlerp explícito (lerp por componentes y normalización) en `STRACK_Math.SlerpMode`, modo 1. La negativa vuelve a la próxima tanda con el mod r6c.
+
+**`smooth_s` por defecto en manos.** El criterio A (`sin_giro` p95 ≤ 2 px) queda descartado: suavizar no fija el arma en pantalla. Al andar, el arma se balancea, la cámara suavizada va detrás y el arma se mueve más en la imagen ([tanda_r6b/barrido_smooth.json](tanda_r6b/barrido_smooth.json), `thook_*.json`). El nuevo criterio es el menor τ con un temblor angular de la cámara, por encima de 2 Hz, de p95 ≤ 0,1° entre frames ([tanda_r6b/temblor_camara.json](tanda_r6b/temblor_camara.json): incremento de rotación entre frames, paso alto por FFT a 2 Hz).
+
+| τ (s) | Temblor > 2 Hz, p95 (°) | sin giro / en giros | Arma en pantalla, `sin_giro` p95 (válidas/capturas) | Retraso en giros, p50 |
+|---|---|---|---|---|
+| 0 | 0,972 | 0,703 / 1,212 | 5,54 px (116/117) | 0,00° |
+| 0,1 | 0,388 | 0,303 / 0,553 | 82,0 px (35/119; 84 no rígidas) | 1,41° / 62 ms |
+| 0,2 | 0,519 | 0,214 / 0,775 | 115,5 px (34/118) | 3,35° / 115 ms |
+| 0,3 | 0,259 | 0,112 / 0,453 | 118,9 px (29/118) | 5,80° / 157 ms |
+| 0,5 | 0,163 | 0,079 / 0,247 | 142,0 px (44/113) | 10,3° / 265 ms |
+| 1,0 | **0,089** ✔ | 0,039 / 0,148 | INCONCLUSO (7/115) | 19,2° / 488 ms |
+
+Por este criterio sale **τ = 1,0 s**, el único que lo cumple, a costa de casi medio segundo de retraso en los giros. La cifra de 0,2 no es monótona con las demás, y el umbral de 0,1° y la elección entre 1,0 y el 0,3 propuesto quedan para la decisión del coordinador o de Guillermo.
+
+**T-lect de Hb con giros lentos y alternos** (lectura a; [tanda_r6b/tlect_*.json](tanda_r6b/)). Va tal cual, sin tocar parámetros:
+
+| Corrida | giro1 | giro2 | giro3 |
+|---|---|---|---|
+| lookat_Hb_lento | INCONCLUSO, 1,48 px (cobertura 0,50) | **PASA**, 1,10 px (1,0) | **PASA**, 1,10 px (1,0) |
+| follow_Hb_lento | FALLA, 2,12 px (1,0) | FALLA, 2,18 px (0,98) | FALLA, 2,14 px (1,0) |
+
+**Mod r6c.** `C:\tmp\dsbx-strack2\bench\@DZS_STrack_r6c\Addons\DZS_STrack.pbo`, de 74 331 B, sha256 `90bdccd6af058fa2397ba12d1e8f60d143d84b6bd56d23fd4b1efc22fb8d897d`. AddonBuilder con `-packonly` (exit 0). El linter offline `script_validator.py` da PASS, con `errors: []` en 6 ficheros. El texto del nlerp está en el PBO; no se ha probado en partida.
+
+**Pruebas r6c** ([tanda_r6b/suite_r6c.txt](tanda_r6b/suite_r6c.txt)). Se corrieron de uno en uno los módulos que cargan el evaluador o los fixtures parcheados, y los que no llegaron a correr antes del disco lleno:
+
+| Módulo | Tests | Resultado |
+|---|---|---|
+| suave_relativo | 2 | OK |
+| s_track2 | 54 | OK |
+| s_track_eval | 6 | OK |
+| timeline_r5 | 5 | OK |
+| detector_windows | 4 | OK |
+| sesgo | 20 | OK |
+| thook_mount | 12 | OK |
+| tlect_direct | 7 | OK |
+| `test_stdlib_only` | 3 | OK |
+
+`test_check_runs` no se repitió, porque no carga código parcheado: vale su 29/29 del 27-nov a las 05:26. Los mutantes se relanzan aparte, con tope de 2 h.
 
 ---
 

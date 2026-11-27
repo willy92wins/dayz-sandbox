@@ -2316,6 +2316,21 @@ def _quat_raw_xyzw(v):
         return None
 
 
+def _quat_rel_mundo(q, q0):
+    """Rotacion en ejes del mundo que lleva q0 a q (wxyz): q * conj(q0), normalizada."""
+    a = np.asarray(q, dtype=np.float64)
+    b = np.asarray(q0, dtype=np.float64)
+    a = a / np.linalg.norm(a)
+    b = b / np.linalg.norm(b)
+    w1, x1, y1, z1 = a
+    w2, x2, y2, z2 = b[0], -b[1], -b[2], -b[3]
+    r = np.array([w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+                  w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+                  w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+                  w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2])
+    return r / np.linalg.norm(r)
+
+
 def _quat_angle_deg(q1, q2):
     if q1 is None or q2 is None:
         return 999.0
@@ -2569,10 +2584,12 @@ def evaluate_suave_run(run):
         # previo al grupo. Antes se fechaba con t_ms y un tirón real hacía
         # discrepar 1,7° a dos cámaras correctas (falso acuerdo FPS).
         t_start = None
+        origen_q = None
         if idxs:
             for j in range(idxs[0] - 1, -1, -1):
                 t_start = cum_dt[j]
                 prev_q = _cam_q_wxyz(samples[j].get("cam") or {})
+                origen_q = prev_q
                 prev_t = t_start
                 break
             if t_start is None:
@@ -2620,7 +2637,10 @@ def evaluate_suave_run(run):
                 prev_q = q
                 prev_t = t_eff
         if orient_1_6 is not None:
-            orient_at[label] = orient_1_6
+            # Arbitro (orquestador, 27-nov; decision del coordinador 04:45Z): el acuerdo entre fps compara la rotacion
+            # relativa al inicio del giro en ejes del mundo, q_1/6 * conj(q_origen), no la orientacion absoluta: las
+            # corridas reales empiezan con rumbos distintos (74-98 grados) y la absoluta daba un FALLA falso.
+            orient_at[label] = _quat_rel_mundo(orient_1_6, origen_q) if origen_q is not None else orient_1_6
         # Arco: corto si va en el sentido del salto de ±170°; largo si va al contrario o supera 180°.
         signed_yaw = 0.0
         prev_yaw = None

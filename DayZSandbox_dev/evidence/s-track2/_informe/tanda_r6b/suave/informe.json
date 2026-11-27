@@ -1,0 +1,508 @@
+{
+  "schema": 2,
+  "calib": {
+    "Ha": {
+      "k": -1,
+      "match_frac": 1.0,
+      "verdict": "PASA",
+      "cause": "",
+      "fov_convention": "medida",
+      "match_by_k": {
+        "-2": 0.593,
+        "-1": 1.0,
+        "0": 0.6432,
+        "1": 0.2412,
+        "2": 0.0955
+      },
+      "f_px": 682.01,
+      "f_std_px": 0.007,
+      "f_p05_px": 682.0,
+      "f_p95_px": 682.02,
+      "f_n": 100,
+      "ref_shot": "f000010.bmp"
+    },
+    "Hb": {
+      "k": -1,
+      "match_frac": 0.995,
+      "verdict": "PASA",
+      "cause": "",
+      "fov_convention": "medida",
+      "match_by_k": {
+        "-2": 0.6332,
+        "-1": 0.995,
+        "0": 0.608,
+        "1": 0.2412,
+        "2": 0.1407
+      },
+      "f_px": 923.94,
+      "f_std_px": 0.006,
+      "f_p05_px": 923.93,
+      "f_p95_px": 923.95,
+      "f_n": 103,
+      "ref_shot": "f000010.bmp"
+    }
+  },
+  "detector": {
+    "p95_px": 999.0,
+    "p95_deg": 999.0,
+    "verdict": "INCONCLUSO",
+    "cause": "sin_fuente_detector"
+  },
+  "results": [
+    {
+      "run": "suave144_Hb_ns",
+      "caso": "suave144",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "s0",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "INCONCLUSO",
+      "cause": "fps_regime",
+      "regime": "144",
+      "tramo": "s0",
+      "err_max_frac": 2e-06,
+      "quat_norm_dev": 5.7e-07,
+      "arc": "corto",
+      "fps_measured": 60.006,
+      "fps_median": 58.824,
+      "orient_1_6_deg": 0.0001,
+      "n_shots": 600
+    },
+    {
+      "run": "suave144_Hb_ns",
+      "caso": "suave144",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "s03",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "INCONCLUSO",
+      "cause": "fps_regime",
+      "regime": "144",
+      "tramo": "s03",
+      "err_max_frac": 0.006613,
+      "quat_norm_dev": 1e-07,
+      "arc": "corto",
+      "fps_measured": 60.006,
+      "fps_median": 58.824,
+      "orient_1_6_deg": 0.0001,
+      "n_shots": 600
+    },
+    {
+      "run": "suave144_Hb_ns",
+      "caso": "suave144",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "s08",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "INCONCLUSO",
+      "cause": "fps_regime",
+      "regime": "144",
+      "tramo": "s08",
+      "err_max_frac": 0.006289,
+      "quat_norm_dev": 0.0,
+      "arc": "corto",
+      "fps_measured": 60.006,
+      "fps_median": 58.824,
+      "orient_1_6_deg": 0.0,
+      "n_shots": 604
+    },
+    {
+      "run": "suave144_Hb_ns",
+      "caso": "suave144",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "giro+170",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "INCONCLUSO",
+      "cause": "fps_regime",
+      "regime": "144",
+      "tramo": "giro+170",
+      "err_max_frac": 0.007812,
+      "quat_norm_dev": 6.6e-07,
+      "arc": "corto",
+      "fps_measured": 60.006,
+      "fps_median": 58.824,
+      "orient_1_6_deg": 72.4618,
+      "n_shots": 240
+    },
+    {
+      "run": "suave144_Hb_ns",
+      "caso": "suave144",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "giro-170",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "INCONCLUSO",
+      "cause": "fps_regime",
+      "regime": "144",
+      "tramo": "giro-170",
+      "err_max_frac": 0.007812,
+      "quat_norm_dev": 6.4e-07,
+      "arc": "corto",
+      "fps_measured": 60.006,
+      "fps_median": 58.824,
+      "orient_1_6_deg": 72.4618,
+      "n_shots": 240
+    },
+    {
+      "run": "suave30_Hb_ns",
+      "caso": "suave30",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "s0",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "PASA",
+      "cause": "",
+      "regime": "30",
+      "tramo": "s0",
+      "err_max_frac": 2e-06,
+      "quat_norm_dev": 1.4e-07,
+      "arc": "corto",
+      "fps_measured": 30.028,
+      "fps_median": 30.303,
+      "orient_1_6_deg": 0.0,
+      "n_shots": 301
+    },
+    {
+      "run": "suave30_Hb_ns",
+      "caso": "suave30",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "s03",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "PASA",
+      "cause": "",
+      "regime": "30",
+      "tramo": "s03",
+      "err_max_frac": 0.002645,
+      "quat_norm_dev": 1.4e-07,
+      "arc": "corto",
+      "fps_measured": 30.028,
+      "fps_median": 30.303,
+      "orient_1_6_deg": 0.0,
+      "n_shots": 300
+    },
+    {
+      "run": "suave30_Hb_ns",
+      "caso": "suave30",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "s08",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "PASA",
+      "cause": "",
+      "regime": "30",
+      "tramo": "s08",
+      "err_max_frac": 0.002582,
+      "quat_norm_dev": 1.4e-07,
+      "arc": "corto",
+      "fps_measured": 30.028,
+      "fps_median": 30.303,
+      "orient_1_6_deg": 0.0,
+      "n_shots": 301
+    },
+    {
+      "run": "suave30_Hb_ns",
+      "caso": "suave30",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "giro+170",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "FALLA",
+      "cause": "suave_fps_agree_exceeded",
+      "regime": "30",
+      "tramo": "giro+170",
+      "err_max_frac": 0.0039,
+      "quat_norm_dev": 6.3e-07,
+      "arc": "corto",
+      "fps_measured": 30.028,
+      "fps_median": 30.303,
+      "orient_1_6_deg": 72.462,
+      "n_shots": 120
+    },
+    {
+      "run": "suave30_Hb_ns",
+      "caso": "suave30",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "giro-170",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "FALLA",
+      "cause": "suave_fps_agree_exceeded",
+      "regime": "30",
+      "tramo": "giro-170",
+      "err_max_frac": 0.0039,
+      "quat_norm_dev": 5.9e-07,
+      "arc": "corto",
+      "fps_measured": 30.028,
+      "fps_median": 30.303,
+      "orient_1_6_deg": 72.4619,
+      "n_shots": 120
+    },
+    {
+      "run": "suave60_Hb_ns",
+      "caso": "suave60",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "s0",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "PASA",
+      "cause": "",
+      "regime": "60",
+      "tramo": "s0",
+      "err_max_frac": 2e-06,
+      "quat_norm_dev": 4.5e-07,
+      "arc": "corto",
+      "fps_measured": 60.011,
+      "fps_median": 58.824,
+      "orient_1_6_deg": 0.0,
+      "n_shots": 600
+    },
+    {
+      "run": "suave60_Hb_ns",
+      "caso": "suave60",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "s03",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "PASA",
+      "cause": "",
+      "regime": "60",
+      "tramo": "s03",
+      "err_max_frac": 0.006729,
+      "quat_norm_dev": 4.5e-07,
+      "arc": "corto",
+      "fps_measured": 60.011,
+      "fps_median": 58.824,
+      "orient_1_6_deg": 0.0,
+      "n_shots": 600
+    },
+    {
+      "run": "suave60_Hb_ns",
+      "caso": "suave60",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "s08",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "PASA",
+      "cause": "",
+      "regime": "60",
+      "tramo": "s08",
+      "err_max_frac": 0.006646,
+      "quat_norm_dev": 4.5e-07,
+      "arc": "corto",
+      "fps_measured": 60.011,
+      "fps_median": 58.824,
+      "orient_1_6_deg": 0.0,
+      "n_shots": 603
+    },
+    {
+      "run": "suave60_Hb_ns",
+      "caso": "suave60",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "giro+170",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "FALLA",
+      "cause": "suave_fps_agree_exceeded",
+      "regime": "60",
+      "tramo": "giro+170",
+      "err_max_frac": 0.007814,
+      "quat_norm_dev": 7.1e-07,
+      "arc": "corto",
+      "fps_measured": 60.011,
+      "fps_median": 58.824,
+      "orient_1_6_deg": 72.4619,
+      "n_shots": 240
+    },
+    {
+      "run": "suave60_Hb_ns",
+      "caso": "suave60",
+      "hook": "Hb",
+      "inject": "none",
+      "measure": "T-suave",
+      "reading": null,
+      "window": "giro-170",
+      "p95_px": 999.0,
+      "roll_deg": 999.0,
+      "coverage": 1.0,
+      "verdict": "FALLA",
+      "cause": "suave_fps_agree_exceeded",
+      "regime": "60",
+      "tramo": "giro-170",
+      "err_max_frac": 0.007814,
+      "quat_norm_dev": 7.4e-07,
+      "arc": "corto",
+      "fps_measured": 60.011,
+      "fps_median": 58.824,
+      "orient_1_6_deg": 72.4618,
+      "n_shots": 240
+    }
+  ],
+  "decisions": {
+    "lectura": null,
+    "hook_por_modo": {
+      "mount0": null,
+      "mount03": null,
+      "lookat": null,
+      "follow": null
+    },
+    "k": {
+      "Ha": -1,
+      "Hb": -1
+    },
+    "ropa": {
+      "mochila": null,
+      "mira": null,
+      "silenciador": null
+    },
+    "suave": {
+      "30": "FALLA",
+      "60": "FALLA",
+      "144": "INCONCLUSO"
+    },
+    "suave_causas": {
+      "30": "suave_fps_agree_exceeded",
+      "60": "suave_fps_agree_exceeded",
+      "144": "fps_regime"
+    }
+  },
+  "negativas": [
+    {
+      "run": "suave144_Hb_quatlerp_ns",
+      "inject": "quatlerp",
+      "expected": "FALLA",
+      "got": "INCONCLUSO",
+      "ok": false
+    },
+    {
+      "run": "suave30_Hb_quatlerp_ns",
+      "inject": "quatlerp",
+      "expected": "FALLA",
+      "got": "PASA",
+      "ok": false
+    }
+  ],
+  "marcas": {
+    "calib_Ha": {
+      "valid": 0,
+      "discarded": [
+        {
+          "shot": "",
+          "cause": "missing_marcas_file"
+        }
+      ]
+    },
+    "calib_Hb": {
+      "valid": 0,
+      "discarded": [
+        {
+          "shot": "",
+          "cause": "missing_marcas_file"
+        }
+      ]
+    },
+    "suave144_Hb_ns": {
+      "valid": 0,
+      "discarded": [
+        {
+          "shot": "",
+          "cause": "missing_marcas_file"
+        }
+      ]
+    },
+    "suave144_Hb_quatlerp_ns": {
+      "valid": 0,
+      "discarded": [
+        {
+          "shot": "",
+          "cause": "missing_marcas_file"
+        }
+      ]
+    },
+    "suave30_Hb_ns": {
+      "valid": 0,
+      "discarded": [
+        {
+          "shot": "",
+          "cause": "missing_marcas_file"
+        }
+      ]
+    },
+    "suave30_Hb_quatlerp_ns": {
+      "valid": 0,
+      "discarded": [
+        {
+          "shot": "",
+          "cause": "missing_marcas_file"
+        }
+      ]
+    },
+    "suave60_Hb_ns": {
+      "valid": 0,
+      "discarded": [
+        {
+          "shot": "",
+          "cause": "missing_marcas_file"
+        }
+      ]
+    }
+  },
+  "exit_code": 1
+}

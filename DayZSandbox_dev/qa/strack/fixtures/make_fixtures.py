@@ -623,7 +623,7 @@ def _slerp_longarc(q0, q1, alpha):
     return res / np.linalg.norm(res)
 
 
-def _write_suave_run(base_dir, regime=60, mode="ok", inject="none", dt_pattern=None):
+def _write_suave_run(base_dir, regime=60, mode="ok", inject="none", dt_pattern=None, base_yaw=0.0, smooth4=None):
     caso = f"suave{int(regime)}"
     suffix = f"_{inject}" if inject != "none" else ""
     run_name = f"{caso}_Hb{suffix}"
@@ -631,7 +631,7 @@ def _write_suave_run(base_dir, regime=60, mode="ok", inject="none", dt_pattern=N
     run_dir.mkdir(parents=True, exist_ok=True)
     fps = float(regime)
     dt = 1.0 / fps
-    smooth_by_tramo = {1: 0.0, 2: 0.3, 3: 0.8, 4: 0.3}
+    smooth_by_tramo = {1: 0.0, 2: 0.3, 3: 0.8, 4: 0.3 if smooth4 is None else float(smooth4)}
     rows = []
     frame = 0
     # Estado del filtro del generador: persiste entre tramos (vuelta 2, hallazgo 7).
@@ -665,7 +665,7 @@ def _write_suave_run(base_dir, regime=60, mode="ok", inject="none", dt_pattern=N
                 if mode == "entrada_desfasada" and prev_raw_pos is not None:
                     camraw_pos = prev_raw_pos.copy()
                 prev_raw_pos = raw_pos.copy()
-                x, y, z = _yaw_axes(0.0)
+                x, y, z = _yaw_axes(base_yaw)
                 raw_q = _rot_to_quat(x, y, z)
                 if filt_pos is None or (mode == "reset_en_tramo" and i == 0 and tramo > 1):
                     filt_pos = camraw_pos.copy()
@@ -704,14 +704,14 @@ def _write_suave_run(base_dir, regime=60, mode="ok", inject="none", dt_pattern=N
                 for i in range(n_seg):
                     dt_cur = float(dt_pattern[frame % len(dt_pattern)]) if dt_pattern else dt
                     raw_pos = lata + np.array([0.0, 0.3, -1.2], dtype=np.float64)
-                    x, y, z = _yaw_axes(yaw_target)
+                    x, y, z = _yaw_axes(base_yaw + yaw_target)
                     raw_q = _rot_to_quat(x, y, z)
                     if giro_n == 2:
                         # La misma orientación con el cuaternión negado: dot de inicio < 0.
                         raw_q = -raw_q
                     if filt_pos is None:
                         filt_pos = raw_pos.copy()
-                        filt_q = _rot_to_quat(*_yaw_axes(0.0))
+                        filt_q = _rot_to_quat(*_yaw_axes(base_yaw))
                     else:
                         alpha = 1.0 - math.exp(-dt_cur / smooth_used)
                         filt_pos = filt_pos + alpha * (raw_pos - filt_pos)

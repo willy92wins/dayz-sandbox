@@ -295,7 +295,13 @@ class STRACK_Math
 		dot = qa[0] * qb[0] + qa[1] * qb[1] + qa[2] * qb[2] + qa[3] * qb[3];
 		if (mode == 1)
 		{
-			Math3D.QuatLerp(q, qa, qb, t);
+			// r6c (orquestador, 27-nov): nlerp explicito. Math3D.QuatLerp dejaba en partida el mismo camino que el slerp
+			// (primer paso de un salto de 170 grados a 30 fps: 18,21 frente a 18,22; un nlerp da ~12) y la negativa
+			// quatlerp no inyectaba nada. Lerp por componentes; la normalizacion va abajo.
+			q[0] = qa[0] + (qb[0] - qa[0]) * t;
+			q[1] = qa[1] + (qb[1] - qa[1]) * t;
+			q[2] = qa[2] + (qb[2] - qa[2]) * t;
+			q[3] = qa[3] + (qb[3] - qa[3]) * t;
 		}
 		else
 		{

@@ -1,0 +1,50 @@
+{
+ "run": "mount03_Hb_p0",
+ "measure": "T-hook-mount",
+ "k": -1,
+ "f_px": 923.94,
+ "ref_shot": "f000030.bmp",
+ "recamara": [
+  884.61,
+  454.58
+ ],
+ "segundo": [
+  892.91,
+  654.41
+ ],
+ "separacion_px": 200.0,
+ "windows": {
+  "giro1": {
+   "n_shots": 118,
+   "n_validas": 5,
+   "n_no_rigidas": 62,
+   "verdict": "INCONCLUSO",
+   "cause": "cultivos_no_rigidos"
+  },
+  "giro2": {
+   "n_shots": 121,
+   "n_validas": 3,
+   "n_no_rigidas": 58,
+   "verdict": "INCONCLUSO",
+   "cause": "cultivos_no_rigidos"
+  },
+  "giro3": {
+   "n_shots": 122,
+   "n_validas": 6,
+   "n_no_rigidas": 62,
+   "verdict": "INCONCLUSO",
+   "cause": "cultivos_no_rigidos"
+  },
+  "sin_giro": {
+   "n_shots": 118,
+   "n_validas": 29,
+   "n_no_rigidas": 89,
+   "coverage": 0.2458,
+   "p95_px": 118.8697,
+   "roll_deg": 6.8736,
+   "verdict": "FALLA",
+   "cause": "p95_px_exceeded"
+  }
+ },
+ "verdict": "FALLA"
+}

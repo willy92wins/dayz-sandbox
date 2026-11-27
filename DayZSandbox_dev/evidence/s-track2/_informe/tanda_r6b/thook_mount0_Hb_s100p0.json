@@ -1,0 +1,47 @@
+{
+ "run": "mount0_Hb_s100p0",
+ "measure": "T-hook-mount",
+ "k": -1,
+ "f_px": 923.94,
+ "ref_shot": "f000030.bmp",
+ "recamara": [
+  736.86,
+  401.36
+ ],
+ "segundo": [
+  768.39,
+  598.86
+ ],
+ "separacion_px": 200.0,
+ "windows": {
+  "giro1": {
+   "n_shots": 121,
+   "n_validas": 0,
+   "n_no_rigidas": 5,
+   "verdict": "INCONCLUSO",
+   "cause": "correlacion_debil"
+  },
+  "giro2": {
+   "n_shots": 122,
+   "n_validas": 0,
+   "n_no_rigidas": 0,
+   "verdict": "INCONCLUSO",
+   "cause": "correlacion_debil"
+  },
+  "giro3": {
+   "n_shots": 121,
+   "n_validas": 0,
+   "n_no_rigidas": 4,
+   "verdict": "INCONCLUSO",
+   "cause": "correlacion_debil"
+  },
+  "sin_giro": {
+   "n_shots": 115,
+   "n_validas": 7,
+   "n_no_rigidas": 43,
+   "verdict": "INCONCLUSO",
+   "cause": "cultivos_no_rigidos"
+  }
+ },
+ "verdict": "INCONCLUSO"
+}
