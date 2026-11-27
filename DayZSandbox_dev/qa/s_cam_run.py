@@ -8,6 +8,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import json
 import math
+import os
 import struct
 import time
 from pathlib import Path
@@ -637,6 +638,7 @@ def _wait_job_terminal(ctx: f03_common.PartContext, job_id: str, timeout_s: floa
     deadline = time.monotonic() + timeout_s
     last_state = ""
     while time.monotonic() < deadline:
+        f03_common.issue_one(ctx, "client", "scam_state_read", wire.empty_payload())
         out = f03_common.issue_one(
             ctx,
             "client",
@@ -881,7 +883,24 @@ def _wait_free_input(
         dt_ok = float(nk.get("integrated_dt_s", 0.0)) >= min_dt_s
         spd_ok = min_speed is None or float(nk.get("speed_mps", 0.0)) >= min_speed
         if ack_ok and dt_ok and spd_ok:
-            return out
+            last_key = None
+            settled = out
+            for _ in range(24):
+                nk2 = settled.payload["num"]
+                key = (
+                    round(float(nk2.get("x_m", 0.0)), 4),
+                    round(float(nk2.get("y_m", 0.0)), 4),
+                    round(float(nk2.get("z_m", 0.0)), 4),
+                    round(float(nk2.get("yaw_deg", 0.0)), 3),
+                    round(float(nk2.get("pitch_deg", 0.0)), 3),
+                    int(float(nk2.get("input_frames_n", 0.0))),
+                )
+                if last_key == key:
+                    return settled
+                last_key = key
+                time.sleep(0.02)
+                settled = f03_common.issue_one(ctx, "client", "scam_state_read", wire.empty_payload())
+            return settled
         time.sleep(0.05)
     return last_out
 
@@ -959,20 +978,20 @@ def _run_scam_s1(
 
     # Tramo 1: 4.0 m/s durante 500 ms -> ~2.0 m.
     seq1, _ = drv.key_hold(["KC_W"], 500.0)
-    s_a_out = _wait_free_input(ctx, seq1, dt0 + 0.48)
+    s_a_out = _wait_free_input(ctx, seq1, dt0 + 0.50)
     _record_state_outcome(ctx, phase, "s_a", s_a_out)
     dt1 = float(s_a_out.payload["num"].get("integrated_dt_s", 0.0))
 
     # Tramo 2: KC_PRIOR (8.0 m/s) + KC_W durante 500 ms -> ~4.0 m.
     drv.key_tap(["KC_PRIOR"])
     seq2, _ = drv.key_hold(["KC_W"], 500.0)
-    s_b_out = _wait_free_input(ctx, seq2, dt1 + 0.48, min_speed=8.0)
+    s_b_out = _wait_free_input(ctx, seq2, dt1 + 0.50, min_speed=8.0)
     _record_state_outcome(ctx, phase, "s_b", s_b_out)
     dt2 = float(s_b_out.payload["num"].get("integrated_dt_s", 0.0))
 
     # Tramo 3: giro KC_RIGHT + KC_UP durante 300 ms (~27 deg sin desplazarse).
     seq3, _ = drv.key_hold(["KC_RIGHT", "KC_UP"], 300.0)
-    s_0_out = _wait_free_input(ctx, seq3, dt2 + 0.28)
+    s_0_out = _wait_free_input(ctx, seq3, dt2 + 0.30)
     _record_state_outcome(ctx, phase, "s_0", s_0_out)
 
     _issue_op(
@@ -1328,6 +1347,8 @@ def _run_scam_s3(
     pre_cap_out = _poll_until_dtsum(ctx, hud_job_id, 1950.0)
     _record_state_outcome(ctx, phase, "pre_cap", pre_cap_out)
     pre_nk = pre_cap_out.payload["num"]
+    post_cap_out = _read_state(ctx, phase, "post_cap")
+    post_nk = post_cap_out.payload["num"]
     cap_h = ctx.now_h_ms()
     if ctx.build == "offline":
         win_w, win_h = _render_offline_bmp(
@@ -1336,8 +1357,6 @@ def _run_scam_s3(
     else:
         hwnd = find_dayz_window()
         win_w, win_h = capture_window(hwnd, ctx.part_dir / "samples" / "hud_during.bmp")
-    post_cap_out = _read_state(ctx, phase, "post_cap")
-    post_nk = post_cap_out.payload["num"]
 
     pre_f = int(round(float(pre_nk.get("frame", 0.0))))
     post_f = int(round(float(post_nk.get("frame", pre_f))))
@@ -1531,6 +1550,8 @@ def _run_dof_path_with_phases(
         post_k_step = f"{path_name}_t{k}_post"
         _record_state_outcome(ctx, phase, pre_step, pre_out)
         pre_nk = pre_out.payload["num"]
+        post_out = _read_state(ctx, phase, post_k_step)
+        post_nk = post_out.payload["num"]
         cap_h = ctx.now_h_ms()
         bmp_name = f"{prefix}_t{k}.bmp"
         if ctx.build == "offline":
@@ -1540,8 +1561,6 @@ def _run_dof_path_with_phases(
         else:
             hwnd = find_dayz_window()
             win_w, win_h = capture_window(hwnd, ctx.part_dir / "samples" / bmp_name)
-        post_out = _read_state(ctx, phase, post_k_step)
-        post_nk = post_out.payload["num"]
         ctx.record_scenario(
             {
                 "capture_h_ms": cap_h,
@@ -1959,17 +1978,42 @@ def _run_scam_s5(
     )
 
 
+def _selected_fases() -> list[str]:
+    raw = str(os.environ.get("DSBX_QA_FASES", "") or "").strip()
+    all_fases = ["S0", "S1", "S2", "S3", "S4", "S5"]
+    if not raw:
+        return list(all_fases)
+    wanted = []
+    for tok in raw.split(","):
+        name = tok.strip().upper().replace("SCAM-", "")
+        if name in all_fases and name not in wanted:
+            wanted.append(name)
+    if not wanted:
+        return list(all_fases)
+    if "S0" not in wanted:
+        wanted.insert(0, "S0")
+    return wanted
+
+
 def _run_standard_part(ctx: f03_common.PartContext, part_name: str) -> None:
     mutant = part_name[4:] if part_name.startswith("mut-") else None
     paths_fx, rois = _load_fixtures()
     drv = _InputDriver(ctx)
+    fases = _selected_fases()
 
-    anchor_y = _run_scam_s0(ctx, paths_fx, rois)
-    _run_scam_s1(ctx, drv, paths_fx, anchor_y, mutant)
-    _run_scam_s2(ctx, paths_fx, anchor_y, mutant)
-    _run_scam_s3(ctx, paths_fx, rois, anchor_y, mutant)
-    _run_scam_s4(ctx, paths_fx, rois, anchor_y, mutant)
-    _run_scam_s5(ctx, drv, paths_fx, anchor_y)
+    anchor_y = 0.0
+    if "S0" in fases:
+        anchor_y = _run_scam_s0(ctx, paths_fx, rois)
+    if "S1" in fases:
+        _run_scam_s1(ctx, drv, paths_fx, anchor_y, mutant)
+    if "S2" in fases:
+        _run_scam_s2(ctx, paths_fx, anchor_y, mutant)
+    if "S3" in fases:
+        _run_scam_s3(ctx, paths_fx, rois, anchor_y, mutant)
+    if "S4" in fases:
+        _run_scam_s4(ctx, paths_fx, rois, anchor_y, mutant)
+    if "S5" in fases:
+        _run_scam_s5(ctx, drv, paths_fx, anchor_y)
 
 
 def _planned_parts(part_arg: str) -> list[str]:

@@ -356,6 +356,9 @@ class CamFakeExt(FakeExt):
         self.jump_injected = False
         self.fault_hud_forced = False
         self.engine_interp_switched = False
+        self.path_hold = False
+        self.path_row0_emitted = False
+        self.path_emit_frame = 0
 
         self.sample_seq = 0
         self.sample_dtsum_ms = 0.0
@@ -371,6 +374,9 @@ class CamFakeExt(FakeExt):
         self.active_cam_job_id = ""
         self.active_sample_job_id = ""
         self.path_fault = ""
+        self.path_hold = False
+        self.path_row0_emitted = False
+        self.path_emit_frame = 0
         self.saved_poses.clear()
         self.saved_pose_order.clear()
         self._input_offset = 0
@@ -479,6 +485,8 @@ class CamFakeExt(FakeExt):
 
     def on_start_op(self, op, args_unpacked, raw_args):
         verb = op["verb"]
+        if verb != "scam_path_start":
+            self.path_hold = False
         fault = op.get("qa_fault", "")
         if fault == "cam_no_player":
             return ("rejected", "client_not_in_game", wire.empty_payload())
@@ -1149,7 +1157,9 @@ class CamFakeExt(FakeExt):
         self.focus_enabled_b = (
             1.0 if (k0["focus_blur"] > 0.0 or k0["focus_dist_m"] > 0.0) else 0.0
         )
-        self._emit_path_row(op_id, 0, 0.0, k0["focus_dist_m"])
+        self.path_row0_emitted = False
+        self.path_emit_frame = int(self.peer.frame)
+        self.path_hold = True
         return ("done", "", self.jobs.fill_start_read(op_id, "cam"))
 
     def _emit_sample_row(self, job_id, seq_n, dtsum_ms):
@@ -1307,6 +1317,8 @@ class CamFakeExt(FakeExt):
             self.free_integrated_dt_s += step_dt
 
     def _tick_path_job(self, timeslice_s):
+        if self.path_hold:
+            return
         jid = self.active_cam_job_id
         if not jid:
             return
@@ -1316,7 +1328,12 @@ class CamFakeExt(FakeExt):
         if self.jobs.is_deadman_tripped(jid):
             self.jobs.end_job(jid, "failed", "lease_expired")
             return
-        self.path_seq += 1
+        first_row = not self.path_row0_emitted
+        if first_row:
+            k0 = self.path_keys[0]
+            self._emit_path_row(jid, 0, 0.0, k0["focus_dist_m"])
+            self.path_row0_emitted = True
+            self.path_seq = 1
         self.path_dtsum_ms += float(timeslice_s) * 1000.0
         reached_end = self.path_dtsum_ms >= self.path_target_duration_ms
         t = self.path_duration_s if reached_end else min(self.path_dtsum_ms / 1000.0, self.path_duration_s)
@@ -1346,15 +1363,17 @@ class CamFakeExt(FakeExt):
                 qout = slerp_quat(ka["q"], kb["q"], u)
                 rot = quat_to_matrix(qout)
             fov = self.cam_fov if self.path_fault == "cam_frozen_fov" else _lerp(ka["fov_rad"], kb["fov_rad"], u)
-            self._set_cam_pose(pos, rot, fov)
-            if self.path_fault != "cam_ignore_focus_keys":
+            if not first_row:
+                self._set_cam_pose(pos, rot, fov)
+            if self.path_fault != "cam_ignore_focus_keys" and not first_row:
                 self._apply_cam_focus(calc_fdist, calc_fblur)
         else:
             pos = [_lerp(ka["pos"][i], kb["pos"][i], u) for i in range(3)]
             qout = slerp_quat(ka["q"], kb["q"], u)
             rot = quat_to_matrix(qout)
             fov = _lerp(ka["fov_rad"], kb["fov_rad"], u)
-            self._set_cam_pose(pos, rot, fov)
+            if not first_row:
+                self._set_cam_pose(pos, rot, fov)
             if not self.engine_interp_switched and nkeys >= 3 and t >= self.path_keys[1]["t_s"]:
                 self.engine_interp_switched = True
                 k2 = self.path_keys[2]
@@ -1365,7 +1384,9 @@ class CamFakeExt(FakeExt):
             self.hud_flags_mask &= ~(128 | 256 | 512)
             self.test_overlay_visible = True
 
-        self._emit_path_row(jid, self.path_seq, self.path_dtsum_ms, calc_fdist)
+        if not first_row:
+            self._emit_path_row(jid, self.path_seq, self.path_dtsum_ms, calc_fdist)
+            self.path_seq += 1
         if reached_end:
             self.jobs.end_job(jid, "done", "")
 
@@ -1400,10 +1421,11 @@ class CamFakeExt(FakeExt):
                 self.slow_stop_remaining_ms = 0.0
                 self.control_disabled = False
 
+        dt = min(float(timeslice_s), 0.05)
         self._poll_os_input()
-        self._tick_free_cam(timeslice_s)
-        self._tick_path_job(timeslice_s)
-        self._tick_sample_job(timeslice_s)
+        self._tick_free_cam(dt)
+        self._tick_path_job(dt)
+        self._tick_sample_job(dt)
 
     def on_job_end(self, job_id, state, reason):
         if job_id == self.active_cam_job_id:
@@ -1411,6 +1433,7 @@ class CamFakeExt(FakeExt):
             hud_by_job = self.hud_hidden_by_job
             self.active_cam_job_id = ""
             self.path_fault = ""
+            self.path_hold = False
             self.hud_hidden_by_job = False
             self._destroy_cameras(preserve_focus=(pfault == "cam_ignore_focus_keys"))
             if hud_by_job:

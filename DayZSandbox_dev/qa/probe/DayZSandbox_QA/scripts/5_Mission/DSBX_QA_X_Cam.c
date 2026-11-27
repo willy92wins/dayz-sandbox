@@ -78,6 +78,9 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 	bool m_JumpInjected;
 	bool m_FaultHudForced;
 	bool m_EngineInterpSwitched;
+	bool m_PathHold;
+	bool m_PathRow0Emitted;
+	int m_PathEmitFrame;
 	bool m_SlowStopPending;
 	float m_SlowStopRemainingMs;
 
@@ -137,6 +140,9 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 		m_JumpInjected = false;
 		m_FaultHudForced = false;
 		m_EngineInterpSwitched = false;
+		m_PathHold = false;
+		m_PathRow0Emitted = false;
+		m_PathEmitFrame = 0;
 		m_SlowStopPending = false;
 		m_SlowStopRemainingMs = 0.0;
 
@@ -238,6 +244,7 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 		m_ActiveCamJobId = "";
 		m_ActiveSampleJobId = "";
 		m_PathFault = "";
+		m_PathHold = false;
 		m_SavedPoses.Clear();
 		m_SavedPoseOrder.Clear();
 		m_FixtureEntities.Clear();
@@ -1071,6 +1078,10 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 	override void OnStartOp(DSBX_QA_Op op, DSBX_QA_Args args, DSBX_QA_Result res)
 	{
 		string verb = op.verb;
+		if (verb != "scam_path_start")
+		{
+			m_PathHold = false;
+		}
 		string fault = m_Probe.GetOpFault();
 		PlayerBase player = null;
 		if (g_Game)
@@ -2068,6 +2079,7 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 		m_JumpInjected = false;
 		m_FaultHudForced = false;
 		m_EngineInterpSwitched = false;
+		m_PathHold = true;
 
 		SetPlayerControlDisabled(true);
 		if (hideHud == "1")
@@ -2114,7 +2126,11 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 				Camera.InterpolateTo(m_CamTarget, k1.m_TS - k0.m_TS, 0);
 			}
 		}
-		EmitPathRow(m_ActiveCamJobId, 0, 0.0, k0.m_FocusDistM);
+		m_PathRow0Emitted = false;
+		if (m_Probe)
+		{
+			m_PathEmitFrame = m_Probe.m_Frame;
+		}
 		m_Jobs.FillStartRead(res.read, op.op_id, "cam");
 		res.status = "done";
 		res.reason = "";
@@ -2294,6 +2310,10 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 
 	void TickPathJob(float timeslice)
 	{
+		if (m_PathHold)
+		{
+			return;
+		}
 		if (m_ActiveCamJobId == "" || !m_Jobs)
 		{
 			return;
@@ -2308,7 +2328,15 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 			m_Jobs.EndJob(m_ActiveCamJobId, "failed", "lease_expired");
 			return;
 		}
-		m_PathSeq = m_PathSeq + 1;
+		bool firstRow = false;
+		if (!m_PathRow0Emitted)
+		{
+			firstRow = true;
+			DSBX_QA_CamKey kEmit0 = m_PathKeys.Get(0);
+			EmitPathRow(m_ActiveCamJobId, 0, 0.0, kEmit0.m_FocusDistM);
+			m_PathRow0Emitted = true;
+			m_PathSeq = 1;
+		}
 		m_PathDtSumMs = m_PathDtSumMs + timeslice * 1000.0;
 		bool reachedEnd = m_PathDtSumMs >= m_PathTargetDurationMs;
 		float t = m_PathDurationS;
@@ -2377,7 +2405,7 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 			}
 			vector mat4[4];
 			CopyRotToMat4(rot, pos, mat4);
-			if (m_Cam)
+			if (m_Cam && !firstRow)
 			{
 				m_Cam.SetTransform(mat4);
 				float fov = Math.Lerp(ka.m_FovRad, kb.m_FovRad, u);
@@ -2386,7 +2414,7 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 					m_Cam.SetFOV(fov);
 				}
 			}
-			if (m_PathFault != "cam_ignore_focus_keys")
+			if (m_PathFault != "cam_ignore_focus_keys" && !firstRow)
 			{
 				ApplyCamFocus(calcFdist, calcFblur);
 			}
@@ -2420,7 +2448,11 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 			ForceQuickbarAndOverlay();
 		}
 
-		EmitPathRow(m_ActiveCamJobId, m_PathSeq, m_PathDtSumMs, calcFdist);
+		if (!firstRow)
+		{
+			EmitPathRow(m_ActiveCamJobId, m_PathSeq, m_PathDtSumMs, calcFdist);
+			m_PathSeq = m_PathSeq + 1;
+		}
 		if (reachedEnd)
 		{
 			m_Jobs.EndJob(m_ActiveCamJobId, "done", "");
@@ -2464,9 +2496,14 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 				SetPlayerControlDisabled(false);
 			}
 		}
-		TickFreeCam(timeslice);
-		TickPathJob(timeslice);
-		TickSampleJob(timeslice);
+		float dt = timeslice;
+		if (dt > 0.05)
+		{
+			dt = 0.05;
+		}
+		TickFreeCam(dt);
+		TickPathJob(dt);
+		TickSampleJob(dt);
 	}
 
 	override void OnJobEnd(string job_id, string state, string reason)
@@ -2477,6 +2514,7 @@ class DSBX_QA_X_Cam : DSBX_QA_Ext
 			bool hudByJob = m_HudHiddenByJob;
 			m_ActiveCamJobId = "";
 			m_PathFault = "";
+			m_PathHold = false;
 			m_HudHiddenByJob = false;
 			if (pathFault == "cam_ignore_focus_keys")
 			{
