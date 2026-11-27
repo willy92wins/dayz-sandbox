@@ -558,7 +558,12 @@ class DSBX_ExpansionEngine : DSBX_ActorEngine
 		string yawJson = yawMdeg.ToString();
 		string miJson = rec.m_MarkI.ToString();
 		string stJson = DSBX_Wire.WireText(rec.m_MarkSt);
-		return "[" + lidJson + "," + clsJson + "," + xJson + "," + yJson + "," + zJson + "," + yawJson + ",[" + itemsJson + "]," + miJson + "," + stJson + "," + tJson + "]";
+		// En cuatro pasos: una sola concatenación de 21 términos da ES-FORMULA-TOO-COMPLEX en el linter.
+		string row = "[" + lidJson + "," + clsJson + ",";
+		row = row + xJson + "," + yJson + "," + zJson + ",";
+		row = row + yawJson + ",[" + itemsJson + "],";
+		row = row + miJson + "," + stJson + "," + tJson + "]";
+		return row;
 	}
 
 	override string Stop(string lid)
