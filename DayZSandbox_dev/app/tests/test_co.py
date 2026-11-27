@@ -9,6 +9,7 @@ import time
 import unittest
 from pathlib import Path
 
+from app.backend.scene_plan import validate_for_apply
 from .test_server import AK, HK, Env, Sse, doc_hash, fog, move
 
 ROOT = Path(__file__).resolve().parents[2]  # DayZSandbox_dev/
@@ -294,6 +295,56 @@ class FachadaMcp(Base):
         sse.close()
         self.assertEqual((ev["data"]["rev"], ev["data"]["author"]["role"]), (res["result"]["rev"], "ai"))
         self.assertEqual(self.env.backend.ops, {})
+
+    def test_actores_validate_y_conflicto_mcp(self):
+        mcp = self.start_mcp()
+        res, err = mcp.call("scene_get")
+        self.assertFalse(err, res)
+        base = res["result"]["rev"]
+        op_hold = {"name": "entity.set", "target": "act-01", "args": {"behaviour": "HOLD"}}
+        val, val_err = mcp.call("scene_validate", base_rev=base, ops=[op_hold])
+        self.assertFalse(val_err, val)
+        self.assertTrue(val["result"]["ok"])
+        doc_hold = copy.deepcopy(res["result"]["doc"])
+        doc_hold["entities"][0]["behaviour"] = "HOLD"
+        ap = validate_for_apply(
+            doc_hold,
+            val["result"]["rev_if_applied"],
+            val["result"]["hash_if_applied"],
+            self.env.store.catalog,
+            actor_engine="expansion",
+        )
+        self.assertFalse(ap["ok"])
+        self.assertEqual((ap["code"], ap["pointer"]), ("actor_invalid", "/entities/0/gestures/0/at"))
+
+        res_g, err_g = mcp.call(
+            "scene_ops",
+            base_rev=base,
+            label="ia cambia gesto",
+            ops=[{"name": "entity.gestures", "target": "act-01", "args": {"gestures": [{"emote": "EmoteSalute", "at": 1}]}}],
+        )
+        self.assertFalse(err_g, res_g)
+        self.assertTrue(res_g["result"]["ok"])
+        rev_g = res_g["result"]["rev"]
+
+        st, h = self.env.ops(
+            [{"name": "entity.marks", "target": "act-01", "args": {"marks": [{"x": 6182.0, "z": 7636.0}, {"x": 6185.0, "z": 7639.0}]}}],
+            label="persona mueve marca",
+        )
+        self.assertEqual(st, 200, h)
+
+        res_c, err_c = mcp.call(
+            "scene_ops",
+            base_rev=rev_g,
+            label="ia mueve marca",
+            ops=[{"name": "entity.marks", "target": "act-01", "args": {"marks": [{"x": 6180.0, "z": 7630.0}, {"x": 6185.0, "z": 7639.0}]}}],
+        )
+        self.assertTrue(err_c)
+        self.assertEqual(res_c["result"]["code"], "conflict")
+        self.assertEqual(
+            [(c["rev"], c["label"], c["author"]["role"]) for c in res_c["changes_since_last_call"]],
+            [(h["rev"], "persona mueve marca", "human")],
+        )
 
 
 if __name__ == "__main__":

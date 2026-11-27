@@ -1207,7 +1207,13 @@ def check_m19(mod_dir: Path) -> list[str]:
         violations.append("M19: DSBX_ActorOps debe heredar de Managed")
     start = _find_method_body(_find_class_body(ops_code, "DSBX_ActorOps"), "StartOrder")
     avail = _brace_block_after(start, "if (!engine.IsAvailable())")
-    if "DSBX_ActorEngineRegistry.Get()" not in start or '"expansion_unavailable"' not in avail:
+    if (
+        "DSBX_ActorEngineRegistry.Get()" not in start
+        or not re.search(
+            r'\bpeer\.FinishEntry\s*\(\s*entry\s*,\s*"rejected"\s*,\s*"expansion_unavailable"\s*,\s*"\{\}"\s*\)\s*;\s*return\s*;',
+            avail,
+        )
+    ):
         violations.append("M19: StartOrder debe rechazar con expansion_unavailable si el motor no esta disponible")
     if not re.search(r"\bref\s+DSBX_ActorOps\s+m_ActorOps\s*;", peer_code) \
             or "m_ActorOps = new DSBX_ActorOps();" not in peer_code:
@@ -1333,7 +1339,7 @@ class TestModStatic(unittest.TestCase):
         for m_sig in (
             'string Spawn(string lid, string cls, vector pos, float yaw, array<string> items) { return "expansion_unavailable"; }',
             'string SetMarks(string lid, array<vector> marks, string behaviour, float roam) { return "expansion_unavailable"; }',
-            'string RequestGesture(string lid, int gi, string emote) { return "expansion_unavailable"; }',
+            'string RequestGesture(string lid, int gi, string emote, int atMark, int tMs) { return "expansion_unavailable"; }',
             'string State(string lid) { return "expansion_unavailable"; }',
             'string Stop(string lid) { return "expansion_unavailable"; }',
             'string Despawn(string lid) { return "expansion_unavailable"; }',
