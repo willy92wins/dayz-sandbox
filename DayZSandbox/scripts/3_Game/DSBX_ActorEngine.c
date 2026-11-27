@@ -6,7 +6,9 @@ class DSBX_ActorEngine : Managed
 	// la base devuelve el código "expansion_unavailable". State devuelve la fila de §2.1 serializada.
 	string Spawn(string lid, string cls, vector pos, float yaw, array<string> items) { return "expansion_unavailable"; }
 	string SetMarks(string lid, array<vector> marks, string behaviour, float roam) { return "expansion_unavailable"; }
-	string RequestGesture(string lid, int gi, string emote) { return "expansion_unavailable"; }
+	string RequestGesture(string lid, int gi, string emote, int atMark, int tMs) { return "expansion_unavailable"; }
+	// Eventos de gesto §2.2 de F3-offline-1 de ese actor, serializados y separados por comas ("" si no hay).
+	string Gestures(string lid) { return ""; }
 	string State(string lid) { return "expansion_unavailable"; }
 	string Stop(string lid) { return "expansion_unavailable"; }
 	string Despawn(string lid) { return "expansion_unavailable"; }

@@ -80,10 +80,9 @@ class DSBX_ActorOps : Managed
 			peer.FinishEntry(entry, "error", res, "{}");
 			return;
 		}
-		// [verify S3] el momento del gesto (g_at, g_t_ms) lo respeta el adaptador.
 		for (int gi = 0; gi < args.g_emote.Count(); gi++)
 		{
-			res = engine.RequestGesture(args.a_lid, gi, args.g_emote[gi]);
+			res = engine.RequestGesture(args.a_lid, gi, args.g_emote[gi], args.g_at[gi], args.g_t_ms[gi]);
 			if (res != "")
 			{
 				peer.FinishEntry(entry, "error", res, "{}");
@@ -110,11 +109,12 @@ class DSBX_ActorOps : Managed
 		peer.FinishEntry(entry, "done", "", body);
 	}
 
-	// Foto §2.3 de la parte 1: las filas de los actores vivos del registro y gestures vacío
-	// (los eventos de gesto son del adaptador, [verify S3]). Con `only`, solo esa fila.
+	// Foto §2.3 de la parte 1: filas de los actores vivos y eventos de gesto de esas filas.
+	// Con `only`, solo esa fila y sus eventos.
 	protected string ReadJson(DSBX_ActorEngine engine, string only)
 	{
 		string rows = "";
+		string events = "";
 		foreach (string lid : m_Lids)
 		{
 			if (only != "" && lid != only)
@@ -131,7 +131,16 @@ class DSBX_ActorOps : Managed
 				rows = rows + ",";
 			}
 			rows = rows + row;
+			string ev = engine.Gestures(lid);
+			if (ev != "")
+			{
+				if (events != "")
+				{
+					events = events + ",";
+				}
+				events = events + ev;
+			}
 		}
-		return "{\"actors\":[" + rows + "],\"gestures\":[]}";
+		return "{\"actors\":[" + rows + "],\"gestures\":[" + events + "]}";
 	}
 }
