@@ -2800,15 +2800,15 @@ async function runS6(browser) {
     }
     await page.setViewportSize({ width: 1280, height: 720 });
 
-    // Negativo: Actores existe, desactivada, con «Llega con F3» en su title
+    // F3-web §5.3: Actores existe y está activa, sin el title «Llega con F3»
     const actoresTab = tablist.locator('[role="tab"], button', { hasText: /^Actores\b/ }).first();
     const actCheck = await actoresTab.evaluate((el) => ({
       disabled: !!(el.disabled || el.getAttribute("aria-disabled") === "true"),
       title: el.getAttribute("title") || "",
     }));
     assert(
-      actCheck.disabled && /Llega con F3/.test(actCheck.title),
-      "S6(-): pestaña Actores no desactivada o sin title 'Llega con F3': " + JSON.stringify(actCheck)
+      !actCheck.disabled && !/Llega con F3/.test(actCheck.title),
+      "S6: pestaña Actores desactivada o con title 'Llega con F3': " + JSON.stringify(actCheck)
     );
 
     // Positivo: el buscador #libq se conserva al cambiar de pestaña
