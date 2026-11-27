@@ -1,6 +1,6 @@
 # F3-web: actores en el estudio (Añadir, Propiedades, marcas y gestos)
 
-2026-11-27 · tarea **F3-web**, rama `claude/project-thread-c4y6r9` (desde `main` `1627463`, con F3-offline 1 y 2 y Desconectar mergeados, PR #31) · spec de implementación (R25) de lo que F6-web parte 1 dejó fuera de su §0 («actores, vestuario y gestos (F3): la biblioteca no ofrece la categoría `actor` y Propiedades enseña los campos de un actor en solo lectura», `plans/2026-11-14-m1-f6-web-1-brief.md:24`) y de la biblioteca de F6 (plan M1 §3 F6: «biblioteca (objetos, vestuario y gestos)») · contrato: `DayZSandbox_dev/product-spec.md` C1, C4, A6 y D1 · v0.1a (AC8: el almacén no guarda gestos fuera del catálogo, así que el caso raro va por el catálogo que ve la web).
+2026-11-27 · tarea **F3-web**, rama `claude/project-thread-c4y6r9` (desde `main` `1627463`, con F3-offline 1 y 2 y Desconectar mergeados, PR #31) · spec de implementación (R25) de lo que F6-web parte 1 dejó fuera de su §0 («actores, vestuario y gestos (F3): la biblioteca no ofrece la categoría `actor` y Propiedades enseña los campos de un actor en solo lectura», `plans/2026-11-14-m1-f6-web-1-brief.md:24`) y de la biblioteca de F6 (plan M1 §3 F6: «biblioteca (objetos, vestuario y gestos)») · contrato: `DayZSandbox_dev/product-spec.md` C1, C4, A6 y D1 · v0.1b (§8: resultado; AC8: el almacén no guarda gestos fuera del catálogo, así que el caso raro va por el catálogo que ve la web).
 
 **Por qué ahora.** No depende de ningún spike: el almacén ya tiene las operaciones de actor (`entity.add` con `wardrobe/behaviour/roam/marks/gestures`, `entity.set` de `wardrobe/behaviour/roam`, `entity.marks`, `entity.gestures`; `app/backend/store.py:19-20`, `:627-680`, `:847-868`), el validador ya juzga actores (`app/backend/validate.py:334-470`) y el catálogo ya trae clases, vestuarios, prendas y gestos (`fixtures/catalog-m1.json`). Lo que falta es la web. Cuando S3 pase en partida, la persona podrá montar la escena con actores desde el estudio sin tocar JSON (D1). Qué gestos valen lo decide el catálogo (la decisión de Guillermo sobre los gestos de S3 cambia el catálogo, no esta web).
 
@@ -149,3 +149,10 @@ Script `plans/f3web-mutants.py` (lo escribe Claude tras la implementación): cad
 ## 7. Entrega
 
 Un commit del oráculo (este brief, §5) y uno de la implementación, separados, en la rama de arriba; después las mutaciones y un PR en borrador. Revisión: lo que se puede probar se prueba (regla de Guillermo del 2026-11-26); sin ronda de Sol salvo que la pida.
+
+## 8. Resultado (v0.1b)
+
+- Implementación de Grok (grok-4.6, 249 s, 0,74 USD) en `493361e`, sin retocar.
+- Tres arreglos del guion, todos del arnés y no de la conducta pedida (falsos FALLA): AC1 vuelve a Añadir antes de leer el medidor (colocar enseña Propiedades); los `select` esperan la lease del campo antes de elegir, como ya hacía `cls` en F6-web 1; cada fila arranca un backend nuevo (sin leases vivas de la anterior), y en AC6 la marca la pone la persona, porque con la lease de gestos en sus manos la IA no puede tocar `marks`.
+- Gate en la nube: 706 unittest OK, build, P1-P9b, S1-S12, C1-C10 y AC1-AC8 en verde.
+- Mutaciones (`plans/f3web-mutants.py`): 12/12 muertas. La primera versión de W10 era equivalente (`commitGestures` normaliza con `gestureWire`) y se movió a `gestureWire`.

@@ -70,7 +70,10 @@ function countOps(page) {
   return c;
 }
 
+// Backend nuevo (sin leases vivas de la fila anterior) sobre el mismo almacén, y escena vacía.
 async function clearScene() {
+  assert((await cmd({ cmd: "stop_backend" })).ok, "stop_backend");
+  assert((await cmd({ cmd: "start_backend" })).ok, "start_backend");
   const snap = await cmd({ cmd: "snapshot" });
   const ops = (snap.doc.entities || []).map((e) => ({ name: "entity.delete", target: e.id, args: {} }));
   if (ops.length) {
@@ -172,6 +175,17 @@ async function actoresTab(page) {
   return { anadir, tab };
 }
 
+// Un select del inspector ignora el cambio hasta que llega la lease del campo (F6-web 1, como `cls`).
+async function selectWithLease(page, sel, value) {
+  const f = page.locator(sel);
+  await f.focus();
+  await page.waitForFunction((q) => {
+    const el = document.querySelector(q);
+    return !!el && !el.disabled && el.getAttribute("aria-readonly") !== "true";
+  }, sel, { timeout: 5000 });
+  await f.selectOption(value);
+}
+
 async function isAriaInvalid(loc) {
   return (await loc.getAttribute("aria-invalid")) === "true";
 }
@@ -226,6 +240,8 @@ async function AC1(browser) {
     }
     const ent = snap.doc.entities.find((e) => e.kind === "actor");
     for (const k of keys) assert(JSON.stringify(ent[k]) === JSON.stringify(want[k]), "AC1(+): snapshot." + k);
+    // Colocar enseña Propiedades; el medidor vive en Añadir.
+    await activatePanel(page, "anadir");
     assert(/1\s*\/\s*2/.test(await page.locator('[data-budget="actor"]').first().innerText()), "AC1(+): medidor != 1 / 2");
 
     // Negativa: al tope (2), la fila no coloca.
@@ -284,7 +300,7 @@ async function AC2(browser) {
     assert(JSON.stringify(await items()) === JSON.stringify(cat.wardrobe_items.cazador), "AC2(+): las prendas no siguen al vestuario del documento");
 
     const ops = countOps(page);
-    await props.locator("#f-wardrobe").selectOption("medica");
+    await selectWithLease(page, "#f-wardrobe", "medica");
     await waitForSnap((s) => s.doc.entities.find((e) => e.id === id).wardrobe === "medica", "AC2(+): wardrobe medica");
     await sleep(300);
     ops.stop();
@@ -315,7 +331,7 @@ async function AC3(browser) {
     const props = await selectEntity(page, id);
     const opts = await props.locator("#f-behaviour option").evaluateAll((els) => els.map((e) => e.value));
     assert(JSON.stringify(opts) === JSON.stringify(["HOLD", "ONCE", "LOOP", "ROAM"]), "AC3(+): opciones: " + JSON.stringify(opts));
-    await props.locator("#f-behaviour").selectOption("ROAM");
+    await selectWithLease(page, "#f-behaviour", "ROAM");
     await waitForSnap((s) => s.doc.entities.find((e) => e.id === id).behaviour === "ROAM", "AC3(+): ROAM");
     assert(!(await typeAndEnter(page, "#f-roam", 30)), "AC3(+): 30 marcado inválido");
     await waitForSnap((s) => s.doc.entities.find((e) => e.id === id).roam === 30, "AC3(+): roam 30");
@@ -454,15 +470,16 @@ async function AC6(browser) {
     await page.locator("#f-gesture-1-value").press("Escape").catch(() => {});
 
     // Una marca, después emote, «cuándo» y valor.
-    const r = await cmd({ cmd: "ai_ops", label: "IA marca", ops: [{ name: "entity.marks", target: id, args: { marks: [{ x: 6180, z: 7630 }] } }] });
-    assert(r && r.ok, "AC6: ai_ops marca " + JSON.stringify(r));
+    // La marca la pone la persona: con la lease de gestos en sus manos, la IA no puede tocar marks.
+    await props.locator('[data-section="marcas"]').getByRole("button", { name: "Añadir marca" }).click();
+    await waitForSnap((s) => s.doc.entities.find((e) => e.id === id).marks.length === 1, "AC6: 1 marca");
     await page.waitForFunction(() => {
       const o = document.querySelector('#f-gesture-1-when option[value="at"]');
       return o && !o.disabled;
     }, null, { timeout: 5000 });
-    await props.locator("#f-gesture-1-emote").selectOption("EmoteSalute");
+    await selectWithLease(page, "#f-gesture-1-emote", "EmoteSalute");
     await waitForSnap((s) => s.doc.entities.find((e) => e.id === id).gestures[0].emote === "EmoteSalute", "AC6(+): EmoteSalute");
-    await props.locator("#f-gesture-1-when").selectOption("at");
+    await selectWithLease(page, "#f-gesture-1-when", "at");
     snap = await waitForSnap((s) => "at" in s.doc.entities.find((e) => e.id === id).gestures[0], "AC6(+): at");
     assert(!(await typeAndEnter(page, "#f-gesture-1-value", 1)), "AC6(+): valor 1 inválido");
     await sleep(300);
