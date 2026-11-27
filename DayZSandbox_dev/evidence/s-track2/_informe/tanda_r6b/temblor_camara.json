@@ -1,0 +1,72 @@
+{
+ "criterio": "temblor > 2.0 Hz, p95 <= 0.1 grados entre frames",
+ "por_tau": [
+  {
+   "fps": 58.8,
+   "n": 1875,
+   "temblor_p95_deg": 0.9718,
+   "temblor_p95_sin_giro_deg": 0.7033,
+   "temblor_p95_giros_deg": 1.2123,
+   "inc_total_p95_deg": 2.2537,
+   "run": "mount0_Hb",
+   "tau_s": 0.0,
+   "cumple": false
+  },
+  {
+   "fps": 58.8,
+   "n": 1889,
+   "temblor_p95_deg": 0.3884,
+   "temblor_p95_sin_giro_deg": 0.3025,
+   "temblor_p95_giros_deg": 0.5528,
+   "inc_total_p95_deg": 1.7973,
+   "run": "mount0_Hb_s010p0",
+   "tau_s": 0.1,
+   "cumple": false
+  },
+  {
+   "fps": 58.8,
+   "n": 1897,
+   "temblor_p95_deg": 0.5191,
+   "temblor_p95_sin_giro_deg": 0.2138,
+   "temblor_p95_giros_deg": 0.7751,
+   "inc_total_p95_deg": 1.5936,
+   "run": "mount0_Hb_s020p0",
+   "tau_s": 0.2,
+   "cumple": false
+  },
+  {
+   "fps": 58.8,
+   "n": 1873,
+   "temblor_p95_deg": 0.2591,
+   "temblor_p95_sin_giro_deg": 0.1117,
+   "temblor_p95_giros_deg": 0.4529,
+   "inc_total_p95_deg": 1.339,
+   "run": "mount03_Hb_p0",
+   "tau_s": 0.3,
+   "cumple": false
+  },
+  {
+   "fps": 58.8,
+   "n": 1830,
+   "temblor_p95_deg": 0.1629,
+   "temblor_p95_sin_giro_deg": 0.0788,
+   "temblor_p95_giros_deg": 0.2465,
+   "inc_total_p95_deg": 1.1482,
+   "run": "mount0_Hb_s050p0",
+   "tau_s": 0.5,
+   "cumple": false
+  },
+  {
+   "fps": 58.8,
+   "n": 1857,
+   "temblor_p95_deg": 0.0887,
+   "temblor_p95_sin_giro_deg": 0.0392,
+   "temblor_p95_giros_deg": 0.1479,
+   "inc_total_p95_deg": 0.9603,
+   "run": "mount0_Hb_s100p0",
+   "tau_s": 1.0,
+   "cumple": true
+  }
+ ],
+ "tau_elegido": 1.0
+}

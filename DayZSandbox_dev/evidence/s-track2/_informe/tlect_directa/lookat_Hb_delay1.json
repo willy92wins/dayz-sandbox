@@ -1,0 +1,228 @@
+{
+ "run": "lookat_Hb_delay1",
+ "measure": "T-lect-directa",
+ "k": -1,
+ "f_px": 923.94,
+ "ref_shot": "f000030.bmp",
+ "ref_boca": [
+  960.0,
+  540.18
+ ],
+ "ref_px_por_m": 561.9,
+ "mascara_px": 616,
+ "banco": 117,
+ "ventanas": {
+  "giro1": {
+   "a": {
+    "n_shots": 122,
+    "n_validas": 118,
+    "coverage": 0.9672,
+    "p95_px": 5.2809,
+    "p50_px": 1.2928,
+    "frac_sobre_umbral": 0.3644,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   },
+   "b": {
+    "n_shots": 122,
+    "n_validas": 118,
+    "coverage": 0.9672,
+    "p95_px": 1545.5785,
+    "p50_px": 970.3942,
+    "frac_sobre_umbral": 1.0,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   },
+   "c": {
+    "n_shots": 122,
+    "n_validas": 118,
+    "coverage": 0.9672,
+    "p95_px": 838.2522,
+    "p50_px": 671.554,
+    "frac_sobre_umbral": 1.0,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   },
+   "d": {
+    "n_shots": 122,
+    "n_validas": 118,
+    "coverage": 0.9672,
+    "p95_px": 101.4122,
+    "p50_px": 56.4695,
+    "frac_sobre_umbral": 1.0,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   },
+   "e": {
+    "n_shots": 122,
+    "n_validas": 118,
+    "coverage": 0.9672,
+    "p95_px": 5.2809,
+    "p50_px": 1.3283,
+    "frac_sobre_umbral": 0.3729,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   },
+   "f": {
+    "n_shots": 122,
+    "n_validas": 118,
+    "coverage": 0.9672,
+    "p95_px": 5.2809,
+    "p50_px": 1.3283,
+    "frac_sobre_umbral": 0.3729,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   }
+  },
+  "giro2": {
+   "a": {
+    "n_shots": 117,
+    "n_validas": 58,
+    "coverage": 0.4957,
+    "p95_px": 10.6947,
+    "p50_px": 0.8121,
+    "frac_sobre_umbral": 0.1724,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 57
+   },
+   "b": {
+    "n_shots": 117,
+    "n_validas": 58,
+    "coverage": 0.4957,
+    "p95_px": 1529.7321,
+    "p50_px": 372.7223,
+    "frac_sobre_umbral": 1.0,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 57
+   },
+   "c": {
+    "n_shots": 117,
+    "n_validas": 58,
+    "coverage": 0.4957,
+    "p95_px": 657.0168,
+    "p50_px": 287.3526,
+    "frac_sobre_umbral": 1.0,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 57
+   },
+   "d": {
+    "n_shots": 117,
+    "n_validas": 58,
+    "coverage": 0.4957,
+    "p95_px": 54.9046,
+    "p50_px": 49.9236,
+    "frac_sobre_umbral": 1.0,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 57
+   },
+   "e": {
+    "n_shots": 117,
+    "n_validas": 58,
+    "coverage": 0.4957,
+    "p95_px": 10.6947,
+    "p50_px": 0.7607,
+    "frac_sobre_umbral": 0.1724,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 57
+   },
+   "f": {
+    "n_shots": 117,
+    "n_validas": 58,
+    "coverage": 0.4957,
+    "p95_px": 10.6947,
+    "p50_px": 0.7607,
+    "frac_sobre_umbral": 0.1724,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 57
+   }
+  },
+  "giro3": {
+   "a": {
+    "n_shots": 107,
+    "n_validas": 97,
+    "coverage": 0.9065,
+    "p95_px": 5.2603,
+    "p50_px": 1.9131,
+    "frac_sobre_umbral": 0.4845,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   },
+   "b": {
+    "n_shots": 107,
+    "n_validas": 97,
+    "coverage": 0.9065,
+    "p95_px": 1552.501,
+    "p50_px": 1134.2396,
+    "frac_sobre_umbral": 1.0,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   },
+   "c": {
+    "n_shots": 107,
+    "n_validas": 97,
+    "coverage": 0.9065,
+    "p95_px": 838.6119,
+    "p50_px": 675.6117,
+    "frac_sobre_umbral": 1.0,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   },
+   "d": {
+    "n_shots": 107,
+    "n_validas": 97,
+    "coverage": 0.9065,
+    "p95_px": 106.731,
+    "p50_px": 48.5744,
+    "frac_sobre_umbral": 1.0,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   },
+   "e": {
+    "n_shots": 107,
+    "n_validas": 97,
+    "coverage": 0.9065,
+    "p95_px": 5.3864,
+    "p50_px": 1.9585,
+    "frac_sobre_umbral": 0.4948,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   },
+   "f": {
+    "n_shots": 107,
+    "n_validas": 97,
+    "coverage": 0.9065,
+    "p95_px": 5.3864,
+    "p50_px": 1.9585,
+    "frac_sobre_umbral": 0.4948,
+    "verdict": "FALLA",
+    "cause": "p95_px_exceeded",
+    "sin_plantilla": 1
+   }
+  }
+ },
+ "por_lectura": {
+  "a": "FALLA",
+  "b": "FALLA",
+  "c": "FALLA",
+  "d": "FALLA",
+  "e": "FALLA",
+  "f": "FALLA"
+ }
+}
