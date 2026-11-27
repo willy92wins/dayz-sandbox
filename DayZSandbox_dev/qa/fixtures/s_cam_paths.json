@@ -45,7 +45,7 @@
           "pos_z_m": 9804.0,
           "yaw_deg": -179.0,
           "pitch_deg": 0.0,
-          "roll_deg": 6.0,
+          "roll_deg": 0.0,
           "fov_rad": 1.1,
           "focus_dist_m": 50.0,
           "focus_blur": 1.0

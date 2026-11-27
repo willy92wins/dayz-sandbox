@@ -226,24 +226,26 @@ def _ref_pos_rel(keys, t_s, pos_mode):
     return out
 
 
-def _key_quat(key):
-    # El slerp sintetico de claves conserva la base sin roll (roll=0):
-    # es la trayectoria de direccion que acredita la referencia de
-    # CAM-05. La matriz completa medida (con roll) se usa en las poses.
+def _key_quat(key, with_roll=False):
+    # El slerp sintetico de claves conserva la base sin roll (roll=0) por
+    # defecto: es la trayectoria de direccion que acredita la referencia
+    # de CAM-05. Con ``with_roll`` se interpola la matriz completa con el
+    # roll de la clave, como un motor honesto (r6).
+    roll = float(key["roll_deg"]) if with_roll else 0.0
     return matrix_to_quat(
-        ypr_matrix(key["yaw_deg"], key["pitch_deg"], 0.0)
+        ypr_matrix(key["yaw_deg"], key["pitch_deg"], roll)
     )
 
 
-def _ref_quat(keys, t_s):
+def _ref_quat(keys, t_s, with_roll=False):
     end = keys[-1]["t_s"]
     t = max(0.0, min(float(t_s), end))
     for i in range(len(keys) - 1):
         t0, t1 = keys[i]["t_s"], keys[i + 1]["t_s"]
         if t0 <= t <= t1:
             u = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
-            return _slerp(_key_quat(keys[i]), _key_quat(keys[i + 1]), u)
-    return _key_quat(keys[-1])
+            return _slerp(_key_quat(keys[i], with_roll), _key_quat(keys[i + 1], with_roll), u)
+    return _key_quat(keys[-1], with_roll)
 
 
 def _ref_fov(keys, t_s):
@@ -291,9 +293,10 @@ def _linear_hud_euler(t_s):
     return (_lerp(15.0, 30.0, u), _lerp(-2.0, 0.0, u), 0.0)
 
 
-def _path_rows(fixture_name, pos_mode, orientation, euler_mode, duration_ms, count=PATH_COUNT):
-    fixtures = _load_json(FIXTURES / "s_cam_paths.json")
-    keys = _key_table(fixtures["paths"][fixture_name])
+def _path_rows(fixture_name, pos_mode, orientation, euler_mode, duration_ms, count=PATH_COUNT, keys=None, with_roll=False):
+    if keys is None:
+        fixtures = _load_json(FIXTURES / "s_cam_paths.json")
+        keys = _key_table(fixtures["paths"][fixture_name])
     dt = duration_ms / float(count - 1)
     staged = []
     for i in range(count):
@@ -301,7 +304,7 @@ def _path_rows(fixture_name, pos_mode, orientation, euler_mode, duration_ms, cou
         rel = _ref_pos_rel(keys, t, pos_mode)
         pos = [rel[0], ANCHOR_Y + rel[1], rel[2]]
         if orientation == "slerp":
-            m = quat_to_matrix(_ref_quat(keys, t))
+            m = quat_to_matrix(_ref_quat(keys, t, with_roll))
             yaw, pitch, roll = _short_arc_euler(t) if euler_mode == "short_arc" else (0.0, 0.0, 0.0)
         else:
             yaw, pitch, roll = _linear_hud_euler(t)
@@ -4981,6 +4984,64 @@ class SCamOfflineTests(unittest.TestCase):
             _r1_scenario(part, fn)
         v = self._r5("m_n40", mut)
         self.assertEqual(_checks_by_id(v)["CAM-09"]["status"], "pass", v)
+
+    # ---------------------------------------------------------------- ronda 6 (test_r6_*)
+    def _r6(self, label, mutate):
+        return self._verdict_with(f"r6_{label}", mutate)
+
+    def _r6_full_roll_rows(self, keys):
+        """Filas de un motor honesto: slerp de la matriz completa con el
+        roll de cada clave (no el ``_key_quat`` sin roll de la suite)."""
+        return _path_rows(
+            "short_arc_6s", "catmull_rom", "slerp", "short_arc",
+            PATH_DURATION_MS, keys=keys, with_roll=True,
+        )
+
+    def test_r6_01_motor_honesto_con_roll_pasa_con_la_fixture_congelada(self):
+        """Con la fixture congelada (todo roll 0), el motor honesto que
+        interpola la matriz completa con el roll de cada clave acredita
+        CAM-05 y cierra en PASA."""
+        fixture = _load_json(FIXTURES / "s_cam_paths.json")
+        keys = _key_table(fixture["paths"]["short_arc_6s"])
+        def mut(part):
+            _write_path_jsonl(_samples(part) / "path_catmull_scripted.jsonl",
+                              self._r6_full_roll_rows(keys))
+        v = self._r6("roll_0_pasa", mut)
+        checks = _checks_by_id(v)
+        self.assertEqual(checks["CAM-05"]["status"], "pass", v)
+        self.assertEqual(v["exit_code"], 0, v)
+
+    def test_r6_02_motor_honesto_con_el_roll_6_reproduce_el_falla_falso(self):
+        """La fixture vieja (roll 6 en t=3), reconstruida en memoria, hace
+        que el mismo motor honesto se aparte de la referencia de CAM-05
+        mas de 2 grados: no-pass (el FALLA falso reproducido)."""
+        fixture = _load_json(FIXTURES / "s_cam_paths.json")
+        old_fixture = json.loads(json.dumps(fixture))
+        old_fixture["paths"]["short_arc_6s"]["keys"][1]["roll_deg"] = 6.0
+        keys = _key_table(old_fixture["paths"]["short_arc_6s"])
+        part = self._part("r6_roll_6")
+        _write_path_jsonl(_samples(part) / "path_catmull_scripted.jsonl",
+                          self._r6_full_roll_rows(keys))
+        from unittest import mock
+        original = s_cam_eval._load_samples
+        def load(part_dir):
+            samples = original(part_dir)
+            samples["fixtures_paths"] = old_fixture
+            return samples
+        with mock.patch.object(s_cam_eval, "_load_samples", load):
+            v = s_cam_eval.evaluate(part)
+        checks = _checks_by_id(v)
+        self.assertNotEqual(checks["CAM-05"]["status"], "pass", v)
+        self.assertEqual(checks["CAM-05"]["status"], "fail", v)
+        self.assertEqual(checks["CAM-05"]["detail"], "orientation_vs_slerp", v)
+
+    def test_r6_03_la_fixture_congelada_no_lleva_roll(self):
+        """Guarda: ninguna clave de la fixture congelada tiene roll != 0;
+        el roll queda fuera de M1 y pasa a M2."""
+        fixture = _load_json(FIXTURES / "s_cam_paths.json")
+        for name, path in sorted(fixture["paths"].items()):
+            for key in path["keys"]:
+                self.assertEqual(float(key["roll_deg"]), 0.0, f"{name}: {key}")
 
     # ---------------------------------------------------------------- testigo comun (E9)
     def _reevaluate_parts(self, ev_dir):
