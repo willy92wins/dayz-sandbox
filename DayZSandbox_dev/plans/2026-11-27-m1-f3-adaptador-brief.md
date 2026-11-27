@@ -296,6 +296,41 @@ Antes de lanzar: el linter de Enforce (DP-14) sobre los dos PBO, con Expansion 1
 - **Lane B, Gemini Argon**: §6 (`test_exp_adapter_static.py`) y el `mutants.py` de §7, sin ver el código de la lane A (escribe las reglas contra el brief; otra familia que el implementador, regla E9 de la otra cuenta).
 - Fallback: el orquestador (Claude) escribe lo que una lane no entregue. Gate y mutantes, el orquestador en la nube.
 
+## 13. Ronda de Sol 6.2 (28-nov) [EXACT]
+
+Sol 6.2 revisó las normas y la fachada MCP en `f65927e` (resumen en la carpeta del proyecto `dayz-sandbox/f3adapt/sol/sol-resumen.md`): normas NO APTAS (N1, N3 y N9 BLOQ; N2, N4, N5, N7, N8, N10-N13 MAY; N6 MEN), MCP APTAS CON CAMBIOS (N14 y N17 MAY; N15 y N16 MEN). Guillermo dio el «retoma» el 27-nov a las 23:16 UTC: se arregla todo salvo **N12** (el tamaño de la foto frente a `WIRE_CAP`), que cambia la admisión de F3 y va en otra PR (bug-ledger, `bugs.md`). Cada regla nueva o endurecida lleva su mutante, que es el que Sol dio como superviviente.
+
+### 13.1 Código (lane A)
+
+- **N11.** `Stop` pone `rec.m_Behaviour = "HOLD"` antes de `CancelActive` (así `TickRoam` no vuelve a mandar destinos). En §9, el caso «reset en mitad de un gesto» se mide como «el gesto no arranca más tarde» (ningún `EmoteCB` nuevo de ese actor tras el reset), no como un evento `canceled/stop` en la foto: el reset retira el actor y su foto es vacía por contrato.
+- **N14.** Descripción de `scene_validate` en `app/mcp/facade.py`: `"Valida una tanda contra el documento (esquema y reglas de edición) sin aplicarla y dice qué rechazo daría. No es la validación para aplicar al juego: esa la hace el backend al aprobar (actores, motor, cable)."` + `NOT_APPLY`.
+- **N16.** Descripción de `scene_get`: `"Lee el documento de la escena (no el estado del juego) con su revisión, su hash y las últimas tandas con su autor. La observación de los actores en partida está en GET /api/actors/observation."` + `NOT_APPLY`.
+- **N17.** `app/mcp/CO-10.md`: el backend HTTP en `8765` (el puerto por defecto de `server.py`) y el bridge en su `8766` por defecto: el paso 1 pasa a `--port 8765`, las URL de los pasos 2 y 5 a `:8765`, y la nota del paso 3 a `"port": 8765`.
+
+### 13.2 Normas (lane B), en `test_exp_adapter_static.py` y `test_mod_static.py`
+
+| Hallazgo | Regla | Qué exige (además de lo de §6) | Mutante nuevo (sobrevivía) |
+|---|---|---|---|
+| N1 | E1 | `requiredAddons` dentro del cuerpo de `class CfgPatches` → `class DayZSandbox_Expansion`; `dependencies` y `defs` dentro de `class CfgMods` → `class DayZSandbox_Expansion` | X14: `class CfgMods` → `class CfgWrong` |
+| N2 | E2 | ningún `#else` ni `#elif` al nivel exterior de la guarda | X15: el `#endif` final de `DSBX_ExpMission.c` → `#else`, una clase, `#endif` |
+| N3 | E3 | cada `override` tiene la misma lista de tipos de parámetros y el mismo tipo de retorno que el método de `DSBX_ActorEngine` del núcleo | X16: `int atMark` → `float atMark` en el `override` |
+| N3 | E4 | `m_DsbxExpEngine = new DSBX_ExpansionEngine();` y `Register(m_DsbxExpEngine)` en `OnMissionStart`; en `OnUpdate`, `m_DsbxExpEngine.Tick(timeslice)` dentro de un `if (m_DsbxExpEngine)` | X17: `Register(null)`; X18: `if (!m_DsbxExpEngine)` |
+| N4 | E5 | en `Spawn`, `SweepAttachments(ai);` antes del primer `CreateAttachment(`, y el tercer argumento de `CreateObjectEx` es `flags` con `int flags = ECE_PLACE_ON_SURFACE \| ECE_INITAI \| ECE_NOLIFETIME \| ECE_NOPERSISTENCY_WORLD;` | X19: sin `SweepAttachments(ai);`; X20: `CreateObjectEx(engineCls, p, ECE_PLACE_ON_SURFACE)` |
+| N5 | E10 (nueva) movimiento | `Tick` llama a `TickMarks(rec, pos);`, `TickRoam(rec, pos);` y `TickGestures(rec);`; en `SetMarks`, la rama `ONCE` usa `eAIWaypointBehavior.ONCE` y la otra `eAIWaypointBehavior.LOOP`; `SendRoamDest` usa `0.35 + 0.4 *` y `rec.m_Roam * frac` | X21: sin `TickMarks(rec, pos);`; X22: LOOP → ONCE en `SetMarks`; X23: `rec.m_Roam * (1.0 + frac)` |
+| N6 | X7, X8 | X7 muta `ONCE` → `ROAMING_LOCAL` en `SendRoamDest`; X8 muta `false` → `true` en el `Expansion_SetEmote` de `FireGesture` | — |
+| N7 | E7 | el cuerpo de `EmoteId` es exactamente el de §5.1 salvo espacios | X24: `emote = "EmoteGreeting";` antes del primer `if` |
+| N8 | E8 | la llamada exacta `engine.RequestGesture(args.a_lid, gi, args.g_emote[gi], args.g_at[gi], args.g_t_ms[gi])`, y en `ReadJson`, `engine.Gestures(lid)` dentro del bucle, después de añadir la fila | X25: `args.g_t_ms[gi] * 0`; X26: `engine.Gestures(only)` |
+| N9 | E9 (reescrita) | se quita la lista global de literales. Cada llamada `Emit(` o `FinishGesture(` con estado literal lleva un par válido: `requested`, `playing` y `finished` con `""`; `canceled` y `expired` con `"interrupted"`, `"timeout"` o `"stop"`, o con la variable `cause`. En `modded class EmoteCB`, `OnStateChange` y `OnFinish` reenvían al motor (`.OnState(` y `.OnFinish(`) tras `super` | X27: sin el `.OnState(` de `OnStateChange`; X28: `Emit(rec, g.m_Gi, "playing", "")` → `"done"`; X29: el primer `FinishGesture(rec, g, "expired", "timeout")` → `""` |
+| N10 | E11 (nueva) fila | en `State`, la fila se arma con `lidJson`, `clsJson`, `xJson`, `yJson`, `zJson`, `yawJson`, `itemsJson`, `miJson`, `stJson`, `tJson` en ese orden; y la fila de muerto es exactamente `"[" + lidJson + ",null,null,null,null,null,[],-1,\"idle\"," + tJson + "]"` o equivalente con el mismo texto resultante | X30: `xJson` y `zJson` cambiados de sitio |
+| N11 | E12 (nueva) parada | `Stop` contiene `rec.m_Behaviour = "HOLD";` antes de `CancelActive(rec, "stop");`; `Despawn` contiene `CancelActive(rec, "stop");`, `g_Game.ObjectDelete(rec.m_Ai);` y `m_Actors.Remove(lid);` | X31: sin `CancelActive` en `Stop`; X32: sin `ObjectDelete` en `Despawn` |
+| N13 | M19 | tras `peer.FinishEntry(entry, "rejected", "expansion_unavailable", "{}");` viene `return;` dentro del mismo bloque | X33: sin ese `return;` (lo corre el mutante de `test_mod_static`, como A13) |
+
+Las reglas nuevas entran en `ALL_CHECKS` y cada una tiene su prueba sobre el árbol real. Los mutantes X14-X33 van en `plans/f3adapt-mutants.py` con el mismo criterio (muere si falla su regla y las demás no; X15 puede tumbar E2 sola). X33 se añade allí también, ejecutando `check_m19`.
+
+### 13.3 Fachada MCP (lane B)
+
+- **N14 y N15.** Prueba nueva en `app/tests/test_co.py`, clase `FachadaMcp`: con la escena de cine, `act-01` pasa de `ONCE` a `HOLD` dejando su gesto en `at: 2`; `scene_validate` da `ok` (es el documento) y la validación para aplicar (`validate_for_apply` con `actor_engine="expansion"`) da `actor_invalid` en `/entities/0/gestures/0/at`. Y una edición de gesto de `act-01` por `scene_ops` aceptada, más un conflicto sobre una marca de `act-01` editada antes por la persona, que vuelve `isError`, `conflict` y la tanda humana en `changes_since_last_call`.
+
 ## 12. Cambios
 
 | Versión | Cambio |
@@ -303,3 +338,4 @@ Antes de lanzar: el linter de Enforce (DP-14) sobre los dos PBO, con Expansion 1
 | v0.1 | Borrador del 27-nov, desde S3 `e92fab7`. |
 | v0.1a | Implementado el 27-nov: lane A (§2-§5) Grok `grok-4.6`, 3 min 49 s, 0,66 USD, 5 dudas en `plans/f3adapt-laneA-dudas.md`, ninguna cambia el brief; lane B (§6, §7) Gemini `gemini-4-argon-high`, 7 min 47 s, a ciegas del código de A. Las dos entregas entraron sin tocar (4bd771f). El orquestador corrigió dos cosas: E9 de la lane B marcaba como causas el literal `"null"` de `causeJson` y el estado interno `"done"` del gesto (ni uno ni otro sale en un evento), así que el regex de asignación ignora las variables `*Json` y `"done"` entra en la lista blanca; y la prueba `test_t_m18_nucleo` de `test_mod_static.py`, que muta la firma vieja de `RequestGesture`, pasa a la firma de §2.1 (§1 decía «sin editar»: la firma nueva la obliga; es la única línea cambiada). **Medido en la nube:** E1-E9 y M1-M19 en verde; los 13 mutantes de §7 mueren con su regla (`python3 plans/f3adapt-mutants.py`). |
 | v0.1b | Linter de Enforce en el PC de Guillermo (con Expansion, CF y Dabs): 0 errores en los dos PBO y un aviso ES-FORMULA-TOO-COMPLEX en `State` (concatenación de 21 términos), partida en cuatro pasos sin cambiar la salida. Riesgos nuevos para §9: la marca imposible de S3 cae en el mar y el actor nada, así que puede no dar nunca `unreachable`; en ese PC Expansion Core es 1.9.85 y Animations 1.9.79, no 1.9.84. |
+| v0.2 | Ronda de Sol 6.2 en §13: N1-N11, N13-N17 aplicados en código, normas, mutantes X14-X33 y fachada MCP; N12 al bug-ledger. |

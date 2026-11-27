@@ -96,3 +96,9 @@ Lo que aparece fuera del alcance de una tanda, o lo que un arbitraje aplaza, se 
 - **Qué pasa:** la prueba (test_f2_live, F2A2Apply) lee `fake.server.sent_results` en cuanto el op llega a `observado`, pero el mod falso añade el resultado a esa lista al volver el POST (`fake_mod.py:618`), en su hilo; el mismo aviso está en `test_fake_mod.py:115`, que ya espera con `wait_until`. Con la máquina cargada (dos suites a la vez) falló 2 de 10; sola, 0 de 12 con y sin los cambios de F3-offline-2, y 0 de 30 en `39c972e`.
 - **Por qué no se arregla aquí:** R20; la prueba es de F2 y no la toca esta tarea.
 - **Arreglo propuesto:** esperar con un plazo a que `sent_results` tenga la entrada antes de leerla.
+
+## 2026-11-28 · F3-adaptador · la foto de actores no cabe en el cable con muchos gestos (Sol 6.2, N12)
+
+- **Qué pasa:** un actor con 64 gestos temporizados pasa la validación del documento y del actor (su orden mide 2 354 B), pero una foto válida con 192 eventos de éxito mide 7 211 B sin la envolvente, frente a `WIRE_CAP` = 3 500 B; tres actores así dan 576 eventos y superan el tope de 512 de `actor_wire.py:114`. El adaptador guarda los eventos desde la creación (`DSBX_ExpEngine.c`, `Gestures`).
+- **Por qué no se arregla aquí:** cambia la admisión de F3 (presupuesto de la foto además del de la orden, `scene_plan.py:403`); Guillermo lo dejó para otra PR (27-nov, «retoma» sobre la propuesta).
+- **Arreglo propuesto:** un negativo offline del tamaño agregado con la envolvente real y que la admisión de F3 mida también la foto peor (actores × eventos por gesto).
