@@ -172,6 +172,14 @@ class Profile:
             if "emotes" in cat and cat["emotes"] is not None
             else sorted(DEFAULT_EMOTES)
         )
+        raw_wi = cat.get("wardrobe_items")
+        wardrobe_items = {}
+        for name in wardrobes:
+            src = raw_wi.get(name) if isinstance(raw_wi, dict) else None
+            if not isinstance(src, (list, tuple)):
+                wardrobe_items[name] = []
+            else:
+                wardrobe_items[name] = [x for x in src if isinstance(x, str) and x]
         return {
             "ok": True,
             "source": "fixture",
@@ -179,6 +187,7 @@ class Profile:
             "caps": caps,
             "wardrobes": wardrobes,
             "emotes": emotes,
+            "wardrobe_items": wardrobe_items,
         }
 
     def get_profile(self):

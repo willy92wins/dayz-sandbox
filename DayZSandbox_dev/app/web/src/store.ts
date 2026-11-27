@@ -1272,6 +1272,9 @@ export const FIELD_SPANISH_NAMES: Record<string, string> = {
   niebla: 'niebla',
   lluvia: 'lluvia',
   viento: 'viento',
+  wardrobe: 'vestuario',
+  behaviour: 'comportamiento',
+  roam: 'radio',
 };
 
 export async function triggerUndoRedo(redo: boolean): Promise<void> {
@@ -1452,18 +1455,31 @@ export async function placeSelectedCatalogItem(): Promise<void> {
     setFlash(`Tope de ${kind} alcanzado (${count} / ${cap})`);
     return;
   }
+  const args: Record<string, unknown> = {
+    kind,
+    cls,
+    name: cls,
+    x: 7680,
+    z: 7680,
+    yaw: 0,
+  };
+  if (kind === 'actor') {
+    const wardrobes = state.catalog?.wardrobes ?? [];
+    if (wardrobes.length === 0) {
+      setState({ placingItem: null });
+      return;
+    }
+    args.wardrobe = wardrobes[0];
+    args.behaviour = 'HOLD';
+    args.roam = 15;
+    args.marks = [];
+    args.gestures = [];
+  }
   setState({ placingItem: null });
   await commitSceneOps(`Colocar ${cls}`, [
     {
       name: 'entity.add',
-      args: {
-        kind,
-        cls,
-        name: cls,
-        x: 7680,
-        z: 7680,
-        yaw: 0,
-      },
+      args,
     },
   ]);
 }

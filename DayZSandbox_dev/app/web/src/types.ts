@@ -111,6 +111,7 @@ export interface CatalogResponse {
   caps: Record<EntityKind, number>;
   wardrobes: string[];
   emotes: string[];
+  wardrobe_items: Record<string, string[]>;
 }
 
 export interface JsonSchemaProperty {

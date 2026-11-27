@@ -1,7 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 import {
   EntityKind,
+  GestureItem,
   JsonSchemaProperty,
+  MarkItem,
   SceneEntity,
   SceneSchemaDoc,
 } from '../types';
@@ -37,9 +39,21 @@ const FIELD_LABELS: Record<string, string> = {
   niebla: 'Niebla',
   lluvia: 'Lluvia',
   viento: 'Viento (m/s)',
+  wardrobe: 'Vestuario',
+  behaviour: 'Comportamiento',
+  roam: 'Radio',
 };
 
-const EDITABLE_ENTITY_FIELDS = new Set(['cls', 'name', 'x', 'z', 'yaw']);
+const EDITABLE_ENTITY_FIELDS = new Set([
+  'cls',
+  'name',
+  'x',
+  'z',
+  'yaw',
+  'wardrobe',
+  'behaviour',
+  'roam',
+]);
 const EDITABLE_AMBIENT_FIELDS = new Set([
   'fecha',
   'hora',
@@ -106,6 +120,37 @@ function formatSchemaValue(val: unknown): string {
   if (Array.isArray(val)) return `${val.length} elementos`;
   if (typeof val === 'object') return `${Object.keys(val as object).length} elementos`;
   return String(val);
+}
+
+function parseNumericDraft(raw: string): number | null {
+  const normalized = raw.trim().replace(',', '.');
+  const num = Number(normalized);
+  return normalized !== '' && Number.isFinite(num) ? num : null;
+}
+
+function gestureWire(
+  g: GestureItem
+): { emote: string; at: number } | { emote: string; t: number } {
+  if (typeof g.at === 'number') return { emote: g.emote, at: g.at };
+  return { emote: g.emote, t: typeof g.t === 'number' ? g.t : 0 };
+}
+
+function rejectLocalField(targetId: string, field: string, rawValue: string): void {
+  const key = `${targetId}:${field}`;
+  setState((prev) => ({
+    drafts: { ...prev.drafts, [key]: rawValue },
+    rejectedDrafts: {
+      ...prev.rejectedDrafts,
+      [key]: {
+        targetId,
+        field,
+        rawValue,
+        code: 'invalid',
+        msg: 'Valor no válido',
+        pointer: '',
+      },
+    },
+  }));
 }
 
 function buildRangeHelp(propSchema: JsonSchemaProperty): string | null {
@@ -192,6 +237,25 @@ export async function confirmFieldValue(
   } else if (field === 'yaw') {
     label = `Girar ${entity.name}`;
     makeOps = () => [{ name: 'entity.set', target: entity.id, args: { yaw: parsedValue } }];
+  } else if (field === 'wardrobe') {
+    label = `Cambiar el vestuario de ${entity.name}`;
+    makeOps = () => [
+      { name: 'entity.set', target: entity.id, args: { wardrobe: parsedValue } },
+    ];
+  } else if (field === 'behaviour') {
+    label = `Cambiar el comportamiento de ${entity.name}`;
+    makeOps = () => [
+      { name: 'entity.set', target: entity.id, args: { behaviour: parsedValue } },
+    ];
+  } else if (field === 'roam') {
+    if (typeof parsedValue !== 'number' || parsedValue <= 0) {
+      rejectLocalField(targetId, field, rawDraft);
+      return false;
+    }
+    label = `Cambiar el radio de ${entity.name}`;
+    makeOps = () => [
+      { name: 'entity.set', target: entity.id, args: { roam: parsedValue } },
+    ];
   } else {
     return true;
   }
@@ -271,6 +335,437 @@ export function PropertiesPanel() {
     window.setTimeout(tryFocus, 30);
   }, [pendingFocusField]);
 
+  const renderActorMarksAndGestures = (ent: SceneEntity) => {
+    const marks: MarkItem[] = Array.isArray(ent.marks) ? ent.marks : [];
+    const gestures: GestureItem[] = Array.isArray(ent.gestures) ? ent.gestures : [];
+    const emotes = catalog?.emotes ?? [];
+    const noEmotes = emotes.length === 0;
+
+    const marksLeaseGranted =
+      activeLease?.targetId === ent.id &&
+      activeLease.field === 'marks' &&
+      activeLease.status === 'granted';
+    const gesturesLeaseGranted =
+      activeLease?.targetId === ent.id &&
+      activeLease.field === 'gestures' &&
+      activeLease.status === 'granted';
+
+    const confirmMarkCoord = (k: number, axis: 'x' | 'z', raw: string) => {
+      const field = `mark-${k}-${axis}`;
+      const num = parseNumericDraft(raw);
+      if (num === null || num < 0 || num > 15360) {
+        rejectLocalField(ent.id, field, raw);
+        return;
+      }
+      void commitSceneOps(
+        `Editar marca ${k}`,
+        () => {
+          const cur = getState().doc?.entities.find((e) => e.id === ent.id);
+          if (!cur) return NO_CHANGE;
+          const list: MarkItem[] = (cur.marks ?? []).map((m) => ({ x: m.x, z: m.z }));
+          const idx = k - 1;
+          if (idx < 0 || idx >= list.length) return NO_CHANGE;
+          if (list[idx][axis] === num) return NO_CHANGE;
+          list[idx] = { ...list[idx], [axis]: num };
+          return [
+            { name: 'entity.marks', target: ent.id, args: { marks: list } },
+          ];
+        },
+        { targetId: ent.id, field, rawValue: raw }
+      );
+    };
+
+    const addMark = () => {
+      if (sinBackend) return;
+      void commitSceneOps(`Añadir marca`, () => {
+        const cur = getState().doc?.entities.find((e) => e.id === ent.id);
+        if (!cur) return NO_CHANGE;
+        const list: MarkItem[] = (cur.marks ?? []).map((m) => ({ x: m.x, z: m.z }));
+        list.push({ x: cur.x, z: cur.z });
+        return [{ name: 'entity.marks', target: ent.id, args: { marks: list } }];
+      });
+    };
+
+    const removeMark = (k: number) => {
+      if (sinBackend) return;
+      const usedBy = gestures.findIndex((g) => g.at === k);
+      if (usedBy >= 0) return;
+      void commitSceneOps(`Quitar marca ${k}`, () => {
+        const cur = getState().doc?.entities.find((e) => e.id === ent.id);
+        if (!cur) return NO_CHANGE;
+        const list: MarkItem[] = (cur.marks ?? []).map((m) => ({ x: m.x, z: m.z }));
+        const idx = k - 1;
+        if (idx < 0 || idx >= list.length) return NO_CHANGE;
+        list.splice(idx, 1);
+        const gList = (cur.gestures ?? []).map(gestureWire);
+        let gChanged = false;
+        const nextG = gList.map((g) => {
+          if ('at' in g && g.at > k) {
+            gChanged = true;
+            return { emote: g.emote, at: g.at - 1 };
+          }
+          return g;
+        });
+        const ops: SceneOp[] = [
+          { name: 'entity.marks', target: ent.id, args: { marks: list } },
+        ];
+        if (gChanged) {
+          ops.push({ name: 'entity.gestures', target: ent.id, args: { gestures: nextG } });
+        }
+        return ops;
+      });
+    };
+
+    const commitGestures = (
+      label: string,
+      field: string,
+      rawValue: string,
+      nextList: GestureItem[]
+    ) => {
+      void commitSceneOps(
+        label,
+        () => {
+          const cur = getState().doc?.entities.find((e) => e.id === ent.id);
+          if (!cur) return NO_CHANGE;
+          return [
+            {
+              name: 'entity.gestures',
+              target: ent.id,
+              args: { gestures: nextList.map(gestureWire) },
+            },
+          ];
+        },
+        { targetId: ent.id, field, rawValue }
+      );
+    };
+
+    const addGesture = () => {
+      if (sinBackend || noEmotes) return;
+      const first = emotes[0];
+      void commitSceneOps(`Añadir gesto`, () => {
+        const cur = getState().doc?.entities.find((e) => e.id === ent.id);
+        if (!cur) return NO_CHANGE;
+        const list = (cur.gestures ?? []).map(gestureWire);
+        list.push({ emote: first, t: 0 });
+        return [{ name: 'entity.gestures', target: ent.id, args: { gestures: list } }];
+      });
+    };
+
+    const removeGesture = (gIdx: number) => {
+      if (sinBackend) return;
+      void commitSceneOps(`Quitar gesto ${gIdx}`, () => {
+        const cur = getState().doc?.entities.find((e) => e.id === ent.id);
+        if (!cur) return NO_CHANGE;
+        const list = (cur.gestures ?? []).map(gestureWire);
+        const idx = gIdx - 1;
+        if (idx < 0 || idx >= list.length) return NO_CHANGE;
+        list.splice(idx, 1);
+        return [{ name: 'entity.gestures', target: ent.id, args: { gestures: list } }];
+      });
+    };
+
+    const changeGestureEmote = (gIdx: number, emote: string) => {
+      const curList = gestures.map((g) => ({ ...g }));
+      const idx = gIdx - 1;
+      if (!curList[idx]) return;
+      curList[idx] = { ...gestureWire(curList[idx]), emote };
+      commitGestures(`Cambiar gesto ${gIdx}`, `gesture-${gIdx}-emote`, emote, curList);
+    };
+
+    const changeGestureWhen = (gIdx: number, when: 'at' | 't') => {
+      const curList = gestures.map((g) => ({ ...g }));
+      const idx = gIdx - 1;
+      const g = curList[idx];
+      if (!g) return;
+      if (when === 'at') {
+        if (marks.length === 0) return;
+        curList[idx] = { emote: g.emote, at: 1 };
+      } else {
+        curList[idx] = { emote: g.emote, t: 0 };
+      }
+      commitGestures(`Cambiar gesto ${gIdx}`, `gesture-${gIdx}-when`, when, curList);
+    };
+
+    const confirmGestureValue = (gIdx: number, raw: string) => {
+      const field = `gesture-${gIdx}-value`;
+      const g = gestures[gIdx - 1];
+      if (!g) return;
+      const num = parseNumericDraft(raw);
+      const usesAt = typeof g.at === 'number';
+      if (usesAt) {
+        if (num === null || !Number.isInteger(num) || num < 1 || num > marks.length) {
+          rejectLocalField(ent.id, field, raw);
+          return;
+        }
+      } else if (num === null || num < 0) {
+        rejectLocalField(ent.id, field, raw);
+        return;
+      }
+      const curList = gestures.map((item) => ({ ...item }));
+      if (usesAt) {
+        curList[gIdx - 1] = { emote: g.emote, at: num as number };
+      } else {
+        curList[gIdx - 1] = { emote: g.emote, t: num as number };
+      }
+      commitGestures(`Cambiar gesto ${gIdx}`, field, raw, curList);
+    };
+
+    const markField = (k: number, axis: 'x' | 'z') => {
+      const field = `mark-${k}-${axis}`;
+      const key = `${ent.id}:${field}`;
+      const m = marks[k - 1];
+      const docVal = m ? String(m[axis]) : '';
+      const display = drafts[key] !== undefined ? drafts[key] : docVal;
+      const rejected = rejectedDrafts[key];
+      return (
+        <>
+          <label htmlFor={`f-${field}`}>{`Marca ${k} · ${axis.toUpperCase()}`}</label>
+          <input
+            id={`f-${field}`}
+            type="text"
+            inputMode="decimal"
+            className="f"
+            value={display}
+            disabled={sinBackend}
+            readOnly={!marksLeaseGranted}
+            aria-invalid={rejected ? 'true' : undefined}
+            onFocus={() => {
+              if (sinBackend) return;
+              void acquireFieldLease(ent.id, 'marks');
+            }}
+            onBlur={() => {
+              releaseFieldLease(ent.id, 'marks');
+              if (escapedKeyRef.current === key) {
+                escapedKeyRef.current = null;
+                return;
+              }
+              if (sinBackend) return;
+              const latest = getState().drafts[key];
+              if (latest !== undefined) confirmMarkCoord(k, axis, latest);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                escapedKeyRef.current = key;
+                clearFieldErrorAndDraft(ent.id, field);
+                return;
+              }
+              if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                e.stopPropagation();
+                const latest = getState().drafts[key];
+                if (!sinBackend && latest !== undefined) confirmMarkCoord(k, axis, latest);
+              }
+            }}
+            onChange={(e) => {
+              if (!marksLeaseGranted) return;
+              setFieldDraft(ent.id, field, e.target.value);
+            }}
+          />
+        </>
+      );
+    };
+
+    return (
+      <>
+        <div className="psec" data-section="marcas">
+          <div className="psec-h">
+            <span>Marcas</span>
+          </div>
+          <div className="pgrid">
+            {marks.length === 0 ? <span>Sin marcas</span> : null}
+            {marks.map((_, i) => {
+              const k = i + 1;
+              const usedBy = gestures.findIndex((g) => g.at === k);
+              const blocked = usedBy >= 0;
+              const note = blocked ? `La usa el gesto ${usedBy + 1}` : null;
+              return (
+                <React.Fragment key={k}>
+                  <div data-mark={k} className="pgrid" style={{ display: 'contents' }}>
+                    {markField(k, 'x')}
+                    {markField(k, 'z')}
+                    <button
+                      type="button"
+                      className="btn sm"
+                      aria-disabled={blocked || sinBackend ? 'true' : undefined}
+                      title={note ?? undefined}
+                      onClick={() => {
+                        if (blocked || sinBackend) return;
+                        removeMark(k);
+                      }}
+                      onKeyDown={(e) => {
+                        if ((e.key === 'Enter' || e.key === ' ') && (blocked || sinBackend)) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }
+                      }}
+                    >
+                      {`Quitar marca ${k}`}
+                    </button>
+                    {note ? <span>{note}</span> : null}
+                  </div>
+                </React.Fragment>
+              );
+            })}
+          </div>
+          <div className="prop-actions">
+            <button
+              type="button"
+              className="btn sm"
+              disabled={sinBackend}
+              onClick={() => addMark()}
+            >
+              Añadir marca
+            </button>
+          </div>
+        </div>
+
+        <div className="psec" data-section="gestos">
+          <div className="psec-h">
+            <span>Gestos</span>
+          </div>
+          <div className="pgrid">
+            {gestures.length === 0 ? <span>Sin gestos</span> : null}
+            {gestures.map((g, i) => {
+              const gIdx = i + 1;
+              const when: 'at' | 't' = typeof g.at === 'number' ? 'at' : 't';
+              const value = when === 'at' ? String(g.at ?? '') : String(g.t ?? '');
+              const valueField = `gesture-${gIdx}-value`;
+              const valueKey = `${ent.id}:${valueField}`;
+              const display = drafts[valueKey] !== undefined ? drafts[valueKey] : value;
+              const rejected = rejectedDrafts[valueKey];
+              const emoteInCat = emotes.includes(g.emote);
+              return (
+                <div key={gIdx} data-gesture={gIdx} className="pgrid" style={{ display: 'contents' }}>
+                  <select
+                    id={`f-gesture-${gIdx}-emote`}
+                    className="f"
+                    value={g.emote}
+                    disabled={sinBackend}
+                    aria-readonly={!gesturesLeaseGranted ? 'true' : undefined}
+                    onFocus={() => {
+                      if (sinBackend) return;
+                      void acquireFieldLease(ent.id, 'gestures');
+                    }}
+                    onBlur={() => releaseFieldLease(ent.id, 'gestures')}
+                    onChange={(e) => {
+                      if (!gesturesLeaseGranted) return;
+                      changeGestureEmote(gIdx, e.target.value);
+                    }}
+                  >
+                    {!emoteInCat && g.emote ? (
+                      <option value={g.emote}>{g.emote}</option>
+                    ) : null}
+                    {emotes.map((em) => (
+                      <option key={em} value={em}>
+                        {em}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    id={`f-gesture-${gIdx}-when`}
+                    className="f"
+                    value={when}
+                    disabled={sinBackend}
+                    aria-readonly={!gesturesLeaseGranted ? 'true' : undefined}
+                    onFocus={() => {
+                      if (sinBackend) return;
+                      void acquireFieldLease(ent.id, 'gestures');
+                    }}
+                    onBlur={() => releaseFieldLease(ent.id, 'gestures')}
+                    onChange={(e) => {
+                      if (!gesturesLeaseGranted) return;
+                      const next = e.target.value === 'at' ? 'at' : 't';
+                      changeGestureWhen(gIdx, next);
+                    }}
+                  >
+                    <option value="at" disabled={marks.length === 0}>
+                      En la marca
+                    </option>
+                    <option value="t">A los segundos</option>
+                  </select>
+                  <input
+                    id={`f-gesture-${gIdx}-value`}
+                    type="text"
+                    inputMode="decimal"
+                    className="f"
+                    value={display}
+                    disabled={sinBackend}
+                    readOnly={!gesturesLeaseGranted}
+                    aria-invalid={rejected ? 'true' : undefined}
+                    onFocus={() => {
+                      if (sinBackend) return;
+                      void acquireFieldLease(ent.id, 'gestures');
+                    }}
+                    onBlur={() => {
+                      releaseFieldLease(ent.id, 'gestures');
+                      if (escapedKeyRef.current === valueKey) {
+                        escapedKeyRef.current = null;
+                        return;
+                      }
+                      if (sinBackend) return;
+                      const latest = getState().drafts[valueKey];
+                      if (latest !== undefined) confirmGestureValue(gIdx, latest);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        escapedKeyRef.current = valueKey;
+                        clearFieldErrorAndDraft(ent.id, valueField);
+                        return;
+                      }
+                      if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const latest = getState().drafts[valueKey];
+                        if (!sinBackend && latest !== undefined) {
+                          confirmGestureValue(gIdx, latest);
+                        }
+                      }
+                    }}
+                    onChange={(e) => {
+                      if (!gesturesLeaseGranted) return;
+                      setFieldDraft(ent.id, valueField, e.target.value);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn sm"
+                    disabled={sinBackend}
+                    onClick={() => removeGesture(gIdx)}
+                  >
+                    {`Quitar gesto ${gIdx}`}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div className="prop-actions">
+            <button
+              type="button"
+              className="btn sm"
+              aria-disabled={noEmotes || sinBackend ? 'true' : undefined}
+              onClick={() => {
+                if (noEmotes || sinBackend) return;
+                addGesture();
+              }}
+              onKeyDown={(e) => {
+                if ((e.key === 'Enter' || e.key === ' ') && (noEmotes || sinBackend)) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }
+              }}
+            >
+              Añadir gesto
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  };
+
   if (!doc || !docInfo) {
     return (
       <div className="panel" data-panel="propiedades">
@@ -298,11 +793,9 @@ export function PropertiesPanel() {
     const label = FIELD_LABELS[prop] ?? prop;
     const isKnownLabel = Object.prototype.hasOwnProperty.call(FIELD_LABELS, prop);
     const isAmbient = targetId === 'ambiente';
-    const isActor = entityForCls?.kind === 'actor';
-
     const hasOperation = isAmbient
       ? EDITABLE_AMBIENT_FIELDS.has(prop)
-      : !isActor && EDITABLE_ENTITY_FIELDS.has(prop);
+      : EDITABLE_ENTITY_FIELDS.has(prop);
 
     const isEditableField =
       isKnownLabel &&
@@ -372,7 +865,41 @@ export function PropertiesPanel() {
 
     let control: React.ReactNode;
 
-    if (prop === 'cls' && entityForCls) {
+    if (prop === 'wardrobe' && entityForCls) {
+      const catList = catalog?.wardrobes ?? [];
+      const curVal = String(docValue ?? '');
+      const inCatalog = catList.includes(curVal);
+      const selectValue = draftVal !== undefined ? draftVal : curVal;
+      control = (
+        <select
+          id={`f-${prop}`}
+          data-field={prop}
+          className="f"
+          value={selectValue}
+          disabled={sinBackend || !isEditableField}
+          aria-invalid={rejected ? 'true' : undefined}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+          onKeyDown={handleKeyDown}
+          aria-readonly={!leaseGranted ? 'true' : undefined}
+          onChange={(e) => {
+            if (!leaseGranted) return;
+            const nextVal = e.target.value;
+            setFieldDraft(targetId, prop, nextVal);
+            void confirmFieldValue(targetId, prop, propSchema, nextVal);
+          }}
+        >
+          {!inCatalog && curVal ? (
+            <option value={curVal}>{curVal} · no está en el catálogo</option>
+          ) : null}
+          {catList.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      );
+    } else if (prop === 'cls' && entityForCls) {
       const catList = catalog?.classes?.[entityForCls.kind] ?? [];
       const curCls = String(docValue ?? '');
       const inCatalog = catList.includes(curCls);
@@ -423,7 +950,11 @@ export function PropertiesPanel() {
           aria-readonly={!leaseGranted ? 'true' : undefined}
           onChange={(e) => {
             if (!leaseGranted) return; // F04: sin préstamo concedido no se edita
-            setFieldDraft(targetId, prop, e.target.value);
+            const nextVal = e.target.value;
+            setFieldDraft(targetId, prop, nextVal);
+            if (prop === 'behaviour') {
+              void confirmFieldValue(targetId, prop, propSchema, nextVal);
+            }
           }}
         >
           {propSchema.enum.map((opt) => (
@@ -479,10 +1010,24 @@ export function PropertiesPanel() {
       );
     }
 
+    const wardrobeItems =
+      prop === 'wardrobe' && entityForCls
+        ? catalog?.wardrobe_items?.[String(entityForCls.wardrobe ?? '')] ?? []
+        : null;
+
     return (
       <React.Fragment key={prop}>
         <label htmlFor={`f-${prop}`}>{label}</label>
         {control}
+        {wardrobeItems ? (
+          <ul data-wardrobe-items>
+            {wardrobeItems.length === 0 ? (
+              <li>Sin prendas en el catálogo</li>
+            ) : (
+              wardrobeItems.map((clsName) => <li key={clsName}>{clsName}</li>)
+            )}
+          </ul>
+        ) : null}
         {helpText ? (
           <div id={helpId} className="field-help">
             {helpText}
@@ -558,7 +1103,9 @@ export function PropertiesPanel() {
   if (selectedEntities.length === 1) {
     const ent = selectedEntities[0];
     const branchProps = getEntityBranchProperties(schema, ent.kind);
-    const propEntries = Object.entries(branchProps).filter(([prop]) => prop !== 'id');
+    const propEntries = Object.entries(branchProps).filter(
+      ([prop]) => prop !== 'id' && prop !== 'marks' && prop !== 'gestures'
+    );
 
     return (
       <div className="panel" data-panel="propiedades">
@@ -572,11 +1119,6 @@ export function PropertiesPanel() {
           {sinBackend ? (
             <div className="lock-banner">
               Sin conexión con el backend: no se puede editar
-            </div>
-          ) : null}
-          {ent.kind === 'actor' ? (
-            <div className="lock-banner">
-              Actores, vestuario y gestos: llegan con F3
             </div>
           ) : null}
           <div className="psec">
@@ -617,6 +1159,10 @@ export function PropertiesPanel() {
               </button>
             </div>
           </div>
+
+          {ent.kind === 'actor'
+            ? renderActorMarksAndGestures(ent)
+            : null}
 
           <details className="tech">
             <summary>Detalles técnicos</summary>
