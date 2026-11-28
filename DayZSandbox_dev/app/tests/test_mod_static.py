@@ -25,6 +25,9 @@ EXPECTED_C_FILES = (
     # F3-offline-1 (§6): interfaz del motor de actores en el nucleo.
     "scripts/3_Game/DSBX_ActorEngine.c",
     "scripts/3_Game/DSBX_ActorOps.c",
+    # F4 parte 1 (§4): la camara del cliente.
+    "scripts/3_Game/DSBX_CamEngine.c",
+    "scripts/5_Mission/DSBX_CamClient.c",
     "scripts/5_Mission/DSBX_Mission.c",
 )
 
@@ -1225,6 +1228,105 @@ def check_m19(mod_dir: Path) -> list[str]:
     return violations
 
 
+_M20_ARGS_FIELDS = (
+    ("string", "cam_id"),
+    ("ref array<int>", "c_t_ms"), ("ref array<int>", "c_x_mm"), ("ref array<int>", "c_y_mm"),
+    ("ref array<int>", "c_z_mm"), ("ref array<int>", "c_yaw_mdeg"), ("ref array<int>", "c_pitch_mdeg"),
+    ("ref array<int>", "c_fov_mdeg"), ("ref array<int>", "c_focus_mm"),
+)
+_M20_3GAME_FORBIDDEN = ("MissionGameplay", "GetMission", "IngameHud", "PlayerBase", "PlayerControlDisable")
+_M20_CLIENT_REQUIRED = ('"staticcamera"', "SetActive(true)", "SetFOV(", "SetFocus(", "PlayerControlDisable(",
+                        "PlayerControlEnable(", "GetCurrentFOV", "Math3D.MatrixToQuat", "Math3D.QuatToMatrix",
+                        "DSBX_Const.CAM_FOCUS_BLUR", "DSBX_Const.CAM_MAX_KEYS")
+_M20_CLIENT_FORBIDDEN = ("InterpolateTo", "FreeDebugCamera", "SetContextFlag(EHudContextFlags.HUD_HIDE, false)")
+_CAM_VERBS = ("camera.play", "camera.stop", "camera.read")
+
+
+def check_m20(mod_dir: Path) -> list[str]:
+    """F4 parte 1 (§4, T-M20): DSBX_CamEngine en el nucleo y DSBX_CamClient en 5_Mission."""
+    violations = []
+    c_files = _read_stripped_c_files(mod_dir)
+    eng = c_files.get("scripts/3_Game/DSBX_CamEngine.c", "")
+    cli = c_files.get("scripts/5_Mission/DSBX_CamClient.c", "")
+    peer = c_files.get("scripts/3_Game/DSBX_Peer.c", "")
+    msg = c_files.get("scripts/3_Game/DSBX_Messages.c", "")
+    const = c_files.get("scripts/3_Game/DSBX_Const.c", "")
+    mission = c_files.get("scripts/5_Mission/DSBX_Mission.c", "")
+    if not eng or not cli:
+        return ["M20: faltan DSBX_CamEngine.c o DSBX_CamClient.c"]
+    # base y registro (§4.1)
+    if not re.search(r"\bclass\s+DSBX_CamEngine\s*:\s*Managed\s*\{", eng):
+        violations.append("M20: DSBX_CamEngine debe heredar de Managed")
+    base = _find_class_body(eng, "DSBX_CamEngine")
+    for name in ("Play", "Stop"):
+        body = _find_method_body(base, name)
+        if not re.search(r'return\s+"unknown_verb"\s*;', body):
+            violations.append(f'M20: DSBX_CamEngine.{name} debe devolver "unknown_verb"')
+    if not re.search(r"\bstring\s+Play\s*\(\s*DSBX_Args\s+\w+\s*\)", base):
+        violations.append("M20: falta string Play(DSBX_Args args) en DSBX_CamEngine")
+    if not re.search(r'return\s+""\s*;', _find_method_body(base, "ReadJson")):
+        violations.append('M20: DSBX_CamEngine.ReadJson debe devolver ""')
+    if not re.search(r"\bvoid\s+Tick\s*\(\s*float\s+\w+\s*\)", base):
+        violations.append("M20: falta void Tick(float timeslice) en DSBX_CamEngine")
+    reg = _find_class_body(eng, "DSBX_CamEngineRegistry")
+    if not re.search(r"\bprotected\s+static\s+ref\s+DSBX_CamEngine\s+s_Engine\s*;", reg):
+        violations.append("M20: falta protected static ref DSBX_CamEngine s_Engine en DSBX_CamEngineRegistry")
+    register = _find_method_body(reg, "Register")
+    if "s_Engine = engine" not in register or not re.search(r"if\s*\(\s*engine\s*\)", register):
+        violations.append("M20: Register debe ignorar null y guardar el motor")
+    if "new DSBX_CamEngine()" not in _find_method_body(reg, "Get"):
+        violations.append("M20: Get debe crear la base si no hay motor")
+    # campos y constantes
+    args_body = _find_class_body(msg, "DSBX_Args")
+    for typ, name in _M20_ARGS_FIELDS:
+        pat = r"(?m)^\s*" + r"\s+".join(map(re.escape, typ.split())) + r"\s+" + name + r"\s*;"
+        if not re.search(pat, args_body):
+            violations.append(f"M20: DSBX_Args debe tener `{typ} {name};`")
+    const_body = _find_class_body(const, "DSBX_Const")
+    if not re.search(r"\bconst\s+float\s+CAM_FOCUS_BLUR\s*=\s*1\.0\s*;", const_body):
+        violations.append("M20: falta const float CAM_FOCUS_BLUR = 1.0 en DSBX_Const")
+    if not re.search(r"\bconst\s+int\s+CAM_MAX_KEYS\s*=\s*32\s*;", const_body):
+        violations.append("M20: falta const int CAM_MAX_KEYS = 32 en DSBX_Const")
+    # despacho solo en la rama del cliente y bajo f2 == 1
+    start = _find_method_body(peer, "StartOrderExecution")
+    client_block = _brace_block_after(start, "if (m_IsClient)")
+    rest = start.replace(client_block, "", 1) if client_block else start
+    if not client_block or not all(f'"{v}"' in client_block for v in _CAM_VERBS) \
+            or "DSBX_CamEngineRegistry.Get()" not in client_block or "f2 == 1" not in client_block:
+        violations.append("M20: el bloque if (m_IsClient) de StartOrderExecution debe despachar camera.* bajo f2 == 1")
+    if "camera." in rest or peer.count("DSBX_CamEngineRegistry") != client_block.count("DSBX_CamEngineRegistry"):
+        violations.append("M20: la camara solo se despacha en la rama del cliente")
+    for rel, code in c_files.items():
+        if rel.startswith("scripts/3_Game/"):
+            for tok in _M20_3GAME_FORBIDDEN:
+                if re.search(r"\b" + re.escape(tok) + r"\b", code):
+                    violations.append(f"M20: {rel} nombra {tok} (capa de arriba)")
+    # cliente (§4.2)
+    if not re.search(r"\bclass\s+DSBX_CamClient\s*:\s*DSBX_CamEngine\s*\{", cli):
+        violations.append("M20: DSBX_CamClient debe heredar de DSBX_CamEngine")
+    for tok in _M20_CLIENT_REQUIRED:
+        if tok not in cli:
+            violations.append(f"M20: DSBX_CamClient.c debe usar {tok}")
+    for tok in _M20_CLIENT_FORBIDDEN:
+        if tok in cli:
+            violations.append(f"M20: DSBX_CamClient.c no debe usar {tok}")
+    # enganches de MissionGameplay
+    mg = _find_class_body(mission, "MissionGameplay")
+    on_start = _find_method_body(mg, "OnMissionStart")
+    if not re.search(r"DSBX_CamEngineRegistry\.Register\(\s*new\s+DSBX_CamClient\s*\(\s*\)\s*\)", on_start):
+        violations.append("M20: OnMissionStart de MissionGameplay debe registrar un DSBX_CamClient")
+    if "DSBX_CamEngineRegistry.Get().Tick(timeslice);" not in _find_method_body(mg, "OnUpdate"):
+        violations.append("M20: OnUpdate de MissionGameplay debe llamar a Tick(timeslice)")
+    finish = _find_method_body(mg, "OnMissionFinish")
+    stop_at = finish.find("DSBX_CamEngineRegistry.Get().Stop();")
+    shut_at = finish.find("m_DsbxPeer.Shutdown();")
+    if stop_at < 0 or (shut_at >= 0 and stop_at > shut_at):
+        violations.append("M20: OnMissionFinish debe llamar a Stop() antes de cerrar el peer")
+    if "DSBX_CamEngineRegistry" in _find_class_body(mission, "MissionServer"):
+        violations.append("M20: MissionServer no registra camara")
+    return violations
+
+
 ALL_CHECKS = {
     "M1": check_m1_forma,
     "M2": check_m2_tokens_prohibidos,
@@ -1245,6 +1347,7 @@ ALL_CHECKS = {
     "M17": check_m17_una_llamada_string_por_expresion,
     "M18": check_m18,
     "M19": check_m19,
+    "M20": check_m20,
 }
 
 
@@ -1374,6 +1477,18 @@ class TestModStatic(unittest.TestCase):
             "\tref array<float> g_t_ms;",
             "M19",
         )
+
+    def test_m20_camara_del_cliente(self):
+        self.assertEqual(check_m20(REAL_MOD_DIR), [])
+
+    def test_x4_m20_cada_mutacion_tumba_solo_m20(self):
+        self._assert_only_rule_fails("scripts/3_Game/DSBX_Messages.c",
+                                     "\tref array<int> c_focus_mm;", "\tref array<float> c_focus_mm;", "M20")
+        self._assert_only_rule_fails("scripts/5_Mission/DSBX_Mission.c",
+                                     "DSBX_CamEngineRegistry.Get().Tick(timeslice);", "", "M20")
+        self._assert_only_rule_fails("scripts/5_Mission/DSBX_CamClient.c",
+                                     '"staticcamera"', '"freedebugcamera"', "M20")
+        self._assert_only_rule_fails("scripts/3_Game/DSBX_Peer.c", '"camera.read"', '"camera.reed"', "M20")
 
     def test_x4_m16_reinicio_solo_por_sesion(self):
         # T4 917bc73: volver a reiniciar el catalogo solo con sesion nueva tumba M16 y nada mas.

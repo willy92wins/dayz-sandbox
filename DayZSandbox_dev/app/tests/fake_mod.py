@@ -26,9 +26,11 @@ from urllib.parse import quote
 
 try:
     from app.tests.fake_world import FakeWorld
+    from app.tests.fake_camera import FakeCamera
 except ImportError:  # CLI: python app/tests/fake_mod.py
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     from app.tests.fake_world import FakeWorld
+    from app.tests.fake_camera import FakeCamera
 
 WIRE_CAP = 3500
 # El motor corta a 1023 caracteres cada cadena que lee con JsonSerializer (medido en la partida diag
@@ -482,6 +484,11 @@ class _Peer:
     def _execute(self, entry):
         order = entry.order
         verb = order["verb"]
+        if getattr(self, "role", "server") == "client":
+            # F4 parte 1 §4.1: el cliente solo sabe de camara; el resto, unknown_verb.
+            status, reason, read = self.fake.camera.execute(verb, order.get("args"))
+            self._finish(entry, status, reason, read)
+            return
         if self.fake.world is not None and verb in (
                 "state.read", "scene.apply", "scene.reset", "scene.observe") \
                 and _is_f2_marked(order.get("args")):
@@ -757,6 +764,7 @@ class FakeMod:
         self.mod_ver = mod_ver
         self.actor_engine = actor_engine
         self.world = world
+        self.camera = FakeCamera()
         if catalog_classes is None and world is not None:
             catalog_classes = world.catalog_classes()
         self.catalog_classes = catalog_classes or [["FakeClaseA", "BaseA"],
