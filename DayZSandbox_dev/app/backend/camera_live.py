@@ -26,7 +26,7 @@ def valid_cam_read(read):
     if not isinstance(cam, dict) or set(cam) != set(_CAM_KEYS):
         return False
     active, playing = cam.get("active"), cam.get("playing")
-    if active not in (0, 1) or playing not in (0, 1):
+    if not _is_int(active) or not _is_int(playing) or active not in (0, 1) or playing not in (0, 1):
         return False
     if playing == 1 and active != 1:
         return False

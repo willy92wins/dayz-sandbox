@@ -104,3 +104,6 @@ Lo que aparece fuera del alcance de una tanda, o lo que un arbitraje aplaza, se 
 - **Por qué no se arregla aquí:** R20; no se ha reproducido y la causa no está identificada (sospecha: un `stale_apply` como el de S7 en #31, la web aplica una rev que el backend ya movió).
 - **Arreglo propuesto:** registrar el cuerpo del 409 en el guion para ver su `code` la próxima vez que salga.
 - **2026-11-28:** el guion ya guarda el cuerpo del 409 en el mensaje de S8. S8 sola, 3 de 3 OK; sin reproducir.
+
+- 2026-11-28 F4 parte 1 (MAY, sin reproducir en partida): `DSBX_CamClient.Play` devuelve `""` (done) aunque `EnsureActiveCam` no consiga crear la `staticcamera`; la lectura diría `active 1` sin cámara. Comprobarlo en la medida de §7 del brief de F4 parte 1 antes de darle código propio.
+- 2026-11-28 F4 parte 1: ninguna regla estática caza una variable local declarada dos veces en la misma función (Enforce no compila). Se coló en `StartOrderExecution` (`string verb`), arreglado a mano. Candidata a regla M21.

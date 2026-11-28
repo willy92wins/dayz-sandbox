@@ -1215,7 +1215,11 @@ def check_m19(mod_dir: Path) -> list[str]:
     if not re.search(r"\bref\s+DSBX_ActorOps\s+m_ActorOps\s*;", peer_code) \
             or "m_ActorOps = new DSBX_ActorOps();" not in peer_code:
         violations.append("M19: DSBX_Peer debe declarar e instanciar m_ActorOps")
-    f2_block = _brace_block_after(peer_code, "if (entry.m_Order.args && entry.m_Order.args.f2 == 1)")
+    # F4 parte 1: la rama del cliente tiene su propio bloque f2 == 1; cuenta el que despacha actores.
+    anchor = "if (entry.m_Order.args && entry.m_Order.args.f2 == 1)"
+    f2_blocks = [_brace_block_after(peer_code[i:], anchor) for i in
+                 [m.start() for m in re.finditer(re.escape(anchor), peer_code)]]
+    f2_block = next((b for b in f2_blocks if '"actor.apply"' in b), "")
     if peer_code.count("m_ActorOps.StartOrder(this, entry);") != 1 \
             or "m_ActorOps.StartOrder(this, entry);" not in f2_block \
             or not all(f'"{v}"' in f2_block for v in ("actor.apply", "actor.reset", "actor.observe")):
@@ -1487,7 +1491,7 @@ class TestModStatic(unittest.TestCase):
         self._assert_only_rule_fails("scripts/5_Mission/DSBX_Mission.c",
                                      "DSBX_CamEngineRegistry.Get().Tick(timeslice);", "", "M20")
         self._assert_only_rule_fails("scripts/5_Mission/DSBX_CamClient.c",
-                                     '"staticcamera"', '"freedebugcamera"', "M20")
+                                     "class DSBX_CamClient : DSBX_CamEngine", "class DSBX_CamClient : Managed", "M20")
         self._assert_only_rule_fails("scripts/3_Game/DSBX_Peer.c", '"camera.read"', '"camera.reed"', "M20")
 
     def test_x4_m16_reinicio_solo_por_sesion(self):

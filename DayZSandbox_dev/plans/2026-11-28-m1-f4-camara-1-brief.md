@@ -168,3 +168,15 @@ Compilar en DayZDiag. Después, en partida: `play` de `cam-02` muestreado por fr
 - **Lane A (Grok), Enforce:** §4. Ficheros: `DayZSandbox/scripts/3_Game/DSBX_CamEngine.c` (nuevo), `DSBX_Messages.c`, `DSBX_Const.c`, `DSBX_Peer.c`, `DayZSandbox/scripts/5_Mission/DSBX_CamClient.c` (nuevo) y `DSBX_Mission.c`. Debe pasar `test_mod_static.py` entero.
 - **Lane B (Grok), Python:** §5. Ficheros: `app/backend/bridge.py`, `app/backend/camera_live.py` (nuevo) y `app/backend/server.py`. Debe pasar `test_f4_camera.py` y no romper nada más.
 - R25 y R20: nada fuera de esos ficheros. Lo raro de alrededor va a `bugs.md`.
+
+## 9. Resultado (2026-11-28)
+
+- Implementación de Grok (grok-4.6) en Willy, en dos lanes paralelas: A (Enforce) 8c0bba5, 2 min 36 s y 0,68 USD; B (Python) 830f632, 3 min 07 s y 0,71 USD. Ninguna tocó ficheros fuera de su lista.
+- Arreglos de Claude después (fallback), cada uno trazado al brief:
+  - `DSBX_Peer.StartOrderExecution` declaraba `string verb` dos veces en la misma función. Enforce no lo admite y no habría compilado. La rama del cliente usa ahora `camVerb`.
+  - `valid_cam_read` aceptaba `active: true` (§3.3 pide enteros 0 o 1).
+- Arreglos del oráculo: M19 buscaba el primer bloque `f2 == 1` de `StartOrderExecution`, que ahora es el del cliente, así que cuenta el que despacha actores. La X4 de M20 cambia la herencia de `DSBX_CamClient`, porque `"staticcamera"` sale dos veces.
+- Gate en la nube: 731 unittest, build, e2e_web P1-P9b, S1-S12, C1-C10 y AC1-AC8, todo verde.
+- Mutaciones `plans/f4cam-mutants.py` F1-F12: 12/12 muertas.
+- Dudas de las lanes (`f4cam-dudas-a.md`, `f4cam-dudas-b.md`): yaw y pitch salen de la dirección como `Atan2(x, z)` y `Asin(y)`, y la pose se redondea con `Math.Round`. Queda abierta una: si no se puede crear la `staticcamera`, `Play` devuelve `""` igualmente. Va a la medida de §7.
+- Falta: compilar en DayZDiag y la medida de §7, en la tanda de partida con S-cam.

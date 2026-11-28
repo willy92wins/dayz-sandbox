@@ -1239,9 +1239,9 @@ class DSBX_Peer : Managed
 		{
 			if (entry.m_Order.args && entry.m_Order.args.f2 == 1)
 			{
-				string verb = entry.m_Order.verb;
+				string camVerb = entry.m_Order.verb;
 				DSBX_CamEngine engine = DSBX_CamEngineRegistry.Get();
-				if (verb == "camera.play")
+				if (camVerb == "camera.play")
 				{
 					string playReason = engine.Play(entry.m_Order.args);
 					if (playReason == "")
@@ -1255,7 +1255,7 @@ class DSBX_Peer : Managed
 					}
 					return;
 				}
-				if (verb == "camera.stop")
+				if (camVerb == "camera.stop")
 				{
 					string stopReason = engine.Stop();
 					if (stopReason == "")
@@ -1269,7 +1269,7 @@ class DSBX_Peer : Managed
 					}
 					return;
 				}
-				if (verb == "camera.read")
+				if (camVerb == "camera.read")
 				{
 					string readBody = engine.ReadJson();
 					FinishEntry(entry, "done", "", readBody);
