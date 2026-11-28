@@ -9,6 +9,7 @@ import {
 import { AddPanel } from "./panels/AddPanel";
 import { ActivityPanel } from "./panels/ActivityPanel";
 import { HierarchyPanel } from "./panels/HierarchyPanel";
+import { CamerasPanel } from "./panels/CamerasPanel";
 import { PlaceholderPanel } from "./panels/Placeholders";
 import { PropertiesPanel, confirmActiveFieldBeforeApply } from "./panels/PropertiesPanel";
 import { ValidationPanel } from "./panels/ValidationPanel";
@@ -92,7 +93,7 @@ const PANEL_COMPONENTS: Record<string, PanelComponent> = {
   validacion: ValidationPanel,
   historial: HistoryPanel,
   ia: AiPanel,
-  camaras: placeholderFor("camaras"),
+  camaras: CamerasPanel,
   tomas: placeholderFor("tomas"),
   preparacion: placeholderFor("preparacion"),
   "vista-previa": placeholderFor("vista-previa"),

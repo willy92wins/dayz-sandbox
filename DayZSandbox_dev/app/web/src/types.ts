@@ -46,6 +46,35 @@ export interface SceneCamera {
   keys: CameraKey[];
 }
 
+export interface CameraLiveCam {
+  active: number;
+  playing: number;
+  cam_id: string;
+  t_ms: number;
+  dur_ms: number;
+  pose: number[];
+}
+
+export interface CameraLiveLast {
+  op_id: string;
+  verb: string;
+  status: string;
+  reason: string | null;
+}
+
+export interface CameraLiveSnapshot {
+  ok: boolean;
+  cam: CameraLiveCam | null;
+  age_ms: number | null;
+  last: CameraLiveLast | null;
+  in_flight: string | null;
+}
+
+export interface CameraPlayError {
+  code: string;
+  msg: string;
+}
+
 export interface SceneAmbiente {
   fecha: string;
   hora: string;

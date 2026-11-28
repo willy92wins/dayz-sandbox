@@ -357,11 +357,11 @@ class Backend:
         with self.store.lock:
             return self.scene_live.actor_observation_locked()
 
-    def request_camera_play(self, doc_id, cam_id):
+    def request_camera_play(self, doc_id, cam_id, key=None):
         with self.store.lock:
             if self.bridge is None or self.camera_live is None:
                 return fail("scene_unsupported", "El servidor no soporta escena F2")
-            return self.camera_live.request_play_locked(doc_id, cam_id)
+            return self.camera_live.request_play_locked(doc_id, cam_id, key)
 
     def request_camera_stop(self):
         with self.store.lock:
@@ -825,7 +825,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             v = self.fields(body, [("doc_id", (str,)), ("cam_id", (str,))])
             if v is not None:
-                self.send_result(self.backend.request_camera_play(*v))
+                key = None
+                if "key" in body:
+                    kv = body["key"]
+                    if not isinstance(kv, int) or isinstance(kv, bool):
+                        self.send_json(400, fail("bad_request", "Falta o tiene mal tipo: key", "/key"))
+                        return
+                    key = kv
+                self.send_result(self.backend.request_camera_play(v[0], v[1], key))
         elif path == "/api/camera/stop":
             if not human:
                 self.send_json(403, fail("forbidden", "Solo la persona para la camara"))

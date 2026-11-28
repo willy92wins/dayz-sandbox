@@ -1,9 +1,11 @@
 import React, { useEffect, useRef } from 'react';
 import {
+  CameraKey,
   EntityKind,
   GestureItem,
   JsonSchemaProperty,
   MarkItem,
+  SceneCamera,
   SceneEntity,
   SceneSchemaDoc,
 } from '../types';
@@ -17,6 +19,7 @@ import {
   duplicateSelectedEntity,
   getState,
   NO_CHANGE,
+  playCamera,
   releaseFieldLease,
   SceneOp,
   setFieldDraft,
@@ -127,6 +130,54 @@ function parseNumericDraft(raw: string): number | null {
   const num = Number(normalized);
   return normalized !== '' && Number.isFinite(num) ? num : null;
 }
+
+function copyCameraKey(k: CameraKey): CameraKey {
+  return {
+    t: k.t,
+    x: k.x,
+    y: k.y,
+    z: k.z,
+    yaw: k.yaw,
+    pitch: k.pitch,
+    fov: k.fov,
+    focus: k.focus,
+  };
+}
+
+function validCameraKeyField(
+  keys: CameraKey[],
+  idx: number,
+  field: keyof CameraKey,
+  num: number
+): boolean {
+  if (!Number.isFinite(num)) return false;
+  if (field === 't') {
+    if (idx === 0) return num === 0;
+    const prev = keys[idx - 1].t;
+    const next = keys[idx + 1]?.t;
+    if (!(num > prev)) return false;
+    if (next !== undefined && !(num < next)) return false;
+    return true;
+  }
+  if (field === 'x' || field === 'z') return num >= 0 && num <= 15360;
+  if (field === 'y') return Number.isFinite(num);
+  if (field === 'yaw') return num >= -180 && num < 360;
+  if (field === 'pitch') return num >= -90 && num <= 90;
+  if (field === 'fov') return num > 0 && num < 180;
+  if (field === 'focus') return num > 0;
+  return false;
+}
+
+const KEY_FIELDS: ReadonlyArray<{ field: keyof CameraKey; label: string }> = [
+  { field: 't', label: 't (s)' },
+  { field: 'x', label: 'X (m)' },
+  { field: 'y', label: 'Y (m)' },
+  { field: 'z', label: 'Z (m)' },
+  { field: 'yaw', label: 'Yaw (°)' },
+  { field: 'pitch', label: 'Pitch (°)' },
+  { field: 'fov', label: 'FOV (°)' },
+  { field: 'focus', label: 'Enfoque (m)' },
+];
 
 function gestureWire(
   g: GestureItem
@@ -782,6 +833,10 @@ export function PropertiesPanel() {
     .map((id) => doc.entities.find((e) => e.id === id))
     .filter((e): e is SceneEntity => Boolean(e));
 
+  const selectedCameras = selectedIds
+    .map((id) => (doc.cameras ?? []).find((c) => c.id === id))
+    .filter((c): c is SceneCamera => Boolean(c));
+
   const renderSchemaField = (
     targetId: string,
     prop: string,
@@ -1046,6 +1101,285 @@ export function PropertiesPanel() {
       </React.Fragment>
     );
   };
+
+  if (selectedCameras.length === 1 && selectedEntities.length === 0) {
+    const cam = selectedCameras[0];
+    const keys = Array.isArray(cam.keys) ? cam.keys : [];
+    const nameKey = `${cam.id}:name`;
+    const nameDraft = drafts[nameKey];
+    const nameRejected = rejectedDrafts[nameKey];
+    const nameDisplay = nameDraft !== undefined ? nameDraft : cam.name;
+    const nameLease =
+      activeLease && activeLease.targetId === cam.id && activeLease.field === 'name'
+        ? activeLease
+        : null;
+    const nameGranted = nameLease?.status === 'granted';
+    const keysLeaseGranted =
+      activeLease?.targetId === cam.id &&
+      activeLease.field === 'keys' &&
+      activeLease.status === 'granted';
+
+    const confirmCamName = (raw: string) => {
+      if (raw.trim() === '') {
+        rejectLocalField(cam.id, 'name', raw);
+        return;
+      }
+      void commitSceneOps(
+        `Cambiar el nombre de ${cam.name}`,
+        () => {
+          const cur = (getState().doc?.cameras ?? []).find((c) => c.id === cam.id);
+          if (!cur) return NO_CHANGE;
+          if (raw === cur.name) return NO_CHANGE;
+          return [{ name: 'camera.set', target: cam.id, args: { name: raw } }];
+        },
+        { targetId: cam.id, field: 'name', rawValue: raw }
+      );
+    };
+
+    const confirmKeyField = (k: number, field: keyof CameraKey, raw: string) => {
+      const draftField = `key-${k}-${field}`;
+      const num = parseNumericDraft(raw);
+      const idx = k - 1;
+      if (num === null || !validCameraKeyField(keys, idx, field, num)) {
+        rejectLocalField(cam.id, draftField, raw);
+        return;
+      }
+      void commitSceneOps(
+        `Editar clave ${k}`,
+        () => {
+          const cur = (getState().doc?.cameras ?? []).find((c) => c.id === cam.id);
+          if (!cur) return NO_CHANGE;
+          const list = (cur.keys ?? []).map(copyCameraKey);
+          if (idx < 0 || idx >= list.length) return NO_CHANGE;
+          if (list[idx][field] === num) return NO_CHANGE;
+          list[idx] = { ...list[idx], [field]: num };
+          return [{ name: 'camera.set', target: cam.id, args: { keys: list } }];
+        },
+        { targetId: cam.id, field: draftField, rawValue: raw }
+      );
+    };
+
+    const addKey = () => {
+      if (sinBackend) return;
+      void commitSceneOps('Añadir clave', () => {
+        const cur = (getState().doc?.cameras ?? []).find((c) => c.id === cam.id);
+        if (!cur || !cur.keys.length) return NO_CHANGE;
+        const list = cur.keys.map(copyCameraKey);
+        const last = list[list.length - 1];
+        list.push({ ...copyCameraKey(last), t: last.t + 1 });
+        return [{ name: 'camera.set', target: cam.id, args: { keys: list } }];
+      });
+    };
+
+    const removeKey = (k: number) => {
+      if (sinBackend || keys.length <= 1) return;
+      void commitSceneOps(`Quitar clave ${k}`, () => {
+        const cur = (getState().doc?.cameras ?? []).find((c) => c.id === cam.id);
+        if (!cur || cur.keys.length <= 1) return NO_CHANGE;
+        const idx = k - 1;
+        if (idx < 0 || idx >= cur.keys.length) return NO_CHANGE;
+        const list = cur.keys.map(copyCameraKey);
+        list.splice(idx, 1);
+        let next = list;
+        if (idx === 0 && next.length > 0) {
+          const shift = next[0].t;
+          next = next.map((item, i) =>
+            i === 0 ? { ...item, t: 0 } : { ...item, t: item.t - shift }
+          );
+        }
+        return [{ name: 'camera.set', target: cam.id, args: { keys: next } }];
+      });
+    };
+
+    const keyInput = (k: number, field: keyof CameraKey, label: string) => {
+      const draftField = `key-${k}-${field}`;
+      const key = `${cam.id}:${draftField}`;
+      const item = keys[k - 1];
+      const docVal = item ? String(item[field]) : '';
+      const display = drafts[key] !== undefined ? drafts[key] : docVal;
+      const rejected = rejectedDrafts[key];
+      const tLocked = field === 't' && k === 1;
+      return (
+        <React.Fragment key={draftField}>
+          <label htmlFor={`f-key-${k}-${field}`}>{`Clave ${k} · ${label}`}</label>
+          <input
+            id={`f-key-${k}-${field}`}
+            type="text"
+            inputMode="decimal"
+            className="f"
+            value={display}
+            disabled={sinBackend}
+            readOnly={tLocked || !keysLeaseGranted}
+            aria-invalid={rejected ? 'true' : undefined}
+            onFocus={() => {
+              if (sinBackend || tLocked) return;
+              void acquireFieldLease(cam.id, 'keys');
+            }}
+            onBlur={() => {
+              releaseFieldLease(cam.id, 'keys');
+              if (escapedKeyRef.current === key) {
+                escapedKeyRef.current = null;
+                return;
+              }
+              if (sinBackend || tLocked) return;
+              const latest = getState().drafts[key];
+              if (latest !== undefined) confirmKeyField(k, field, latest);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                escapedKeyRef.current = key;
+                clearFieldErrorAndDraft(cam.id, draftField);
+                return;
+              }
+              if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (tLocked) return;
+                const latest = getState().drafts[key];
+                if (!sinBackend && latest !== undefined) confirmKeyField(k, field, latest);
+              }
+            }}
+            onChange={(e) => {
+              if (tLocked || !keysLeaseGranted) return;
+              setFieldDraft(cam.id, draftField, e.target.value);
+            }}
+          />
+        </React.Fragment>
+      );
+    };
+
+    return (
+      <div className="panel" data-panel="propiedades">
+        <div className="panel-header">
+          <span>Propiedades · {cam.name}</span>
+        </div>
+        <div className="panel-body">
+          {sinBackend ? (
+            <div className="lock-banner">
+              Sin conexión con el backend: no se puede editar
+            </div>
+          ) : null}
+          <div className="psec">
+            <div className="psec-h">
+              <span>{cam.name}</span>
+            </div>
+            <div className="pgrid">
+              <label htmlFor="f-cam-name">Nombre</label>
+              <input
+                id="f-cam-name"
+                type="text"
+                className="f"
+                value={nameDisplay}
+                disabled={sinBackend}
+                readOnly={!nameGranted}
+                aria-invalid={nameRejected ? 'true' : undefined}
+                onFocus={() => {
+                  if (sinBackend) return;
+                  void acquireFieldLease(cam.id, 'name');
+                }}
+                onBlur={() => {
+                  releaseFieldLease(cam.id, 'name');
+                  if (escapedKeyRef.current === nameKey) {
+                    escapedKeyRef.current = null;
+                    return;
+                  }
+                  if (sinBackend) return;
+                  const latest = getState().drafts[nameKey];
+                  if (latest !== undefined) confirmCamName(latest);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    escapedKeyRef.current = nameKey;
+                    clearFieldErrorAndDraft(cam.id, 'name');
+                    return;
+                  }
+                  if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const latest = getState().drafts[nameKey];
+                    if (!sinBackend && latest !== undefined) confirmCamName(latest);
+                  }
+                }}
+                onChange={(e) => {
+                  if (!nameGranted) return;
+                  setFieldDraft(cam.id, 'name', e.target.value);
+                }}
+              />
+            </div>
+            <div className="prop-actions">
+              <button
+                type="button"
+                className="btn sm danger"
+                id="cam-delete"
+                disabled={sinBackend}
+                onClick={() => {
+                  setState({ selectedIds: [] });
+                  void commitSceneOps(`Borrar ${cam.name}`, [
+                    { name: 'camera.delete', target: cam.id, args: {} },
+                  ]);
+                }}
+              >
+                Borrar cámara
+              </button>
+            </div>
+          </div>
+
+          <div className="psec" data-section="claves">
+            <div className="psec-h">
+              <span>Claves</span>
+            </div>
+            {keys.map((_, i) => {
+              const k = i + 1;
+              return (
+                <div key={k} data-key={String(k)}>
+                  <div className="pgrid">
+                    {KEY_FIELDS.map(({ field, label }) => keyInput(k, field, label))}
+                  </div>
+                  <div className="prop-actions">
+                    <button
+                      type="button"
+                      className="btn sm"
+                      data-key-goto={String(k)}
+                      disabled={sinBackend}
+                      onClick={() => {
+                        void playCamera(cam.id, k - 1);
+                      }}
+                    >
+                      Ir a esta pose
+                    </button>
+                    <button
+                      type="button"
+                      className="btn sm danger"
+                      data-key-del={String(k)}
+                      disabled={sinBackend || keys.length <= 1}
+                      onClick={() => removeKey(k)}
+                    >
+                      {`Quitar clave ${k}`}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="prop-actions">
+              <button
+                type="button"
+                className="btn sm"
+                id="cam-key-add"
+                disabled={sinBackend}
+                onClick={addKey}
+              >
+                Añadir clave
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Multi-selection view (§5.2)
   if (selectedEntities.length > 1) {

@@ -145,7 +145,7 @@ class CameraLive:
     def request_read_locked(self):
         return self._enqueue_locked("camera.read", {"f2": 1})
 
-    def request_play_locked(self, doc_id, cam_id):
+    def request_play_locked(self, doc_id, cam_id, key=None):
         snap = self.backend.store.snapshot()
         if doc_id != snap["doc_id"]:
             return _fail("doc_changed", "documento distinto", "/doc_id")
@@ -159,45 +159,59 @@ class CameraLive:
                 break
         if cam is None:
             return _fail("not_found", "No existe esa camara", "/cam_id")
+        all_keys = cam.get("keys") if isinstance(cam.get("keys"), list) else []
+        n_all = len(all_keys)
+        if key is not None:
+            if not _is_int(key) or key < 0 or key >= n_all:
+                return _fail("not_found", "No existe esa clave", "/key")
+            keys = [all_keys[key]]
+            key_indices = [key]
+        else:
+            keys = all_keys
+            key_indices = list(range(n_all))
         if not self.bridge.client_in_world():
             return _fail("client_not_in_game", "El cliente no esta en el mundo")
         if self._busy_locked():
             return _fail("camera_busy", "Hay una orden de camara en vuelo")
-        keys = cam.get("keys") if isinstance(cam.get("keys"), list) else []
         n = len(keys)
         base = "/cameras/%d/keys" % idx
         if n > CAM_MAX_KEYS:
             return _fail("invalid", "Mas de %d claves" % CAM_MAX_KEYS, base)
         t_ms = []
-        for k, key in enumerate(keys):
-            t = key.get("t") if isinstance(key, dict) else None
+        for kobj in keys:
+            t = kobj.get("t") if isinstance(kobj, dict) else None
             t_ms.append(round(float(t) * 1000) if t is not None else None)
         for k in range(1, n):
             if t_ms[k] is not None and t_ms[k - 1] is not None and t_ms[k] == t_ms[k - 1]:
                 return _fail("invalid", "Dos claves en el mismo milisegundo",
-                             "%s/%d/t" % (base, k))
+                             "%s/%d/t" % (base, key_indices[k]))
         srv = self.bridge.peers.get("server") or {}
         wsize = srv.get("world_size")
         wsize = float(wsize) if isinstance(wsize, (int, float)) and not isinstance(wsize, bool) else 0.0
-        for k, key in enumerate(keys):
-            if not isinstance(key, dict):
+        for i, kobj in enumerate(keys):
+            if not isinstance(kobj, dict):
                 continue
+            orig_k = key_indices[i]
             for axis in ("x", "z"):
-                val = key.get(axis)
+                val = kobj.get(axis)
                 if not isinstance(val, (int, float)) or isinstance(val, bool) \
                         or float(val) < 0.0 or float(val) > wsize:
-                    return _fail("out_of_map", "Fuera del mapa", "%s/%d/%s" % (base, k, axis))
+                    return _fail("out_of_map", "Fuera del mapa", "%s/%d/%s" % (base, orig_k, axis))
+        if key is not None:
+            t_wire = [0]
+        else:
+            t_wire = [round(float(kobj["t"]) * 1000) for kobj in keys]
         args = {
             "f2": 1,
             "cam_id": cam_id,
-            "c_t_ms": [round(float(key["t"]) * 1000) for key in keys],
-            "c_x_mm": [m_to_mm(key["x"]) for key in keys],
-            "c_y_mm": [m_to_mm(key["y"]) for key in keys],
-            "c_z_mm": [m_to_mm(key["z"]) for key in keys],
-            "c_yaw_mdeg": [yaw_to_mdeg(key["yaw"]) for key in keys],
-            "c_pitch_mdeg": [round(float(key["pitch"]) * 1000) for key in keys],
-            "c_fov_mdeg": [round(float(key["fov"]) * 1000) for key in keys],
-            "c_focus_mm": [m_to_mm(key["focus"]) for key in keys],
+            "c_t_ms": t_wire,
+            "c_x_mm": [m_to_mm(kobj["x"]) for kobj in keys],
+            "c_y_mm": [m_to_mm(kobj["y"]) for kobj in keys],
+            "c_z_mm": [m_to_mm(kobj["z"]) for kobj in keys],
+            "c_yaw_mdeg": [yaw_to_mdeg(kobj["yaw"]) for kobj in keys],
+            "c_pitch_mdeg": [round(float(kobj["pitch"]) * 1000) for kobj in keys],
+            "c_fov_mdeg": [round(float(kobj["fov"]) * 1000) for kobj in keys],
+            "c_focus_mm": [m_to_mm(kobj["focus"]) for kobj in keys],
         }
         ok, order = self.bridge.enqueue_order("camera.play", args, role="client")
         if not ok:
