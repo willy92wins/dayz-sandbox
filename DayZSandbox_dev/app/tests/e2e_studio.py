@@ -36,6 +36,10 @@ elif GUION == "camaras":
     # F4-web §4: DSBX_GUION=camaras corre camaras.e2e.cjs con sus filas CM1-CM8.
     ALL_ROWS = ["CM%d" % i for i in range(1, 9)]
     SCRIPT = "camaras.e2e.cjs"
+elif GUION == "tomas":
+    # F5 parte 1 §6: DSBX_GUION=tomas corre tomas.e2e.cjs con sus filas TM1-TM6.
+    ALL_ROWS = ["TM%d" % i for i in range(1, 7)]
+    SCRIPT = "tomas.e2e.cjs"
 else:
     ALL_ROWS = ["S%d" % i for i in range(1, 13)]
     SCRIPT = "studio.e2e.cjs"
