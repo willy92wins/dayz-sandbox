@@ -60,6 +60,15 @@ class DSBX_Args
 	ref array<int> mk_z_mm;
 	ref array<int> g_at;
 	ref array<int> g_t_ms;
+	string cam_id;
+	ref array<int> c_t_ms;
+	ref array<int> c_x_mm;
+	ref array<int> c_y_mm;
+	ref array<int> c_z_mm;
+	ref array<int> c_yaw_mdeg;
+	ref array<int> c_pitch_mdeg;
+	ref array<int> c_fov_mdeg;
+	ref array<int> c_focus_mm;
 }
 
 class DSBX_Order

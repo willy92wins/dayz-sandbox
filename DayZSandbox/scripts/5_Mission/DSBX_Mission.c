@@ -48,11 +48,13 @@ modded class MissionGameplay
 	override void OnMissionStart()
 	{
 		super.OnMissionStart();
+		DSBX_CamEngineRegistry.Register(new DSBX_CamClient());
 		m_DsbxPeer = new DSBX_Peer("client", null);
 	}
 
 	override void OnMissionFinish()
 	{
+		DSBX_CamEngineRegistry.Get().Stop();
 		if (m_DsbxPeer)
 		{
 			m_DsbxPeer.Shutdown();
@@ -64,6 +66,7 @@ modded class MissionGameplay
 	override void OnUpdate(float timeslice)
 	{
 		super.OnUpdate(timeslice);
+		DSBX_CamEngineRegistry.Get().Tick(timeslice);
 		if (m_DsbxPeer)
 		{
 			m_DsbxPeer.Tick(timeslice);
