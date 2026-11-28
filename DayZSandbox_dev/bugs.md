@@ -106,4 +106,4 @@ Lo que aparece fuera del alcance de una tanda, o lo que un arbitraje aplaza, se 
 - **2026-11-28:** el guion ya guarda el cuerpo del 409 en el mensaje de S8. S8 sola, 3 de 3 OK; sin reproducir.
 
 - 2026-11-28 F4 parte 1 (MAY, sin reproducir en partida): `DSBX_CamClient.Play` devuelve `""` (done) aunque `EnsureActiveCam` no consiga crear la `staticcamera`; la lectura diría `active 1` sin cámara. Comprobarlo en la medida de §7 del brief de F4 parte 1 antes de darle código propio.
-- 2026-11-28 F4 parte 1: ninguna regla estática caza una variable local declarada dos veces en la misma función (Enforce no compila). Se coló en `StartOrderExecution` (`string verb`), arreglado a mano. Candidata a regla M21.
+- 2026-11-28 F4 parte 1: ninguna regla estática caza una variable local declarada dos veces en la misma función (Enforce no compila). Se coló en `StartOrderExecution` (`string verb`), arreglado a mano. Candidata a regla M21. **Hecho 2026-11-28:** regla M21 en `test_mod_static.py` (caza la versión 8c0bba5 de `DSBX_Peer.c`), con su X4.

@@ -1331,6 +1331,30 @@ def check_m20(mod_dir: Path) -> list[str]:
     return violations
 
 
+# F4 parte 1 (bugs.md): Enforce no compila una variable local declarada dos veces en la misma
+# funcion, aunque sea en bloques distintos (se colo `string verb` en StartOrderExecution).
+_M21_DECL = re.compile(
+    r"(?:(?<=[;{}(])|^)\s*(?:ref\s+|autoptr\s+|const\s+)?(?:auto|bool|int|float|string|vector|typename|[A-Z]\w*)"
+    r"(?:\s*<[^;{}()=]*>)?\s+(\w+)\s*(?:=|;|\[)", re.M)
+_M21_FUNC = re.compile(
+    r"(?m)^\t(?:(?:static|override|protected|private|proto|native|void|bool|int|float|string|vector|ref|"
+    r"[A-Z]\w*(?:<[^>]*>)?)\s+)+(\w+)\s*\(([^)]*)\)\s*\n\t\{")
+
+
+def check_m21(mod_dir: Path) -> list[str]:
+    """Ninguna funcion declara dos veces el mismo nombre local (parametros incluidos)."""
+    violations = []
+    for rel, code in _read_stripped_c_files(mod_dir).items():
+        for m in _M21_FUNC.finditer(code):
+            start = code.find("{", m.end() - 1)
+            body = re.sub(r'"(?:\\.|[^"\\])*"', '""', _extract_block(code, start))
+            names = _M21_DECL.findall(body)
+            names += [re.sub(r"\[.*", "", p.split("=")[0].split()[-1]) for p in m.group(2).split(",") if p.strip()]
+            for dup in sorted({n for n in names if names.count(n) > 1}):
+                violations.append(f"M21: {rel} {m.group(1)} declara '{dup}' mas de una vez")
+    return violations
+
+
 ALL_CHECKS = {
     "M1": check_m1_forma,
     "M2": check_m2_tokens_prohibidos,
@@ -1352,6 +1376,7 @@ ALL_CHECKS = {
     "M18": check_m18,
     "M19": check_m19,
     "M20": check_m20,
+    "M21": check_m21,
 }
 
 
@@ -1493,6 +1518,15 @@ class TestModStatic(unittest.TestCase):
         self._assert_only_rule_fails("scripts/5_Mission/DSBX_CamClient.c",
                                      "class DSBX_CamClient : DSBX_CamEngine", "class DSBX_CamClient : Managed", "M20")
         self._assert_only_rule_fails("scripts/3_Game/DSBX_Peer.c", '"camera.read"', '"camera.reed"', "M20")
+
+    def test_m21_sin_locales_repetidas(self):
+        self.assertEqual(check_m21(REAL_MOD_DIR), [])
+
+    def test_x4_m21_local_repetida(self):
+        self._assert_only_rule_fails("scripts/3_Game/DSBX_Peer.c", "string camVerb = entry.m_Order.verb;",
+                                     "string camVerb = entry.m_Order.verb;\n\t\t\t\tstring playReason;", "M21")
+        self._assert_only_rule_fails("scripts/3_Game/DSBX_Peer.c", "string camVerb = entry.m_Order.verb;",
+                                     "string verb = entry.m_Order.verb;\n\t\t\t\tstring camVerb = verb;", "M21")
 
     def test_x4_m16_reinicio_solo_por_sesion(self):
         # T4 917bc73: volver a reiniciar el catalogo solo con sesion nueva tumba M16 y nada mas.
