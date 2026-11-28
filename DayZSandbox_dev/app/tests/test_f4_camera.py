@@ -286,6 +286,30 @@ class K14LecturaRota(CamBase):
         self.assertEqual(st["in_flight"], op_id)
 
 
+class K15Clave(CamBase):
+    """F4-web §2: `key` opcional en play reproduce una sola clave como pose fija."""
+
+    def test_k15_key_es_una_pose_fija_y_sus_errores(self):
+        for bad in (True, "1", 1.0):
+            status, res = self.post("/api/camera/play", {"doc_id": DOC_ID, "cam_id": "cam-02", "key": bad})
+            self.assertEqual(status, 400, (bad, res))
+        for bad in (3, -1):
+            status, res = self.post("/api/camera/play", {"doc_id": DOC_ID, "cam_id": "cam-02", "key": bad})
+            self.assertEqual((status, res.get("code"), res.get("pointer")), (404, "not_found", "/key"), bad)
+        status, res = self.post("/api/camera/play", {"doc_id": DOC_ID, "cam_id": "cam-77", "key": 0})
+        self.assertEqual((status, res.get("pointer")), (404, "/cam_id"))
+        self.assertEqual(self.cam_orders(), [])
+        status, res = self.post("/api/camera/play", {"doc_id": DOC_ID, "cam_id": "cam-02", "key": 1})
+        self.assertEqual(status, 200, res)
+        order = self.env.bridge.orders[(self.env.bridge.session, res["op_id"])]
+        want = {k: ([0] if k == "c_t_ms" else [v[1]]) for k, v in CAM02_ARGS.items() if k.startswith("c_")}
+        want.update(f2=1, cam_id="cam-02")
+        self.assertEqual(order["args"], want)
+        cam = self.wait_last(res["op_id"])["cam"]
+        self.assertEqual((cam["playing"], cam["dur_ms"]), (0, 0))
+        self.assertEqual(cam["pose"], [6168000, 2400, 7614000, 8000, -3000, 36000])
+
+
 class V1LecturaValida(unittest.TestCase):
     def setUp(self):
         from app.backend.camera_live import valid_cam_read
