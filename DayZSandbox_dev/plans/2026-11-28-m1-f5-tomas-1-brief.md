@@ -214,3 +214,12 @@ Gate: el offline entero de `reference-cloud-gate-m1` más `DSBX_GUION=camaras` y
 - **Lane A, Python:** §3 y §4. Ficheros: `app/backend/take_live.py` (nuevo), `app/backend/bridge.py`, `app/backend/camera_live.py` (solo la función de §4.2.10) y `app/backend/server.py`. Debe pasar `test_f5_take.py` y no romper nada más.
 - **Lane B, web:** §5. Ficheros bajo `app/web/src/`: un panel nuevo `panels/TakesPanel.tsx`, `App.tsx` para montarlo en lugar del hueco, `store.ts` y `types.ts`. Debe pasar `tomas.e2e.cjs`.
 - R25 y R20: nada fuera de esos ficheros. Lo raro de alrededor va a `bugs.md`.
+
+## 8. Resultado (2026-11-28)
+
+- Implementación de Grok (grok-4.6) en Willy, en dos lanes paralelas, sin retocar: A (Python) 50485d6, 3 min 42 s y 0,66 USD; B (web) 07e5a69, 1 min 09 s y 0,23 USD. Ninguna tocó ficheros fuera de su lista. T1-T13, V1 y TM1-TM6 pasaron a la primera.
+- Gate en la nube: 750 unittest, build, e2e_web P1-P9b, S1-S12, C1-C10, AC1-AC8, CM1-CM8 y TM1-TM6, todo verde.
+- Mutaciones `plans/f5take-mutants.py` M1-M14: 14/14 muertas. Dos (M6, la parada pedida no arma; M11, rodar solo con la toma armada) sobrevivían a la primera porque las pruebas no las distinguían; el oráculo ganó T10b y una comprobación en T2, y T14 (una `take.cam_load` descartada da `fallida`).
+- Sin cubrir con pruebas: reintentar un `take.stop` descartado y el `rejected/unknown_take` de un stop que adelanta al `take.prepare`. Dependen del orden exacto de entrega.
+- Dudas de la lane B (`f5take-dudas-b.md`), ninguna rompe una fila: un `bad` con un nombre desconocido se pinta tal cual; una `parada` con un origen desconocido se pinta «Parada desde la web»; sin backend los botones de Tomas siguen activos (los de Cámaras se desactivan).
+- Falta: la parte 2 en Enforce (§1, «No entra») cuando S-toma pase, y el visto bueno de Guillermo a D1-D6.

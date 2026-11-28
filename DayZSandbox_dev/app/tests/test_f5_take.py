@@ -151,6 +151,9 @@ class T2Rodar(TakeBase):
         self.assertEqual(self.fake.camera.state()["active"], 0)
         self.assertIsNone(self.gate())
         self.assertGreaterEqual(len(self.take_orders("take.read")), 1)
+        status, res = self.post("/api/take/go", {"take_id": tid})
+        self.assertEqual((status, res.get("code")), (409, "take_state"))
+        self.assertEqual(len(self.take_orders("take.go")), 1)
 
 
 class T3PararWeb(TakeBase):
@@ -313,6 +316,26 @@ class T10StopPreparando(TakeBase):
         self.assertEqual(self.take()["state"], "parada")
 
 
+class T10bStopAntesDeArmar(TakeBase):
+    def test_t10b_parada_pedida_no_arma_aunque_llegue_la_camara(self):
+        self.fake.cut_polls("client", 60000)
+        time.sleep(0.4)
+        status, body = self.prepare()
+        self.assertEqual(status, 200, body)
+        self.assertTrue(wait_until(lambda: self.fake.take.state()["state"] == "preparada", 5))
+        self.fake.cut_polls("server", 500)
+        time.sleep(0.3)
+        status, res = self.post("/api/take/stop", {"take_id": body["take_id"]})
+        self.assertEqual(status, 200, res)
+        self.fake.client.clear_poll_cut()
+        self.assertTrue(wait_until(lambda: [o for o in self.take_orders("take.cam_load")
+                                            if o["bstate"] == "terminal"], 5))
+        t = self.wait_state("parada")
+        self.assertEqual(t["origin"], "web")
+        time.sleep(0.4)
+        self.assertEqual(self.take_orders("take.arm"), [])
+
+
 class T11EpochNuevo(TakeBase):
     def test_t11_mundo_reiniciado_con_la_toma_armada(self):
         self.armed()
@@ -343,6 +366,17 @@ class T13GoTardio(TakeBase):
         self.assertEqual(self.fake.camera.state()["active"], 0)
         t = self.wait_state("parada")
         self.assertEqual((t["take_id"], t["origin"]), (tid, "juego"))
+
+
+class T14Descartada(TakeBase):
+    def test_t14_cam_load_descartada_por_ttl_da_fallida(self):
+        self.fake.cut_polls("client", 60000)
+        time.sleep(0.4)
+        status, body = self.prepare()
+        self.assertEqual(status, 200, body)
+        t = self.wait_state("fallida", timeout=12)
+        self.assertEqual(t["reason"], "sin_resultado")
+        self.assertEqual(self.take_orders("take.arm"), [])
 
 
 class V1Lecturas(unittest.TestCase):
