@@ -75,6 +75,39 @@ export interface CameraPlayError {
   msg: string;
 }
 
+export type TakeLiveState =
+  | 'preparando'
+  | 'armada'
+  | 'rodando'
+  | 'terminada'
+  | 'parada'
+  | 'fallida';
+
+export type TakeOrigin = 'web' | 'juego' | 'hombre_muerto';
+
+export interface TakeLiveTake {
+  take_id: string;
+  doc_id: string;
+  rev: number;
+  cam_id: string;
+  state: TakeLiveState;
+  origin: TakeOrigin | null;
+  reason: string | null;
+  bad: string[];
+  t_ms: number;
+  dur_ms: number;
+}
+
+export interface TakeLiveSnapshot {
+  ok: boolean;
+  take: TakeLiveTake | null;
+}
+
+export interface TakeError {
+  code: string;
+  msg: string;
+}
+
 export interface SceneAmbiente {
   fecha: string;
   hora: string;
