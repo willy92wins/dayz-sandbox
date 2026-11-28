@@ -24,6 +24,7 @@ from app.backend.lease import Leases  # noqa: E402
 from app.backend.profile import Profile  # noqa: E402
 from app.backend.bridge import Bridge  # noqa: E402
 from app.backend.scene_live import SceneLive  # noqa: E402
+from app.backend.camera_live import CameraLive  # noqa: E402
 
 MAX_BODY = 1024 * 1024
 CLIENT_QUEUE = 1000
@@ -46,6 +47,7 @@ STATUS = {
     "expansion_unavailable": 422, "actor_invalid": 422, "catalog_pending": 409,
     "unknown_class": 422, "out_of_map": 422, "budget_exceeded": 422,
     "plan_too_large": 422, "scene_unsupported": 409,
+    "client_not_in_game": 409, "camera_busy": 409,
 }
 
 
@@ -101,11 +103,13 @@ class Backend:
         self.httpd.backend = self
         self.bridge = None
         self.scene_live = None
+        self.camera_live = None
         self.observation = None
         if bridge_port is not None:
             self.bridge = Bridge(self, peer_key, port=bridge_port, clock=self.clock,
                                  log=self.log, **(bridge_kwargs or {}))
             self.scene_live = SceneLive(self.bridge)
+            self.camera_live = CameraLive(self.bridge)
 
     @property
     def port(self):
@@ -352,6 +356,31 @@ class Backend:
             return {"ok": True, "observation": None, "age_ms": None}
         with self.store.lock:
             return self.scene_live.actor_observation_locked()
+
+    def request_camera_play(self, doc_id, cam_id):
+        with self.store.lock:
+            if self.bridge is None or self.camera_live is None:
+                return fail("scene_unsupported", "El servidor no soporta escena F2")
+            return self.camera_live.request_play_locked(doc_id, cam_id)
+
+    def request_camera_stop(self):
+        with self.store.lock:
+            if self.bridge is None or self.camera_live is None:
+                return fail("scene_unsupported", "El servidor no soporta escena F2")
+            return self.camera_live.request_stop_locked()
+
+    def request_camera_read(self):
+        with self.store.lock:
+            if self.bridge is None or self.camera_live is None:
+                return fail("scene_unsupported", "El servidor no soporta escena F2")
+            return self.camera_live.request_read_locked()
+
+    def get_camera(self):
+        """GET /api/camera: ultima lectura valida, last e in_flight. Siempre 200."""
+        if self.camera_live is None:
+            return {"ok": True, "cam": None, "age_ms": None, "last": None, "in_flight": None}
+        with self.store.lock:
+            return self.camera_live.snapshot_locked()
 
     def get_observation(self):
         """GET /api/observation (§4.2): ultima lectura `now` y su antiguedad.
@@ -641,6 +670,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, self.backend.get_observation())
         elif url.path == "/api/actors/observation":
             self.send_json(200, self.backend.get_actor_observation())
+        elif url.path == "/api/camera":
+            self.send_json(200, self.backend.get_camera())
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 
@@ -788,6 +819,20 @@ class Handler(BaseHTTPRequestHandler):
                 # §5: `expansion_unavailable` va con el 409 de la respuesta, sin tocar el 422 de F2.
                 status = 200 if res.get("ok") else res.get("http") or STATUS.get(res.get("code"), 409)
                 self.send_json(status, res)
+        elif path == "/api/camera/play":
+            if not human:
+                self.send_json(403, fail("forbidden", "Solo la persona rueda la camara"))
+                return
+            v = self.fields(body, [("doc_id", (str,)), ("cam_id", (str,))])
+            if v is not None:
+                self.send_result(self.backend.request_camera_play(*v))
+        elif path == "/api/camera/stop":
+            if not human:
+                self.send_json(403, fail("forbidden", "Solo la persona para la camara"))
+                return
+            self.send_result(self.backend.request_camera_stop())
+        elif path == "/api/camera/read":
+            self.send_result(self.backend.request_camera_read())
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 
