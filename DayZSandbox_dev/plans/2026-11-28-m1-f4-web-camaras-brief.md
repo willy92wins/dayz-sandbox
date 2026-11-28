@@ -74,3 +74,13 @@ Las claves se escriben con `commitSceneOps` y la lease de campo que ya usan los 
 - **Lane única (Grok):** §2 y §3. Ficheros: `app/backend/camera_live.py` y `app/backend/server.py` (solo `key`), y `app/web/src/` (sobre todo `panels/Placeholders.tsx` o un panel nuevo `panels/CamerasPanel.tsx`, `App.tsx`, `panels/HierarchyPanel.tsx`, `panels/PropertiesPanel.tsx`, `store.ts` y `types.ts`). No toca `app/tests/` ni `app/web/e2e/`, y no añade dependencias.
 - R25 y R20: nada fuera de eso. Lo raro de alrededor va a `bugs.md`.
 - Gate en la nube: el offline entero más `DSBX_GUION=camaras`. Después, mutaciones `plans/f4web-mutants.py`.
+
+## 6. Resultado (2026-11-28)
+
+- La implementación es de Grok (grok-4.6) en Willy, sin retocar: 8c24b65, unos 4 min y 1,14 USD. No dejó dudas.
+- K15 y CM1-CM8 pasaron a la primera.
+- Gate en la nube: 732 unittest, build, P1-P9b, S1-S12, C1-C10, AC1-AC8 y CM1-CM8, todo verde.
+- Mutaciones `plans/f4web-mutants.py` V1-V12: 12/12 muertas.
+- Detalles menores que dejó sin cerrar. Ninguno rompe una fila:
+  - Pulsar una cámara en la Jerarquía la selecciona, pero no abre Propiedades.
+  - El panel Cámaras sigue leyendo `GET /api/camera` cada segundo mientras está montado, aunque no se vea.
