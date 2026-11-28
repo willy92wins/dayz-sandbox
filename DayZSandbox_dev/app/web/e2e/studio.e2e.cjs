@@ -3505,7 +3505,9 @@ async function runS8(browser) {
       await page.keyboard.down("Shift");
       await page.keyboard.down("F8");
       const sf8Resp = await sf8RespP;
-      assert(sf8Resp.status() === 200, "S8(-): primer POST /api/apply con Shift+F8 no dio 200: " + sf8Resp.status());
+      // bugs.md 2026-11-28: un 409 intermitente; se guarda su cuerpo para ver el code.
+      const sf8Body = sf8Resp.status() === 200 ? "" : await sf8Resp.text().catch(() => "");
+      assert(sf8Resp.status() === 200, "S8(-): primer POST /api/apply con Shift+F8 no dio 200: " + sf8Resp.status() + " " + sf8Body);
       await page.waitForFunction(
         () => {
           const b = document.querySelector('[data-testid="accion-principal"] button');
