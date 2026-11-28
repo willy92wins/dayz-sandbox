@@ -329,6 +329,46 @@ def _actor_poll_len(args):
     return len(compact_json_bytes(body)), _max_str_bytes(body)
 
 
+def _actor_photo_len(entities, store_catalog, world_size):
+    """Bytes de la foto peor de actor.observe para estas entidades (F3-foto N12)."""
+    x_mm = int(_xz_limit_mm(world_size))
+    t_ms = 999999999999
+    wardrobes = {}
+    if isinstance(store_catalog, dict):
+        raw = store_catalog.get("wardrobe_items")
+        if isinstance(raw, dict):
+            wardrobes = raw
+    rows = []
+    events = []
+    for ent in entities:
+        if not isinstance(ent, dict) or ent.get("kind") != "actor":
+            continue
+        aid = ent.get("id")
+        items = wardrobes.get(ent.get("wardrobe"))
+        if not isinstance(items, list):
+            items = []
+        rows.append([
+            aid, ent.get("cls"), x_mm, -MAX_Y_MM, x_mm, 359999, items, 63,
+            "unreachable", t_ms,
+        ])
+        gestures = ent.get("gestures")
+        gestures = gestures if isinstance(gestures, list) else []
+        for j in range(len(gestures)):
+            events.append([aid, j, "requested", t_ms, None])
+            events.append([aid, j, "playing", t_ms, None])
+            events.append([aid, j, "canceled", t_ms, "x" * 24])
+    env = {
+        "op_id": "rd-999999",
+        "session": "0" * 16,
+        "epoch": "0" * 32,
+        "status": "done",
+        "reason": None,
+        "dup": False,
+        "read": {"actors": rows, "gestures": events},
+    }
+    return len(compact_json_bytes(env))
+
+
 def _actor_errors(doc, entities, rev, hash_, store_catalog, world_size):
     """Paso 1b `actor_invalid` (F3-offline-2 §3): todas las entradas del documento."""
     cat = store_catalog if isinstance(store_catalog, dict) else {}
@@ -406,6 +446,10 @@ def _actor_errors(doc, entities, rev, hash_, store_catalog, world_size):
             poll_len, max_str = _actor_poll_len(args)
             if poll_len > WIRE_CAP or max_str > STR_CAP:
                 err(base, f"La orden del actor ({poll_len} B) no cabe en el cable.")
+    if not errors and n_actors > 0:
+        photo_len = _actor_photo_len(entities, store_catalog, world_size)
+        if photo_len > WIRE_CAP:
+            err("/entities", f"La foto de los actores ({photo_len} B) no cabe en el cable.")
     return errors
 
 
