@@ -3,6 +3,8 @@ import { DockviewApi } from 'dockview-react';
 import {
   Anchor,
   ApplyErrorInfo,
+  CameraLiveSnapshot,
+  CameraPlayError,
   CatalogResponse,
   EntityKind,
   ModeName,
@@ -148,6 +150,8 @@ export interface StudioState {
   toolsMenuOpen: boolean;
   pendingFocusField: { targetId: string; field: string } | null;
   tick: number;
+  camLive: CameraLiveSnapshot | null;
+  camPlayError: CameraPlayError | null;
 }
 
 let state: StudioState = {
@@ -186,6 +190,8 @@ let state: StudioState = {
   toolsMenuOpen: false,
   pendingFocusField: null,
   tick: 0,
+  camLive: null,
+  camPlayError: null,
 };
 
 const listeners = new Set<() => void>();
@@ -248,6 +254,8 @@ export function resetStudioState() {
     toolsMenuOpen: false,
     pendingFocusField: null,
     tick: 0,
+    camLive: null,
+    camPlayError: null,
   };
   emitChange();
 }
@@ -580,7 +588,10 @@ export function applyIncomingSceneDoc(
       patch.doc = doc;
       // Una entidad que ya no está no puede dejar un borrador que bloquee «Aplicar» para siempre:
       // se retiran sus borradores y su fila de Validación se queda, con «Ya no existe» (Sol, F07).
-      const alive = new Set(doc.entities.map((e) => e.id));
+      const alive = new Set([
+        ...doc.entities.map((e) => e.id),
+        ...(doc.cameras ?? []).map((c) => c.id),
+      ]);
       const gone = (key: string) => {
         const target = key.slice(0, key.lastIndexOf(':'));
         return target !== 'ambiente' && !alive.has(target);
@@ -600,17 +611,18 @@ export function applyIncomingSceneDoc(
     if (isCommitEvent) {
       patch.lastCommitPerfMs = performance.now();
     }
-    if (
-      usable &&
-      pendingCreatedEntityId &&
-      doc.entities.some((e) => e.id === pendingCreatedEntityId)
-    ) {
+    if (usable && pendingCreatedEntityId) {
       const createdId = pendingCreatedEntityId;
-      pendingCreatedEntityId = null;
-      patch.selectedIds = [createdId];
-      patch.pendingFocusField = { targetId: createdId, field: 'x' };
-      if (dockApiRef) {
-        openOrFocusPanel(dockApiRef, prev.mode, 'propiedades');
+      if (doc.entities.some((e) => e.id === createdId)) {
+        pendingCreatedEntityId = null;
+        patch.selectedIds = [createdId];
+        patch.pendingFocusField = { targetId: createdId, field: 'x' };
+        if (dockApiRef) {
+          openOrFocusPanel(dockApiRef, prev.mode, 'propiedades');
+        }
+      } else if ((doc.cameras ?? []).some((c) => c.id === createdId)) {
+        pendingCreatedEntityId = null;
+        patch.selectedIds = [createdId];
       }
     }
     return patch;
@@ -841,6 +853,81 @@ export function releaseFieldLease(targetId: string, field: string): void {
   if (!cur || cur.targetId !== targetId || cur.field !== field) return;
   leaseSeq += 1;
   releaseActiveLeaseOnUnmount();
+}
+
+export async function fetchCameraLive(): Promise<void> {
+  if (state.sinBackend) return;
+  try {
+    const res = await fetch('/api/camera', { credentials: 'same-origin' });
+    if (res.status === 401) {
+      handleSessionExpired();
+      return;
+    }
+    markBackendAlive();
+    const data = (await res.json().catch(() => null)) as CameraLiveSnapshot | null;
+    if (!data || typeof data !== 'object') return;
+    setState({ camLive: data });
+  } catch {
+    markBackendDown();
+  }
+}
+
+async function postCameraPath(
+  path: '/api/camera/play' | '/api/camera/stop',
+  body: Record<string, unknown>
+): Promise<boolean> {
+  if (state.sinBackend) return false;
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': localStorage.getItem('csrf') ?? '',
+      },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) {
+      handleSessionExpired();
+      return false;
+    }
+    markBackendAlive();
+    const data = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      code?: string;
+      msg?: string;
+    } | null;
+    if (res.ok && data?.ok) {
+      setState({ camPlayError: null });
+      await fetchCameraLive();
+      return true;
+    }
+    setState({
+      camPlayError: {
+        code: data?.code ?? String(res.status),
+        msg: data?.msg ?? '',
+      },
+    });
+    return false;
+  } catch {
+    markBackendDown();
+    setState({
+      camPlayError: { code: 'internal', msg: 'Sin conexión con el backend' },
+    });
+    return false;
+  }
+}
+
+export function playCamera(camId: string, key?: number): Promise<boolean> {
+  const docId = state.docInfo?.doc_id;
+  if (!docId) return Promise.resolve(false);
+  const body: Record<string, unknown> = { doc_id: docId, cam_id: camId };
+  if (key !== undefined) body.key = key;
+  return postCameraPath('/api/camera/play', body);
+}
+
+export function stopCamera(): Promise<boolean> {
+  return postCameraPath('/api/camera/stop', {});
 }
 
 // Scene Operations (POST /api/scene/ops)
@@ -1181,7 +1268,8 @@ async function handleOpsResponse(
     // Su entidad ya no existe (la borró otra edición): tampoco (revisión de Sol, R2-03).
     if (
       context.targetId !== 'ambiente' &&
-      !state.doc?.entities.some((e) => e.id === context.targetId)
+      !state.doc?.entities.some((e) => e.id === context.targetId) &&
+      !(state.doc?.cameras ?? []).some((c) => c.id === context.targetId)
     ) {
       return false;
     }
@@ -1272,6 +1360,9 @@ export const FIELD_SPANISH_NAMES: Record<string, string> = {
   niebla: 'niebla',
   lluvia: 'lluvia',
   viento: 'viento',
+  wardrobe: 'vestuario',
+  behaviour: 'comportamiento',
+  roam: 'radio',
 };
 
 export async function triggerUndoRedo(redo: boolean): Promise<void> {
@@ -1452,18 +1543,31 @@ export async function placeSelectedCatalogItem(): Promise<void> {
     setFlash(`Tope de ${kind} alcanzado (${count} / ${cap})`);
     return;
   }
+  const args: Record<string, unknown> = {
+    kind,
+    cls,
+    name: cls,
+    x: 7680,
+    z: 7680,
+    yaw: 0,
+  };
+  if (kind === 'actor') {
+    const wardrobes = state.catalog?.wardrobes ?? [];
+    if (wardrobes.length === 0) {
+      setState({ placingItem: null });
+      return;
+    }
+    args.wardrobe = wardrobes[0];
+    args.behaviour = 'HOLD';
+    args.roam = 15;
+    args.marks = [];
+    args.gestures = [];
+  }
   setState({ placingItem: null });
   await commitSceneOps(`Colocar ${cls}`, [
     {
       name: 'entity.add',
-      args: {
-        kind,
-        cls,
-        name: cls,
-        x: 7680,
-        z: 7680,
-        yaw: 0,
-      },
+      args,
     },
   ]);
 }

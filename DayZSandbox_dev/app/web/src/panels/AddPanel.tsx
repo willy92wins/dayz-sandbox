@@ -12,7 +12,7 @@ const TABS: readonly {
   { kind: 'objeto', label: 'Objetos', singular: 'Objeto' },
   { kind: 'infectado', label: 'Infectados', singular: 'Infectado' },
   { kind: 'animal', label: 'Animales', singular: 'Animal' },
-  { kind: 'actor', label: 'Actores', singular: 'Actor', disabled: true },
+  { kind: 'actor', label: 'Actores', singular: 'Actor' },
 ];
 
 export function AddPanel() {
@@ -68,8 +68,12 @@ export function AddPanel() {
     });
   };
 
+  const noWardrobes =
+    addCategory === 'actor' && (catalog?.wardrobes?.length ?? 0) === 0;
+
   const handleChooseClass = (cls: string) => {
     if (sinBackend) return;
+    if (noWardrobes) return;
     if (atCap) {
       setFlash(`Tope de ${addCategory} alcanzado (${currentCount} / ${currentCap})`);
       return;
@@ -194,7 +198,7 @@ export function AddPanel() {
               const isPlacing =
                 placingItem?.kind === addCategory && placingItem?.cls === cls;
               const friendly = KNOWN_CLASS_NAMES[cls];
-              const isRowDisabled = atCap || sinBackend;
+              const isRowDisabled = atCap || sinBackend || noWardrobes;
               return (
                 <button
                   key={cls}
@@ -215,6 +219,9 @@ export function AddPanel() {
                   <span className="lib-item-main">
                     <KindGlyph kind={addCategory} cls={cls} />
                     <span>{friendly ? `${friendly} (${cls})` : cls}</span>
+                    {noWardrobes ? (
+                      <span>El catálogo no tiene vestuarios</span>
+                    ) : null}
                   </span>
                 </button>
               );

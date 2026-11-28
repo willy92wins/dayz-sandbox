@@ -453,11 +453,7 @@ async function runS1(browser) {
         "El mapa llega con S-mapa.",
         "Mientras tanto, coloca con Intro desde Añadir y escribe X y Z en Propiedades.",
       ],
-      // historial e ia dejaron de ser huecos con F6-web parte 2 (brief §8.3).
-      camaras: [
-        "Llega con F4 y F5.",
-        "Aquí irán las cámaras, las tomas, la preparación y la vista previa del mapa.",
-      ],
+      // historial e ia dejaron de ser huecos con F6-web parte 2 (brief §8.3), y camaras con F4-web (§4).
       tomas: [
         "Llega con F4 y F5.",
         "Aquí irán las cámaras, las tomas, la preparación y la vista previa del mapa.",
@@ -2800,15 +2796,15 @@ async function runS6(browser) {
     }
     await page.setViewportSize({ width: 1280, height: 720 });
 
-    // Negativo: Actores existe, desactivada, con «Llega con F3» en su title
+    // F3-web §5.3: Actores existe y está activa, sin el title «Llega con F3»
     const actoresTab = tablist.locator('[role="tab"], button', { hasText: /^Actores\b/ }).first();
     const actCheck = await actoresTab.evaluate((el) => ({
       disabled: !!(el.disabled || el.getAttribute("aria-disabled") === "true"),
       title: el.getAttribute("title") || "",
     }));
     assert(
-      actCheck.disabled && /Llega con F3/.test(actCheck.title),
-      "S6(-): pestaña Actores no desactivada o sin title 'Llega con F3': " + JSON.stringify(actCheck)
+      !actCheck.disabled && !/Llega con F3/.test(actCheck.title),
+      "S6: pestaña Actores desactivada o con title 'Llega con F3': " + JSON.stringify(actCheck)
     );
 
     // Positivo: el buscador #libq se conserva al cambiar de pestaña
@@ -3505,7 +3501,9 @@ async function runS8(browser) {
       await page.keyboard.down("Shift");
       await page.keyboard.down("F8");
       const sf8Resp = await sf8RespP;
-      assert(sf8Resp.status() === 200, "S8(-): primer POST /api/apply con Shift+F8 no dio 200: " + sf8Resp.status());
+      // bugs.md 2026-11-28: un 409 intermitente; se guarda su cuerpo para ver el code.
+      const sf8Body = sf8Resp.status() === 200 ? "" : await sf8Resp.text().catch(() => "");
+      assert(sf8Resp.status() === 200, "S8(-): primer POST /api/apply con Shift+F8 no dio 200: " + sf8Resp.status() + " " + sf8Body);
       await page.waitForFunction(
         () => {
           const b = document.querySelector('[data-testid="accion-principal"] button');

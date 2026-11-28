@@ -96,3 +96,14 @@ Lo que aparece fuera del alcance de una tanda, o lo que un arbitraje aplaza, se 
 - **Qué pasa:** la prueba (test_f2_live, F2A2Apply) lee `fake.server.sent_results` en cuanto el op llega a `observado`, pero el mod falso añade el resultado a esa lista al volver el POST (`fake_mod.py:618`), en su hilo; el mismo aviso está en `test_fake_mod.py:115`, que ya espera con `wait_until`. Con la máquina cargada (dos suites a la vez) falló 2 de 10; sola, 0 de 12 con y sin los cambios de F3-offline-2, y 0 de 30 en `39c972e`.
 - **Por qué no se arregla aquí:** R20; la prueba es de F2 y no la toca esta tarea.
 - **Arreglo propuesto:** esperar con un plazo a que `sent_results` tenga la entrada antes de leerla.
+- **Arreglado 2026-11-28** (F3-foto, PR #33): la prueba espera con `wait_until`.
+
+## 2026-11-28 · F3-foto · S8 de `e2e_studio.py` falló una vez con 409 en el primer `POST /api/apply` con Mayús+F8
+
+- **Qué pasa:** en el gate de F3-foto (`aa1d92d`), S8(-) dio «primer POST /api/apply con Shift+F8 no dio 200: 409» y S9-S12 no corrieron; repetidas solas, S8-S12 pasan. En el gate de F3-web (`78e05ad`) pasó. No hay actores en esa escena, así que el cambio de F3-foto (solo con actores) no entra en ese camino.
+- **Por qué no se arregla aquí:** R20; no se ha reproducido y la causa no está identificada (sospecha: un `stale_apply` como el de S7 en #31, la web aplica una rev que el backend ya movió).
+- **Arreglo propuesto:** registrar el cuerpo del 409 en el guion para ver su `code` la próxima vez que salga.
+- **2026-11-28:** el guion ya guarda el cuerpo del 409 en el mensaje de S8. S8 sola, 3 de 3 OK; sin reproducir.
+
+- 2026-11-28 F4 parte 1 (MAY, sin reproducir en partida): `DSBX_CamClient.Play` devuelve `""` (done) aunque `EnsureActiveCam` no consiga crear la `staticcamera`; la lectura diría `active 1` sin cámara. Comprobarlo en la medida de §7 del brief de F4 parte 1 antes de darle código propio.
+- 2026-11-28 F4 parte 1: ninguna regla estática caza una variable local declarada dos veces en la misma función (Enforce no compila). Se coló en `StartOrderExecution` (`string verb`), arreglado a mano. Candidata a regla M21. **Hecho 2026-11-28:** regla M21 en `test_mod_static.py` (caza la versión 8c0bba5 de `DSBX_Peer.c`), con su X4.

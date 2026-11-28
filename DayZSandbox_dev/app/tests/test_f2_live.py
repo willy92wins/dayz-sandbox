@@ -506,8 +506,9 @@ class F2A2Apply(LiveBase):
                 for e in doc["entities"] if e["cls"] == c["cls"])
             self.assertLess(best, POS_TOL_M - 0.002, c["cls"])
         # checkpoint del resultado: las 33, incluidas criaturas, a < 0,5 m
-        bodies = [b for b in fake.server.sent_results
-                  if b["op_id"] == op_id and b.get("status") == "done"]
+        # el mod falso añade el resultado a sent_results al volver su POST, en su hilo (bugs.md 2026-11-26)
+        bodies = wait_until(lambda: [b for b in fake.server.sent_results
+                                     if b["op_id"] == op_id and b.get("status") == "done"])
         self.assertTrue(bodies)
         read = bodies[-1]["read"]
         self.assertEqual(read["obs"]["at"], "checkpoint")

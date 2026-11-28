@@ -1235,7 +1235,51 @@ class DSBX_Peer : Managed
 
 	void StartOrderExecution(DSBX_CacheEntry entry)
 	{
-		if (m_IsClient || !m_World)
+		if (m_IsClient)
+		{
+			if (entry.m_Order.args && entry.m_Order.args.f2 == 1)
+			{
+				string camVerb = entry.m_Order.verb;
+				DSBX_CamEngine engine = DSBX_CamEngineRegistry.Get();
+				if (camVerb == "camera.play")
+				{
+					string playReason = engine.Play(entry.m_Order.args);
+					if (playReason == "")
+					{
+						string playRead = engine.ReadJson();
+						FinishEntry(entry, "done", "", playRead);
+					}
+					else
+					{
+						FinishEntry(entry, "rejected", playReason, "{}");
+					}
+					return;
+				}
+				if (camVerb == "camera.stop")
+				{
+					string stopReason = engine.Stop();
+					if (stopReason == "")
+					{
+						string stopRead = engine.ReadJson();
+						FinishEntry(entry, "done", "", stopRead);
+					}
+					else
+					{
+						FinishEntry(entry, "rejected", stopReason, "{}");
+					}
+					return;
+				}
+				if (camVerb == "camera.read")
+				{
+					string readBody = engine.ReadJson();
+					FinishEntry(entry, "done", "", readBody);
+					return;
+				}
+			}
+			FinishEntry(entry, "rejected", "unknown_verb", "{}");
+			return;
+		}
+		if (!m_World)
 		{
 			FinishEntry(entry, "rejected", "unknown_verb", "{}");
 			return;

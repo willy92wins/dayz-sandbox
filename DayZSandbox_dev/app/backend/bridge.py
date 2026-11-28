@@ -218,29 +218,29 @@ class Bridge:
         return len(body)
 
     def _public_order(self, order, now_ms):
-        srv = self.peers.get("server") or {}
+        peer = self.peers.get(order.get("role") or "server") or {}
         return {
             "op_id": order["op_id"], "session": self.session,
             "conn": order["conn"],
-            "epoch": order["epoch"] if order["epoch"] is not None else srv.get("epoch", "0" * 32),
-            "inst": order["inst"] if order["inst"] is not None else srv.get("inst", "0" * 32),
+            "epoch": order["epoch"] if order["epoch"] is not None else peer.get("epoch", "0" * 32),
+            "inst": order["inst"] if order["inst"] is not None else peer.get("inst", "0" * 32),
             "verb": order["verb"], "args": copy.deepcopy(order["args"]),
             "issued_ms": order["issued_ms"], "ttl_ms": order["ttl_ms"],
         }
 
-    def enqueue_order(self, verb, args, op_id=None, ttl_ms=None, internal=False):
+    def enqueue_order(self, verb, args, op_id=None, ttl_ms=None, internal=False, role="server"):
         """Encola una orden. Devuelve (True, orden) o (False, 'wire_cap_exceeded')."""
         with self.cond:
             if op_id is None:
                 self._rd_n += 1
                 op_id = "rd-%d" % self._rd_n
             now = self._now()
-            srv = self.peers.get("server") or {}
+            rec = self.peers.get(role) or {}
             order = {
                 "op_id": op_id, "verb": verb, "args": copy.deepcopy(args),
-                "role": "server", "internal": bool(internal),
-                "conn": int(srv.get("conn", 0)),
-                "epoch": srv.get("epoch"), "inst": srv.get("inst"),
+                "role": role, "internal": bool(internal),
+                "conn": int(rec.get("conn", 0)),
+                "epoch": rec.get("epoch"), "inst": rec.get("inst"),
                 "session": self.session, "issued_ms": self._ms(now),
                 "enqueued_mono": now, "ttl_ms": int(ttl_ms if ttl_ms is not None else self.ttl_ms),
                 "bstate": "pendiente", "delivered_inst": None, "last_delivery": None,
@@ -299,6 +299,8 @@ class Bridge:
 
     def _transition_conn_orders_locked(self, new_conn, new_epoch):
         for order in list(self.orders.values()):
+            if order.get("role", "server") != "server":
+                continue
             if order["conn"] == new_conn:
                 continue
             if order["internal"]:
@@ -349,6 +351,8 @@ class Bridge:
             old_conn = int(srv["conn"])
             new_conn = old_conn + 1
             for order in list(self.orders.values()):
+                if order.get("role", "server") != "server":
+                    continue
                 if order["conn"] != old_conn:
                     continue
                 if order["internal"]:
@@ -386,6 +390,12 @@ class Bridge:
                     self._internal_dropped_locked(order, "sin_resultado")
                     if not self.reconciled or self._has_live_parcial_locked():
                         self._schedule_read_retry_locked()
+                    continue
+                if order.get("role") == "client":
+                    order["bstate"] = "descartada"
+                    cl = getattr(self.backend, "camera_live", None)
+                    if cl is not None:
+                        cl.on_dropped_locked(order, "sin_resultado")
                     continue
                 if order["bstate"] == "pendiente":
                     order["bstate"] = "terminal"
@@ -456,6 +466,16 @@ class Bridge:
             new_conn = int(old["conn"]) + 1 if old else 1
             if peer == "server":
                 self._transition_conn_orders_locked(new_conn, epoch)
+            elif peer == "client":
+                cl = getattr(self.backend, "camera_live", None)
+                for order in list(self.orders.values()):
+                    if order.get("role") != "client":
+                        continue
+                    if order.get("bstate") not in ("pendiente", "ejecutando"):
+                        continue
+                    order["bstate"] = "descartada"
+                    if cl is not None:
+                        cl.on_dropped_locked(order, "conexion_perdida")
             self.peers[peer] = {
                 "peer": peer, "inst": inst, "epoch": epoch, "conn": new_conn,
                 "mod_ver": body.get("mod_ver"), "build": body.get("build"),
@@ -567,11 +587,11 @@ class Bridge:
                 record["inflight"] = max(0, record.get("inflight", 1) - 1)
 
     def _pick_order_locked(self, peer, record):
-        if peer != "server":
-            return None
         now = self._now()
         orders = sorted(self.orders.values(), key=lambda o: (o["priority"], o["_seq"]))
         for o in orders:
+            if o.get("role", "server") != peer:
+                continue
             if o["bstate"] == "ejecutando" and o["conn"] == record["conn"] \
                     and o["delivered_inst"] == record["inst"] and not o["result_seen"]:
                 if (now - o["enqueued_mono"]) * 1000.0 > o["ttl_ms"]:
@@ -579,16 +599,20 @@ class Bridge:
                 if o["last_delivery"] is not None and (now - o["last_delivery"]) * 1000.0 >= self.retry_ms:
                     return o
         for o in orders:
+            if o.get("role", "server") != peer:
+                continue
             if o["bstate"] == "ejecutando" and o["conn"] == record["conn"] and not o["result_seen"]:
                 return None
         for o in orders:
+            if o.get("role", "server") != peer:
+                continue
             if o["bstate"] != "pendiente":
                 continue
             if o["conn"] != int(record["conn"]):
                 continue
             if (now - o["enqueued_mono"]) * 1000.0 > o["ttl_ms"]:
                 continue
-            if o["verb"] in ("scene.apply", "scene.reset") and not self.reconciled:
+            if peer == "server" and o["verb"] in ("scene.apply", "scene.reset") and not self.reconciled:
                 continue
             return o
         return None
@@ -630,8 +654,14 @@ class Bridge:
             if epoch != order["epoch"]:
                 return _err(400, "bad_request")
             sl = getattr(self.backend, "scene_live", None)
+            cl = getattr(self.backend, "camera_live", None)
+            is_cam = order.get("verb", "").startswith("camera.")
             is_f2 = sl is not None and sl.is_f2_order(order)
-            if is_f2:
+            if is_cam:
+                from app.backend.camera_live import valid_cam_read
+                if status == "done" and not valid_cam_read(read):
+                    return _err(400, "bad_request")
+            elif is_f2:
                 # D1/A10: una orden F2 se valida con §3.2 y la juzga SceneLive.
                 if status == "done" and not sl.valid_read(order, read):
                     return _err(400, "bad_request")
@@ -655,6 +685,13 @@ class Bridge:
                     order["result_seen"] = True
                     order["bstate"] = "terminal"
                     return 200, {"ok": True}
+            if is_cam:
+                if cl is not None:
+                    cl.on_result_locked(order, status, reason, read)
+                order["result_seen"] = True
+                order["bstate"] = "terminal"
+                self.cond.notify_all()
+                return 200, {"ok": True}
             if is_f2:
                 # A10: SceneLive antes de marcar result_seen; el no lo marca.
                 sl.on_result_locked(order, status, reason, read)

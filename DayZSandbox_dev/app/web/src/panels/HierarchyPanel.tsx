@@ -225,8 +225,27 @@ export function HierarchyPanel() {
 
           <div className="tgroup" role="presentation">
             <span>Cámaras</span>
-            <span>Llegan con F4</span>
+            <span>{(doc?.cameras ?? []).length === 0 ? 'Ninguna' : (doc?.cameras ?? []).length}</span>
           </div>
+          {(doc?.cameras ?? []).map((cam) => {
+            const isSelected = selectedIds.includes(cam.id);
+            return (
+              <div
+                key={cam.id}
+                role="treeitem"
+                className="trow"
+                data-cam-id={cam.id}
+                aria-selected={isSelected}
+                tabIndex={-1}
+                onClick={() => {
+                  lastClickedIdRef.current = cam.id;
+                  setState({ selectedIds: [cam.id] });
+                }}
+              >
+                <span className="name">{cam.name}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
