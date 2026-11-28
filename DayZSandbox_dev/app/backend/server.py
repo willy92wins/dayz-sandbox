@@ -25,6 +25,7 @@ from app.backend.profile import Profile  # noqa: E402
 from app.backend.bridge import Bridge  # noqa: E402
 from app.backend.scene_live import SceneLive  # noqa: E402
 from app.backend.camera_live import CameraLive  # noqa: E402
+from app.backend.take_live import TakeLive  # noqa: E402
 
 MAX_BODY = 1024 * 1024
 CLIENT_QUEUE = 1000
@@ -48,6 +49,7 @@ STATUS = {
     "unknown_class": 422, "out_of_map": 422, "budget_exceeded": 422,
     "plan_too_large": 422, "scene_unsupported": 409,
     "client_not_in_game": 409, "camera_busy": 409,
+    "no_director": 409, "take_busy": 409, "take_state": 409, "scene_not_observed": 409,
 }
 
 
@@ -104,12 +106,14 @@ class Backend:
         self.bridge = None
         self.scene_live = None
         self.camera_live = None
+        self.take_live = None
         self.observation = None
         if bridge_port is not None:
             self.bridge = Bridge(self, peer_key, port=bridge_port, clock=self.clock,
                                  log=self.log, **(bridge_kwargs or {}))
             self.scene_live = SceneLive(self.bridge)
             self.camera_live = CameraLive(self.bridge)
+            self.take_live = TakeLive(self.bridge)
 
     @property
     def port(self):
@@ -381,6 +385,31 @@ class Backend:
             return {"ok": True, "cam": None, "age_ms": None, "last": None, "in_flight": None}
         with self.store.lock:
             return self.camera_live.snapshot_locked()
+
+    def get_take(self):
+        """GET /api/take: ultima toma. Siempre 200."""
+        if self.take_live is None:
+            return {"ok": True, "take": None}
+        with self.store.lock:
+            return self.take_live.snapshot_locked()
+
+    def request_take_prepare(self, doc_id, cam_id):
+        with self.store.lock:
+            if self.bridge is None or self.take_live is None:
+                return fail("scene_unsupported", "El servidor no soporta escena F2")
+            return self.take_live.request_prepare_locked(doc_id, cam_id)
+
+    def request_take_go(self, take_id):
+        with self.store.lock:
+            if self.bridge is None or self.take_live is None:
+                return fail("scene_unsupported", "El servidor no soporta escena F2")
+            return self.take_live.request_go_locked(take_id)
+
+    def request_take_stop(self, take_id):
+        with self.store.lock:
+            if self.bridge is None or self.take_live is None:
+                return fail("scene_unsupported", "El servidor no soporta escena F2")
+            return self.take_live.request_stop_locked(take_id)
 
     def get_observation(self):
         """GET /api/observation (§4.2): ultima lectura `now` y su antiguedad.
@@ -672,6 +701,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, self.backend.get_actor_observation())
         elif url.path == "/api/camera":
             self.send_json(200, self.backend.get_camera())
+        elif url.path == "/api/take":
+            self.send_json(200, self.backend.get_take())
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 
@@ -840,6 +871,39 @@ class Handler(BaseHTTPRequestHandler):
             self.send_result(self.backend.request_camera_stop())
         elif path == "/api/camera/read":
             self.send_result(self.backend.request_camera_read())
+        elif path == "/api/take/prepare":
+            if not human:
+                self.send_json(403, fail("forbidden", "Solo la persona prepara la toma"))
+                return
+            v = self.fields(body, [("doc_id", (str,)), ("cam_id", (str,))])
+            if v is not None:
+                if not v[0] or not v[1]:
+                    self.send_json(400, fail("bad_request", "Falta o tiene mal tipo: cam_id",
+                                             "/cam_id" if v[0] else "/doc_id"))
+                    return
+                self.send_result(self.backend.request_take_prepare(v[0], v[1]))
+        elif path == "/api/take/go":
+            if not human:
+                self.send_json(403, fail("forbidden", "Solo la persona rueda la toma"))
+                return
+            v = self.fields(body, [("take_id", (str,))])
+            if v is not None:
+                if not v[0]:
+                    self.send_json(400, fail("bad_request", "Falta o tiene mal tipo: take_id",
+                                             "/take_id"))
+                    return
+                self.send_result(self.backend.request_take_go(v[0]))
+        elif path == "/api/take/stop":
+            if not human:
+                self.send_json(403, fail("forbidden", "Solo la persona para la toma"))
+                return
+            v = self.fields(body, [("take_id", (str,))])
+            if v is not None:
+                if not v[0]:
+                    self.send_json(400, fail("bad_request", "Falta o tiene mal tipo: take_id",
+                                             "/take_id"))
+                    return
+                self.send_result(self.backend.request_take_stop(v[0]))
         else:
             self.send_json(404, fail("not_found", "Ruta desconocida"))
 

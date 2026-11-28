@@ -6,6 +6,8 @@ import {
   CameraLiveSnapshot,
   CameraPlayError,
   CatalogResponse,
+  TakeError,
+  TakeLiveSnapshot,
   EntityKind,
   ModeName,
   NoticeItem,
@@ -152,6 +154,8 @@ export interface StudioState {
   tick: number;
   camLive: CameraLiveSnapshot | null;
   camPlayError: CameraPlayError | null;
+  takeLive: TakeLiveSnapshot | null;
+  takeError: TakeError | null;
 }
 
 let state: StudioState = {
@@ -192,6 +196,8 @@ let state: StudioState = {
   tick: 0,
   camLive: null,
   camPlayError: null,
+  takeLive: null,
+  takeError: null,
 };
 
 const listeners = new Set<() => void>();
@@ -256,6 +262,8 @@ export function resetStudioState() {
     tick: 0,
     camLive: null,
     camPlayError: null,
+    takeLive: null,
+    takeError: null,
   };
   emitChange();
 }
@@ -928,6 +936,83 @@ export function playCamera(camId: string, key?: number): Promise<boolean> {
 
 export function stopCamera(): Promise<boolean> {
   return postCameraPath('/api/camera/stop', {});
+}
+
+export async function fetchTakeLive(): Promise<void> {
+  if (state.sinBackend) return;
+  try {
+    const res = await fetch('/api/take', { credentials: 'same-origin' });
+    if (res.status === 401) {
+      handleSessionExpired();
+      return;
+    }
+    markBackendAlive();
+    const data = (await res.json().catch(() => null)) as TakeLiveSnapshot | null;
+    if (!data || typeof data !== 'object') return;
+    setState({ takeLive: data });
+  } catch {
+    markBackendDown();
+  }
+}
+
+async function postTakePath(
+  path: '/api/take/prepare' | '/api/take/go' | '/api/take/stop',
+  body: Record<string, unknown>
+): Promise<boolean> {
+  if (state.sinBackend) return false;
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': localStorage.getItem('csrf') ?? '',
+      },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) {
+      handleSessionExpired();
+      return false;
+    }
+    markBackendAlive();
+    const data = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      code?: string;
+      msg?: string;
+    } | null;
+    if (res.ok && data?.ok) {
+      setState({ takeError: null });
+      await fetchTakeLive();
+      return true;
+    }
+    setState({
+      takeError: {
+        code: data?.code ?? String(res.status),
+        msg: data?.msg ?? '',
+      },
+    });
+    return false;
+  } catch {
+    markBackendDown();
+    setState({
+      takeError: { code: 'internal', msg: 'Sin conexión con el backend' },
+    });
+    return false;
+  }
+}
+
+export function prepareTake(camId: string): Promise<boolean> {
+  const docId = state.docInfo?.doc_id;
+  if (!docId) return Promise.resolve(false);
+  return postTakePath('/api/take/prepare', { doc_id: docId, cam_id: camId });
+}
+
+export function goTake(takeId: string): Promise<boolean> {
+  return postTakePath('/api/take/go', { take_id: takeId });
+}
+
+export function stopTake(takeId: string): Promise<boolean> {
+  return postTakePath('/api/take/stop', { take_id: takeId });
 }
 
 // Scene Operations (POST /api/scene/ops)

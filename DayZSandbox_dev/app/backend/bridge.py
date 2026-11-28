@@ -250,6 +250,8 @@ class Bridge:
             self._seq += 1
             if verb == "state.read":
                 order["priority"] = 0
+            if verb == "take.stop":
+                order["priority"] = -1
             public = self._public_order(order, self._ms(now))
             if self._wire_poll_len(public, self._ms(now)) > WIRE_CAP:
                 return False, "wire_cap_exceeded"
@@ -296,6 +298,9 @@ class Bridge:
         sl = getattr(self.backend, "scene_live", None)
         if sl is not None:
             sl.on_internal_dropped_locked(order, reason)
+        tl = getattr(self.backend, "take_live", None)
+        if tl is not None:
+            tl.on_dropped_locked(order, reason)
 
     def _transition_conn_orders_locked(self, new_conn, new_epoch):
         for order in list(self.orders.values()):
@@ -396,6 +401,9 @@ class Bridge:
                     cl = getattr(self.backend, "camera_live", None)
                     if cl is not None:
                         cl.on_dropped_locked(order, "sin_resultado")
+                    tl = getattr(self.backend, "take_live", None)
+                    if tl is not None:
+                        tl.on_dropped_locked(order, "sin_resultado")
                     continue
                 if order["bstate"] == "pendiente":
                     order["bstate"] = "terminal"
@@ -420,6 +428,9 @@ class Bridge:
                     and t >= self._read_next_at and self._active_read_locked() is None:
                 if not self.reconciled or self._has_live_parcial_locked():
                     self._trigger_state_read_locked()
+            tl = getattr(self.backend, "take_live", None)
+            if tl is not None:
+                tl.tick_locked()
             self.cond.notify_all()
 
     def _has_live_parcial_locked(self):
@@ -468,6 +479,7 @@ class Bridge:
                 self._transition_conn_orders_locked(new_conn, epoch)
             elif peer == "client":
                 cl = getattr(self.backend, "camera_live", None)
+                tl = getattr(self.backend, "take_live", None)
                 for order in list(self.orders.values()):
                     if order.get("role") != "client":
                         continue
@@ -476,6 +488,8 @@ class Bridge:
                     order["bstate"] = "descartada"
                     if cl is not None:
                         cl.on_dropped_locked(order, "conexion_perdida")
+                    if tl is not None:
+                        tl.on_dropped_locked(order, "conexion_perdida")
             self.peers[peer] = {
                 "peer": peer, "inst": inst, "epoch": epoch, "conn": new_conn,
                 "mod_ver": body.get("mod_ver"), "build": body.get("build"),
@@ -497,6 +511,9 @@ class Bridge:
                 sl = getattr(self.backend, "scene_live", None)
                 if sl is not None:
                     sl.on_server_hello_locked(self.peers[peer])
+                tl = getattr(self.backend, "take_live", None)
+                if tl is not None:
+                    tl.on_server_hello_locked(self.peers[peer])
                 self._trigger_state_read_locked()
             self.cond.notify_all()
             return 200, {"ok": True, "session": self.session, "conn": new_conn,
@@ -655,9 +672,18 @@ class Bridge:
                 return _err(400, "bad_request")
             sl = getattr(self.backend, "scene_live", None)
             cl = getattr(self.backend, "camera_live", None)
+            tl = getattr(self.backend, "take_live", None)
             is_cam = order.get("verb", "").startswith("camera.")
+            is_take = order.get("verb", "").startswith("take.")
             is_f2 = sl is not None and sl.is_f2_order(order)
-            if is_cam:
+            if is_take:
+                from app.backend.take_live import valid_ready_read, valid_take_read
+                if status == "done":
+                    ok_read = (valid_ready_read(read) if order.get("verb") == "take.cam_load"
+                               else valid_take_read(read))
+                    if not ok_read:
+                        return _err(400, "bad_request")
+            elif is_cam:
                 from app.backend.camera_live import valid_cam_read
                 if status == "done" and not valid_cam_read(read):
                     return _err(400, "bad_request")
@@ -685,6 +711,13 @@ class Bridge:
                     order["result_seen"] = True
                     order["bstate"] = "terminal"
                     return 200, {"ok": True}
+            if is_take:
+                if tl is not None:
+                    tl.on_result_locked(order, status, reason, read)
+                order["result_seen"] = True
+                order["bstate"] = "terminal"
+                self.cond.notify_all()
+                return 200, {"ok": True}
             if is_cam:
                 if cl is not None:
                     cl.on_result_locked(order, status, reason, read)

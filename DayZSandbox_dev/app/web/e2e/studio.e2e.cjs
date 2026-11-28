@@ -453,11 +453,8 @@ async function runS1(browser) {
         "El mapa llega con S-mapa.",
         "Mientras tanto, coloca con Intro desde Añadir y escribe X y Z en Propiedades.",
       ],
-      // historial e ia dejaron de ser huecos con F6-web parte 2 (brief §8.3), y camaras con F4-web (§4).
-      tomas: [
-        "Llega con F4 y F5.",
-        "Aquí irán las cámaras, las tomas, la preparación y la vista previa del mapa.",
-      ],
+      // historial e ia dejaron de ser huecos con F6-web parte 2 (brief §8.3), camaras con F4-web (§4)
+      // y tomas con F5 parte 1 (§6).
       preparacion: [
         "Llega con F4 y F5.",
         "Aquí irán las cámaras, las tomas, la preparación y la vista previa del mapa.",

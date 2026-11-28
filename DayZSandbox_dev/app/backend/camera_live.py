@@ -59,6 +59,50 @@ def _fail(code, msg, pointer=""):
     return {"ok": False, "code": code, "pointer": pointer, "msg": msg}
 
 
+def play_args_from_keys(bridge, cam_id, idx, keys, key_indices, collapse_t=False):
+    """Args de camera.play (F4 §5.2) o el error 422 / out_of_map. Sin encolar."""
+    n = len(keys)
+    base = "/cameras/%d/keys" % idx
+    if n > CAM_MAX_KEYS:
+        return _fail("invalid", "Mas de %d claves" % CAM_MAX_KEYS, base)
+    t_ms = []
+    for kobj in keys:
+        t = kobj.get("t") if isinstance(kobj, dict) else None
+        t_ms.append(round(float(t) * 1000) if t is not None else None)
+    for k in range(1, n):
+        if t_ms[k] is not None and t_ms[k - 1] is not None and t_ms[k] == t_ms[k - 1]:
+            return _fail("invalid", "Dos claves en el mismo milisegundo",
+                         "%s/%d/t" % (base, key_indices[k]))
+    srv = bridge.peers.get("server") or {}
+    wsize = srv.get("world_size")
+    wsize = float(wsize) if isinstance(wsize, (int, float)) and not isinstance(wsize, bool) else 0.0
+    for i, kobj in enumerate(keys):
+        if not isinstance(kobj, dict):
+            continue
+        orig_k = key_indices[i]
+        for axis in ("x", "z"):
+            val = kobj.get(axis)
+            if not isinstance(val, (int, float)) or isinstance(val, bool) \
+                    or float(val) < 0.0 or float(val) > wsize:
+                return _fail("out_of_map", "Fuera del mapa", "%s/%d/%s" % (base, orig_k, axis))
+    if collapse_t:
+        t_wire = [0]
+    else:
+        t_wire = [round(float(kobj["t"]) * 1000) for kobj in keys]
+    return {"ok": True, "args": {
+        "f2": 1,
+        "cam_id": cam_id,
+        "c_t_ms": t_wire,
+        "c_x_mm": [m_to_mm(kobj["x"]) for kobj in keys],
+        "c_y_mm": [m_to_mm(kobj["y"]) for kobj in keys],
+        "c_z_mm": [m_to_mm(kobj["z"]) for kobj in keys],
+        "c_yaw_mdeg": [yaw_to_mdeg(kobj["yaw"]) for kobj in keys],
+        "c_pitch_mdeg": [round(float(kobj["pitch"]) * 1000) for kobj in keys],
+        "c_fov_mdeg": [round(float(kobj["fov"]) * 1000) for kobj in keys],
+        "c_focus_mm": [m_to_mm(kobj["focus"]) for kobj in keys],
+    }}
+
+
 class CameraLive:
     """Coordinador de camara (F4) acoplado a un Bridge y su Backend."""
 
@@ -173,46 +217,11 @@ class CameraLive:
             return _fail("client_not_in_game", "El cliente no esta en el mundo")
         if self._busy_locked():
             return _fail("camera_busy", "Hay una orden de camara en vuelo")
-        n = len(keys)
-        base = "/cameras/%d/keys" % idx
-        if n > CAM_MAX_KEYS:
-            return _fail("invalid", "Mas de %d claves" % CAM_MAX_KEYS, base)
-        t_ms = []
-        for kobj in keys:
-            t = kobj.get("t") if isinstance(kobj, dict) else None
-            t_ms.append(round(float(t) * 1000) if t is not None else None)
-        for k in range(1, n):
-            if t_ms[k] is not None and t_ms[k - 1] is not None and t_ms[k] == t_ms[k - 1]:
-                return _fail("invalid", "Dos claves en el mismo milisegundo",
-                             "%s/%d/t" % (base, key_indices[k]))
-        srv = self.bridge.peers.get("server") or {}
-        wsize = srv.get("world_size")
-        wsize = float(wsize) if isinstance(wsize, (int, float)) and not isinstance(wsize, bool) else 0.0
-        for i, kobj in enumerate(keys):
-            if not isinstance(kobj, dict):
-                continue
-            orig_k = key_indices[i]
-            for axis in ("x", "z"):
-                val = kobj.get(axis)
-                if not isinstance(val, (int, float)) or isinstance(val, bool) \
-                        or float(val) < 0.0 or float(val) > wsize:
-                    return _fail("out_of_map", "Fuera del mapa", "%s/%d/%s" % (base, orig_k, axis))
-        if key is not None:
-            t_wire = [0]
-        else:
-            t_wire = [round(float(kobj["t"]) * 1000) for kobj in keys]
-        args = {
-            "f2": 1,
-            "cam_id": cam_id,
-            "c_t_ms": t_wire,
-            "c_x_mm": [m_to_mm(kobj["x"]) for kobj in keys],
-            "c_y_mm": [m_to_mm(kobj["y"]) for kobj in keys],
-            "c_z_mm": [m_to_mm(kobj["z"]) for kobj in keys],
-            "c_yaw_mdeg": [yaw_to_mdeg(kobj["yaw"]) for kobj in keys],
-            "c_pitch_mdeg": [round(float(kobj["pitch"]) * 1000) for kobj in keys],
-            "c_fov_mdeg": [round(float(kobj["fov"]) * 1000) for kobj in keys],
-            "c_focus_mm": [m_to_mm(kobj["focus"]) for kobj in keys],
-        }
+        built = play_args_from_keys(self.bridge, cam_id, idx, keys, key_indices,
+                                    collapse_t=(key is not None))
+        if not built.get("ok"):
+            return built
+        args = built["args"]
         ok, order = self.bridge.enqueue_order("camera.play", args, role="client")
         if not ok:
             return _fail("plan_too_large", "La orden no cabe en el cable")
