@@ -1,6 +1,6 @@
 # F3: la foto de actores tiene que caber en el cable (N12)
 
-2026-11-28 · tarea **F3-foto**, rama `claude/project-thread-c4y6r9` (encima de F3-web, PR #33) · arreglo del hallazgo **N12** de la ronda de Sol 6.2 sobre F3-adaptador (PR #32), apuntado en `bugs.md` de esa rama («la foto de actores no cabe en el cable con muchos gestos») · v0.1.
+2026-11-28 · tarea **F3-foto**, rama `claude/project-thread-c4y6r9` (encima de F3-web, PR #33) · arreglo del hallazgo **N12** de la ronda de Sol 6.2 sobre F3-adaptador (PR #32), apuntado en `bugs.md` de esa rama («la foto de actores no cabe en el cable con muchos gestos») · v0.1a (§6: resultado).
 
 **Qué pasa hoy.** La admisión de F3 (`_actor_errors`, `app/backend/scene_plan.py:332-409`) mide la **orden** de cada actor contra `WIRE_CAP` (3 500 B, `bridge.py:21`), pero no la **foto** que el mod devuelve al observar (`actor.observe`): una fila por actor más hasta tres eventos por gesto (`actor_wire.py:88-139`). Un actor con 64 gestos pasa la admisión (orden de 2 354 B) y su foto mide unos 7 200 B: el mod la cambia por `result_too_large` (`tests/fake_mod.py:592-596`) y la escena nunca se puede juzgar. El fallo sale en partida, tarde y sin decir qué sobra.
 
@@ -40,6 +40,7 @@ Sin tope aparte de eventos (512 en `actor_wire.py:26`): con 3 eventos de al meno
 |---|---|---|
 | F1 | `escena-basica-cine.json` con motor → `ok` como hoy | — |
 | F2 | Un actor `HOLD` con `G` gestos temporizados, donde `G` es el mayor con la foto peor (construida por la prueba, de forma independiente) ≤ 3 500 B → `ok` | El mismo con `G + 1` → `actor_invalid`, un solo error con `pointer` `/entities` y los bytes de la prueba en el mensaje |
+| F2b | Con un vestuario de relleno de dos prendas ajustadas, la foto peor mide justo 3 500 B → `ok` | Con un byte más → `actor_invalid` en `/entities` (caza `>=` en vez de `>`) |
 | F3 | — | Dos actores con `G // 2 + 1` gestos cada uno (ninguno solo pasa el tope, juntos sí) → `actor_invalid` en `/entities` |
 | F4 | — | Un actor con un error propio (vestuario inexistente) y demasiados gestos → solo el error propio, no el de la foto |
 | F5 | La foto peor construida por la prueba con `G` gestos pasa `actor_wire.valid_actor_read` (es una foto válida) | — |
@@ -53,5 +54,12 @@ Además, todo el gate: `unittest` entero, build y los E2E (P1-P9b, S1-S12, C1-C1
 | P1 | Sin la llamada de §3 | F2, F3 |
 | P2 | Mide solo el primer actor | F3 |
 | P3 | Dos eventos por gesto en vez de tres | F2 |
-| P4 | `>=` en vez de `>` | F2 (positiva) |
+| P4 | `>=` en vez de `>` | F2b |
 | P5 | La foto se mide aunque ya haya errores | F4 |
+
+## 6. Resultado (v0.1a)
+
+- Implementación de Grok (grok-4.6, 34 s, 0,14 USD) en `aa1d92d`, sin retocar.
+- El oráculo tenía un hueco: P4 sobrevivía porque ninguna foto de F2 medía justo el tope. Se añadió F2b, que ajusta dos prendas de relleno hasta 3 500 B exactos.
+- Mutaciones (`plans/f3foto-mutants.py`): 5/5 muertas.
+- Lo que significa para el producto: con el vestuario `partisano`, una escena admite como mucho **20 gestos en total** entre todos sus actores (G = 20 en F2). Si hacen falta más, el arreglo es otro diseño (paginar la foto o mandar solo los eventos nuevos), no esta PR.

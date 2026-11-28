@@ -29,9 +29,10 @@ def _world_catalog(cat):
     return {"classes": classes}
 
 
-def _validate(doc, world_size=15360):
+def _validate(doc, world_size=15360, cat=None):
+    cat = cat if cat is not None else CAT
     return sp.validate_for_apply(
-        doc, 1, HASH, CAT, world_catalog=_world_catalog(CAT), catalog_valid=True,
+        doc, 1, HASH, cat, world_catalog=_world_catalog(cat), catalog_valid=True,
         world_size=world_size, op_id="op-1", conn=1, actor_engine="expansion",
     )
 
@@ -51,12 +52,13 @@ def _doc(actors):
     return doc
 
 
-def _photo(actors, world_size=15360):
+def _photo(actors, world_size=15360, cat=None):
     """Foto peor escrita aquí, sin usar el código bajo prueba."""
+    cat = cat if cat is not None else CAT
     x = int(min(world_size * 1000, 99999000))
     rows, events = [], []
     for a in actors:
-        items = CAT["wardrobe_items"].get(a["wardrobe"], [])
+        items = cat["wardrobe_items"].get(a["wardrobe"], [])
         rows.append([a["id"], a["cls"], x, -9999999, x, 359999, list(items), 63, "unreachable", T])
         for j in range(len(a["gestures"])):
             events.append([a["id"], j, "requested", T, None])
@@ -94,6 +96,34 @@ class TestActorPhotoCap(unittest.TestCase):
         self.assertEqual(bad["code"], "actor_invalid")
         self.assertEqual([e["pointer"] for e in bad["errors"]], ["/entities"])
         self.assertIn("%d B" % size, bad["errors"][0]["msg"])
+
+    def test_f2b_borde_exacto(self):
+        # Vestuario de relleno con dos prendas cuyo largo se ajusta hasta que la foto mide justo WIRE_CAP.
+        def cat_with(la, lb):
+            cat = copy.deepcopy(CAT)
+            items = ["P" * la, "Q" * lb]
+            cat["wardrobes"] = list(cat["wardrobes"]) + ["relleno"]
+            cat["wardrobe_items"]["relleno"] = items
+            cat["classes"]["objeto"] = list(cat["classes"]["objeto"]) + items
+            return cat
+        for g in range(1, 64):
+            actor = _actor(1, g, wardrobe="relleno")
+            extra = WIRE_CAP - _photo([actor], cat=cat_with(1, 1))[0]
+            if 0 <= extra <= 125:
+                break
+        else:
+            self.fail("ningún número de gestos deja el borde a tiro")
+        la = 1 + min(extra, 63)
+        lb = 1 + extra - (la - 1)
+        exact = cat_with(la, lb)
+        self.assertEqual(_photo([actor], cat=exact)[0], WIRE_CAP)
+        res = _validate(_doc([actor]), cat=exact)
+        self.assertTrue(res["ok"], res)
+        over = cat_with(la, lb + 1) if lb < 64 else cat_with(la + 1, lb)
+        self.assertEqual(_photo([actor], cat=over)[0], WIRE_CAP + 1)
+        res = _validate(_doc([actor]), cat=over)
+        self.assertEqual(res.get("code"), "actor_invalid", res)
+        self.assertEqual([e["pointer"] for e in res["errors"]], ["/entities"])
 
     def test_f3_suma_de_actores(self):
         half = G // 2 + 1
